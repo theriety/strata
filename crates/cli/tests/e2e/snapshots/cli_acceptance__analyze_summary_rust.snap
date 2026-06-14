@@ -1,0 +1,15 @@
+---
+source: crates/cli/tests/e2e/cli_acceptance.rs
+expression: stdout
+---
+snapshot 1c5072657680ee94fe4bf336abb5a44a07d77fb59782202e24ae42cd56937d31
+summary: 6 symbols, 4 edges, 1 files
+current score: 3.3000
+visibility [violation] Shape :: `Shape` is exported at Package but needed only at File
+visibility [violation] describe_shape :: `describe_shape` is exported at Package but needed only at File
+visibility [violation] Rectangle :: `Rectangle` is exported at Package but needed only at File
+visibility [violation] summarize :: `summarize` is exported at Package but needed only at File
+mode anchored: 1 candidate(s)
+  candidate 1 score 4.3000 (2 move group(s))
+mode greenfield: 1 candidate(s)
+  candidate 1 score 3.3000 (2 move group(s))

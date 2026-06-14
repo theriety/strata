@@ -1,0 +1,12 @@
+---
+source: crates/cli/tests/e2e/cli_acceptance.rs
+expression: stdout
+---
+snapshot f6b6dcc98073ffac6abe3443e0083a47fa44935eba80e405c2a40835b76706a5
+summary: 4 symbols, 4 edges, 2 files
+current score: 20.6000
+no violations
+mode anchored: 1 candidate(s)
+  candidate 1 score 6.6000 (2 move group(s))
+mode greenfield: 1 candidate(s)
+  candidate 1 score 5.6000 (2 move group(s))

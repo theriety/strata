@@ -1,0 +1,15 @@
+---
+source: crates/cli/tests/e2e/cli_acceptance.rs
+expression: stdout
+---
+rust [packageGroup]
+  src [package]
+    src/lib.rs [domain]
+      src/lib.rs [folder]
+        src/lib.rs [file] 6 sloc
+          - Shape (package)
+          - describe_shape (package)
+          - Rectangle (package)
+          - Rectangle (file)
+          - area (file)
+          - summarize (package)

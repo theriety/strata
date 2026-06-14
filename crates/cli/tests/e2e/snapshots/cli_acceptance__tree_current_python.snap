@@ -1,0 +1,16 @@
+---
+source: crates/cli/tests/e2e/cli_acceptance.rs
+expression: stdout
+---
+python [packageGroup]
+  pkg [package]
+    pkg/rectangle.py [domain]
+      pkg/rectangle.py [folder]
+        pkg/rectangle.py [file] 2 sloc
+          - Rectangle (file)
+          - summarize (file)
+    pkg/shape.py [domain]
+      pkg/shape.py [folder]
+        pkg/shape.py [file] 2 sloc
+          - Shape (file)
+          - describe_shape (file)

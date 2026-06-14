@@ -15,10 +15,16 @@ serde_json = { workspace = true }
 [dev-dependencies]
 serde_json = { workspace = true }
 strata-engine = { path = "../engine" }
+assert_cmd = "2"
+insta = "1"
 
 [[test]]
 name = "parity"
 path = "tests/e2e/parity.rs"
+
+[[test]]
+name = "cli_acceptance"
+path = "tests/e2e/cli_acceptance.rs"
 
 [lints]
 workspace = true

@@ -1,0 +1,7 @@
+---
+source: crates/cli/tests/e2e/cli_acceptance.rs
+expression: stdout
+---
+workspace [packageGroup]
+  cluster-0 [folder]
+    src/lib.rs [file] 0 sloc

@@ -1,0 +1,6 @@
+---
+source: crates/cli/tests/e2e/cli_acceptance.rs
+expression: stdout
+---
+move cluster-0 :: python -> workspace (cohesion gain)
+move pkg/rectangle.py, pkg/shape.py :: python/pkg -> workspace/cluster-0 (cohesion gain)
