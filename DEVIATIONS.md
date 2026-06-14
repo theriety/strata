@@ -143,3 +143,11 @@
 - **Reason**: wrong-integration
 - **Impact on spec**: surface-change
 - **Severity**: minor
+
+### D-19: Visibility and projection entry points take the data the spec signatures omit
+- **When**: Commit 6 (feat(core): LCA visibility derivation and test projection)
+- **Draft said**: `derive_visibility(tree: &ContainerTree, edges: &[Edge])`, `project(candidate: &mut Candidate, polarity: &[Polarity])`, and `detect_convention(package: &PackageView)` over undefined `Candidate`/`PackageView` types
+- **What I did instead**: added a `nodes: &[Node]` parameter to `derive_visibility` (an `Edge` carries only `NodeId`s, so the node→container map and declared visibility must come from the node list) and a `convention: SpecConvention` parameter to `project`; defined the local view/result DTOs (`VisibilityResult`, `DerivedScope`, `Finding`, `Candidate`, `PackageView`, `Violation`, ...) the spec referenced but never declared, mirroring how `pack.rs` defines its `FolderView`
+- **Reason**: wrong-integration
+- **Impact on spec**: surface-change
+- **Severity**: minor

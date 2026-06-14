@@ -10,14 +10,20 @@
 //! veto and capacity a hard cap ([`cluster`]). Commit 5 adds capacitated file
 //! packing — cohesion-first Kruskal agglomeration of SCC atoms under the
 //! production-SLOC cap, with conditional splits for oversized cyclic groups
-//! ([`pack`]). It re-exports the IR contract so downstream crates have a single
-//! solver-facing entry point.
+//! ([`pack`]). Commit 6 derives visibility from consumption — LCA over each
+//! symbol's consumers widened by the transitive type-exposure fixpoint
+//! ([`visibility`]) — and projects test code: specs follow their subjects under
+//! the per-package convention while the polarity matrix is enforced as a hard
+//! veto ([`project`]). It re-exports the IR contract so downstream crates have a
+//! single solver-facing entry point.
 
 pub mod cluster;
 pub mod condense;
 pub mod graph;
 pub mod layer;
 pub mod pack;
+pub mod project;
 pub mod shatter;
+pub mod visibility;
 
 pub use strata_ir as ir;
