@@ -9,7 +9,7 @@ languages = ["typescript", "rust", "python"]
 # Source-inclusion globs, relative to the analysis root.
 include = ["**/*"]
 # Source-exclusion globs, applied after inclusion.
-exclude = ["**/node_modules/**", "**/target/**", "**/.venv/**"]
+exclude = ["**/.git/**", "**/node_modules/**", "**/target/**", "**/.venv/**"]
 
 [analysis]
 # Restructuring mode: anchored | greenfield | both.

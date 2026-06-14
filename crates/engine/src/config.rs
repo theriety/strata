@@ -73,6 +73,7 @@ impl Default for AdaptersConfig {
             ],
             include: vec!["**/*".to_owned()],
             exclude: vec![
+                "**/.git/**".to_owned(),
                 "**/node_modules/**".to_owned(),
                 "**/target/**".to_owned(),
                 "**/.venv/**".to_owned(),

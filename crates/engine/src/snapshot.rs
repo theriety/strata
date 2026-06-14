@@ -97,8 +97,8 @@ pub fn snapshot_from_root(
     config: &AnalyzeConfig,
 ) -> Result<strata_ir::Snapshot, StrataError> {
     let root = root.as_ref();
-    let files = discover_sources(root, config)?;
     let languages = enabled_languages(config);
+    let files = discover_sources(root, config, &languages)?;
 
     let grouped = group_by_language(&files, &languages);
     let fragments = grouped
@@ -123,9 +123,19 @@ fn enabled_languages(config: &AnalyzeConfig) -> Vec<Language> {
         .collect()
 }
 
-/// Reads every file under `root` that matches the include globs and clears the
-/// exclude globs, returning the source set as repo-relative paths plus contents.
-fn discover_sources(root: &Path, config: &AnalyzeConfig) -> Result<Vec<SourceFile>, StrataError> {
+/// Reads every file under `root` that matches the include globs, clears the
+/// exclude globs, and is claimed by an enabled language, returning the source
+/// set as repo-relative paths plus contents.
+///
+/// Extension filtering happens here, *before* any file is read, so discovery
+/// never touches non-source files (binaries, lockfiles, images, VCS metadata).
+/// This keeps a file like `.git/index` — invalid UTF-8 — from aborting the walk:
+/// it matches no enabled language and is skipped silently.
+fn discover_sources(
+    root: &Path,
+    config: &AnalyzeConfig,
+    languages: &[Language],
+) -> Result<Vec<SourceFile>, StrataError> {
     let includes = compile_globs(&config.adapters.include)?;
     let excludes = compile_globs(&config.adapters.exclude)?;
 
@@ -159,6 +169,14 @@ fn discover_sources(root: &Path, config: &AnalyzeConfig) -> Result<Vec<SourceFil
                 continue;
             }
             if excludes.iter().any(|glob| glob.matches(&relative)) {
+                continue;
+            }
+            // skip files no enabled language claims, *before* reading them, so a
+            // binary or non-UTF-8 file (e.g. `.git/index`) never aborts the walk.
+            if !languages
+                .iter()
+                .any(|language| language.matches_extension(&relative))
+            {
                 continue;
             }
             let contents =
@@ -391,6 +409,69 @@ mod tests {
             level: ScopeLevel::File,
             parent: None,
         }
+    }
+
+    /// A self-cleaning unique temp directory for filesystem fixtures.
+    ///
+    /// The repo carries no `tempfile` dependency, so this wraps a uniquely named
+    /// directory under [`std::env::temp_dir`] and removes it on drop. The name
+    /// mixes the process id and a per-call counter to stay unique across parallel
+    /// tests within one binary.
+    struct TempDir {
+        path: std::path::PathBuf,
+    }
+
+    impl TempDir {
+        /// Creates a fresh, empty temp directory.
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+
+            static COUNTER: AtomicU32 = AtomicU32::new(0);
+            let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("strata-discover-{}-{unique}", std::process::id()));
+            let created = std::fs::create_dir_all(&path).is_ok();
+            assert!(created, "could not create temp dir {}", path.display());
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn should_skip_non_source_files_during_discovery() {
+        // a real repo carries a `.git/` whose `index` is binary, plus non-source
+        // text like markdown; discovery must read only the source file and never
+        // choke on the non-UTF-8 bytes.
+        let dir = TempDir::new();
+        let root = &dir.path;
+
+        let wrote_source = std::fs::write(root.join("a.ts"), "export const a = 1;\n").is_ok();
+        let wrote_readme = std::fs::write(root.join("README.md"), "# readme\n").is_ok();
+        let made_git = std::fs::create_dir_all(root.join(".git")).is_ok();
+        let wrote_index =
+            std::fs::write(root.join(".git").join("index"), [0xff, 0xfe, 0x00]).is_ok();
+        assert!(
+            wrote_source && wrote_readme && made_git && wrote_index,
+            "fixture setup failed"
+        );
+
+        // an exclude list *without* `.git` proves the extension filter alone makes
+        // discovery robust to the binary index — independent of the VCS default.
+        let mut config = AnalyzeConfig::default();
+        config.adapters.exclude = vec!["**/node_modules/**".to_owned()];
+        let languages = enabled_languages(&config);
+
+        let result = discover_sources(root, &config, &languages);
+
+        // discovery succeeds despite the binary `.git/index`, reading only `a.ts`.
+        let sources = result.unwrap_or_else(|_| Vec::new());
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources.first().map(|file| file.path.as_str()), Some("a.ts"));
     }
 
     #[test]
