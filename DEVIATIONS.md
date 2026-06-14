@@ -71,3 +71,27 @@
 - **Reason**: missing-dep
 - **Impact on spec**: none
 - **Severity**: minor
+
+### D-10: Defined the cluster phase's shared support types
+- **When**: Commit 4 (feat(core): multilevel acyclic clustering with capacity vetoes)
+- **Draft said**: `coarsen.rs` / `seed.rs` / `refine.rs` reference `LevelCaps`, `Partition`, and `GainFn` without defining them
+- **What I did instead**: defined `ClusterId`, `LevelCaps` (defaults 15/12/10/12 from FR-1), `Partition` (assignment + per-cluster sizes), and `GainFn` (per-node token sets + α/β) in `cluster.rs`, plus a `SeedLevel` selector so each pass picks the right cap
+- **Reason**: stale-symbol
+- **Impact on spec**: surface-change
+- **Severity**: minor
+
+### D-11: Matching/seeding adapted to the repo's dependent→dependency edge orientation
+- **When**: Commit 4
+- **Draft said**: the coarsen matching rule is "safe when layer(v) - layer(u) <= 1" for an edge u ~> v, implying edges climb layers (target higher)
+- **What I did instead**: this crate's CSR edges point from dependent to dependency with `layer(source) > layer(target)` (per commit 2's layering), so the screen is `layer(u) - layer(v) <= 1` with an explicit two-hop probe; seeding walks descending-layer (topological) order so contiguous clusters stay acyclic
+- **Reason**: wrong-integration
+- **Impact on spec**: behavior-change
+- **Severity**: minor
+
+### D-12: FM gain accounts for incoming edges via a reverse adjacency
+- **When**: Commit 4
+- **Draft said**: the incremental acyclicity veto maintains a quotient order with "kahn-style local repair" without specifying edge direction handling
+- **What I did instead**: the CoarseGraph carries only a forward CSR, so `QuotientEdges` builds a predecessor list once and a move's deltas adjust both the moved node's outgoing and incoming quotient edges; acyclicity is checked by Kahn over the small prospective quotient edge set
+- **Reason**: wrong-integration
+- **Impact on spec**: none
+- **Severity**: minor
