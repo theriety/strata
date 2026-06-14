@@ -148,6 +148,46 @@ fn should_deliver_the_analyze_summary_for_the_rust_fixture() {
 }
 
 #[test]
+fn should_print_the_recommended_structure_only_when_show_suggestions_is_set() {
+    // --show-suggestions is opt-in: it renders the best candidate's proposed tree
+    // below the headlines; the plain run prints only the candidate headlines.
+    let root = fixture("rust");
+    let root_str = root.to_str().unwrap_or_default();
+    let base = [
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--mode",
+        "anchored",
+        "--format",
+        "summary",
+    ];
+
+    let mut with_flag = base.to_vec();
+    with_flag.push("--show-suggestions");
+    let shown = run(&with_flag);
+    let plain = run(&base);
+
+    assert_eq!(shown.code, 0, "the suggestion run exits 0");
+    assert_eq!(plain.code, 0, "the plain run exits 0");
+    assert!(
+        shown.stdout.contains("suggested structure (candidate 1"),
+        "the suggestion header leads the rendered tree"
+    );
+    assert!(
+        shown.stdout.contains("workspace [packageGroup]")
+            && shown.stdout.contains("src/lib.rs [file]"),
+        "the rendered candidate tree carries its container names"
+    );
+    assert!(
+        !plain.stdout.contains("suggested structure"),
+        "the plain run omits the suggested structure entirely"
+    );
+}
+
+#[test]
 fn should_deliver_the_analyze_summary_for_the_python_fixture() {
     let root = fixture("python");
     let root_str = root.to_str().unwrap_or_default();

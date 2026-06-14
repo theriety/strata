@@ -52,13 +52,23 @@ impl Format {
 /// violations, and the best candidate per mode. The table face is the violation
 /// listing used by the `violations` command.
 ///
+/// `show_suggestions` only affects the summary face: when set, each mode's best
+/// candidate has its proposed structure rendered below the candidate headlines.
+/// The JSON face already serializes every candidate's tree, so the flag is a
+/// no-op there.
+///
 /// # Errors
 ///
 /// Returns the underlying [`io::Error`] if writing to `out` fails.
-pub fn render(result: &AnalyzeResult, format: Format, out: &mut impl Write) -> io::Result<()> {
+pub fn render(
+    result: &AnalyzeResult,
+    format: Format,
+    show_suggestions: bool,
+    out: &mut impl Write,
+) -> io::Result<()> {
     match format {
         Format::Json => write_json(result, out),
-        Format::Summary => write_summary(result, out),
+        Format::Summary => write_summary(result, show_suggestions, out),
     }
 }
 
@@ -78,7 +88,11 @@ pub fn write_json(result: &AnalyzeResult, out: &mut impl Write) -> io::Result<()
 /// # Errors
 ///
 /// Returns an [`io::Error`] if writing fails.
-fn write_summary(result: &AnalyzeResult, out: &mut impl Write) -> io::Result<()> {
+fn write_summary(
+    result: &AnalyzeResult,
+    show_suggestions: bool,
+    out: &mut impl Write,
+) -> io::Result<()> {
     writeln!(out, "snapshot {}", result.snapshot_hash)?;
     writeln!(
         out,
@@ -89,16 +103,25 @@ fn write_summary(result: &AnalyzeResult, out: &mut impl Write) -> io::Result<()>
     write_violation_table(&result.current.violations, out)?;
 
     if let Some(mode) = &result.modes.anchored {
-        write_mode_summary("anchored", mode, out)?;
+        write_mode_summary("anchored", mode, show_suggestions, out)?;
     }
     if let Some(mode) = &result.modes.greenfield {
-        write_mode_summary("greenfield", mode, out)?;
+        write_mode_summary("greenfield", mode, show_suggestions, out)?;
     }
     Ok(())
 }
 
-/// Writes one mode's candidate headline to `out`.
-fn write_mode_summary(name: &str, mode: &ModeResult, out: &mut impl Write) -> io::Result<()> {
+/// Writes one mode's candidate headlines to `out`.
+///
+/// When `show_suggestions` is set and the mode has at least one candidate, the
+/// best candidate's proposed structure (candidates are best-score-first, so the
+/// best is the first) is rendered below the headlines via [`render_tree`].
+fn write_mode_summary(
+    name: &str,
+    mode: &ModeResult,
+    show_suggestions: bool,
+    out: &mut impl Write,
+) -> io::Result<()> {
     writeln!(out, "mode {name}: {} candidate(s)", mode.candidates.len())?;
     if !mode.solution_space_converged {
         writeln!(out, "  (fewer than k candidates; solution space converged)")?;
@@ -111,6 +134,14 @@ fn write_mode_summary(name: &str, mode: &ModeResult, out: &mut impl Write) -> io
             candidate.score,
             candidate.delta_narration.len()
         )?;
+    }
+    if show_suggestions && let Some(best) = mode.candidates.first() {
+        writeln!(
+            out,
+            "  suggested structure (candidate {}, score {:.4}):",
+            best.index, best.score
+        )?;
+        render_tree(&best.tree, false, None, out)?;
     }
     Ok(())
 }
@@ -296,6 +327,34 @@ mod tests {
         }
     }
 
+    /// Builds a result whose anchored mode carries one candidate whose tree has a
+    /// `proposed` container, for exercising the `--show-suggestions` face.
+    fn result_with_candidate() -> AnalyzeResult {
+        let mut result = result_with(Vec::new());
+        result.modes = Modes {
+            anchored: Some(ModeResult {
+                candidates: vec![Candidate {
+                    index: 1,
+                    score: 0.25,
+                    score_breakdown: zero_breakdown(),
+                    tree: ContainerNode {
+                        name: "proposed".to_owned(),
+                        level: Level::Folder,
+                        children: Some(vec![file_node("lib", 1)]),
+                        symbols: None,
+                        production_sloc: None,
+                    },
+                    conditional_splits: Vec::new(),
+                    delta_narration: Vec::new(),
+                }],
+                pairwise_distance: Vec::new(),
+                solution_space_converged: true,
+            }),
+            greenfield: None,
+        };
+        result
+    }
+
     /// Builds a zeroed score breakdown.
     fn zero_breakdown() -> ScoreBreakdown {
         ScoreBreakdown {
@@ -416,12 +475,36 @@ mod tests {
         let result = result_with(vec![cycle()]);
         let mut buffer = Vec::new();
 
-        render(&result, Format::Summary, &mut buffer).unwrap_or_default();
+        render(&result, Format::Summary, false, &mut buffer).unwrap_or_default();
 
         let text = String::from_utf8(buffer).unwrap_or_default();
         assert!(text.contains("snapshot deadbeef"));
         assert!(text.contains("current score: 1.5000"));
         assert!(text.contains("cycle [violation]"));
+    }
+
+    #[test]
+    fn should_render_the_best_candidate_structure_when_suggestions_are_shown() {
+        let result = result_with_candidate();
+        let mut buffer = Vec::new();
+
+        render(&result, Format::Summary, true, &mut buffer).unwrap_or_default();
+
+        let text = String::from_utf8(buffer).unwrap_or_default();
+        assert!(text.contains("suggested structure (candidate 1"));
+        assert!(text.contains("proposed"));
+    }
+
+    #[test]
+    fn should_omit_the_candidate_structure_when_suggestions_are_not_shown() {
+        let result = result_with_candidate();
+        let mut buffer = Vec::new();
+
+        render(&result, Format::Summary, false, &mut buffer).unwrap_or_default();
+
+        let text = String::from_utf8(buffer).unwrap_or_default();
+        assert!(!text.contains("suggested structure"));
+        assert!(!text.contains("proposed"));
     }
 
     #[test]

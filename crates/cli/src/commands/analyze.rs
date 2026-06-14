@@ -27,6 +27,8 @@ pub struct AnalyzeArgs {
     pub overrides: ConfigOverrides,
     /// The resolved output format.
     pub format: Format,
+    /// Whether the summary face prints the best candidate's structure per mode.
+    pub show_suggestions: bool,
 }
 
 /// Runs `analyze`, writing the rendered or serialized result to `out`.
@@ -40,9 +42,11 @@ pub fn run(args: &AnalyzeArgs, out: &mut impl Write) -> Result<(), StrataError> 
     let config = resolve_config(&args.config, args.overrides)?;
     let snapshot = snapshot_from_root(&args.root, &config)?;
     let result = analyze(&snapshot, &config)?;
-    render(&result, args.format, out).map_err(|error| StrataError::InputUnreadable {
-        path: args.root.clone(),
-        reason: error.to_string(),
+    render(&result, args.format, args.show_suggestions, out).map_err(|error| {
+        StrataError::InputUnreadable {
+            path: args.root.clone(),
+            reason: error.to_string(),
+        }
     })
 }
 
@@ -81,6 +85,7 @@ mod tests {
             config: root.join("strata.toml"),
             overrides: ConfigOverrides::default(),
             format: Format::Json,
+            show_suggestions: false,
         };
         let mut buffer = Vec::new();
 
