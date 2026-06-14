@@ -1,0 +1,29 @@
+[package]
+name = "strata-adapter-rust"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# THROWAWAY feasibility spike (AD-4). This crate carries no library; it exists
+# only to host `src/bin/spike.rs`, which measures whether the `ra_ap_*`
+# (rust-analyzer) crates can resolve cross-crate references on a realistic
+# cargo workspace within acceptable time and memory. Delete once the AD-4
+# Component Note is written.
+
+[[bin]]
+name = "spike"
+path = "src/bin/spike.rs"
+
+[dependencies]
+ra_ap_load-cargo = "0.0.336"
+ra_ap_ide = "0.0.336"
+ra_ap_ide_db = "0.0.336"
+ra_ap_hir = "0.0.336"
+ra_ap_vfs = "0.0.336"
+ra_ap_paths = "0.0.336"
+ra_ap_project_model = "0.0.336"
+ra_ap_syntax = "0.0.336"
+libc = { workspace = true }
+
+[lints]
+workspace = true

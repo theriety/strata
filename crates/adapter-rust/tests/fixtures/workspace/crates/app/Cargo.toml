@@ -1,0 +1,12 @@
+[package]
+name = "fixture-app"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fixture_app"
+path = "src/lib.rs"
+
+[dependencies]
+fixture-core = { path = "../core" }
+fixture-util = { path = "../util" }

@@ -6,7 +6,13 @@ members = [
     "crates/engine",
     "crates/cli",
     "crates/adapter-typescript",
+    "crates/adapter-rust",
 ]
+
+# The fixture cargo workspace under crates/adapter-rust/tests/fixtures is a
+# self-contained workspace loaded at runtime by the spike; it must not be
+# treated as a member of the outer workspace.
+exclude = ["crates/adapter-rust/tests/fixtures/workspace"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -18,6 +24,7 @@ proptest = "1"
 criterion = "0.5"
 highs = "1"
 rayon = "1"
+libc = "0.2"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

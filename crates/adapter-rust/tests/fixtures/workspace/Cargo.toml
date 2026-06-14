@@ -1,0 +1,5 @@
+# Throwaway fixture workspace for the AD-4 ra_ap binder feasibility spike.
+# Three crates in a value/type/trait dependency chain: util <- core <- app.
+[workspace]
+resolver = "2"
+members = ["crates/util", "crates/core", "crates/app"]

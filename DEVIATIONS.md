@@ -119,3 +119,27 @@
 - **Reason**: behavior-change
 - **Impact on spec**: behavior-change
 - **Severity**: minor
+
+### D-16: Spike loads the rust-analyzer sysroot to measure full resolution
+- **When**: Commit 9 (spike(adapter-rust): ra_ap binder feasibility (AD-4))
+- **Draft said**: "load the fixture workspace via ra_ap_load_cargo" and walk references, with no mention of sysroot configuration
+- **What I did instead**: set `CargoConfig.sysroot = Some(RustLibSource::Discover)` so std-library references (e.g. the `ToString::to_string` blanket-trait method call) resolve; with the default no-sysroot config the binder reached only 94.1% (the single std method-call missed), masking that the cross-crate (AD-4) edges themselves were already 100%
+- **Reason**: wrong-integration
+- **Impact on spec**: behavior-change
+- **Severity**: minor
+
+### D-17: Outer workspace gains the crate as a member and excludes the fixture workspace
+- **When**: Commit 9
+- **Draft said**: showed only `crates/adapter-rust/{Cargo.toml, src/bin/spike.rs, tests/fixtures/workspace/}` without addressing the root `Cargo.toml`
+- **What I did instead**: added `crates/adapter-rust` to `[workspace].members` and added `exclude = ["crates/adapter-rust/tests/fixtures/workspace"]` so the self-contained 3-crate fixture (loaded at runtime by the spike) is not treated as a member of the outer workspace
+- **Reason**: arch-conflict
+- **Impact on spec**: surface-change
+- **Severity**: minor
+
+### D-18: Peak RSS measured in-process via getrusage instead of an external launcher
+- **When**: Commit 9
+- **Draft said**: print "peak rss" and list "memory bounded" as an exit criterion; an earlier source comment offloaded RSS to a launcher's `/usr/bin/time -l`
+- **What I did instead**: added `libc` and measure `ru_maxrss` from `getrusage(RUSAGE_SELF)` in-process (bytes on macOS, KiB on Linux), print `peak_rss_mib` and enforce it against a 4096 MiB budget in the go/no-go gate — no external launcher is committed or required; an unknown reading fails the gate (validated against `/usr/bin/time -l`: 520 MiB matched exactly)
+- **Reason**: wrong-integration
+- **Impact on spec**: surface-change
+- **Severity**: minor
