@@ -30,3 +30,20 @@ impl Summarize for Report {
         format!("{}: {}", self.label, self.measure.value)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Shared test utility: builds a sample report. Used only by test cases, so
+    /// it classifies as test *support* rather than a test case.
+    fn sample_report() -> Report {
+        Report::new("sample", 21)
+    }
+
+    #[test]
+    fn report_doubles_its_measure() {
+        let report = sample_report();
+        assert_eq!(report.doubled(), 42);
+    }
+}

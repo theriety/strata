@@ -2791,15 +2791,18 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 name = "strata-adapter-rust"
 version = "0.1.0"
 dependencies = [
- "libc",
- "ra_ap_hir",
+ "proc-macro2",
  "ra_ap_ide",
- "ra_ap_ide_db",
  "ra_ap_load-cargo",
- "ra_ap_paths",
  "ra_ap_project_model",
  "ra_ap_syntax",
  "ra_ap_vfs",
+ "rayon",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "strata-ir",
+ "syn",
 ]
 
 [[package]]

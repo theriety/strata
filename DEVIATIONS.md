@@ -167,3 +167,19 @@
 - **Reason**: wrong-integration
 - **Impact on spec**: surface-change
 - **Severity**: minor
+
+### D-22: Rust binder takes (manifest, root) and the trait wraps it, like the TS adapter
+- **When**: Commit 10 (feat(adapter-rust): syn parse and ra_ap bind to IR fragments)
+- **Draft said**: `bind(files: Vec<ParsedFile>, manifest: &Path) -> Result<IrFragment, AdapterError>`
+- **What I did instead**: free `bind(files: &[ParsedFile], manifest: &Path, root: &Path) -> Result<IrFragment, BindOutcome>` plus a `RustAdapter` that holds `(manifest, root)` and implements the IR `Adapter` trait (`parse(&[SourceFile])`/`bind(Vec<ParseTree>)`, which carries no manifest); the trait impl maps `BindOutcome` into `AdapterError::Bind` — mirroring the landed `TypeScriptAdapter` pattern. `root` is required to relate parsed repo-relative paths to vfs absolute paths and to name containers
+- **Reason**: wrong-integration
+- **Impact on spec**: surface-change
+- **Severity**: minor
+
+### D-23: Per-symbol SLOC is computed inline during parse; no SymbolId-keyed sloc() exists
+- **When**: Commit 10
+- **Draft said**: `sloc(file: &ParsedFile) -> Vec<(SymbolId, u32)>`
+- **What I did instead**: the IR has no `SymbolId` (node ids are `NodeId`, assigned at bind, not parse), so SLOC is computed per declaration during parsing and stored on `Declaration.sloc`; the public surface is `production_sloc(source: &str) -> u32` over a source slice (mirroring the TS adapter's `sloc` module), and `bind` copies each declaration's SLOC onto its `Node.effective_size`. `cfg(test)` declarations carry zero production SLOC
+- **Reason**: wrong-integration
+- **Impact on spec**: surface-change
+- **Severity**: minor

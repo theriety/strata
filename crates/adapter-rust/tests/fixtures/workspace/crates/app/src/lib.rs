@@ -4,6 +4,9 @@
 use fixture_core::Report;
 use fixture_util::{Measure, Summarize};
 
+/// Re-exports the leaf-crate `Measure` type through `app`'s public surface.
+pub use fixture_util::Measure as ReMeasure;
+
 /// Builds a report and returns its trait-driven summary.
 pub fn describe(label: &str, magnitude: u64) -> String {
     let report = Report::new(label, magnitude);
