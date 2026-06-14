@@ -9,6 +9,15 @@ path = "src/lib.rs"
 
 [dependencies]
 strata-ir = { path = "../ir" }
+smol_str = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "graph"
+harness = false
 
 [lints]
 workspace = true

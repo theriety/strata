@@ -47,3 +47,27 @@
 - **Reason**: stale-symbol
 - **Impact on spec**: surface-change
 - **Severity**: minor
+
+### D-7: `Interner::resolve` returns `Option<&SmolStr>` instead of `&SmolStr`
+- **When**: Commit 2 (feat(core): CSR graph, Tarjan condensation, longest-path layering)
+- **Draft said**: `pub fn resolve(&self, id: u32) -> &SmolStr` (infallible, would panic on unknown id)
+- **What I did instead**: `pub fn resolve(&self, id: u32) -> Option<&SmolStr>` returning `None` for unknown ids
+- **Reason**: standard-violation
+- **Impact on spec**: surface-change
+- **Severity**: minor
+
+### D-8: CSR edge weights use baked-in default kind weights
+- **When**: Commit 2 (feat(core): CSR graph, Tarjan condensation, longest-path layering)
+- **Draft said**: per-edge weight = kind weight × binder confidence, with `build_csr(snapshot, filter)` taking no config
+- **What I did instead**: kind weights come from the documented `[weights]` defaults (value-import/call 1.0, inheritance 1.5, type-reference 0.3, re-export 0.0); config plumbing arrives in a later slice
+- **Reason**: wrong-integration
+- **Impact on spec**: none
+- **Severity**: minor
+
+### D-9: Added `proptest` and `criterion` dev-dependencies
+- **When**: Commit 2 (feat(core): CSR graph, Tarjan condensation, longest-path layering)
+- **Draft said**: scope includes "property tests and a 100k-node release benchmark" without naming crates
+- **What I did instead**: added `proptest` (property tests) and `criterion` (benchmark) to `[workspace.dependencies]` and the core crate's `[dev-dependencies]`
+- **Reason**: missing-dep
+- **Impact on spec**: none
+- **Severity**: minor
