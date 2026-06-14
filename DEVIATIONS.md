@@ -151,3 +151,19 @@
 - **Reason**: wrong-integration
 - **Impact on spec**: surface-change
 - **Severity**: minor
+
+### D-20: Scoring consumes a pre-extracted candidate view rather than a whole tree
+- **When**: Commit 7 (feat(core): objective scoring and VI diversification)
+- **Draft said**: `score(c: &Candidate, k: &Coefficients) -> ScoreBreakdown` over a `Candidate`/`Coefficients` the draft never defines (and a `Candidate` already exists in `project.rs` meaning something unrelated)
+- **What I did instead**: defined `score::Candidate` as the pre-extracted projections the objective actually scores (`edges: Vec<ScoredEdge>` carrying each edge's kind/confidence/LCA level, `containers` child sizes for imbalance, `cohesion_groups` for naming, `path_cohesion`, `move_distance`) plus `Coefficients` with `anchored()`/`greenfield()` presets — mirroring how `pack.rs`/`visibility.rs` own only the view they consume (the established D-19 pattern); cohesion terms are pre-negated into the breakdown so it sums to `total`
+- **Reason**: wrong-integration
+- **Impact on spec**: surface-change
+- **Severity**: minor
+
+### D-21: Diversification takes a `Solver` abstraction instead of a `Snapshot`
+- **When**: Commit 7
+- **Draft said**: `diversify(snapshot: &Snapshot, cfg: &ModeConfig) -> ModeResult`, internally calling a `solve(seed)` that re-runs cluster + pack
+- **What I did instead**: no single `solve` orchestrator exists yet in `core` (cluster/pack are separate phase functions, and wiring the full pipeline is out of this slice's two target files), so `diversify(solver: &impl Solver, cfg)` takes a `Solver` trait (`fn solve(&self, seed: u64) -> SolvedCandidate`) — keeping diversification a pure, testable function that owns oversampling/filtering/max-min-VI while the cluster+pack stack plugs in later; `ModeConfig` also carries `base_seed`, `score_tolerance`, and `min_distance` the draft left implicit. `vi_distance` operates on `cluster::Partition`, the canonical induced-partition type
+- **Reason**: wrong-integration
+- **Impact on spec**: surface-change
+- **Severity**: minor
