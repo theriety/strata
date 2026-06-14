@@ -1,0 +1,247 @@
+---
+type: notion_page
+ref: 37db2572-f788-8110-ae8f-cf9df5441487
+title: Audit Report
+last_edited_time: 2026-06-12T10:13:00.000Z
+---
+
+{{ type: callout, ref: 37db2572-f788-8103-af1b-fb721fce6923, color: red_background, icon: 🗑️ }}
+**Remove all instruction callouts (including this one) from the final report.** They exist only as guidance for using this template.
+--{ ref: 37db2572-f788-8103-af1b-fb721fce6923 }--
+
+{{ type: callout, ref: 37db2572-f788-814b-92be-d0d292ddb177, color: blue_background, icon: 📋 }}
+**Conventions** — use consistently across all sections:
+  **Verdict**: ✅ Holds · ⚠️ Holds with caveats · ❌ Breaks · ❓ Inconclusive
+  **Severity** (Gap Registry): [Critical]{{ color: red }} data loss / contract breach · [High]{{ color: orange }} stated outcome fails under realistic conditions · [Medium]{{ color: yellow }} degraded UX or observability · [Low]{{ color: gray }} cosmetic or future-only risk
+  **Tags** (Gap Registry): API · Type · Module · Dependency · Config · Lifecycle · Concurrency · DX · Docs · Contract
+  **ID prefixes** (Experiment Catalogue): `EXP-<CAT>-<NN>` where `<CAT>` ∈ `HP` Happy Path · `CP` Coverage Probe · `FM` Failure Mode · `IR` Idempotency / Retry · `CR` Concurrency / Race · `SL` Scale / Load · `AS` Adversarial / Security · `MB` Migration / Backcompat · `DX` Developer Experience · `BX` Bespoke
+--{ ref: 37db2572-f788-814b-92be-d0d292ddb177 }--
+
+{{ ref: 37db2572-f788-8159-8abb-e679f4aa3be4 }}
+## 🔑 Key Takeaways
+--{ ref: 37db2572-f788-8159-8abb-e679f4aa3be4 }--
+
+{{ type: callout, ref: 37db2572-f788-8151-82b9-e76351db5b3b, color: yellow_background, icon: ⚠️ }}
+**Exactly five load-bearing bullets.** Every bullet is non-trivial; a reviewer should 🔴 block if any changes silently. Order is fixed.
+--{ ref: 37db2572-f788-8151-82b9-e76351db5b3b }--
+
+{{ ref: 37db2572-f788-81df-a25c-d6fb5a494f68 }}
+- **Verdict at a glance:** [ N experiments across M categories · X ✅ · Y ⚠️ · Z ❌ · W ❓. K gaps registered — A Critical · B High · C Medium · D Low. ]
+--{ ref: 37db2572-f788-81df-a25c-d6fb5a494f68 }--
+{{ ref: 37db2572-f788-81d7-a7e3-e51f3bbab9ee }}
+- **Why so many experiments:** *one path = one experiment*. [ Restate the discipline so a reviewer understands density is breadth, not redundancy: every distinguishable Usage Example end-to-end, every public-API contract probe, every dependency outage, every mutating call's retry, every race, every scale dimension, every adversarial input, every backcompat scenario gets its own card. ]
+--{ ref: 37db2572-f788-81d7-a7e3-e51f3bbab9ee }--
+{{ ref: 37db2572-f788-8199-b515-f612416a1231 }}
+- **Failure surfaces that break today:** [ Enumerate every ❌ verdict, grouped by theme (e.g. dependency outages, type-safety holes, lifecycle leaks), tagged with experiment IDs. ]
+--{ ref: 37db2572-f788-8199-b515-f612416a1231 }--
+{{ ref: 37db2572-f788-81df-a0b0-cdee36e80a21 }}
+- **Critical actions (N):**
+  {{ ref: 37db2572-f788-8133-bc7a-d2dcfb1184ae }}
+  - [ Top Critical-severity fix · GAP-NN · target artifact ]
+  --{ ref: 37db2572-f788-8133-bc7a-d2dcfb1184ae }--
+  {{ ref: 37db2572-f788-810f-8ea3-cb30442b0040 }}
+  - [ Top Critical-severity fix · GAP-NN · target artifact ]
+  --{ ref: 37db2572-f788-810f-8ea3-cb30442b0040 }--
+--{ ref: 37db2572-f788-81df-a0b0-cdee36e80a21 }--
+{{ ref: 37db2572-f788-81e7-a749-c18cd4984ff2 }}
+- **Theme summary by category:**
+  {{ ref: 37db2572-f788-8183-a76b-f05fea39f24e }}
+  - *Happy paths (N):* [ what holds vs breaks across Usage Examples ]
+  --{ ref: 37db2572-f788-8183-a76b-f05fea39f24e }--
+  {{ ref: 37db2572-f788-8181-8c73-c975c758114b }}
+  - *Coverage probes (N):* [ public API / type / dependency / config / docs closure ]
+  --{ ref: 37db2572-f788-8181-8c73-c975c758114b }--
+  {{ ref: 37db2572-f788-8140-a900-de472da68c4c }}
+  - *Failure modes (N):* [ degradation contract per dependency ]
+  --{ ref: 37db2572-f788-8140-a900-de472da68c4c }--
+  {{ ref: 37db2572-f788-8119-a7b8-fa4ef1fb889e }}
+  - *Idempotency / retry (N):* [ mutating-op replay safety ]
+  --{ ref: 37db2572-f788-8119-a7b8-fa4ef1fb889e }--
+  {{ ref: 37db2572-f788-818c-86e2-ff255a10c012 }}
+  - *Concurrency / race (N):* [ shared-state and lifecycle races ]
+  --{ ref: 37db2572-f788-818c-86e2-ff255a10c012 }--
+  {{ ref: 37db2572-f788-818e-af57-c4f4aa6da8aa }}
+  - *Scale / load (N):* [ throughput, payload, footprint ]
+  --{ ref: 37db2572-f788-818e-af57-c4f4aa6da8aa }--
+  {{ ref: 37db2572-f788-8178-993f-f516413c6462 }}
+  - *Adversarial / security (N):* [ malformed / malicious / oversized inputs at the API boundary ]
+  --{ ref: 37db2572-f788-8178-993f-f516413c6462 }--
+  {{ ref: 37db2572-f788-8194-961a-d1e898ed6164 }}
+  - *Migration / backcompat (N):* [ semver, deprecation, type-level breakage ]
+  --{ ref: 37db2572-f788-8194-961a-d1e898ed6164 }--
+  {{ ref: 37db2572-f788-81ac-a4f9-e0712c54109c }}
+  - *Developer experience (N):* [ ergonomics, defaults, discoverability, error messages ]
+  --{ ref: 37db2572-f788-81ac-a4f9-e0712c54109c }--
+--{ ref: 37db2572-f788-81e7-a749-c18cd4984ff2 }--
+
+{{ ref: 37db2572-f788-8142-b19b-e3749f8b2c29 }}
+## 📐 Protocol
+--{ ref: 37db2572-f788-8142-b19b-e3749f8b2c29 }--
+
+{{ type: callout, ref: 37db2572-f788-8128-9c3c-cde7c83f5c7f, color: gray_background, icon: 📐 }}
+**How a thought experiment is conducted on this library**
+  - **One path = one experiment.** Every distinguishable path is its own experiment with its own hypothesis, procedure, observation, and verdict. Never collapse a category into a single representative experiment.
+  - **Distinguishable paths** include: every Usage Example end-to-end (per workflow × per entry point × per outcome); every coverage probe (per axis: public API, types, modules, dependencies, config, lifecycle, docs); every dependency's outage; every mutating call's retry; every distinct race; every scale dimension; every adversarial input vector; every backcompat scenario; every DX friction point.
+  - **Hypothesis** is one falsifiable sentence. If it does not fit on one line, it is two experiments.
+  - **Setup** pins preconditions, fixtures, fakes, runtime version, feature flags, and caller identity before any step runs.
+  - **Procedure** is numbered. *Every step carries an explicit expected observation* — written before the simulation runs. A step without an expected observation cannot fail and is not an experiment.
+  - **Observation** is a step-by-step narration of the simulation, comparing actual to expected. Disagreements are tagged `[DIVERGENCE]`.
+  - **Verdict** is one of ✅ Holds · ⚠️ Holds with caveats · ❌ Breaks · ❓ Inconclusive.
+  - **Title prefix** — every experiment card heading leads with **exactly one** verdict emoji (not a stack like `✅⚠️❌`) *before* the EXP-ID, e.g. `⚠️ EXP-HP-01 — …`. Pick the single emoji that matches the current verdict (✅ · ⚠️ · ❌ · ❓) and update it whenever the verdict changes so the cards and the Experiment Catalogue stay in sync at a glance.
+  - **Findings** reference Gap Registry IDs only. Descriptions live in the registry, not in the experiment card.
+  - **Severity scale** for gaps: Critical · High · Medium · Low.
+  - **Tags** for gaps: API · Type · Module · Dependency · Config · Lifecycle · Concurrency · DX · Docs · Contract.
+  - **Run metadata** — date, spec revision, conductor — is recorded in this callout and rolled up in the Run Log.
+  - **Run metadata for this audit:** Date `\[ YYYY-MM-DD \]` · Spec revision `\[ revision tag or commit \]` · Conductor `\[ name \]`.
+--{ ref: 37db2572-f788-8128-9c3c-cde7c83f5c7f }--
+
+{{ ref: 37db2572-f788-81fa-8aed-ceea536cc6a4 }}
+## 🎯 Library Snapshot
+--{ ref: 37db2572-f788-81fa-8aed-ceea536cc6a4 }--
+
+{{ type: callout, ref: 37db2572-f788-8166-8450-e96da95525d5, color: yellow_background, icon: ⚠️ }}
+**Capture the library's intended-design surface at the spec revision used for this run.** Pulled from the Library Specification's Problem Statement, Usage Examples, Architecture Overview, Mechanism, Tech Stack, and References. Anything missing or implicit becomes a candidate gap.
+--{ ref: 37db2572-f788-8166-8450-e96da95525d5 }--
+
+{{ ref: 37db2572-f788-810b-82b3-c6e2eeeebfed, table_width: 2 }}
+| Dimension           | Captured at this revision                                          |
+| ------------------- | ------------------------------------------------------------------ |
+| **Stated outcomes** | [ What the library promises to deliver — from Problem Statement ]  |
+| **Usage Examples**  | [ Enumerated workflows, with entry points and outcomes ]           |
+| **Public API surface** | [ Every exported function / class / type that callers can reach ]  |
+| **Inputs**          | [ Required + optional inputs per entry point, with types ]         |
+| **Outputs**         | [ Return types, emitted events, side effects ]                     |
+| **Errors**          | [ Declared error classes / codes — must come from `@theriety/core` ] |
+| **Dependencies**    | [ Runtime + peer + dev dependencies; provider-specific bindings ]  |
+| **Configuration**   | [ Every option, default, valid range, impact ]                     |
+| **Lifecycle**       | [ Init, dispose, async, cancellation, resource cleanup ]           |
+| **Concurrency model** | [ Thread/async safety, shared state, locking ]                     |
+| **Constraints**     | [ Declared budgets, footprint, runtime version, environment ]      |
+| **Boundary conditions** | [ Where the library explicitly stops applying ]                    |
+| **Reversibility**   | [ Whether mutating operations can be undone ]                      |
+--{ ref: 37db2572-f788-810b-82b3-c6e2eeeebfed }--
+
+{{ ref: 37db2572-f788-8113-9aac-d1b796555e6e }}
+## 📚 Experiment Catalogue
+--{ ref: 37db2572-f788-8113-9aac-d1b796555e6e }--
+
+{{ type: callout, ref: 37db2572-f788-812c-afe4-cd63d20efef7, color: yellow_background, icon: ⚠️ }}
+**Every experiment in §Experiments must appear here.** Treat density as a *signal of breadth*, not a problem — a non-trivial library typically yields **20–60+ experiments**.
+--{ ref: 37db2572-f788-812c-afe4-cd63d20efef7 }--
+
+{{ ref: 37db2572-f788-8174-bb3a-d96850a9bfdb, table_width: 5 }}
+| ID        | Category             | Hypothesis (one line)                                                  | Verdict | Open gaps |
+| --------- | -------------------- | ---------------------------------------------------------------------- | ------- | --------- |
+| EXP-HP-01 | Happy Path           | [ Usage Example #1 closes end-to-end against the public API ]          | ⚠️      | 0         |
+| EXP-CP-01 | Coverage Probe       | [ Every public API entry is exercised by ≥ 1 Usage Example ]           | ⚠️      | 0         |
+| EXP-FM-01 | Failure Mode         | [ Dependency D outage degrades predictably without data loss ]         | ❌       | 0         |
+| EXP-IR-01 | Idempotency          | [ Mutating call M is safe under retry ]                                | ⚠️      | 0         |
+| EXP-CR-01 | Concurrency          | [ Concurrent callers on shared state converge consistently ]           | ⚠️      | 0         |
+| EXP-SL-01 | Scale                | [ Library holds at 10× expected input size ]                           | ⚠️      | 0         |
+| EXP-AS-01 | Adversarial          | [ Malformed input is rejected at the boundary without side effects ]   | ⚠️      | 0         |
+| EXP-MB-01 | Migration            | [ Old caller on previous semver continues to compile and run ]         | ⚠️      | 0         |
+| EXP-DX-01 | Developer Experience | [ A first-time caller can complete Usage Example #1 from types alone ] | ⚠️      | 0         |
+--{ ref: 37db2572-f788-8174-bb3a-d96850a9bfdb }--
+
+{{ ref: 37db2572-f788-8127-b120-eb381e55e70a }}
+## 🧪 Experiments
+--{ ref: 37db2572-f788-8127-b120-eb381e55e70a }--
+
+{{ type: callout, ref: 37db2572-f788-81d9-8817-dfee796cfe89, color: yellow_background, icon: ⚠️ }}
+**One toggle per experiment.** Within each category, enumerate every distinguishable path. A category with a single representative experiment is a defect. Cards reference Gap IDs only — descriptions live in the registry.
+--{ ref: 37db2572-f788-81d9-8817-dfee796cfe89 }--
+
+{{ ref: 37db2572-f788-819a-89c2-ff56736ebbc0 }}
+### 🟢 Happy Paths
+--{ ref: 37db2572-f788-819a-89c2-ff56736ebbc0 }--
+
+{{ ref: 37db2572-f788-81ed-a6fd-fc8b6d57f1d7 }}
+### 🔍 Coverage Probes
+--{ ref: 37db2572-f788-81ed-a6fd-fc8b6d57f1d7 }--
+
+{{ ref: 37db2572-f788-81cd-97ba-d97b065ed499 }}
+### 💥 Failure Modes
+--{ ref: 37db2572-f788-81cd-97ba-d97b065ed499 }--
+
+{{ ref: 37db2572-f788-81de-95d2-cfca75e99787 }}
+### 🔁 Idempotency & Retry
+--{ ref: 37db2572-f788-81de-95d2-cfca75e99787 }--
+
+{{ ref: 37db2572-f788-81b5-bc11-f350ca87dd59 }}
+### 🏎️ Concurrency & Race
+--{ ref: 37db2572-f788-81b5-bc11-f350ca87dd59 }--
+
+{{ ref: 37db2572-f788-8155-8e33-f1c92b472080 }}
+### 📈 Scale & Load
+--{ ref: 37db2572-f788-8155-8e33-f1c92b472080 }--
+
+{{ ref: 37db2572-f788-81ac-b836-d0e016297784 }}
+### 🛡️ Adversarial & Security
+--{ ref: 37db2572-f788-81ac-b836-d0e016297784 }--
+
+{{ ref: 37db2572-f788-8190-bb7f-f58f8399f399 }}
+### 🚚 Migration & Backcompat
+--{ ref: 37db2572-f788-8190-bb7f-f58f8399f399 }--
+
+{{ ref: 37db2572-f788-81c4-aacd-fe3726d8cd1c }}
+### 🧑‍💻 Developer Experience
+--{ ref: 37db2572-f788-81c4-aacd-fe3726d8cd1c }--
+
+{{ ref: 37db2572-f788-8179-a7ec-e3eacfa96812 }}
+## 🚩 Gap Registry
+--{ ref: 37db2572-f788-8179-a7ec-e3eacfa96812 }--
+
+{{ type: callout, ref: 37db2572-f788-8169-8a75-da7843308092, color: yellow_background, icon: ⚠️ }}
+**One row per unique gap.** A gap surfaced by multiple experiments lists every surfacing experiment. Descriptions live here only — never duplicate them on experiment cards.
+--{ ref: 37db2572-f788-8169-8a75-da7843308092 }--
+
+{{ ref: 37db2572-f788-81dd-b464-cdcf759c5018, table_width: 5 }}
+| ID     | Description                                                                                       | Tag            | Severity     | Surfaced by          |
+| ------ | ------------------------------------------------------------------------------------------------- | -------------- | ------------ | -------------------- |
+| GAP-01 | [ One-paragraph description of the gap, the artifact it touches, and what "resolved" looks like ] | API · Contract | High         | EXP-HP-01, EXP-CP-01 |
+| GAP-02 | [ … ]                                                                                             | [ tag ]        | [ severity ] | [ EXP-IDs ]          |
+--{ ref: 37db2572-f788-81dd-b464-cdcf759c5018 }--
+
+{{ ref: 37db2572-f788-8168-b57c-ce625237f3fe }}
+## 🧭 Verdict & Recommendation
+--{ ref: 37db2572-f788-8168-b57c-ce625237f3fe }--
+
+{{ type: callout, ref: 37db2572-f788-8144-99bc-dc21f47f0ff2, color: yellow_background, icon: ⚠️ }}
+**The conductor's expert call.** A single Critical gap can sink an otherwise clean run. Pick exactly one verdict and prioritize the changeset.
+--{ ref: 37db2572-f788-8144-99bc-dc21f47f0ff2 }--
+
+{{ ref: 37db2572-f788-8125-9e5a-e5b65dc296eb }}
+**Verdict:** *Ship as-is* · *Ship with named caveats* · *Revise before shipping* · *Do not ship* — [ pick one and justify in one paragraph ]
+--{ ref: 37db2572-f788-8125-9e5a-e5b65dc296eb }--
+
+{{ ref: 37db2572-f788-81db-bb98-fe67b8dc8e88 }}
+**Prioritized changeset:**
+--{ ref: 37db2572-f788-81db-bb98-fe67b8dc8e88 }--
+
+{{ ref: 37db2572-f788-817f-9450-d27954c37243 }}
+1. [ Critical / High fix · GAP-NN · target artifact ]
+--{ ref: 37db2572-f788-817f-9450-d27954c37243 }--
+{{ ref: 37db2572-f788-81f1-8da6-c73935aaa251 }}
+1. [ Critical / High fix · GAP-NN · target artifact ]
+--{ ref: 37db2572-f788-81f1-8da6-c73935aaa251 }--
+{{ ref: 37db2572-f788-81fd-9c35-f05093420905 }}
+1. [ Medium fix · GAP-NN · target artifact ]
+--{ ref: 37db2572-f788-81fd-9c35-f05093420905 }--
+
+{{ ref: 37db2572-f788-81a9-8a43-e2df26868f88 }}
+## 📅 Run Log
+--{ ref: 37db2572-f788-81a9-8a43-e2df26868f88 }--
+
+{{ type: callout, ref: 37db2572-f788-81d9-bbbd-f35c14afabe3, color: yellow_background, icon: ⚠️ }}
+**Optional but encouraged for repeat runs.** A second audit does not overwrite the first — create a new report and append a row here.
+--{ ref: 37db2572-f788-81d9-bbbd-f35c14afabe3 }--
+
+{{ ref: 37db2572-f788-8140-8944-eb086051afbf, table_width: 5 }}
+| Date           | Spec revision | Conductor | Experiments run | Δ vs. previous run                                 |
+| -------------- | ------------- | --------- | --------------- | -------------------------------------------------- |
+| [ YYYY-MM-DD ] | [ revision ]  | [ name ]  | [ N ]           | [ gaps closed / newly surfaced / severity shifts ] |
+--{ ref: 37db2572-f788-8140-8944-eb086051afbf }--
+
+{{ ref: 37db2572-f788-8111-9c6d-f17758a5544d }}
+---
+--{ ref: 37db2572-f788-8111-9c6d-f17758a5544d }--

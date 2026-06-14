@@ -1,0 +1,70 @@
+---
+type: notion_page
+ref: 37db2572-f788-818d-9410-fd8503226263
+title: Code Review [Review Date and Feature]
+last_edited_time: 2026-06-12T10:13:00.000Z
+---
+
+{{ ref: 37db2572-f788-8152-b81b-cef6c9c788ba }}
+### ❓ Open Questions
+--{ ref: 37db2572-f788-8152-b81b-cef6c9c788ba }--
+
+{{ type: callout, ref: 37db2572-f788-811e-bd6c-cf2f98173034, color: yellow_background, icon: ⚠️ }}
+**Capture unresolved questions and unknowns.** These are pre-decisions — naming conflicts, design trade-offs, gaps found when comparing with other libraries or workspace pages, and ambiguities that need clarification before they become ADs or PIs. Apply severity color coding to each toggle. Include **Recommendations** with evaluated options. Leave **Decision** blank for the user to fill in. Remove the entry once resolved.
+--{ ref: 37db2572-f788-811e-bd6c-cf2f98173034 }--
+
+{{ type: toggle, ref: 37db2572-f788-8105-8d89-fa7405c3aa2b, color: orange_background }}
+> 🟢 / 🟡 / 🔴 OQ-1: Question Title
+  - **Issue**: [ What's unclear or inconsistent ]
+  - **Found in**:
+    - [ Source 1: what it says ]
+    - [ Source 2: what it says (if conflicting) ]
+  - **Decision Needed**: [ Specific question(s) to resolve ]
+  - **Recommendations**:
+    - *[ Option A ]*: [ Evaluation — pros, cons, trade-offs ]
+    - *[ Option B ]*: [ Evaluation — pros, cons, trade-offs ]
+  - **Decision**: [ User fills in the chosen direction — remove this entry once resolved ]
+--{ ref: 37db2572-f788-8105-8d89-fa7405c3aa2b }--
+
+{{ ref: 37db2572-f788-8107-b787-d002751646b0 }}
+---
+--{ ref: 37db2572-f788-8107-b787-d002751646b0 }--
+
+{{ ref: 37db2572-f788-811e-ba2a-e15c768c5f88 }}
+### 🔀 Spec Deviations
+--{ ref: 37db2572-f788-811e-ba2a-e15c768c5f88 }--
+
+{{ type: callout, ref: 37db2572-f788-81bf-9d06-cf31ef2741d8, color: yellow_background, icon: ⚠️ }}
+**Document spec-vs-implementation mismatches.** Each entry captures where the codebase diverges from its specification or reference documentation — found during code review, audits, or testing. Clearly show what the spec says versus what the code does, and the impact. Apply severity color coding to each toggle. Include **Recommendations** with evaluated options. Leave **Decision** blank for the user to fill in. Remove the entry once resolved.
+--{ ref: 37db2572-f788-81bf-9d06-cf31ef2741d8 }--
+
+{{ type: toggle, ref: 37db2572-f788-819b-bc64-df7c0c0276ff, color: red_background }}
+> 🟢 / 🟡 / 🔴SD-1: Discrepancy Title
+  - **Issue**: [ Brief summary of the mismatch ]
+  - **Spec describes**:
+    - [ What the documentation/spec says ]
+  - **Actual implementation**:
+    - [ What the code actually does ]
+  - **Impact**: [ Consequences of this mismatch ]
+  - **Recommendations**:
+    - *[ Option A ]*: [ Evaluation — pros, cons, trade-offs ]
+    - *[ Option B ]*: [ Evaluation — pros, cons, trade-offs ]
+  - **Decision**: [ User fills in the chosen direction — remove this entry once resolved ]
+--{ ref: 37db2572-f788-819b-bc64-df7c0c0276ff }--
+
+{{ ref: 37db2572-f788-81d2-8b8c-c68c5e29240e }}
+### 📋 Miscellaneous
+--{ ref: 37db2572-f788-81d2-8b8c-c68c5e29240e }--
+
+{{ type: callout, ref: 37db2572-f788-81f6-82fb-dbd9c0652908, color: yellow_background, icon: ⚠️ }}
+**Capture all other issues** — style violations, Coding Bible non-compliance, improvement suggestions, and general observations that don't fit OQ or SD. Group related items logically. Reference specific files and line ranges where possible. Apply severity color coding to each toggle. Remove the entry once resolved.
+--{ ref: 37db2572-f788-81f6-82fb-dbd9c0652908 }--
+
+{{ type: toggle, ref: 37db2572-f788-816f-9646-c1a73d9aaa45, color: gray_background }}
+> 🟢 / 🟡 / 🔴 MI-1: Issue Title
+  - **Issue**: [ What was observed ]
+  - **Found in**: [ File(s) and line range(s) ]
+  - **Severity**: [Nice-to-have]{{ color: gray }}
+  - **Recommendation**: [ Suggested fix or improvement ]
+  - **Decision**: [ User fills in — remove this entry once resolved ]
+--{ ref: 37db2572-f788-816f-9646-c1a73d9aaa45 }--

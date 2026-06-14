@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = ["crates/ir", "crates/core", "crates/engine", "crates/cli"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1"
+smol_str = { version = "0.3", features = ["serde"] }
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+# Baseline: deny everything in `all` and `pedantic`.
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+
+# Curated allow-list (RST-CORE-04). The `reason:` justification lives in the
+# trailing comment since cargo 1.96 does not accept a `reason` key in the lint
+# table; each allow is sanctioned by RST-CORE-04.
+module_name_repetitions = { level = "allow", priority = 0 } # reason: RST-IMPT-03 — one public symbol per module; `foo::FooClient` is idiomatic
+missing_errors_doc = { level = "allow", priority = 0 } # reason: RST-ERRH-01 — typed error documents failure modes at the type
+missing_panics_doc = { level = "allow", priority = 0 } # reason: RST-CORE-01 — panics forbidden in libs; rare allowed panic documented at call site
+must_use_candidate = { level = "allow", priority = 0 } # reason: `#[must_use]` reserved for builders and Result-like values
+return_self_not_must_use = { level = "allow", priority = 0 } # reason: RST-PARM-04 — `&mut Self` fluent chains do not need `#[must_use]`
+implicit_hasher = { level = "allow", priority = 0 } # reason: ergonomic `HashMap<K, V>` in API surfaces; explicit hasher in security-sensitive code
+similar_names = { level = "allow", priority = 0 } # reason: RST-TYPE-01 newtypes solve the actual collision risk
+struct_excessive_bools = { level = "allow", priority = 0 } # reason: RST-PARM-01 behavioural bools become enum; pure config DTOs may carry flags
+too_many_arguments = { level = "allow", priority = 0 } # reason: RST-PARM-03 supersedes — bundle into request struct
+doc_markdown = { level = "allow", priority = 0 } # reason: noise on proper nouns; reviewers catch real prose bugs
+
+# Denied without exception — these catch real bugs.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+todo = "deny"
+unimplemented = "deny"
+indexing_slicing = "deny"
+float_cmp = "deny"
+lossy_float_literal = "deny"
+large_enum_variant = "deny"
+large_stack_arrays = "deny"
+shadow_unrelated = "deny"

@@ -1,0 +1,62 @@
+---
+type: notion_page
+ref: 7308ae90-429d-46a0-8547-e4328f180c89
+title: "Commit 6: feat(core): lca visibility derivation and test projection"
+last_edited_time: 2026-06-12T15:01:00.000Z
+---
+
+{{ ref: ccf53d41-28ed-4787-be24-b1244adcd125 }}
+- **Scope**: `crates/core/src/visibility.rs` and `crates/core/src/project.rs`. Consumes packed candidate trees (commit 5).
+--{ ref: ccf53d41-28ed-4787-be24-b1244adcd125 }--
+{{ ref: ada8c606-0f08-4dd3-aa9f-001a3802a3df }}
+- **Description**: Visibility is derived, never declared: each symbol's export scope is the lowest container ancestor covering all its consumers, widened by the transitive type-exposure fixpoint. Test code is projected, not optimized: specs follow their subjects under the detected per-package convention, helpers cluster inside the test polarity zone, and any production → test edge is a hard violation (AD-3).
+--{ ref: ada8c606-0f08-4dd3-aa9f-001a3802a3df }--
+
+{{ ref: f476948c-4d05-45cf-b51c-1c5eabd8cd4e }}
+```plain text
+crates/core/src/
+├── project.rs       (new)
+├── visibility.rs    (new)
+└── lib.rs           (modified)
+```
+--{ ref: f476948c-4d05-45cf-b51c-1c5eabd8cd4e }--
+
+{{ type: toggle, ref: 415a0261-1984-4a96-bd96-f1ca42b93a94 }}
+> crates/core/src/visibility.rs (new)
+  ```rust
+  /// derived export scope per symbol, plus findings where the declared
+  /// visibility is wider than the derived one
+  pub fn derive_visibility(tree: &ContainerTree, edges: &[Edge]) -> VisibilityResult
+  // logic:
+  //   1. build binary-lifting lca tables over the candidate tree
+  //      (o(v log v) build, o(log v) per query)
+  //   2. scope[s] = lca over { container(c) : c consumes s }
+  //      (a symbol nobody consumes stays file-private)
+  //   3. transitive type-exposure fixpoint — monotone widening, so it terminates:
+  //        repeat until no change:
+  //          for every exported f, for every type t in signature(f):
+  //            scope[t] = widest(scope[t], scope[f])
+  //   4. finding: declared visibility wider than derived -> `visibility` finding
+  //      (drives barrel contents: a folder/domain barrel exports exactly the
+  //       symbols whose derived scope reaches that level)
+  ```
+--{ ref: 415a0261-1984-4a96-bd96-f1ca42b93a94 }--
+
+{{ type: toggle, ref: f64f76c2-0501-437d-8abf-d24f0d284678 }}
+> crates/core/src/project.rs (new)
+  ```rust
+  pub enum SpecConvention { CoLocatedSibling, MirroredFolder }
+
+  /// majority vote over existing spec placements per package; echoed in the report
+  pub fn detect_convention(package: &PackageView) -> SpecConvention
+
+  /// place testcase files and validate polarity
+  pub fn project(candidate: &mut Candidate, polarity: &[Polarity]) -> Vec<Violation>
+  // logic:
+  //   for each testcase file: subject = production file receiving the
+  //   largest share of the spec's outgoing edge weight; place the spec
+  //   beside it (sibling) or at the mirrored path, per the package convention
+  //   testsupport was already clustered by the optimizer (standard cap applies)
+  //   validation: every edge production -> {testcase, testsupport} -> polarity violation
+  ```
+--{ ref: f64f76c2-0501-437d-8abf-d24f0d284678 }--

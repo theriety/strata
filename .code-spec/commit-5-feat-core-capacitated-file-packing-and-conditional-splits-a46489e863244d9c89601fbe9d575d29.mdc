@@ -1,0 +1,53 @@
+---
+type: notion_page
+ref: a46489e8-6324-4d9c-8960-1fbe9d575d29
+title: "Commit 5: feat(core): capacitated file packing and conditional splits"
+last_edited_time: 2026-06-12T15:01:00.000Z
+---
+
+{{ ref: a8ed1f5f-d858-49eb-a1bf-0870615cbe76 }}
+- **Scope**: `crates/core/src/pack.rs`. Consumes folder-level clusters (commit 4) and per-SCC break sets (commit 3); produces file assignments under the 250-production-SLOC cap.
+--{ ref: a8ed1f5f-d858-49eb-a1bf-0870615cbe76 }--
+{{ ref: 9a153f20-40ed-472b-8f3c-7e5efc0230d5 }}
+- **Description**: Cohesion-first packing — files are not bins. Oversized acyclic groups split at the cheapest legal point; oversized cyclic groups are never split illegally and instead emit a conditional split whose preconditions are the MFAS break suggestions (AD-1). Single symbols over the cap get a flagged exemption.
+--{ ref: 9a153f20-40ed-472b-8f3c-7e5efc0230d5 }--
+
+{{ ref: 053d4eae-60ff-4d6c-bd24-08caeead590e }}
+```plain text
+crates/core/src/
+├── pack.rs    (new)
+└── lib.rs     (modified)
+```
+--{ ref: 053d4eae-60ff-4d6c-bd24-08caeead590e }--
+
+{{ type: toggle, ref: d7b3878b-7cb8-4551-b42a-878c00d5b75d }}
+> crates/core/src/pack.rs (new)
+  ```rust
+  pub struct Packing {
+      pub files: Vec<FileGroup>,
+      pub conditional_splits: Vec<ConditionalSplit>,
+      pub exemptions: Vec<NodeId>,   // oversized single symbols
+  }
+
+  /// "break these edges first, then this split becomes legal"
+  pub struct ConditionalSplit {
+      pub group: Vec<NodeId>,
+      pub preconditions: BreakSet,   // from the shatter phase
+      pub resulting_files: Vec<FileGroup>,
+  }
+
+  pub fn pack(folder: &FolderView, cap: u32, breaks: &[BreakSet]) -> Packing
+  // logic:
+  //   1. affinity per scc-atom pair = sum of edge weights + naming-token cohesion;
+  //      sort pairs descending (ties by index for determinism)
+  //   2. kruskal-style agglomeration: merge two groups iff combined production
+  //      sloc <= cap AND the folder's file-level quotient stays acyclic
+  //   3. leftover group > cap and acyclic:
+  //      split at the min-weight topological cut — dp over the topological
+  //      order minimizing crossing weight, o(n^2) on group size
+  //   4. leftover group > cap and cyclic (scc bigger than the cap):
+  //      emit conditional_split(preconditions = mfas(group), resulting split)
+  //   5. single symbol > cap: flag oversized-symbol exemption; its file is cap-exempt
+  // capacity counts production sloc only (node effective_size; testcase files exempt)
+  ```
+--{ ref: d7b3878b-7cb8-4551-b42a-878c00d5b75d }--

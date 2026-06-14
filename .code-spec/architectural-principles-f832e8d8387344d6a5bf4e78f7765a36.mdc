@@ -1,0 +1,509 @@
+---
+type: notion_page
+ref: f832e8d8-3873-44d6-a5bf-4e78f7765a36
+title: Architectural Principles
+last_edited_time: 2026-04-28T17:02:00.000Z
+Owner:
+  - avatar: https://lh3.googleusercontent.com/a-/AAuE7mBz34aOECu6l2g9IUYx7j4k1ApFfrfovFCC77Qa=s100
+    email: alvis@hilbert.space
+    name: Alvis Tang
+Verification: expired
+---
+
+{{ ref: 119aa9eb-08f5-42b0-bf61-0a4ce10e839f }}
+> Simplicity is prerequisite for reliability
+  {{ ref: 55d3c6bc-c969-489d-9db0-3d09e4f5fcc2 }}
+  - Edsger W. Dijkstra
+  --{ ref: 55d3c6bc-c969-489d-9db0-3d09e4f5fcc2 }--
+--{ ref: 119aa9eb-08f5-42b0-bf61-0a4ce10e839f }--
+
+{{ ref: 2efb2572-f788-808a-afed-f97e23973fac }}
+
+--{ ref: 2efb2572-f788-808a-afed-f97e23973fac }--
+
+{{ ref: d9db7a3f-9421-4242-bf6b-f6c0f3a69f25 }}
+📌 **Introduction**
+--{ ref: d9db7a3f-9421-4242-bf6b-f6c0f3a69f25 }--
+
+{{ ref: 872eed69-f4b6-4d59-bbe1-8728045b7a41 }}
+This document defines the architectural principles that guide everything we build — from services and APIs to infrastructure and operations. These aren't abstract ideals; they're practical guardrails that keep our systems consistent, reliable, and maintainable as we scale.
+--{ ref: 872eed69-f4b6-4d59-bbe1-8728045b7a41 }--
+
+{{ ref: 360ddd4d-6899-49b3-be9b-cbc13f53e130 }}
+---
+--{ ref: 360ddd4d-6899-49b3-be9b-cbc13f53e130 }--
+
+{{ ref: 964d1c6a-2dcb-48ae-beb8-4a7f1195507d }}
+## 🧭 Guiding Philosophy
+--{ ref: 964d1c6a-2dcb-48ae-beb8-4a7f1195507d }--
+
+{{ ref: 172df5e4-1c17-4f14-830c-9bf8ccf44f96 }}
+Our architecture is built on a few foundational beliefs:
+--{ ref: 172df5e4-1c17-4f14-830c-9bf8ccf44f96 }--
+
+{{ ref: 91efff8f-8698-40dc-9a04-e4d3a3f2160b }}
+1. **Operations are atomic and idempotent** — They either fully succeed or fully fail, and repeating them is always safe.
+--{ ref: 91efff8f-8698-40dc-9a04-e4d3a3f2160b }--
+{{ ref: c3edea8c-749f-4a5a-91a6-858f310ec477 }}
+1. **Fail fast, fail clearly** — Validate early, surface errors immediately, never proceed with bad data.
+--{ ref: c3edea8c-749f-4a5a-91a6-858f310ec477 }--
+{{ ref: a02bbf5c-a5dd-47b9-abe7-7a253fc79859 }}
+1. **Immutability over mutation** — Deploy new resources rather than patching existing ones.
+--{ ref: a02bbf5c-a5dd-47b9-abe7-7a253fc79859 }--
+{{ ref: fa5c17b5-eee6-4876-90ac-96151bcbef07 }}
+1. **Defense in depth** — Layer security controls; never rely on a single mechanism.
+--{ ref: fa5c17b5-eee6-4876-90ac-96151bcbef07 }--
+{{ ref: 91798f9e-1c5e-4d46-a9b2-97e0973193fa }}
+1. **Observability by default** — Every service emits logs, metrics, and traces from day one.
+--{ ref: 91798f9e-1c5e-4d46-a9b2-97e0973193fa }--
+
+{{ ref: e601ca73-2e5d-45a2-bf3f-af84bfda77ff }}
+These principles aren't just guidelines — they're the foundation that makes our codebase predictable and our debugging tractable.
+--{ ref: e601ca73-2e5d-45a2-bf3f-af84bfda77ff }--
+
+{{ ref: 7e55f248-10d8-4274-83f7-67212e9f10e4 }}
+---
+--{ ref: 7e55f248-10d8-4274-83f7-67212e9f10e4 }--
+
+{{ ref: 58e90629-bcb4-44a9-81b1-cac4ab9a7e34 }}
+## 🔧 Operations Architecture
+--{ ref: 58e90629-bcb4-44a9-81b1-cac4ab9a7e34 }--
+
+{{ ref: ed2b7178-b127-47d8-b7f7-5918323bb1b9 }}
+Our backend follows an **operation-first architecture**. Business logic lives in service operations, which coordinate data orchestrators for all database access. This separation keeps concerns clean and makes each layer independently testable.
+--{ ref: ed2b7178-b127-47d8-b7f7-5918323bb1b9 }--
+
+{{ ref: 37f9c615-a4c8-4d9d-9bc8-396c9298a5de }}
+### Service Operations
+--{ ref: 37f9c615-a4c8-4d9d-9bc8-396c9298a5de }--
+
+{{ ref: f7a3f610-7c43-4c38-a2ef-29c3c1bb6c5f }}
+Service operations contain business logic and are executed by the runtime layer. They:
+--{ ref: f7a3f610-7c43-4c38-a2ef-29c3c1bb6c5f }--
+
+{{ ref: c2af6fb7-9349-4962-bdc1-928d95acbf9e }}
+- Define typed input/output schemas via manifests
+--{ ref: c2af6fb7-9349-4962-bdc1-928d95acbf9e }--
+{{ ref: f466569d-5842-4e43-ba81-c998b6e3e104 }}
+- Call peer services through typed service agents
+--{ ref: f466569d-5842-4e43-ba81-c998b6e3e104 }--
+{{ ref: 583ca982-fc16-4e32-8fe4-0d20bd20a3a4 }}
+- Access databases **exclusively** through data orchestrators
+--{ ref: 583ca982-fc16-4e32-8fe4-0d20bd20a3a4 }--
+{{ ref: 8bb62202-308d-451e-9865-fd082e32bfc8 }}
+- Integrate with external services (Sentry, Supabase Auth, Stripe, etc.)
+--{ ref: 8bb62202-308d-451e-9865-fd082e32bfc8 }--
+
+{{ ref: 6788929b-fa93-4dc5-aabc-aa9c435033b4 }}
+### Data Operations
+--{ ref: 6788929b-fa93-4dc5-aabc-aa9c435033b4 }--
+
+{{ ref: b3cfc8f5-3f9f-4a47-ba1a-0a016b2dcf75 }}
+Data operations are procedures that read from or write to a persistent store. Every data operation must touch a database — that's what defines them.
+--{ ref: b3cfc8f5-3f9f-4a47-ba1a-0a016b2dcf75 }--
+
+{{ ref: e74d24cc-e417-460a-974b-17156c292fb2 }}
+Each operation is a standalone, **ACID-compliant** unit of work:
+--{ ref: e74d24cc-e417-460a-974b-17156c292fb2 }--
+
+{{ ref: 78a2be9b-25fc-453e-a462-5c3faf7b18dd, table_width: 2 }}
+| Property   | Guarantee                                                        |
+| ---------- | ---------------------------------------------------------------- |
+| **Atomic** | Fully succeeds or fully fails — no partial writes                |
+| **Consistent** | Schema constraints and business rules are enforced before commit |
+| **Isolated** | Concurrent operations don't see intermediate state               |
+| **Durable** | Once returned, data is persisted                                 |
+--{ ref: 78a2be9b-25fc-453e-a462-5c3faf7b18dd }--
+
+{{ ref: ce0d7a24-93f5-4f9e-80ee-19e02eec650c }}
+### Design Implications
+--{ ref: ce0d7a24-93f5-4f9e-80ee-19e02eec650c }--
+
+{{ ref: a3607b12-9d0c-4f4c-93f4-028d65dd83c0 }}
+These ACID guarantees shape how we design operations:
+--{ ref: a3607b12-9d0c-4f4c-93f4-028d65dd83c0 }--
+
+{{ ref: a4c7b7ff-cc4d-45d2-be33-139303a07c60 }}
+- **Keep operations small and focused** — one logical change per operation
+--{ ref: a4c7b7ff-cc4d-45d2-be33-139303a07c60 }--
+{{ ref: 7cea0c63-9e8a-4acc-a8a1-403c57d12ad9 }}
+- **Operations are safe to retry** on transient failures
+--{ ref: 7cea0c63-9e8a-4acc-a8a1-403c57d12ad9 }--
+{{ ref: a1f33beb-c97c-442b-b679-bf736dec9ba1 }}
+- **Services compose operations** rather than expanding transaction scope
+--{ ref: a1f33beb-c97c-442b-b679-bf736dec9ba1 }--
+{{ ref: 4f115e88-98f3-4c4c-a637-6691629cf41d }}
+- **Each operation is independently testable** with predictable outcomes
+--{ ref: 4f115e88-98f3-4c4c-a637-6691629cf41d }--
+
+{{ ref: 863daea5-3c52-44c9-a7f6-5769c5fe2d4f }}
+### Layer Boundaries
+--{ ref: 863daea5-3c52-44c9-a7f6-5769c5fe2d4f }--
+
+{{ ref: 501a5f3b-3936-489e-a058-9b19d7018406 }}
+Understanding where code belongs keeps each layer focused and testable:
+--{ ref: 501a5f3b-3936-489e-a058-9b19d7018406 }--
+
+{{ ref: e7ee90f1-ad7a-46a0-bc62-27f139c63e8d, table_width: 3 }}
+| Code Type                       | Where It Belongs         | Principle                                 |
+| ------------------------------- | ------------------------ | ----------------------------------------- |
+| Database read/write             | Data Operation           | ACID guarantees, single source of truth   |
+| Call external API               | Service Operation        | Retry logic, error handling, auth context |
+| Orchestrate multiple operations | Service Operation        | Coordinates at business level             |
+| Generate embeddings / AI calls  | Service Operation        | External dependency, retriable            |
+| Service input/output schema     | Manifest                 | Contract lives with API definition        |
+| Validation schema               | Co-located with consumer | Cache adapter owns its cache schema       |
+| Parse or transform data         | Shared Library           | Pure function, no side effects            |
+| Format output response          | Shared Library           | Deterministic, easily testable            |
+--{ ref: e7ee90f1-ad7a-46a0-bc62-27f139c63e8d }--
+
+{{ ref: 13c2f683-1fe2-48d2-96a9-444475e86cbb }}
+**Decision guide:**
+--{ ref: 13c2f683-1fe2-48d2-96a9-444475e86cbb }--
+
+{{ ref: 40234679-9b29-4cb6-8445-876f42b13d9d }}
+- **Touches database?** → Data Operation
+--{ ref: 40234679-9b29-4cb6-8445-876f42b13d9d }--
+{{ ref: a8e326ee-0a6d-42ec-b6a9-de607457cd9f }}
+- **Touches external service?** → Service Operation
+--{ ref: a8e326ee-0a6d-42ec-b6a9-de607457cd9f }--
+{{ ref: 3bf0b443-853e-46f5-8f7e-959b4f307f6e }}
+- **Defines API contract?** → Manifest
+--{ ref: 3bf0b443-853e-46f5-8f7e-959b4f307f6e }--
+{{ ref: 47a4b8f8-2f58-4b4d-ab7c-c535cccf2f7d }}
+- **Validates domain-specific data?** → Co-locate with consumer
+--{ ref: 47a4b8f8-2f58-4b4d-ab7c-c535cccf2f7d }--
+{{ ref: d0ef69d8-a74a-42d2-846e-2027e3c76438 }}
+- **Pure utility with no side effects?** → Shared Library
+--{ ref: d0ef69d8-a74a-42d2-846e-2027e3c76438 }--
+
+{{ type: callout, ref: f0cfed32-09b7-4f60-92b9-c62bdb1df48d, color: yellow_background, icon: ⚠️ }}
+**Anti-pattern (cross-domain):** Don't create "mega-operations" that touch multiple unrelated domains. Cross-domain coordination belongs at the service layer, with compensation logic — never inside a single data operation or a single `transact` block.
+--{ ref: f0cfed32-09b7-4f60-92b9-c62bdb1df48d }--
+
+{{ type: callout, ref: 93fd4acf-a28a-48b5-94d1-bb1f1b777a18, color: blue_background, icon: 🔗 }}
+**Intra-domain transactional composition** — when multiple operations *within the same domain* must commit or roll back together, compose them via the orchestrator's `transact` primitive:
+  ```typescript
+  await <orchestrator>.transact(async (tx) => {
+    const entity = await tx.set<Entity>({ /* ... */ });
+    await tx.attach<Related>({ entityId: entity.id, /* ... */ });
+  });
+  ```
+  `tx` exposes the same operations as the orchestrator, minus `transact` itself. Each `tx.*` call shares one interactive transaction — atomic commit or rollback. Defaults: `timeout: 3000ms`, `maxWait: 2000ms` (override via `createOrchestrator` options). Use only for single-domain composition; coordinate cross-domain flows at the service layer with compensation logic.
+  See [@theriety/prisma]{{ mention: page:66b95120-1519-4778-a1b6-a41e6d85a804 }} for the underlying mechanism and [Different Kinds of Logics]{{ mention: page:379cf3c8-7d3f-49e9-8075-3ce8bcc925f1 }} for where this fits in the data-layer story.
+--{ ref: 93fd4acf-a28a-48b5-94d1-bb1f1b777a18 }--
+
+{{ ref: e4063eb7-1951-44b8-bbb9-5ad81bf271e3 }}
+### Invocation Paths
+--{ ref: e4063eb7-1951-44b8-bbb9-5ad81bf271e3 }--
+
+{{ ref: 7facb78b-719b-43e4-822a-b6691a162346 }}
+Operations can be invoked via two distinct paths — **external** (through the API gateway) or **internal** (through the service mesh). The gateway is reserved for client-facing requests; service-to-service calls bypass it entirely.
+--{ ref: 7facb78b-719b-43e4-822a-b6691a162346 }--
+
+{{ ref: 1a76fd6c-3187-4c13-9c59-deed3d1ebe21 }}
+```mermaid
+graph LR
+    subgraph "External Path (client → gateway → service)"
+        Client["External Client"] -->|"POST /services/{svc}/operations/{op}<br/>Authorization: Bearer external-token<br/>Body: raw payload"| GW["API Gateway"]
+        GW -->|"Verify token<br/>Issue initiator JWT<br/>Wrap body as { payload }"| EP["@theriety/endpoint"]
+        EP -->|"Feature gating<br/>Dispatch via service agent"| SVC1["Target Service"]
+    end
+
+    subgraph "Internal Path (service → dispatcher → service)"
+        SVC2["Calling Service"] -->|"action.service.peer.operation(input)<br/>Dispatcher resolves inline or external"| DISP["Dispatcher"]
+        DISP -->|"Full OperationRequest envelope<br/>{ payload, cache?, callback?, error? }<br/>+ initiator JWT"| SVC3["Peer Service"]
+    end
+
+    style GW fill:#e1f5ff
+    style EP fill:#fff4e6
+    style DISP fill:#e8f5e9
+```
+--{ ref: 1a76fd6c-3187-4c13-9c59-deed3d1ebe21 }--
+
+{{ ref: 66934cd3-6884-4e4b-8fc8-827a466df5b8 }}
+**Key difference:** The gateway accepts a **raw JSON payload** from external clients and maps it to `{ payload }` only — the `cache`, `error`, and `callback` fields on `OperationRequest` do not exist on the external path. These fields are injected exclusively by the runtime's service agent and async callback machinery during internal dispatch.
+--{ ref: 66934cd3-6884-4e4b-8fc8-827a466df5b8 }--
+
+{{ ref: 74330696-4e19-4180-a40d-88750ccda25d, table_width: 3 }}
+|                   | **External (Gateway)**           | **Internal (Dispatcher)**                                   |
+| ----------------- | -------------------------------- | ----------------------------------------------------------- |
+| **Entry point**   | HTTP URL path                    | `action.service.<peer>.<operation>(input)`                  |
+| **Auth**          | External Bearer token (OIDC)     | Initiator JWT (internally signed)                           |
+| **Body → **`**payload**` | ✅ Raw HTTP body becomes `payload` | ✅ Operation input becomes `payload`                         |
+| `**cache**`       | ❌ Not present                    | Injected by runtime for cross-invocation result persistence |
+| `**error**`       | ❌ Not present                    | Injected by runtime alongside `cache`                       |
+| `**callback**`    | ❌ Not present                    | Injected by service agent for async continuations           |
+| `**deferUntil**`  | ❌ Not available                  | Available on `DispatchParams` for scheduled execution       |
+| **Feature gating** | ✅ Checked at endpoint layer      | ❌ Bypassed (trusted boundary)                               |
+| **Scope enforcement** | ✅ At target service via `ensure()` | ✅ At target service via `ensure()`                          |
+--{ ref: 74330696-4e19-4180-a40d-88750ccda25d }--
+
+{{ ref: 7ab51364-10e2-482a-b481-764183bcc2e8 }}
+For the full type definitions and developer guide, see the **Request Format** section in [Enforcing Permission]{{ mention: page:d7aa7b9b-641b-4133-995e-357237eb8928 }}.
+--{ ref: 7ab51364-10e2-482a-b481-764183bcc2e8 }--
+
+{{ ref: 64a6584b-5fa6-45aa-a53b-fc0974c9188b }}
+---
+--{ ref: 64a6584b-5fa6-45aa-a53b-fc0974c9188b }--
+
+{{ ref: 4c39aec2-a7c2-4c35-a26d-ee9268c5f3a4 }}
+## 💻 API Design
+--{ ref: 4c39aec2-a7c2-4c35-a26d-ee9268c5f3a4 }--
+
+{{ ref: 85b5f97c-3535-4e88-9727-b62c952f74e3 }}
+### Explicit Over Implicit
+--{ ref: 85b5f97c-3535-4e88-9727-b62c952f74e3 }--
+
+{{ ref: 4de4e36f-eeec-4203-8c66-560a6eacc5bd }}
+APIs should require explicit intent. Avoid magic defaults or implicit behaviors that surprise callers.
+--{ ref: 4de4e36f-eeec-4203-8c66-560a6eacc5bd }--
+
+{{ ref: 48559ea5-ec94-40f9-97bc-9637f523a0db }}
+```typescript
+// ✅ explicit intent
+createUser({ name: "Alice", role: "member", permissions: ["read"] });
+
+// ❌ implicit behavior
+createUser({ name: "Alice" }); // what role? what permissions?
+```
+--{ ref: 48559ea5-ec94-40f9-97bc-9637f523a0db }--
+
+{{ ref: a93dc67b-0685-4075-b85f-af8f81c60bdc }}
+### Fail Fast
+--{ ref: a93dc67b-0685-4075-b85f-af8f81c60bdc }--
+
+{{ ref: 585c0a04-a6da-4b7f-9fa5-e4be63e16a24 }}
+Validate inputs early and return clear errors. Don't proceed with invalid data.
+--{ ref: 585c0a04-a6da-4b7f-9fa5-e4be63e16a24 }--
+
+{{ ref: 0211c760-d772-4831-8011-571ff4489c43 }}
+```typescript
+// ✅ early validation
+function process(data: Input) {
+  validateInput(data); // throws immediately if invalid
+  // processing with confidence...
+}
+
+// ❌ late failure
+async function process(data: Input) {
+  // ... 100 lines of processing ...
+  if (!data.required) throw new Error("Missing field"); // too late!
+}
+```
+--{ ref: 0211c760-d772-4831-8011-571ff4489c43 }--
+
+{{ ref: c0bc8f97-ae3e-4781-9afc-6482aa8d7583 }}
+### Versioning
+--{ ref: c0bc8f97-ae3e-4781-9afc-6482aa8d7583 }--
+
+{{ ref: 1f19110f-4ea1-49af-a6fb-46e6e0801faf }}
+APIs are versioned. Breaking changes require new versions — we never break existing clients.
+--{ ref: 1f19110f-4ea1-49af-a6fb-46e6e0801faf }--
+
+{{ ref: 91563c2b-66e8-4b53-a6c4-82f750b594d7, table_width: 3 }}
+| Version | Path      | Status     |
+| ------- | --------- | ---------- |
+| v1      | `/v1/users` | Deprecated |
+| v2      | `/v2/users` | Current    |
+--{ ref: 91563c2b-66e8-4b53-a6c4-82f750b594d7 }--
+
+{{ ref: 019107f9-bdbf-4aa7-827b-5cae2cbe7511 }}
+---
+--{ ref: 019107f9-bdbf-4aa7-827b-5cae2cbe7511 }--
+
+{{ ref: 4d61ec52-381f-4a2f-8005-5c64d5c8058e }}
+## 🏗️ Infrastructure & Deployment
+--{ ref: 4d61ec52-381f-4a2f-8005-5c64d5c8058e }--
+
+{{ ref: e409fc40-1f91-4af7-8250-115d449173eb }}
+### Immutable Deployments
+--{ ref: e409fc40-1f91-4af7-8250-115d449173eb }--
+
+{{ ref: f696fd08-be65-4ba4-a47b-1196d3f5692b }}
+Infrastructure changes create new resources rather than mutating existing ones. This makes rollbacks trivial and eliminates configuration drift.
+--{ ref: f696fd08-be65-4ba4-a47b-1196d3f5692b }--
+
+{{ ref: dff4b5b5-253d-4941-86fc-05f36b163d4b, table_width: 2 }}
+| Action        | Approach                           |
+| ------------- | ---------------------------------- |
+| Deploy        | Create new Lambda version          |
+| Rollback      | Redeploy previous version          |
+| Update config | New deployment with updated values |
+--{ ref: dff4b5b5-253d-4941-86fc-05f36b163d4b }--
+
+{{ ref: 8ac0ab76-e4d3-49ac-9edb-d5d2450c7559 }}
+### Configuration as Code
+--{ ref: 8ac0ab76-e4d3-49ac-9edb-d5d2450c7559 }--
+
+{{ ref: 1e2972f2-9246-4552-97f6-bf712e3642e9 }}
+All configuration is version-controlled and reproducible. Nothing is configured manually in the console.
+--{ ref: 1e2972f2-9246-4552-97f6-bf712e3642e9 }--
+
+{{ ref: 92898612-1b9a-4e44-b6d3-ed4d836ebba0, table_width: 3 }}
+| Type           | Storage             | Tool             |
+| -------------- | ------------------- | ---------------- |
+| Infrastructure | Git repository      | Pulumi           |
+| Runtime config | SSM Parameter Store | AWS SDK          |
+| Secrets        | Secrets Manager     | Rotation enabled |
+--{ ref: 92898612-1b9a-4e44-b6d3-ed4d836ebba0 }--
+
+{{ ref: bfab34c9-8267-4a26-8e6f-ad0b52dfda17 }}
+---
+--{ ref: bfab34c9-8267-4a26-8e6f-ad0b52dfda17 }--
+
+{{ ref: 88b4e009-77cb-40c4-8a99-4c0e17f4fb67 }}
+## 🛡️ Reliability & Resilience
+--{ ref: 88b4e009-77cb-40c4-8a99-4c0e17f4fb67 }--
+
+{{ ref: bc995af8-9af0-4539-8e71-b60fdce9fd3d }}
+### Idempotency
+--{ ref: bc995af8-9af0-4539-8e71-b60fdce9fd3d }--
+
+{{ ref: 4eb20942-a1c9-43bd-aa51-9df2ee07f4a1 }}
+The same request executed multiple times produces the same result without side effects. This is essential for safe retries.
+--{ ref: 4eb20942-a1c9-43bd-aa51-9df2ee07f4a1 }--
+
+{{ ref: 0a21e33f-633a-4bc6-a1c0-6f2db821783d }}
+```typescript
+// ✅ idempotent with key
+async function createPayment(idempotencyKey: string, amount: number) {
+  const existing = await db.findPayment(idempotencyKey);
+  if (existing) return existing; // return cached result
+  
+  return await db.createPayment({ idempotencyKey, amount });
+}
+```
+--{ ref: 0a21e33f-633a-4bc6-a1c0-6f2db821783d }--
+
+{{ ref: 34ac3465-c629-41cf-bd14-fb9ce779a5bf }}
+### Retry with Backoff
+--{ ref: 34ac3465-c629-41cf-bd14-fb9ce779a5bf }--
+
+{{ ref: c5fe1911-c37d-4592-8d36-970ccc083d5d }}
+Transient failures are retried with exponential backoff and jitter. This prevents thundering herds while giving failures time to recover.
+--{ ref: c5fe1911-c37d-4592-8d36-970ccc083d5d }--
+
+{{ ref: f0f7dce2-4342-49f2-a73c-e28abfe37954 }}
+```typescript
+const retryConfig = {
+  maxRetries: 3,
+  baseDelay: 100,      // ms
+  maxDelay: 5000,      // ms
+  backoffFactor: 2,
+  jitter: true,
+};
+```
+--{ ref: f0f7dce2-4342-49f2-a73c-e28abfe37954 }--
+
+{{ ref: a8b07bfe-bc47-4764-9023-c3ed04134136 }}
+### Graceful Degradation
+--{ ref: a8b07bfe-bc47-4764-9023-c3ed04134136 }--
+
+{{ ref: 8d86ed48-a66c-464c-9794-4f786cd3c650 }}
+Services continue operating with reduced functionality when dependencies fail. A payment service outage shouldn't take down the entire application.
+--{ ref: 8d86ed48-a66c-464c-9794-4f786cd3c650 }--
+
+{{ ref: 7af7e165-ae6d-4806-970c-5f6f24862853 }}
+### Circuit Breaking
+--{ ref: 7af7e165-ae6d-4806-970c-5f6f24862853 }--
+
+{{ ref: 73819af8-d118-46e6-a51d-3e3ea56d76e7 }}
+We stop requests to failing dependencies after threshold breaches, preventing cascade failures from overwhelming the system.
+--{ ref: 73819af8-d118-46e6-a51d-3e3ea56d76e7 }--
+
+{{ ref: ee3b9847-e74d-4d90-a2da-fcca14345844 }}
+---
+--{ ref: ee3b9847-e74d-4d90-a2da-fcca14345844 }--
+
+{{ ref: db8f1f14-9e5c-4e98-8613-8ee60b785366 }}
+## 🔐 Security
+--{ ref: db8f1f14-9e5c-4e98-8613-8ee60b785366 }--
+
+{{ ref: 7ca9dc1b-d2cc-41ff-a99a-5421d12cb350 }}
+### Least Privilege
+--{ ref: 7ca9dc1b-d2cc-41ff-a99a-5421d12cb350 }--
+
+{{ ref: 886bd528-f6c0-4daa-9c9a-cdd685976920 }}
+Services have minimal permissions required for their function. Lambda functions don't get admin access just because it's convenient.
+--{ ref: 886bd528-f6c0-4daa-9c9a-cdd685976920 }--
+
+{{ ref: 6f200860-2702-4d7e-b998-61f65c09344c }}
+### Defense in Depth
+--{ ref: 6f200860-2702-4d7e-b998-61f65c09344c }--
+
+{{ ref: f312cada-538b-41ef-84eb-c600f5c226d6 }}
+Security controls are layered. We don't rely on a single mechanism to protect sensitive data or operations.
+--{ ref: f312cada-538b-41ef-84eb-c600f5c226d6 }--
+
+{{ ref: f8302763-507e-4224-b7de-940aa41ec5bb, table_width: 2 }}
+| Layer          | Control              |
+| -------------- | -------------------- |
+| Network        | VPC, Security Groups |
+| Transport      | TLS 1.3              |
+| Authentication | JWT, OIDC            |
+| Authorization  | RBAC, Scopes         |
+--{ ref: f8302763-507e-4224-b7de-940aa41ec5bb }--
+
+{{ ref: 054a4162-0b6f-4008-aea8-4e87daa4c309 }}
+### Secrets Management
+--{ ref: 054a4162-0b6f-4008-aea8-4e87daa4c309 }--
+
+{{ ref: 0a6d5ca3-96ed-454f-8e7f-5e9f1789ca70 }}
+Secrets are externalized, rotated, and **never committed** to source control. Period.
+--{ ref: 0a6d5ca3-96ed-454f-8e7f-5e9f1789ca70 }--
+
+{{ ref: 4b7c7aa4-c853-4231-b780-b329300825b5 }}
+---
+--{ ref: 4b7c7aa4-c853-4231-b780-b329300825b5 }--
+
+{{ ref: d3b71b82-63b3-4ced-bad5-350c495e9ad9 }}
+## 📡 Observability
+--{ ref: d3b71b82-63b3-4ced-bad5-350c495e9ad9 }--
+
+{{ ref: 4299f1c2-75c3-49a8-9f18-5ee3871ea6a9 }}
+Every service emits logs, metrics, and traces by default. Observability isn't an afterthought — it's built into the runtime.
+--{ ref: 4299f1c2-75c3-49a8-9f18-5ee3871ea6a9 }--
+
+{{ ref: 62617973-2ddf-4b8e-a679-25d454f7602f, table_width: 3 }}
+| Signal  | Tool       | Purpose                     |
+| ------- | ---------- | --------------------------- |
+| Logs    | CloudWatch | Debugging, audit trail      |
+| Metrics | CloudWatch | Performance, alerting       |
+| Errors  | Sentry     | Exception tracking, context |
+| Traces  | Sentry     | Distributed request flow    |
+--{ ref: 62617973-2ddf-4b8e-a679-25d454f7602f }--
+
+{{ ref: 40259faa-5e43-42c8-8c07-0bdc68864d36 }}
+### Distributed Tracing
+--{ ref: 40259faa-5e43-42c8-8c07-0bdc68864d36 }--
+
+{{ ref: 0bdab655-d240-4ec8-86f8-8c3e98ce48da }}
+Tracing helps us analyze distributed system performance — particularly for identifying bottlenecks and calculating latency costs for each component.
+--{ ref: 0bdab655-d240-4ec8-86f8-8c3e98ce48da }--
+
+{{ ref: 76874d4f-f3bc-43ed-aa7a-5685937d56ea }}
+A **trace** consists of **spans**, each representing a unit of work done by a component. Spans can be nested, so a span representing a longer-running task can contain multiple spans for the smaller tasks within it.
+--{ ref: 76874d4f-f3bc-43ed-aa7a-5685937d56ea }--
+
+{{ ref: 20faa5e5-fd4b-4bc6-844a-dc247870fee0 }}
+We use **Sentry** as our distributed tracing system. While it lacks features like service graphs compared to dedicated solutions (Zipkin, Jaeger, Appdash), its rich context for individual events and its position as our exception management tool make it the right choice for us.
+--{ ref: 20faa5e5-fd4b-4bc6-844a-dc247870fee0 }--
+
+{{ ref: e13ed0ab-d899-43ef-9ec1-5401cddc7683 }}
+---
+--{ ref: e13ed0ab-d899-43ef-9ec1-5401cddc7683 }--
+
+{{ ref: f827a413-04fc-4c51-9183-691696107bc5 }}
+## 📚 Related Documentation
+--{ ref: f827a413-04fc-4c51-9183-691696107bc5 }--
+
+{{ ref: 37689b1e-e6af-4492-bcca-67b371263ffc }}
+- [Codebase Overview]{{ mention: page:df2ea0db-ed4e-427e-aa96-e7ca44e55119 }} — Code structure and packages
+--{ ref: 37689b1e-e6af-4492-bcca-67b371263ffc }--
+{{ ref: 687bb8ae-0d58-4c9c-969c-b6ad1e5551f3 }}
+- [Deployment Pipeline]{{ mention: page:15076598-6af9-43eb-ab2b-32368c81cf7b }} — CI/CD workflow
+--{ ref: 687bb8ae-0d58-4c9c-969c-b6ad1e5551f3 }--
+{{ ref: fcac3b92-6a19-4905-af7a-314ca5688b37 }}
+- [Infrastructure (Pulumi)]{{ mention: page:98bbd03a-bd87-4c4b-bb0d-36e9c354216b }} — Infrastructure as code
+--{ ref: fcac3b92-6a19-4905-af7a-314ca5688b37 }--

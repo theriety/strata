@@ -1,0 +1,210 @@
+---
+type: notion_page
+ref: 37db2572-f788-81cb-bb9e-cb6e3ca36178
+title: Implementation Draft
+last_edited_time: 2026-06-12T15:05:00.000Z
+---
+
+{{ ref: 37db2572-f788-8130-a4b4-ed279dfd612c, color: gray }}
+Pre-implementation working draft — the file structure and commit plan agreed before coding starts. The `(#N)` markers in the tree map each file to the commit that introduces it.
+--{ ref: 37db2572-f788-8130-a4b4-ed279dfd612c }--
+
+{{ ref: 37db2572-f788-8147-8bff-d045097f7111 }}
+## 📁 File Structure
+--{ ref: 37db2572-f788-8147-8bff-d045097f7111 }--
+
+{{ ref: fc2238d4-f455-4107-bd00-a2dc65d3d55e }}
+```plain text
+strata/
+├── crates/
+│   ├── adapter-python/
+│   │   ├── src/
+│   │   │   ├── bind.rs            # scope resolver + import graph -> ir edges (#11)
+│   │   │   ├── lib.rs             # Adapter trait impl + public exports (#11)
+│   │   │   ├── parse.rs           # rustpython-parser per-file parsing (#11)
+│   │   │   └── sloc.rs            # sloc excl. comments + docstrings (#11)
+│   │   └── Cargo.toml             # (#11)
+│   ├── adapter-rust/
+│   │   ├── src/
+│   │   │   ├── bind.rs            # ra_ap cross-crate name resolution (#9, #10)
+│   │   │   ├── lib.rs             # Adapter trait impl + public exports (#10)
+│   │   │   ├── parse.rs           # syn per-file parsing (#10)
+│   │   │   └── sloc.rs            # sloc excl. doc comments + cfg(test) (#10)
+│   │   └── Cargo.toml             # (#9, #10)
+│   ├── adapter-typescript/
+│   │   ├── src/
+│   │   │   ├── bind.rs            # module graph + symbol binding (#8)
+│   │   │   ├── lib.rs             # Adapter trait impl + public exports (#8)
+│   │   │   ├── parse.rs           # swc per-file parsing (#8)
+│   │   │   └── sloc.rs            # sloc excl. comments + jsdoc (#8)
+│   │   └── Cargo.toml             # (#8)
+│   ├── cli/
+│   │   ├── src/
+│   │   │   ├── commands/
+│   │   │   │   ├── analyze.rs     # (#13)
+│   │   │   │   ├── diff.rs        # (#13)
+│   │   │   │   ├── report.rs      # (#13)
+│   │   │   │   ├── tree.rs        # (#13)
+│   │   │   │   └── violations.rs  # (#13)
+│   │   │   ├── main.rs            # clap entry point (#1 stub, #13)
+│   │   │   └── render.rs          # tty tables, trees, summaries (#13)
+│   │   └── Cargo.toml             # (#1, #13)
+│   ├── core/
+│   │   ├── src/
+│   │   │   ├── cluster/
+│   │   │   │   ├── coarsen.rs     # acyclicity-preserving matching (#4)
+│   │   │   │   ├── refine.rs      # fm moves + cycle/capacity vetoes (#4)
+│   │   │   │   └── seed.rs        # topological greedy growing (#4)
+│   │   │   ├── graph/
+│   │   │   │   ├── csr.rs         # csr adjacency, forward + reverse (#2)
+│   │   │   │   └── intern.rs      # identifier interning (#2)
+│   │   │   ├── condense.rs        # iterative tarjan condensation (#2)
+│   │   │   ├── diversify.rs       # multi-start + max-min vi (#7)
+│   │   │   ├── layer.rs           # longest-path layering (#2)
+│   │   │   ├── lib.rs             # public exports (#1 stub, #2–#7)
+│   │   │   ├── pack.rs            # capacitated packing + conditional splits (#5)
+│   │   │   ├── project.rs         # test projection (#6)
+│   │   │   ├── score.rs           # objective + per-candidate breakdowns (#7)
+│   │   │   ├── shatter.rs         # mfas: ilp + els heuristic (#3)
+│   │   │   └── visibility.rs      # lca visibility derivation (#6)
+│   │   └── Cargo.toml             # (#1, #3 adds highs)
+│   ├── engine/
+│   │   ├── src/
+│   │   │   ├── config.rs          # strata.toml schema + defaults (#12)
+│   │   │   ├── lib.rs             # snapshot_from_root, analyze, load_config (#1 stub, #12)
+│   │   │   └── result.rs          # AnalyzeResult dto + delta narration (#12)
+│   │   └── Cargo.toml             # (#1, #12)
+│   └── ir/
+│       ├── src/
+│       │   ├── adapter.rs         # shared parse -> bind trait (#1)
+│       │   ├── container.rs       # laminar container tree (#1)
+│       │   ├── edge.rs            # edge, hardness, confidence (#1)
+│       │   ├── lib.rs             # public exports (#1)
+│       │   ├── node.rs            # node, polarity, scope level (#1)
+│       │   └── snapshot.rs        # validation + blake3 hashing (#1)
+│       └── Cargo.toml             # (#1)
+├── tests/
+│   └── e2e/
+│       ├── fixtures/              # ts / rust / python sample repos (#13)
+│       └── parity.rs              # cli json == library result (#13)
+├── Cargo.toml                     # workspace manifest (#1)
+└── strata.toml                    # self-analysis config, dogfooding (#13)
+```
+--{ ref: fc2238d4-f455-4107-bd00-a2dc65d3d55e }--
+
+{{ ref: 37db2572-f788-811d-bb94-f9b2c448bac7 }}
+## 📦 Commit Plan
+--{ ref: 37db2572-f788-811d-bb94-f9b2c448bac7 }--
+
+{{ type: callout, ref: 37db2572-f788-81db-b902-e85f6209e95e, color: yellow_background, icon: ⚠️ }}
+**Group commits by Pending Implementation (PI).** Each PI from [Dev Notes]{{ mention: page:37db2572-f788-81db-aa87-d189be40b121 }} gets a bold-text heading that **exactly matches** its task title (e.g. `**PI-1: Task Title**`). List the commits belonging to that PI underneath. **PIs appear in order (PI-1, PI-2, …) and commit numbers stay globally sequential across all PIs — no reset.** Each PI may contain one or more commits.
+  **Break implementation into atomic, standalone commits.** Each commit should be independently testable and deployable: the whole workspace builds and all tests pass at that commit — no forward dependencies on unmerged work. Format each commit as a subpage titled `Commit N: type(scope): description` following conventional commit style. Include Scope, Description, file tree, and file content sections within.
+  - ⏳ — Pending / in progress
+  - ✅ — Merged / complete
+  - 🛑 — Blocked by another commit (note the dependency)
+  **Keep PI headings in sync with Dev Notes** — if a PI is renamed, update the heading here in the same edit.
+--{ ref: 37db2572-f788-81db-b902-e85f6209e95e }--
+
+{{ ref: 37db2572-f788-81f2-8ea3-eb0ede8e3601, color: gray }}
+Thirteen commits across twelve pending implementations — PI numbering matches the Pending Implementations backlog in [Dev Notes]{{ mention: page:37db2572-f788-81db-aa87-d189be40b121 }}.
+--{ ref: 37db2572-f788-81f2-8ea3-eb0ede8e3601 }--
+
+{{ ref: 37db2572-f788-81b5-849c-ddbab4c9e82b }}
+**PI-1: Scaffold the strata workspace and the ir crate**
+--{ ref: 37db2572-f788-81b5-849c-ddbab4c9e82b }--
+
+{{ type: child_page, ref: c585b548-d8cc-419b-a4a2-e528338b534d }}
+[Commit 1: feat(ir): scaffold workspace and snapshot contract]{{ type: page, ref: c585b548-d8cc-419b-a4a2-e528338b534d }}
+--{ ref: c585b548-d8cc-419b-a4a2-e528338b534d }--
+
+{{ ref: cc8d30f2-7c96-4753-9aa1-f741802f76a4 }}
+**PI-2: Implement core graph engine — CSR, condensation, layering**
+--{ ref: cc8d30f2-7c96-4753-9aa1-f741802f76a4 }--
+
+{{ type: child_page, ref: b4ee4b74-9b12-456f-aa5e-5617d80d1fbe }}
+[Commit 2: feat(core): csr graph, tarjan condensation, longest-path layering]{{ type: page, ref: b4ee4b74-9b12-456f-aa5e-5617d80d1fbe }}
+--{ ref: b4ee4b74-9b12-456f-aa5e-5617d80d1fbe }--
+
+{{ ref: 02382899-fe42-4467-8b7e-67bb7d775aa4 }}
+**PI-3: Cycle shattering — exact and heuristic MFAS**
+--{ ref: 02382899-fe42-4467-8b7e-67bb7d775aa4 }--
+
+{{ type: child_page, ref: 63dcdf4e-78fa-4e30-a764-f38a4b5a2209 }}
+[Commit 3: feat(core): mfas shattering with exact ilp and els fallback]{{ type: page, ref: 63dcdf4e-78fa-4e30-a764-f38a4b5a2209 }}
+--{ ref: 63dcdf4e-78fa-4e30-a764-f38a4b5a2209 }--
+
+{{ ref: 37db2572-f788-81ba-b963-f883020c9004 }}
+**PI-4: Multilevel acyclic clustering**
+--{ ref: 37db2572-f788-81ba-b963-f883020c9004 }--
+
+{{ type: child_page, ref: 8fedd956-4dde-4c34-897c-d128ebadcd89 }}
+[Commit 4: feat(core): multilevel acyclic clustering with capacity vetoes]{{ type: page, ref: 8fedd956-4dde-4c34-897c-d128ebadcd89 }}
+--{ ref: 8fedd956-4dde-4c34-897c-d128ebadcd89 }--
+
+{{ ref: 3e045883-c9f3-4df1-a367-74e2b000edb0 }}
+**PI-5: Capacitated file packing and conditional splits**
+--{ ref: 3e045883-c9f3-4df1-a367-74e2b000edb0 }--
+
+{{ type: child_page, ref: a46489e8-6324-4d9c-8960-1fbe9d575d29 }}
+[Commit 5: feat(core): capacitated file packing and conditional splits]{{ type: page, ref: a46489e8-6324-4d9c-8960-1fbe9d575d29 }}
+--{ ref: a46489e8-6324-4d9c-8960-1fbe9d575d29 }--
+
+{{ ref: b12d4e10-a067-44db-a307-84a44bdb20e8 }}
+**PI-6: Visibility derivation and test projection**
+--{ ref: b12d4e10-a067-44db-a307-84a44bdb20e8 }--
+
+{{ type: child_page, ref: 7308ae90-429d-46a0-8547-e4328f180c89 }}
+[Commit 6: feat(core): lca visibility derivation and test projection]{{ type: page, ref: 7308ae90-429d-46a0-8547-e4328f180c89 }}
+--{ ref: 7308ae90-429d-46a0-8547-e4328f180c89 }--
+
+{{ ref: 8ee86e25-8db6-49c6-8615-0d153e2ac42e }}
+**PI-7: Scoring and candidate diversification**
+--{ ref: 8ee86e25-8db6-49c6-8615-0d153e2ac42e }--
+
+{{ type: child_page, ref: 1ba8ab44-27ad-417c-9a43-b3e3900c6cab }}
+[Commit 7: feat(core): objective scoring and vi diversification]{{ type: page, ref: 1ba8ab44-27ad-417c-9a43-b3e3900c6cab }}
+--{ ref: 1ba8ab44-27ad-417c-9a43-b3e3900c6cab }--
+
+{{ ref: b835b128-a408-4f4b-90f4-e9eb31925519 }}
+**PI-8: TypeScript adapter — swc parse and bind**
+--{ ref: b835b128-a408-4f4b-90f4-e9eb31925519 }--
+
+{{ type: child_page, ref: 3b3bb62e-b156-40a3-83a9-485addaaf05d }}
+[Commit 8: feat(adapter-typescript): swc parse and bind to ir fragments]{{ type: page, ref: 3b3bb62e-b156-40a3-83a9-485addaaf05d }}
+--{ ref: 3b3bb62e-b156-40a3-83a9-485addaaf05d }--
+
+{{ ref: 5c9ff80f-b85a-4b90-b914-c2cc1e56fc89 }}
+**PI-9: Rust adapter — syn and ra_ap binder**
+--{ ref: 5c9ff80f-b85a-4b90-b914-c2cc1e56fc89 }--
+
+{{ type: child_page, ref: 47a202bf-7878-4e72-9bbc-9b72ba5238f7 }}
+[Commit 9: spike(adapter-rust): ra_ap binder feasibility (AD-4)]{{ type: page, ref: 47a202bf-7878-4e72-9bbc-9b72ba5238f7 }}
+--{ ref: 47a202bf-7878-4e72-9bbc-9b72ba5238f7 }--
+
+{{ type: child_page, ref: 531938a4-7ba3-44ff-8396-0c043b661817 }}
+[Commit 10: feat(adapter-rust): syn parse and ra_ap bind to ir fragments]{{ type: page, ref: 531938a4-7ba3-44ff-8396-0c043b661817 }}
+--{ ref: 531938a4-7ba3-44ff-8396-0c043b661817 }--
+
+{{ ref: 697d53de-830e-43f0-9153-6ec342803785 }}
+**PI-10: Python adapter — rustpython parse and bind**
+--{ ref: 697d53de-830e-43f0-9153-6ec342803785 }--
+
+{{ type: child_page, ref: a804da20-9533-438e-886d-a3211570c417 }}
+[Commit 11: feat(adapter-python): rustpython parse and scope-resolver bind]{{ type: page, ref: a804da20-9533-438e-886d-a3211570c417 }}
+--{ ref: a804da20-9533-438e-886d-a3211570c417 }--
+
+{{ ref: 10f5432b-0f6f-4ce2-9a26-b181aecc30da }}
+**PI-11: Engine orchestration and public library surface**
+--{ ref: 10f5432b-0f6f-4ce2-9a26-b181aecc30da }--
+
+{{ type: child_page, ref: 9f18b42e-411d-4c15-a9c4-69d0e5e4fac7 }}
+[Commit 12: feat(engine): orchestration, config, and public library surface]{{ type: page, ref: 9f18b42e-411d-4c15-a9c4-69d0e5e4fac7 }}
+--{ ref: 9f18b42e-411d-4c15-a9c4-69d0e5e4fac7 }--
+
+{{ ref: 7ddb092f-675b-4cac-a04a-ce412b8c8d00 }}
+**PI-12: CLI commands, rendering, and end-to-end parity**
+--{ ref: 7ddb092f-675b-4cac-a04a-ce412b8c8d00 }--
+
+{{ type: child_page, ref: 62464bb6-5869-4692-b427-97eef1f310b0 }}
+[Commit 13: feat(cli): commands, rendering, e2e fixtures, and parity test]{{ type: page, ref: 62464bb6-5869-4692-b427-97eef1f310b0 }}
+--{ ref: 62464bb6-5869-4692-b427-97eef1f310b0 }--

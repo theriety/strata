@@ -1,0 +1,65 @@
+---
+type: notion_page
+ref: 63dcdf4e-78fa-4e30-a764-f38a4b5a2209
+title: "Commit 3: feat(core): mfas shattering with exact ilp and els fallback"
+last_edited_time: 2026-06-12T15:00:00.000Z
+---
+
+{{ ref: d1320be8-3f9b-40ca-8268-3b837307b5be }}
+- **Scope**: `crates/core/src/shatter.rs` plus the `highs` dependency. Consumes condensation SCCs from commit 2; conditional-split wiring comes later (commit 5).
+--{ ref: d1320be8-3f9b-40ca-8268-3b837307b5be }--
+{{ ref: 80e8367c-8a1f-4b8f-948d-386d954e422e }}
+- **Description**: Per-SCC minimum feedback arc set suggestions — the product's most actionable output. Exact ILP with lazy cycle constraints for SCCs up to `ilp-threshold` (default 300); Eades–Lin–Smyth ordering with local search above the threshold or on timeout. Every result carries an `exact` flag so heuristic answers never masquerade as proofs (AD-7).
+--{ ref: 80e8367c-8a1f-4b8f-948d-386d954e422e }--
+
+{{ ref: c0c4284d-7cc9-4027-933c-1ffa2aafa00a }}
+```plain text
+crates/core/
+├── src/
+│   ├── shatter.rs   (new)
+│   └── lib.rs       (modified)
+└── Cargo.toml       (modified · adds highs)
+```
+--{ ref: c0c4284d-7cc9-4027-933c-1ffa2aafa00a }--
+
+{{ type: toggle, ref: 00432a51-ea08-47cd-8f22-2a87eb2e739b }}
+> crates/core/src/shatter.rs (new)
+  ```rust
+  /// a set of edges whose removal makes the scc acyclic
+  pub struct BreakSet { pub edges: Vec<EdgeRef>, pub exact: bool }
+
+  pub struct SolverLimits {
+      /// sccs at or under this size go to the ilp (default 300)
+      pub ilp_threshold: usize,
+      /// wall-clock budget per scc; overruns degrade to the heuristic
+      pub timeout: Duration,
+  }
+
+  /// rayon-parallel over sccs; results reduced in scc-index order (deterministic)
+  pub fn shatter_all(sccs: &[SccView], w: &EdgeWeights, limits: &SolverLimits) -> Vec<BreakSet>
+
+  // ilp path — lazy cycle constraints (avoids enumerating exponentially many cycles):
+  //   constraints = {}
+  //   loop:
+  //     x = highs.solve(minimize sum w(e) * cut(e), cut(e) binary, constraints)
+  //     c = find_cycle(scc minus { e : cut(e) = 1 })      // plain dfs
+  //     if none: return BreakSet { edges, exact: true }
+  //     constraints += sum over e in c of cut(e) >= 1
+  //   on timeout: fall through to els, exact: false
+
+  // els path (eades-lin-smyth, o(v + e)):
+  //   repeatedly strip sinks (append right) and sources (prepend left);
+  //   otherwise move the vertex maximizing out-degree minus in-degree
+  //   cut = backward edges in the final ordering
+  //   improve: single-vertex repositioning while total cut weight drops
+  ```
+--{ ref: 00432a51-ea08-47cd-8f22-2a87eb2e739b }--
+
+{{ type: toggle, ref: d330dc0d-56b9-471d-a05f-70ee77f5d016 }}
+> crates/core/Cargo.toml (modified)
+  ```toml
+  [dependencies]
+  highs = "1"      # exact mfas via ilp with lazy cycle constraints (ad-7)
+  rayon = "1"      # per-scc parallelism
+  ```
+--{ ref: d330dc0d-56b9-471d-a05f-70ee77f5d016 }--

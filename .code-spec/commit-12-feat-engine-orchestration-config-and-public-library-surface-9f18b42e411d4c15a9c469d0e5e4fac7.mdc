@@ -1,0 +1,96 @@
+---
+type: notion_page
+ref: 9f18b42e-411d-4c15-a9c4-69d0e5e4fac7
+title: "Commit 12: feat(engine): orchestration, config, and public library surface"
+last_edited_time: 2026-06-12T15:03:00.000Z
+---
+
+{{ ref: b12f3428-4777-4573-a42f-1996c31c7fd8 }}
+- **Scope**: The complete `engine` crate — config loading and validation, adapter dispatch and fragment merging, pipeline orchestration, the typed result DTO with delta narration, and the public library API (`snapshot_from_root`, `analyze`, `load_config`).
+--{ ref: b12f3428-4777-4573-a42f-1996c31c7fd8 }--
+{{ ref: dc4603ed-6ee0-4c64-843d-6bc1609c9897 }}
+- **Description**: The library-first integration surface (AD-5): everything the CLI can do is callable as a plain Rust API with typed inputs and outputs — `analyze` is pure (no I/O, no global state), so embedders control filesystem access and parallelism. All eight `StrataError` variants originate here or pass through here.
+--{ ref: dc4603ed-6ee0-4c64-843d-6bc1609c9897 }--
+
+{{ ref: e257b827-3ce9-4cd3-9ee9-0b49ac51b40c }}
+```plain text
+crates/engine/
+├── src/
+│   ├── config.rs    (new)
+│   ├── lib.rs       (modified · replaces stub)
+│   └── result.rs    (new)
+└── Cargo.toml       (modified · depends on ir, core, all adapters)
+```
+--{ ref: e257b827-3ce9-4cd3-9ee9-0b49ac51b40c }--
+
+{{ type: toggle, ref: f35f8884-5a3e-4138-bd81-23c12898c155 }}
+> crates/engine/src/config.rs (new)
+  ```rust
+  /// every key optional; defaults match the reference tables exactly
+  pub struct AnalyzeConfig {
+      pub mode: Mode,                 // anchored (default) | greenfield
+      pub caps: LevelCaps,            // file 250 / folder 15 / domain 12 / package 10 / group 12
+      pub weights: EdgeWeights,       // value-import 1.0, inheritance 1.5, call 1.0,
+                                      // type-reference 0.3, re-export 0.0
+      pub objective: Coefficients,    // imbalance 0.1, naming 0.3, path 0.2, anchor 1.0
+      pub solver: SolverLimits,       // ilp-threshold 300, timeout 60s
+      pub diversity: DiversityConfig, // k 3, seeds-per-candidate 10,
+                                      // score-tolerance 0.05, min-distance 0.05
+      pub seed: u64,                  // 42
+  }
+
+  /// parse strata.toml; unknown keys, bad types, or out-of-range values
+  /// -> StrataError::ConfigInvalid with key path and expected range
+  pub fn load_config(path: &Path) -> Result<AnalyzeConfig, StrataError>
+  ```
+--{ ref: f35f8884-5a3e-4138-bd81-23c12898c155 }--
+
+{{ type: toggle, ref: af44e1fb-eab6-4e15-8e5f-1558c2cf4013 }}
+> crates/engine/src/lib.rs (modified)
+  ```rust
+  /// discover sources, run adapters, merge fragments, validate, hash
+  pub fn snapshot_from_root(root: &Path, cfg: &AnalyzeConfig) -> Result<Snapshot, StrataError>
+  // logic:
+  //   1. glob source discovery, honoring config include/exclude patterns
+  //   2. group files by language; dispatch adapters in parallel (rayon)
+  //   3. merge fragments: re-intern ids into one namespace
+  //   4. flatten re-export chains to original definitions
+  //      (depth guard -> ReExportDepthExceeded on pathological chains)
+  //   5. Snapshot::assemble — validate + canonical blake3 hash
+
+  /// pure function of (snapshot, config): condense -> shatter -> layer ->
+  /// cluster -> pack -> visibility -> project -> score -> diversify
+  pub fn analyze(snapshot: &Snapshot, cfg: &AnalyzeConfig) -> Result<AnalyzeResult, StrataError>
+
+  pub enum StrataError {
+      ConfigInvalid, AdapterParseFailure, AdapterBindFailure, SolverTimeout,
+      CandidateNotFound, InputUnreadable, SnapshotInvalid, ReExportDepthExceeded,
+  }
+  ```
+--{ ref: af44e1fb-eab6-4e15-8e5f-1558c2cf4013 }--
+
+{{ type: toggle, ref: 3d098856-a70c-474f-b65c-23d68559f720 }}
+> crates/engine/src/result.rs (new)
+  ```rust
+  /// the dto contract — serde camelCase, identical bytes for cli --format json
+  pub struct AnalyzeResult {
+      pub snapshot_hash: String,
+      pub findings: Vec<Finding>,           // cycles, visibility, oversized, polarity
+      pub anchored: ModeResult,             // k candidates + converged flag
+      pub greenfield: Option<ModeResult>,   // when both modes requested
+  }
+
+  pub struct Candidate {
+      pub tree: ContainerTree,
+      pub score: ScoreBreakdown,
+      pub edge_breaks: Vec<EdgeBreak>,
+      pub conditional_splits: Vec<ConditionalSplit>,
+      pub delta: Vec<Move>,                 // anchored mode: narrated moves
+  }
+
+  /// delta narration: diff candidate tree against the current tree,
+  /// group moves by destination container, attach the dominant reason
+  /// (cohesion gain, cap pressure, or cycle break) per group
+  pub fn narrate_delta(current: &ContainerTree, candidate: &ContainerTree) -> Vec<Move>
+  ```
+--{ ref: 3d098856-a70c-474f-b65c-23d68559f720 }--

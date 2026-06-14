@@ -1,0 +1,67 @@
+---
+type: notion_page
+ref: 1ba8ab44-27ad-417c-9a43-b3e3900c6cab
+title: "Commit 7: feat(core): objective scoring and vi diversification"
+last_edited_time: 2026-06-12T15:01:00.000Z
+---
+
+{{ ref: 87b86b3f-f026-485e-be3c-28e8fc16de66 }}
+- **Scope**: `crates/core/src/score.rs` and `crates/core/src/diversify.rs`. Completes the `core` pipeline; mode presets (anchored vs greenfield) are pure coefficient choices.
+--{ ref: 87b86b3f-f026-485e-be3c-28e8fc16de66 }--
+{{ ref: 6154a6f8-4230-4e9b-9c34-1691a0c29bba }}
+- **Description**: The full objective J(T) with per-candidate breakdowns so users see why a tree ranks where it does, plus multi-start diversification: 10·k seeded restarts, a score-tolerance filter, and greedy max-min selection by variation of information — returning k genuinely different candidates or fewer with `solutionSpaceConverged: true` (AD-2).
+--{ ref: 6154a6f8-4230-4e9b-9c34-1691a0c29bba }--
+
+{{ ref: 2da475d5-5187-4365-9a40-7f7c19612b21 }}
+```plain text
+crates/core/src/
+├── diversify.rs    (new)
+├── score.rs        (new)
+└── lib.rs          (modified)
+```
+--{ ref: 2da475d5-5187-4365-9a40-7f7c19612b21 }--
+
+{{ type: toggle, ref: 728c8e84-c5b2-41fd-be6e-f69a1a1d1c68 }}
+> crates/core/src/score.rs (new)
+  ```rust
+  /// per-candidate score decomposition, reported in the dto
+  pub struct ScoreBreakdown {
+      pub cut: f64,        // sum over edges of w(e) * c(e) * h(lca_t(e))
+      pub imbalance: f64,  // lambda * size-imbalance across sibling containers
+      pub naming: f64,     // alpha * shared-token cohesion within containers
+      pub path: f64,       // beta * current-path cohesion (anchored mode only)
+      pub anchor: f64,     // mu * move distance d(t, t0) from the current tree
+      pub total: f64,
+  }
+
+  pub fn score(c: &Candidate, k: &Coefficients) -> ScoreBreakdown
+  // h(level) is the height penalty: cutting inside a file is cheap,
+  // across packages expensive — monotone in lca height
+  // hard constraints never appear here: they are vetoes upstream
+  ```
+--{ ref: 728c8e84-c5b2-41fd-be6e-f69a1a1d1c68 }--
+
+{{ type: toggle, ref: c8631669-46b6-4395-856b-03dc951437e9 }}
+> crates/core/src/diversify.rs (new)
+  ```rust
+  pub struct ModeResult {
+      pub candidates: Vec<Candidate>,        // best score first
+      pub solution_space_converged: bool,    // true iff fewer than k survived
+  }
+
+  pub fn diversify(snapshot: &Snapshot, cfg: &ModeConfig) -> ModeResult
+  // logic:
+  //   1. pool = rayon-parallel solve(seed = base + i) for i in 0 .. 10 * k
+  //      (each run re-executes cluster + pack with its own seed;
+  //       results reduced in i-order so thread scheduling cannot leak in)
+  //   2. keep candidates with total <= (1 + score_tolerance) * best_total
+  //   3. greedy max-min: pick the best; repeatedly pick the candidate
+  //      maximizing its minimum vi-distance to those already picked,
+  //      requiring pairwise vi >= min_distance
+  //   4. fewer than k survivors -> return them all, converged = true
+
+  /// variation of information (meila 2007) over induced symbol partitions —
+  /// vi(x, y) = h(x) + h(y) - 2 * i(x, y); a true metric on partitions
+  pub fn vi_distance(a: &Partition, b: &Partition) -> f64
+  ```
+--{ ref: c8631669-46b6-4395-856b-03dc951437e9 }--

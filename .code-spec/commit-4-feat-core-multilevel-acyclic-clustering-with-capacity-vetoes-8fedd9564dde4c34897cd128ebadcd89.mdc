@@ -1,0 +1,69 @@
+---
+type: notion_page
+ref: 8fedd956-4dde-4c34-897c-d128ebadcd89
+title: "Commit 4: feat(core): multilevel acyclic clustering with capacity vetoes"
+last_edited_time: 2026-06-12T15:01:00.000Z
+---
+
+{{ ref: 08a96461-ecdf-40a4-b437-2ed070d955d8 }}
+- **Scope**: `crates/core/src/cluster/` — coarsening, seeding, and refinement. Consumes the layered condensation from commit 2; produces nested container assignments (folders → domains → packages → package groups).
+--{ ref: 08a96461-ecdf-40a4-b437-2ed070d955d8 }--
+{{ ref: 212b1537-7b21-47ae-b8cc-89b736b68c8c }}
+- **Description**: dagP-style multilevel clustering where acyclicity is an inviolable veto, not a penalty. Coarsening never merges a cycle-creating pair; seeding grows clusters along topological order; FM refinement accepts a move only if the quotient stays acyclic (incremental check — the hot path) and the target cluster respects its member cap. Cohesion bonuses (naming, path) live inside the gain function.
+--{ ref: 212b1537-7b21-47ae-b8cc-89b736b68c8c }--
+
+{{ ref: 0525ade3-afae-48d3-b256-22d823336338 }}
+```plain text
+crates/core/src/
+├── cluster/
+│   ├── coarsen.rs   (new)
+│   ├── refine.rs    (new)
+│   └── seed.rs      (new)
+└── lib.rs           (modified)
+```
+--{ ref: 0525ade3-afae-48d3-b256-22d823336338 }--
+
+{{ type: toggle, ref: 3d33d1ef-7f1e-47bc-9da0-b9858c308a9d }}
+> crates/core/src/cluster/coarsen.rs (new)
+  ```rust
+  /// one coarsening level: a graph plus the mapping back to the finer level
+  pub struct CoarseGraph { pub graph: Csr, pub fine_to_coarse: Vec<u32> }
+
+  /// heavy-edge matching chain until the graph is small enough to seed
+  pub fn coarsen_chain(dag: &Csr, layers: &[u32]) -> Vec<CoarseGraph>
+  // matching rule: a pair (u, v) may merge only if contracting it cannot
+  // create a quotient cycle — reject when an alternative directed path
+  // u ~> v of length >= 2 exists (checked against the layering: merging
+  // is safe when layer(v) - layer(u) <= 1 and no two-hop path connects them)
+  ```
+--{ ref: 3d33d1ef-7f1e-47bc-9da0-b9858c308a9d }--
+
+{{ type: toggle, ref: 348ba3fe-9436-43d2-bca6-b051065ab90e }}
+> crates/core/src/cluster/seed.rs (new)
+  ```rust
+  /// initial partition at the top of the coarsening chain:
+  /// walk nodes in topological order, greedily grow the current cluster
+  /// until its member cap is hit, then open the next one — clusters
+  /// inherit contiguous layer ranges, so the seed quotient is acyclic by construction
+  pub fn seed(top: &CoarseGraph, layers: &[u32], caps: &LevelCaps) -> Partition
+  ```
+--{ ref: 348ba3fe-9436-43d2-bca6-b051065ab90e }--
+
+{{ type: toggle, ref: 529f97e5-8d83-436e-98aa-39aa1a7f16e7 }}
+> crates/core/src/cluster/refine.rs (new)
+  ```rust
+  /// fm-style refinement, applied at every uncoarsening level
+  pub fn refine(g: &CoarseGraph, parts: &mut Partition, gain: &GainFn)
+  // per pass:
+  //   for v in descending gain order:
+  //     veto 1 — acyclicity: maintain a topological order of the quotient;
+  //       moving v from cluster a to b is legal iff it introduces no
+  //       order-violating quotient edge (kahn-style local repair, incremental —
+  //       never a full recomputation per move)
+  //     veto 2 — capacity: cluster b must stay within its level cap
+  //     apply iff gain > 0, where gain = cut-weight delta
+  //       + alpha * naming-token cohesion + beta * path cohesion (mode-dependent)
+  //   stop when a full pass applies no move
+  // determinism: ties in gain order broken by node index
+  ```
+--{ ref: 529f97e5-8d83-436e-98aa-39aa1a7f16e7 }--

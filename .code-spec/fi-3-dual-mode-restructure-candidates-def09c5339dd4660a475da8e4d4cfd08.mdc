@@ -1,0 +1,54 @@
+---
+type: notion_page
+ref: def09c53-39dd-4660-a475-da8e4d4cfd08
+title: "🟡 FI-3: Dual-mode restructure candidates"
+last_edited_time: 2026-06-12T21:32:00.000Z
+---
+
+{{ ref: 9d25d9f4-0d12-469e-808c-556142864a9d }}
+- **Status**: ⏳ Planned
+--{ ref: 9d25d9f4-0d12-469e-808c-556142864a9d }--
+{{ ref: 1e0f94d7-a69b-4401-8100-87a3433dafda }}
+- **Depends on**: FI-1
+--{ ref: 1e0f94d7-a69b-4401-8100-87a3433dafda }--
+{{ ref: 18a6344b-f3a7-4136-aa3c-5ae3d186317d }}
+- **PRs**: None yet
+--{ ref: 18a6344b-f3a7-4136-aa3c-5ae3d186317d }--
+{{ ref: 619fa225-782b-496d-adfe-980a35744ea4 }}
+- **Surface Area**: `crates/core` (cluster, pack, score, diversify), `--mode` / `-k` flags on `strata analyze`, `AnalyzeConfig { mode, candidates }`
+--{ ref: 619fa225-782b-496d-adfe-980a35744ea4 }--
+{{ ref: ae8b8cc1-8c37-43ae-994f-3712438ea09c }}
+- **Description**: Proposes up to k genuinely different laminar restructures per mode. **Anchored** (μ > 0, path cohesion β > 0) keeps candidates reachable from today's layout; **greenfield** (μ = 0 and β = 0) computes the unbiased ideal — one solver, one objective, different coefficients (AD-2). Candidates within the score-tolerance band of the best are selected by max-min variation of information, so the returned set spans real alternatives instead of near-clones of one local optimum.
+--{ ref: ae8b8cc1-8c37-43ae-994f-3712438ea09c }--
+{{ ref: 7142d6b7-5ae9-4874-b06e-870902aefb37 }}
+- **Usage**:
+--{ ref: 7142d6b7-5ae9-4874-b06e-870902aefb37 }--
+
+{{ ref: 6fbc5beb-3788-450a-a9df-97732e4b79fe }}
+```bash
+$ strata analyze --root . --mode both -k 3 --output result.json
+  anchored    3 candidates · best score 12,401.2  (current scores 19,873.5)
+  greenfield  3 candidates · best score 10,962.8
+```
+--{ ref: 6fbc5beb-3788-450a-a9df-97732e4b79fe }--
+
+{{ ref: 85362337-1e6f-4140-ae70-b14e39ce6009 }}
+- **Code** *(result shape excerpt)*:
+--{ ref: 85362337-1e6f-4140-ae70-b14e39ce6009 }--
+
+{{ ref: 0071de33-90ff-48a9-8e43-d65b2aa70a22 }}
+```rust
+pub struct ModeResult {
+  pub candidates: Vec<Candidate>,     // up to k, best score first
+  pub pairwise_distance: Vec<Vec<f64>>, // variation-of-information matrix
+  pub solution_space_converged: bool, // true when fewer than k survived
+}
+```
+--{ ref: 0071de33-90ff-48a9-8e43-d65b2aa70a22 }--
+
+{{ ref: 56225af9-10e4-492a-ae6a-012f041e0ef0 }}
+- **Behaviour**: Every candidate carries a score breakdown (cut / imbalance / naming / path / anchor) and delta narration against the current tree, so users see *why* it ranks where it does. If the surviving pool collapses below k, fewer candidates are returned with `solutionSpaceConverged: true` — itself a meaningful signal that the solution space is tight. Identical snapshot + config + seed produces byte-identical candidates.
+--{ ref: 56225af9-10e4-492a-ae6a-012f041e0ef0 }--
+{{ ref: a569d431-dd6d-408c-a450-09c4ee606e16 }}
+- **Compatibility**: First release. Scores are comparable only within one Strata version; `result.json` records its `schemaVersion`, and `InputUnreadable` rejects files from incompatible versions.
+--{ ref: a569d431-dd6d-408c-a450-09c4ee606e16 }--

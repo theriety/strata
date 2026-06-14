@@ -1,0 +1,65 @@
+---
+type: notion_page
+ref: a804da20-9533-438e-886d-a3211570c417
+title: "Commit 11: feat(adapter-python): rustpython parse and scope-resolver bind"
+last_edited_time: 2026-06-12T15:03:00.000Z
+---
+
+{{ ref: bdfeb862-9bd9-4a23-be73-79ebcc3f4693 }}
+- **Scope**: The full `adapter-python` crate — parse, custom scope resolver, SLOC, trait implementation, and fixture-based integration tests.
+--{ ref: bdfeb862-9bd9-4a23-be73-79ebcc3f4693 }--
+{{ ref: b9780363-a077-4634-a283-ab9f6b3fc3e1 }}
+- **Description**: rustpython-parser for syntax; a custom binder for resolution (no off-the-shelf semantic database exists for Python in Rust). Lexical scope chains, absolute and relative imports, `__init__.py` packages, and honest low-confidence edges for Python's dynamic constructs (`getattr`, `importlib`, star imports via `__all__`).
+--{ ref: b9780363-a077-4634-a283-ab9f6b3fc3e1 }--
+
+{{ ref: 2b17c522-ca73-4dda-a64f-4ba7995ef72e }}
+```plain text
+crates/adapter-python/
+├── src/
+│   ├── bind.rs      (new)
+│   ├── lib.rs       (new)
+│   ├── parse.rs     (new)
+│   └── sloc.rs      (new)
+├── tests/
+│   └── fixtures/    (new · sample python package + expected fragments)
+└── Cargo.toml       (new)
+```
+--{ ref: 2b17c522-ca73-4dda-a64f-4ba7995ef72e }--
+
+{{ type: toggle, ref: 649c8d56-469d-4a4c-86b9-8d6663b36680 }}
+> crates/adapter-python/src/parse.rs (new)
+  ```rust
+  /// rustpython-parser per file, rayon-parallel; yields ast + comment/docstring spans
+  pub fn parse(files: &[SourceFile]) -> Result<Vec<ParsedModule>, AdapterError>
+  ```
+--{ ref: 649c8d56-469d-4a4c-86b9-8d6663b36680 }--
+
+{{ type: toggle, ref: bb530514-db34-4120-aad4-35ee63c69f5c }}
+> crates/adapter-python/src/bind.rs (new)
+  ```rust
+  /// custom scope resolver — lexical chains: module > class > function
+  pub fn bind(modules: Vec<ParsedModule>, root: &Path) -> Result<IrFragment, AdapterError>
+  // resolution:
+  //   absolute imports against the package root; relative imports (`from . import x`)
+  //   against the importing module's package; `__init__.py` marks package containers
+  //   (and acts as the folder barrel — its re-exports are emitted as-is)
+  // edge emission:
+  //   import / from-import        -> value-import (hard)
+  //   annotations (params, returns, variables) -> type-reference (soft)
+  //   class bases                 -> inheritance (hard)
+  //   resolvable calls            -> call (hard)
+  //   getattr / importlib / star import via __all__ -> confidence < 1.0
+  // polarity:
+  //   test_*.py, *_test.py, tests/ -> TestCase
+  //   conftest.py + test-only helpers -> TestSupport
+  ```
+--{ ref: bb530514-db34-4120-aad4-35ee63c69f5c }--
+
+{{ type: toggle, ref: 28a71b06-876a-4faa-8e82-38c1be7da6e0 }}
+> crates/adapter-python/src/sloc.rs (new)
+  ```rust
+  /// production sloc per symbol: non-blank, non-comment, excluding docstrings
+  pub fn sloc(module: &ParsedModule) -> Vec<(SymbolId, u32)>
+  // docstrings detected as first-statement string literals of module/class/function
+  ```
+--{ ref: 28a71b06-876a-4faa-8e82-38c1be7da6e0 }--

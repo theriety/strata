@@ -1,0 +1,1069 @@
+---
+type: notion_page
+ref: 4d351827-4962-4147-96fc-7e56136cb530
+title: Strata
+Audit: null
+last_edited_time: 2026-06-12T21:31:00.000Z
+Owner:
+  - avatar: https://lh3.googleusercontent.com/a-/AAuE7mBz34aOECu6l2g9IUYx7j4k1ApFfrfovFCC77Qa=s100
+    email: alvis@hilbert.space
+    name: Alvis Tang
+Products:
+  []
+Source: null
+Status: ✏️ Drafting
+Tags:
+  []
+Verification: unverified
+---
+
+{{ type: layout, ref: 37db2572-f788-817a-ba14-ecefd720ac6b, ratios: "1,1,1" }}
+  {{ type: column, ref: "#37db2572-f788-817a-ba14-ecefd720ac6b.1", width_ratio: 0.3333333333333333 }}
+    {{ type: child_page, ref: 37db2572-f788-81fe-87c9-dbbf15e8c99e }}
+    [Reference]{{ type: page, ref: 37db2572-f788-81fe-87c9-dbbf15e8c99e }}
+    --{ ref: 37db2572-f788-81fe-87c9-dbbf15e8c99e }--
+
+  {{ type: column, ref: "#37db2572-f788-817a-ba14-ecefd720ac6b.2", width_ratio: 0.3333333333333333 }}
+    {{ type: child_page, ref: 37db2572-f788-8135-b94d-cd4cc3dbb341 }}
+    [Requirements]{{ type: page, ref: 37db2572-f788-8135-b94d-cd4cc3dbb341 }}
+    --{ ref: 37db2572-f788-8135-b94d-cd4cc3dbb341 }--
+
+  {{ type: column, ref: "#37db2572-f788-817a-ba14-ecefd720ac6b.3", width_ratio: 0.3333333333333333 }}
+    {{ type: child_page, ref: 37db2572-f788-81db-aa87-d189be40b121 }}
+    [Dev Notes]{{ type: page, ref: 37db2572-f788-81db-aa87-d189be40b121 }}
+    --{ ref: 37db2572-f788-81db-aa87-d189be40b121 }--
+--{ ref: 37db2572-f788-817a-ba14-ecefd720ac6b }--
+
+{{ ref: e8cc7069-59ce-4cde-8404-355dff1713f5 }}
+> The effectiveness of a "modularization" is dependent upon the criteria used in dividing the system into modules.
+— D.L. Parnas, *On the Criteria To Be Used in Decomposing Systems into Modules*, CACM (1972)
+--{ ref: e8cc7069-59ce-4cde-8404-355dff1713f5 }--
+
+{{ type: callout, ref: be1f11cc-a317-4b62-b2d1-098959d3bfb5, color: gray_background, icon: 📦 }}
+**Package**: `strata` — standalone Rust workspace shipping two faces of one engine: the `strata` CLI binary and an embeddable Rust library (the `strata-engine` crate) for programmatic use. No network service of any kind. Greenfield: no existing `@theriety/*` package overlaps with this scope; consumers are developers, CI pipelines, and Rust tooling that links the library.
+--{ ref: be1f11cc-a317-4b62-b2d1-098959d3bfb5 }--
+
+{{ ref: 9bc05fdb-f33d-4612-b635-b52cedbeb420 }}
+## 🔑 Key Takeaways
+--{ ref: 9bc05fdb-f33d-4612-b635-b52cedbeb420 }--
+
+{{ ref: 0c5333f9-27d9-42fb-847b-bc0b702e4f55 }}
+- **Read-only architecture analyzer**: models a codebase as a typed directed multigraph over symbols and types, then recommends k diverse laminar restructures — it never creates, edits, or deletes source files
+--{ ref: 0c5333f9-27d9-42fb-847b-bc0b702e4f55 }--
+{{ ref: 13233316-42b5-4b73-b9aa-ac527de04a0a }}
+- **Fixed constraint priority**: acyclicity > test polarity > capacity > cohesion > anchoring; sibling cycles over hard edges are never traded away
+--{ ref: 13233316-42b5-4b73-b9aa-ac527de04a0a }--
+{{ ref: cf612ced-c582-4a4d-9dca-c2e29709c567 }}
+- **One solver, two modes**: anchored (reachable from today's layout) and greenfield (unbiased ideal) differ only by the μ anchoring coefficient and the path-cohesion term — no mode-specific code paths
+--{ ref: cf612ced-c582-4a4d-9dca-c2e29709c567 }--
+{{ ref: 8df96b49-5158-4449-a62b-fefcf25afa27 }}
+- **Conditional splits**: a cyclic group over the 250-SLOC file cap is never split illegally; it yields "break these specific edges first, then this split becomes legal"
+--{ ref: 8df96b49-5158-4449-a62b-fefcf25afa27 }--
+{{ ref: bf64ee9d-3721-4214-923f-bc0293b04444 }}
+- **Derived visibility**: a symbol's export scope is computed as the lowest container ancestor covering all its consumers (including transitive type exposure) — never declared by default
+--{ ref: bf64ee9d-3721-4214-923f-bc0293b04444 }--
+{{ ref: 5e399f54-3c0a-4631-9b45-bc38cff7962f }}
+- **Tests are projected, not optimized**: spec files follow their subjects under the detected per-package convention; test helpers cluster like code inside the test polarity zone; production → test edges are hard violations
+--{ ref: 5e399f54-3c0a-4631-9b45-bc38cff7962f }--
+{{ ref: 32a50aaa-1237-4592-ba1a-cc5d019e436d }}
+- **Deterministic by contract**: identical snapshot + config + seed ⇒ byte-identical output; blake3 snapshot hashes let library callers cache results safely
+--{ ref: 32a50aaa-1237-4592-ba1a-cc5d019e436d }--
+{{ ref: edb7b35a-5e0b-4c9c-a989-3727de1d0cff }}
+- **Monorepo-scale budget**: 100k symbols / ~500k edges complete the core pipeline within 60 s on an 8-core machine
+--{ ref: edb7b35a-5e0b-4c9c-a989-3727de1d0cff }--
+
+{{ ref: ab181dfe-f8b1-409e-86e1-6d93ec782a22 }}
+---
+--{ ref: ab181dfe-f8b1-409e-86e1-6d93ec782a22 }--
+
+{{ ref: 37db2572-f788-81ae-92d1-ee71fe083d4a }}
+## 🤔 Problem Statement
+--{ ref: 37db2572-f788-81ae-92d1-ee71fe083d4a }--
+
+{{ ref: 37db2572-f788-81df-87db-c13870eff591 }}
+Large codebases — including our own `theriety/core` monorepo — accumulate entanglement faster than humans can audit it: import cycles between files, barrels that obscure true dependencies, 1,000-line files nobody dares touch, symbols exported "just in case", and test helpers that quietly leak into production paths. Reviews catch local violations; nobody can see the global structure.
+--{ ref: 37db2572-f788-81df-87db-c13870eff591 }--
+
+{{ ref: 30ef099b-6a41-4408-bd70-ffe371302a40 }}
+The mathematical problem underneath is **hierarchical acyclic module decomposition**: given a directed multigraph of symbols and types (with typed, weighted edges from value imports, type references, inheritance, and calls), find a laminar container tree — symbols → files → folders → domains → packages → package groups — such that:
+--{ ref: 30ef099b-6a41-4408-bd70-ffe371302a40 }--
+
+{{ ref: 4a1b2152-ef7d-4d96-8c30-10e4e6c1e1ab }}
+1. at **every** level, sibling groups form a DAG over hard edges (one-way flow everywhere)
+--{ ref: 4a1b2152-ef7d-4d96-8c30-10e4e6c1e1ab }--
+{{ ref: 821b5eb4-d8eb-4b4b-87c5-995411e8bd0c }}
+1. production never depends on test code (three-valued polarity: Production | TestCase | TestSupport)
+--{ ref: 821b5eb4-d8eb-4b4b-87c5-995411e8bd0c }--
+{{ ref: 5ed69388-968d-4876-903e-fbebf152b8a6 }}
+1. every container respects its capacity (250 production SLOC per file by default; member caps above)
+--{ ref: 5ed69388-968d-4876-903e-fbebf152b8a6 }--
+{{ ref: 310c5d54-1f8f-493e-aab2-21b4f0b08c15 }}
+1. cut edges are minimized, weighted by how high in the tree they cross (cheap within a file, expensive across packages)
+--{ ref: 310c5d54-1f8f-493e-aab2-21b4f0b08c15 }--
+{{ ref: 955ddcc8-ea83-421d-8d8d-032799944667 }}
+1. results are **diverse**: up to k genuinely different candidates per mode, because architecture is taste as well as math
+--{ ref: 955ddcc8-ea83-421d-8d8d-032799944667 }--
+
+{{ ref: 695521d1-ce38-4791-bb6b-c5b5bc3d34e6 }}
+Key subproblems are classical and hard: minimum feedback arc set (NP-hard) for cycle-break suggestions, acyclic graph partitioning (NP-hard) for clustering, capacitated packing for file assignment. Strata composes exact solvers where bounded (ILP on SCCs ≤ 300 nodes) with principled heuristics elsewhere, and is honest about which is which.
+--{ ref: 695521d1-ce38-4791-bb6b-c5b5bc3d34e6 }--
+
+{{ ref: 3f02eed1-8794-4b25-92ff-b14368cd8d1e }}
+Strata is a **diagnostic** tool: it reports violations of the current structure and proposes restructures with full delta narration — the developer decides; the tool never rewrites code.
+--{ ref: 3f02eed1-8794-4b25-92ff-b14368cd8d1e }--
+
+{{ ref: 37db2572-f788-817d-9123-eee93f2ea278 }}
+---
+--{ ref: 37db2572-f788-817d-9123-eee93f2ea278 }--
+
+{{ ref: 37db2572-f788-8174-bf6f-c70df56a918c }}
+## 🎬 Usage Examples
+--{ ref: 37db2572-f788-8174-bf6f-c70df56a918c }--
+
+{{ ref: 37db2572-f788-817f-8750-ef7befb68956, is_toggleable: true }}
+### Example: Analyze a monorepo and save candidates
+  {{ ref: 7a50e2e9-7d77-494f-8463-dcbd970e2b53 }}
+  **When to use:** First contact with a codebase, or re-analysis after significant change.
+  --{ ref: 7a50e2e9-7d77-494f-8463-dcbd970e2b53 }--
+  {{ ref: ae4e3669-4f3e-4d86-8881-5793ba852b87 }}
+  **Entry point:** `strata analyze`
+  --{ ref: ae4e3669-4f3e-4d86-8881-5793ba852b87 }--
+  {{ ref: 7d2a1ddf-137e-441f-8d93-7aa654984140 }}
+  **Outcome:** `result.json` (`AnalyzeResult`) containing current violations plus up to 3 candidates per mode; human summary on stdout.
+  --{ ref: 7d2a1ddf-137e-441f-8d93-7aa654984140 }--
+  {{ ref: 8c95f597-2280-484e-b655-1db5a0b6f14c }}
+  **Command & expected output:**
+  --{ ref: 8c95f597-2280-484e-b655-1db5a0b6f14c }--
+  {{ ref: 12a6062d-1d5d-42de-9e77-c744563459eb }}
+  ```bash
+  $ strata analyze --root . --mode both -k 3 --output result.json
+    parsed      1,482 files   (ts 1,210 · rs 201 · py 71)
+    graph       103,512 symbols · 512,940 edges
+    current     7 cycles · 3 polarity leaks · 41 over-cap files
+    anchored    3 candidates · best score 12,401.2  (current scores 19,873.5)
+    greenfield  3 candidates · best score 10,962.8
+    wrote result.json
+  $ echo $?
+  0
+  ```
+  --{ ref: 12a6062d-1d5d-42de-9e77-c744563459eb }--
+  {{ ref: eddc129f-2b21-4dd0-8963-4eba42f9684a }}
+  **Errors to expect:** `AdapterParseFailure` → fix the syntax error or exclude the path; `AdapterBindFailure` → ensure the workspace builds; `ConfigInvalid` → fix the reported TOML key.
+  --{ ref: eddc129f-2b21-4dd0-8963-4eba42f9684a }--
+  {{ ref: 73169c7b-d597-4495-8611-8dd43f3b139d }}
+  **Notes:** Analysis always exits `0` when it completes — violations are findings, not failures. Use `violations --fail-on` for gating.
+  --{ ref: 73169c7b-d597-4495-8611-8dd43f3b139d }--
+--{ ref: 37db2572-f788-817f-8750-ef7befb68956 }--
+
+{{ ref: 2d5c4b3a-e861-4ef2-b005-0dc668f9c33d, is_toggleable: true }}
+### Example: Inspect a candidate as a file tree
+  {{ ref: b74f1e6e-a3d9-4afc-96f9-4733661199fd }}
+  **When to use:** Reviewing what a proposed structure actually looks like.
+  --{ ref: b74f1e6e-a3d9-4afc-96f9-4733661199fd }--
+  {{ ref: 1090a597-a595-48d9-b405-602fb9ad98ee }}
+  **Entry point:** `strata tree`
+  --{ ref: 1090a597-a595-48d9-b405-602fb9ad98ee }--
+  {{ ref: ce024384-a4b6-4a99-a672-c9627c14f007 }}
+  **Outcome:** An indented tree of the candidate's containers and files, optionally with per-file symbols and derived visibility.
+  --{ ref: ce024384-a4b6-4a99-a672-c9627c14f007 }--
+  {{ ref: c8cd1c81-8d60-4e56-864d-efbcb0b7e656 }}
+  **Command & expected output:**
+  --{ ref: c8cd1c81-8d60-4e56-864d-efbcb0b7e656 }--
+  {{ ref: 274f88e5-ab48-485d-85a7-5ec7d59257e2 }}
+  ```bash
+  $ strata tree --input result.json --mode anchored --candidate 1 --symbols --depth 3
+  packages/
+    data/                          # domain · 9 folders
+      store/                       # folder · 4 files · 612 prod sloc
+        record.rs                  # 188 sloc · Record, RecordId(pub), parse_record
+        codec.rs                   # 154 sloc · encode(pub), decode(pub)
+        index.rs                   # 121 sloc · Index, rebuild
+        store.rs                   # 149 sloc · Store(pub), open(pub)
+      query/                       # folder · 6 files · 924 prod sloc
+    runtime/                       # domain · 7 folders
+  $ echo $?
+  0
+  ```
+  --{ ref: 274f88e5-ab48-485d-85a7-5ec7d59257e2 }--
+  {{ ref: cd410544-9192-4b80-8cee-820a42a48d92 }}
+  **Errors to expect:** `CandidateNotFound` → run without `--candidate` to list what exists; `InputUnreadable` → regenerate with the same Strata version.
+  --{ ref: cd410544-9192-4b80-8cee-820a42a48d92 }--
+  {{ ref: 441213b8-8945-4157-817c-0fe072422b09 }}
+  **Notes:** `--current` prints today's structure instead, with violation annotations inline.
+  --{ ref: 441213b8-8945-4157-817c-0fe072422b09 }--
+--{ ref: 2d5c4b3a-e861-4ef2-b005-0dc668f9c33d }--
+
+{{ ref: 37db2572-f788-816d-a49f-e9a92f7d61e5, is_toggleable: true }}
+### Example: Compare two candidates
+  {{ ref: 37db2572-f788-816e-8f9d-c807b4213ae5 }}
+  **When to use:** Choosing between proposals, or measuring how far a candidate sits from today.
+  --{ ref: 37db2572-f788-816e-8f9d-c807b4213ae5 }--
+  {{ ref: 37db2572-f788-814f-9a4e-d5d768f77946 }}
+  **Entry point:** `strata diff`
+  --{ ref: 37db2572-f788-814f-9a4e-d5d768f77946 }--
+  {{ ref: 37db2572-f788-81a9-aaec-ed72356df6f5 }}
+  **Outcome:** A grouped move list plus the variation-of-information distance between the two structures.
+  --{ ref: 37db2572-f788-81a9-aaec-ed72356df6f5 }--
+  {{ ref: 37db2572-f788-81c3-8e7a-e6b4b6a26718 }}
+  **Command & expected output:**
+  --{ ref: 37db2572-f788-81c3-8e7a-e6b4b6a26718 }--
+  {{ ref: 37db2572-f788-8169-9459-e863f28cdbbe }}
+  ```bash
+  $ strata diff --input result.json current anchored/1
+  vi distance: 0.41
+
+  moves (12 groups, 87 symbols):
+    split  packages/data/blob.ts (612 sloc) -> blob/{reader,writer,meta}.ts
+           reason: over cap; min-weight topological cut (3 internal edges cut, w=1.9)
+    move   parse_header: codec.ts -> reader.ts
+           reason: sole consumer lives in reader.ts; visibility narrows to file
+    merge  utils/strings.ts + utils/text.ts -> text.ts (201 sloc)
+           reason: naming cohesion 0.83; combined size under cap
+  $ echo $?
+  0
+  ```
+  --{ ref: 37db2572-f788-8169-9459-e863f28cdbbe }--
+  {{ ref: 37db2572-f788-81b9-b96d-eddeb38bd468 }}
+  **Errors to expect:** `CandidateNotFound` → check mode/index reference syntax (`anchored/1`, `current`).
+  --{ ref: 37db2572-f788-81b9-b96d-eddeb38bd468 }--
+  {{ ref: 37db2572-f788-81f7-93eb-f548e1a6a78f }}
+  **Notes:** Spec files moved by test projection are narrated with their subject ("follows [record.rs](http://record.rs/)").
+  --{ ref: 37db2572-f788-81f7-93eb-f548e1a6a78f }--
+--{ ref: 37db2572-f788-816d-a49f-e9a92f7d61e5 }--
+
+{{ ref: 37db2572-f788-818a-9852-fa7c2d95dc32, is_toggleable: true }}
+### Example: Gate CI on structural violations
+  {{ ref: 37db2572-f788-81a4-b87b-cd0325724fdc }}
+  **When to use:** Continuous enforcement — fail the build when someone introduces a cycle or a production → test import.
+  --{ ref: 37db2572-f788-81a4-b87b-cd0325724fdc }--
+  {{ ref: 37db2572-f788-81a4-9477-c2f7fafba51f }}
+  **Entry point:** `strata violations`
+  --{ ref: 37db2572-f788-81a4-9477-c2f7fafba51f }--
+  {{ ref: 37db2572-f788-810b-adca-d47688ef90dd }}
+  **Outcome:** A violation table; exit code `2` if any `--fail-on` class is present.
+  --{ ref: 37db2572-f788-810b-adca-d47688ef90dd }--
+  {{ ref: 37db2572-f788-81a5-823b-d18c6131fa5e }}
+  **Command & expected output:**
+  --{ ref: 37db2572-f788-81a5-823b-d18c6131fa5e }--
+  {{ ref: 30edf5b2-0d99-47df-a00d-03e34c5f8394 }}
+  ```bash
+  $ strata violations --root . --fail-on cycle,polarity
+  KIND      SEVERITY    LOCATION                                  DETAIL
+  cycle     violation   packages/data/{store.rs, codec.rs}        2-file cycle; break codec.rs -> store.rs (w=1.0, exact)
+  polarity  violation   packages/api/server.ts -> tests/util.ts   production imports test support
+  capacity  borderline  packages/core/engine.rs                   263 prod sloc (cap 250, +5%)
+  $ echo $?
+  2
+  ```
+  --{ ref: 30edf5b2-0d99-47df-a00d-03e34c5f8394 }--
+  {{ ref: 37db2572-f788-815e-a723-c2f553b47cb0 }}
+  **Errors to expect:** `ConfigInvalid` → unknown class name in `--fail-on`.
+  --{ ref: 37db2572-f788-815e-a723-c2f553b47cb0 }--
+  {{ ref: 37db2572-f788-8131-9de6-d704c41d2848 }}
+  **Notes:** `borderline` findings (within ±10% of a cap) never trigger exit `2` — they absorb formatter churn.
+  --{ ref: 37db2572-f788-8131-9de6-d704c41d2848 }--
+--{ ref: 37db2572-f788-818a-9852-fa7c2d95dc32 }--
+
+{{ ref: 40142015-e7ea-428e-ac91-9ae40ad410d6, is_toggleable: true }}
+### Example: Render a shareable report
+  {{ ref: 0698d479-6ba7-4037-bf25-3d9c112d7058 }}
+  **When to use:** Architecture review meetings; an artifact for non-CLI readers.
+  --{ ref: 0698d479-6ba7-4037-bf25-3d9c112d7058 }--
+  {{ ref: bc2e2da1-60ca-4e57-a8b7-8f0c90889316 }}
+  **Entry point:** `strata report`
+  --{ ref: bc2e2da1-60ca-4e57-a8b7-8f0c90889316 }--
+  {{ ref: 8121373a-c5a0-4bab-959c-867227d40ae8 }}
+  **Outcome:** A Markdown report with score breakdowns, layer views, conditional splits, and per-candidate delta narration.
+  --{ ref: 8121373a-c5a0-4bab-959c-867227d40ae8 }--
+  {{ ref: 92e59a3e-5867-4a77-9289-3e8f6d0b4d06 }}
+  **Command & expected output:**
+  --{ ref: 92e59a3e-5867-4a77-9289-3e8f6d0b4d06 }--
+  {{ ref: b380cf3b-cbfa-4dfc-9ba8-6f3fea23049e }}
+  ```bash
+  $ strata report --input result.json --output report.md
+    wrote report.md (6 candidates · 7 cycles narrated · 3 conditional splits)
+  $ echo $?
+  0
+  ```
+  --{ ref: b380cf3b-cbfa-4dfc-9ba8-6f3fea23049e }--
+  {{ ref: ad9d986f-0e19-4df3-93b5-4a8593a18d32 }}
+  **Errors to expect:** `InputUnreadable` → regenerate the input.
+  --{ ref: ad9d986f-0e19-4df3-93b5-4a8593a18d32 }--
+  {{ ref: 23638d32-8073-4937-8415-ee6568dceef4 }}
+  **Notes:** The report embeds the same delta narration shown by `diff`, grouped per candidate.
+  --{ ref: 23638d32-8073-4937-8415-ee6568dceef4 }--
+--{ ref: 40142015-e7ea-428e-ac91-9ae40ad410d6 }--
+
+{{ ref: 7ad5d916-70e3-46ff-947c-1fd59c8abe1d, is_toggleable: true }}
+### Example: Embed Strata as a Rust library
+  {{ ref: 8997b1bb-704f-4b62-b958-d543cc9419f8 }}
+  **When to use:** CI bots, dashboards, editors, or custom tooling that need analysis results programmatically — without shelling out to the CLI and parsing its output.
+  --{ ref: 8997b1bb-704f-4b62-b958-d543cc9419f8 }--
+  {{ ref: 34ad14bc-033d-49d3-8482-0c5d928b2ace }}
+  **Entry point:** `strata_engine::analyze` (add the `strata-engine` crate as a Cargo dependency)
+  --{ ref: 34ad14bc-033d-49d3-8482-0c5d928b2ace }--
+  {{ ref: 2d8ff050-804d-4dab-b0f4-02e9b858931c }}
+  **Outcome:** An owned `AnalyzeResult` value — the same data the CLI writes as JSON — usable directly from Rust.
+  --{ ref: 2d8ff050-804d-4dab-b0f4-02e9b858931c }--
+  {{ ref: ec878c7f-d157-4f5b-a9f8-825ebcc0c8c5 }}
+  **Code snippet:**
+  --{ ref: ec878c7f-d157-4f5b-a9f8-825ebcc0c8c5 }--
+  {{ ref: 18122db5-6a75-4a29-9afc-60073c122592 }}
+  ```rust
+  // cargo add strata-engine
+  use strata_engine::{analyze, snapshot_from_root, AnalyzeConfig, Mode};
+
+  // inputs: config mirrors strata.toml; defaults equal a config-less cli run
+  let config = AnalyzeConfig { mode: Mode::Both, candidates: 3, ..AnalyzeConfig::default() };
+
+  // build the ir snapshot from sources (or assemble your own ir directly)
+  let snapshot = snapshot_from_root(".", &config)?;
+
+  // invocation: pure, deterministic function of snapshot + config + seed
+  let result = analyze(&snapshot, &config)?;
+
+  // expected: result.modes.anchored holds up to 3 candidates, best score first
+  let anchored = result.modes.anchored.as_ref().unwrap();
+  println!("{} candidates, best score {}", anchored.candidates.len(), anchored.candidates[0].score);
+  ```
+  --{ ref: 18122db5-6a75-4a29-9afc-60073c122592 }--
+  {{ ref: 5ed31992-fa09-4b79-98a2-7136c874fe4b }}
+  **Errors to expect:** `SnapshotInvalid` → regenerate the snapshot with a current adapter build; `AdapterParseFailure` / `AdapterBindFailure` → same handling as the CLI; `ReExportDepthExceeded` → inspect the reported barrel chain. ILP timeouts never error — an over-budget exact solve degrades to heuristic suggestions flagged `exact: false`.
+  --{ ref: 5ed31992-fa09-4b79-98a2-7136c874fe4b }--
+  {{ ref: 11513a23-4d61-47c1-88f6-e5bbb4a62553 }}
+  **Notes:** `analyze` is a pure function — cache results keyed by `result.snapshot_hash` when calling repeatedly. The library never touches the network and reads nothing outside the given root.
+  --{ ref: 11513a23-4d61-47c1-88f6-e5bbb4a62553 }--
+--{ ref: 7ad5d916-70e3-46ff-947c-1fd59c8abe1d }--
+
+{{ ref: 37db2572-f788-81dc-b47b-c9f89babf466 }}
+---
+--{ ref: 37db2572-f788-81dc-b47b-c9f89babf466 }--
+
+{{ ref: 37db2572-f788-81e9-873e-cfae95cd5381 }}
+## 🏗️ Architecture Overview
+--{ ref: 37db2572-f788-81e9-873e-cfae95cd5381 }--
+
+{{ ref: 37db2572-f788-8169-9535-f5130f114bd9 }}
+A strict one-way crate graph mirrors the tool's own philosophy: the contract crate `ir` sits at the bottom; the pure solver `core` and the three language adapters depend only on `ir`; `engine` is the sole crate that sees both sides — and doubles as the **public library crate** (`strata-engine`) for programmatic consumers; `cli` is a thin shell over `engine`.
+--{ ref: 37db2572-f788-8169-9535-f5130f114bd9 }--
+
+{{ ref: 37db2572-f788-8121-a8a9-fba67c888192, is_toggleable: true }}
+### Interaction Diagram
+  {{ ref: 3369eaad-b216-403f-9f85-13a31fb17bb7 }}
+  ```mermaid
+  graph TB
+      subgraph Input
+          SRC["source files (ts · rust · py)"]
+          CFG["strata.toml"]
+      end
+      subgraph Consumers["Consumer Layer"]
+          CLI["cli (clap)"]
+          LIB["library consumers (cargo dependency)"]
+      end
+      subgraph Orchestration
+          ENG["engine"]
+      end
+      subgraph Adapters["Adapter Layer"]
+          TS["adapter-typescript (swc)"]
+          RS["adapter-rust (syn + ra_ap)"]
+          PY["adapter-python (rustpython)"]
+      end
+      subgraph Solver
+          CORE["core (condense · shatter · layer · cluster · pack · project · diversify)"]
+      end
+      subgraph Contract
+          IR["ir (typed graph + laminar tree + blake3 snapshot)"]
+      end
+      subgraph Output
+          OUT["AnalyzeResult json · tree · diff · report"]
+      end
+      CLI -->|"invokes analysis"| ENG
+      LIB -->|"calls analyze()"| ENG
+      CFG -->|"configures"| ENG
+      ENG -->|"dispatches sources"| TS
+      ENG -->|"dispatches sources"| RS
+      ENG -->|"dispatches sources"| PY
+      SRC -->|"read by"| TS
+      SRC -->|"read by"| RS
+      SRC -->|"read by"| PY
+      TS -->|"emits ir fragment"| IR
+      RS -->|"emits ir fragment"| IR
+      PY -->|"emits ir fragment"| IR
+      ENG -->|"merges + hashes snapshot"| IR
+      ENG -->|"runs pipeline over snapshot"| CORE
+      CORE -->|"returns candidates + violations"| ENG
+      ENG -->|"assembles dto"| OUT
+  ```
+  --{ ref: 3369eaad-b216-403f-9f85-13a31fb17bb7 }--
+--{ ref: 37db2572-f788-8121-a8a9-fba67c888192 }--
+
+{{ ref: 37db2572-f788-81f7-8f5f-d746417a3d11, is_toggleable: true }}
+### Data Flow
+  {{ ref: c6ea14dc-e5b5-447d-bce5-65de82ba36f8 }}
+  ```mermaid
+  sequenceDiagram
+      box Consumers
+      participant CLI as cli / library caller
+      end
+      box Orchestration
+      participant ENG as engine
+      end
+      box Adapters
+      participant AD as language adapters
+      end
+      box Solver
+      participant CORE as core pipeline
+      end
+
+      CLI->>ENG: root + config (or pre-built snapshot)
+      ENG->>AD: source set, partitioned by language
+      Note over AD: parse -> syntax trees<br>bind -> resolved edges + polarity + sloc
+      AD->>ENG: ir fragments (confidence-scored edges)
+      Note over ENG: merge fragments<br>flatten re-exports<br>blake3 snapshot hash
+      ENG->>CORE: immutable snapshot + coefficients
+      Note over CORE: condense (tarjan) -> shatter (mfas)<br>layer -> cluster -> pack -> visibility<br>project tests -> score -> diversify
+      CORE->>ENG: k candidates per mode + current violations
+      Note over ENG: assemble analyze-result dto<br>delta narration vs current tree
+      ENG-->>CLI: AnalyzeResult (owned value / json / rendered summary)
+  ```
+  --{ ref: c6ea14dc-e5b5-447d-bce5-65de82ba36f8 }--
+--{ ref: 37db2572-f788-81f7-8f5f-d746417a3d11 }--
+
+{{ ref: 6f001144-05bb-4e30-ab0c-e8b05684c3b3 }}
+- **Between components**: every boundary speaks `ir` types — adapters emit `IrFragment`s; `core` consumes an immutable `Snapshot` and returns owned results; shells see only the `AnalyzeResult` DTO
+--{ ref: 6f001144-05bb-4e30-ab0c-e8b05684c3b3 }--
+{{ ref: 03a629bf-ee0c-4ceb-bfb5-dfbff92e939a }}
+- **Data creation**: snapshots are validated (no dangling edges, well-formed laminar tree) and content-hashed at assembly; invalid input fails fast before any solving
+--{ ref: 03a629bf-ee0c-4ceb-bfb5-dfbff92e939a }--
+{{ ref: 16206e10-8cae-405a-a040-d79391eeea6b }}
+- **Data mutation**: none — every pipeline phase is a pure function from graph views to new owned values; the snapshot is never mutated after hashing
+--{ ref: 16206e10-8cae-405a-a040-d79391eeea6b }--
+{{ ref: e7ef783d-2fdd-4a72-aeb8-d0c265574aa5 }}
+- **Data persistence**: none — library callers and CI wrappers may cache results keyed by the blake3 snapshot hash
+--{ ref: e7ef783d-2fdd-4a72-aeb8-d0c265574aa5 }--
+
+{{ ref: 37db2572-f788-8145-a154-ff04148bd655 }}
+---
+--{ ref: 37db2572-f788-8145-a154-ff04148bd655 }--
+
+{{ ref: 37db2572-f788-81c1-b0a3-e937ca226615 }}
+## 🧮 **Mechanism**
+--{ ref: 37db2572-f788-81c1-b0a3-e937ca226615 }--
+
+{{ ref: 37db2572-f788-81ad-81a5-ffc45266daad }}
+The pipeline runs eleven phases: **Extract → Normalize → Condense → Shatter → Layer → Cluster → Pack → Derive Visibility → Project Tests → Score → Diversify & Report**. Each mechanism below maps to one phase or a cross-cutting strategy.
+--{ ref: 37db2572-f788-81ad-81a5-ffc45266daad }--
+
+{{ ref: 37db2572-f788-81b6-b18e-f078afd7ce82, is_toggleable: true }}
+### **Mechanism**: Objective Function & μ-Modes
+  {{ ref: 37db2572-f788-810e-b32e-f9f398bc1eb6 }}
+  **Context**: One score must rank wildly different trees, and the same solver must serve both incremental and greenfield restructuring.
+  --{ ref: 37db2572-f788-810e-b32e-f9f398bc1eb6 }--
+  {{ ref: 37db2572-f788-81e4-b2d1-ca406c6fe21e }}
+  **Strategy**:
+  --{ ref: 37db2572-f788-81e4-b2d1-ca406c6fe21e }--
+  {{ ref: 37db2572-f788-8111-9e79-f7c9bf6931a6 }}
+  Minimize, over candidate laminar trees T:
+  --{ ref: 37db2572-f788-8111-9e79-f7c9bf6931a6 }--
+  {{ ref: df112b54-b799-43ad-b4e1-00e47352c8a6, equation: "J(T) = \\sum_{e} w(e)\\,c(e)\\,h(\\mathrm{lca}_T(e)) + \\lambda\\,\\mathrm{imbalance}(T) - \\alpha\\,\\mathrm{naming}(T) - \\beta\\,\\mathrm{path}(T) + \\mu\\,d(T, T_0)" }}
+  $$J(T) = \sum_{e} w(e)\,c(e)\,h(\mathrm{lca}_T(e)) + \lambda\,\mathrm{imbalance}(T) - \alpha\,\mathrm{naming}(T) - \beta\,\mathrm{path}(T) + \mu\,d(T, T_0)$$
+  --{ ref: df112b54-b799-43ad-b4e1-00e47352c8a6 }--
+  {{ ref: 7aaa1769-3464-4a76-a391-f9f6f97bd85b }}
+  where w(e) is the edge-kind weight (inheritance 1.5, value import / call 1.0, type reference 0.3, re-export 0 after flattening), c(e) the binder confidence, h(·) a height penalty making cross-package edges costlier than intra-file ones, and d(T, T₀) the move distance from the current tree.
+  --{ ref: 7aaa1769-3464-4a76-a391-f9f6f97bd85b }--
+  {{ ref: c7d09406-4bd7-49f1-b87a-583692eefb7e }}
+  **Term definitions** (all fixed in v1, not configurable):
+  --{ ref: c7d09406-4bd7-49f1-b87a-583692eefb7e }--
+  {{ ref: e175c5d6-4123-4395-81e9-b4153394879f }}
+  - [$h(\ell)$]{{ equation: h(\ell) }} — height penalty by LCA level: same file 1, folder 2, domain 4, package 8, package group 16 (doubling per level)
+  --{ ref: e175c5d6-4123-4395-81e9-b4153394879f }--
+  {{ ref: 52233677-b7ab-4e0e-af44-5394c7816d9c }}
+  - [$\mathrm{imbalance}(T)$]{{ equation: "\\mathrm{imbalance}(T)" }} — for every container, the squared coefficient of variation of its children's production-SLOC subtree sizes, summed over all containers
+  --{ ref: 52233677-b7ab-4e0e-af44-5394c7816d9c }--
+  {{ ref: 7d3871d6-36eb-4d2e-85c3-a420670415f0 }}
+  - [$\mathrm{naming}(T)$]{{ equation: "\\mathrm{naming}(T)" }} — size-weighted mean pairwise Jaccard similarity of symbol-name token sets (split on case and underscores) within each file and folder; **symbol tokens only, never directory-path tokens** — this is what makes greenfield candidates provably invariant under folder renames
+  --{ ref: 7d3871d6-36eb-4d2e-85c3-a420670415f0 }--
+  {{ ref: 3745daa2-6417-4e45-aff7-971391970f2a }}
+  - [$\mathrm{path}(T)$]{{ equation: "\\mathrm{path}(T)" }} — fraction of symbol pairs sharing a folder in T that also shared a directory in T₀ (anchored mode only)
+  --{ ref: 3745daa2-6417-4e45-aff7-971391970f2a }--
+  {{ ref: 931d916d-b814-4ba6-af58-ad75d4ea7d7a }}
+  - [$d(T, T_0)$]{{ equation: "d(T, T_0)" }} — fraction of symbols whose full container path differs between T₀ and T (a normalized move count)
+  --{ ref: 931d916d-b814-4ba6-af58-ad75d4ea7d7a }--
+  {{ ref: 37db2572-f788-81c3-a9bf-de00f5382b81 }}
+  **Key Principles**:
+  --{ ref: 37db2572-f788-81c3-a9bf-de00f5382b81 }--
+  {{ ref: 37db2572-f788-8130-8fb0-ee2c99e52951 }}
+  - **Anchored mode**: μ > 0, path cohesion on (β > 0) — candidates stay reachable from today's layout
+  --{ ref: 37db2572-f788-8130-8fb0-ee2c99e52951 }--
+  {{ ref: 37db2572-f788-81e7-b991-d3b83eced08d }}
+  - **Greenfield mode**: μ = 0 **and** β = 0 — naming-token cohesion (α) remains, so the current layout cannot leak back in through path similarity
+  --{ ref: 37db2572-f788-81e7-b991-d3b83eced08d }--
+  {{ ref: 37db2572-f788-81de-994a-ff0bf0a0c4ac }}
+  - Hard constraints (acyclicity, polarity, capacity) are vetoes, never penalty terms — they cannot be traded for score
+  --{ ref: 37db2572-f788-81de-994a-ff0bf0a0c4ac }--
+  {{ ref: 37db2572-f788-8167-9329-e146f73183d1 }}
+  **Implementation Notes**: score breakdowns (cut / imbalance / naming / path / anchor) are reported per candidate so users see *why* a tree ranks where it does.
+  --{ ref: 37db2572-f788-8167-9329-e146f73183d1 }--
+--{ ref: 37db2572-f788-81b6-b18e-f078afd7ce82 }--
+
+{{ ref: 37db2572-f788-8144-b6ac-f4ae1ae6ea74, is_toggleable: true }}
+### **Mechanism**: Edge Normalization & Re-export Flattening
+  {{ ref: 37db2572-f788-8167-bef3-f3b9fb87f090 }}
+  **Purpose**: Convert raw language-level references into honest dependency edges; stop barrels from masquerading as dependency hubs.
+  --{ ref: 37db2572-f788-8167-bef3-f3b9fb87f090 }--
+  {{ ref: 37db2572-f788-8196-8248-e0b9f7a80330 }}
+  **Approach**: Resolve every import chain through re-exports to its transitive original symbol and assign edge weights by kind. Edge kinds, hardness, and confidence arrive already set by the adapters — only they hold the language knowledge to decide where a type-only edge is erased at runtime; normalization never reclassifies edges.
+  --{ ref: 37db2572-f788-8196-8248-e0b9f7a80330 }--
+  {{ ref: 37db2572-f788-811c-ae38-da25ba74516a }}
+  **Time Complexity**: O(E · L) where L is the maximum re-export chain depth (guarded; pathological chains raise `ReExportDepthExceeded`).
+  --{ ref: 37db2572-f788-811c-ae38-da25ba74516a }--
+  {{ ref: 37db2572-f788-8123-b816-c0b57bef4346 }}
+  **Space Complexity**: O(V + E)
+  --{ ref: 37db2572-f788-8123-b816-c0b57bef4346 }--
+  {{ ref: 37db2572-f788-816d-9911-d819b36ee88d }}
+  **Pseudocode**:
+  --{ ref: 37db2572-f788-816d-9911-d819b36ee88d }--
+  {{ ref: cdc21c35-a480-450a-b533-ae030264e9e1 }}
+  ```plain text
+  normalize(edges):
+    // flatten barrels
+    for each edge (a -> b):
+      while b is a re-export: b = target(b)   // follow chain, guard depth
+      emit (a -> b, kind, weight[kind], confidence)
+    // hardness and confidence arrive from adapters; normalization never reclassifies
+  ```
+  --{ ref: cdc21c35-a480-450a-b533-ae030264e9e1 }--
+  {{ ref: 37db2572-f788-8119-9c28-c44ea9ce99a8 }}
+  **Trade-offs**:
+  --{ ref: 37db2572-f788-8119-9c28-c44ea9ce99a8 }--
+  {{ ref: 37db2572-f788-813d-b7ef-ed7c7f408030 }}
+  - Barrels become invisible to the solver — their cost (fan-in distortion) disappears
+  --{ ref: 37db2572-f788-813d-b7ef-ed7c7f408030 }--
+  {{ ref: 2abc4b4b-e256-4d20-b509-0dd52bdd04f4 }}
+  - Type-only soft edges still score, so type entanglement is discouraged without forbidding it
+  --{ ref: 2abc4b4b-e256-4d20-b509-0dd52bdd04f4 }--
+  {{ ref: 906393f6-5a13-4c64-9d79-50231e69e426 }}
+  **Alternatives Considered**:
+  --{ ref: 906393f6-5a13-4c64-9d79-50231e69e426 }--
+  {{ ref: 3204a224-16fa-4bdb-b31c-9488274f2a7b }}
+  - Keeping barrels as nodes: rejected — they are a presentation artifact, and treating them as real hubs corrupts every downstream metric
+  --{ ref: 3204a224-16fa-4bdb-b31c-9488274f2a7b }--
+--{ ref: 37db2572-f788-8144-b6ac-f4ae1ae6ea74 }--
+
+{{ ref: 068a7c86-57e2-4026-b2ba-44ec799f9969, is_toggleable: true }}
+### **Mechanism**: Current-Tree Level Mapping
+  {{ ref: 52191e0d-01ed-45b0-96a6-8c227d3904be }}
+  **Purpose**: Map an arbitrarily nested real repository onto the fixed five-level hierarchy (file → folder → domain → package → package group) — the anchored mode's d(T, T₀) and path terms, current-tree scoring, and `tree --current` all depend on this mapping.
+  --{ ref: 52191e0d-01ed-45b0-96a6-8c227d3904be }--
+  {{ ref: 7415e723-d00c-4eb8-85dd-faf04e16996e }}
+  **Approach**: Anchor on manifests, then assign by depth from each package root. **Package** = a manifest boundary (`Cargo.toml`, `package.json`, `pyproject.toml`); **package group** = the workspace directory containing packages (e.g. `crates/`, `packages/`), or the repository root when none exists; below each package root, depth-1 directories map to **domains**, depth-2 directories to **folders**, and any deeper directory collapses into its depth-2 ancestor (its name survives as naming tokens). **Files** are always leaves.
+  --{ ref: 7415e723-d00c-4eb8-85dd-faf04e16996e }--
+  {{ ref: 299dfca7-7d86-4a9d-b3ee-eaa1ed473c82 }}
+  **Time Complexity**: O(F) over file paths.
+  --{ ref: 299dfca7-7d86-4a9d-b3ee-eaa1ed473c82 }--
+  {{ ref: 502d95bf-9baa-4b40-b816-1b2cb492a50e }}
+  **Space Complexity**: O(F)
+  --{ ref: 502d95bf-9baa-4b40-b816-1b2cb492a50e }--
+  {{ ref: 71a233f7-72f9-4d60-b1cd-99d6b2048603 }}
+  **Pseudocode**:
+  --{ ref: 71a233f7-72f9-4d60-b1cd-99d6b2048603 }--
+  {{ ref: d3bab61c-17c7-49db-b84e-830ae88954ff }}
+  ```plain text
+  map_levels(paths, manifests):
+    group = workspace dir containing manifests, else repo root
+    for each package root p (manifest dir):
+      for each file f under p:
+        domain = depth-1 dir of f under p (or implicit)
+        folder = depth-2 dir of f under p (or implicit)
+        deeper dirs collapse into folder; names kept as tokens
+  ```
+  --{ ref: d3bab61c-17c7-49db-b84e-830ae88954ff }--
+  {{ ref: ebf61a2e-5cc9-452f-a2e8-36472a00a664 }}
+  **Trade-offs**:
+  --{ ref: ebf61a2e-5cc9-452f-a2e8-36472a00a664 }--
+  {{ ref: a259884b-a0fe-477d-b2c1-c5ef178acd90 }}
+  - Shallow repos are handled by **implicit levels**: a package with files at its root has a single implicit domain and folder, collapsed in rendering — every tree is logically five levels, so scores stay comparable
+  --{ ref: a259884b-a0fe-477d-b2c1-c5ef178acd90 }--
+  {{ ref: c2c8d7f8-b739-4fce-91cc-31e01c8484bd }}
+  - The depth rule is deliberately dumb and deterministic; the anchoring term only needs a stable T₀, not a perfect one
+  --{ ref: c2c8d7f8-b739-4fce-91cc-31e01c8484bd }--
+  {{ ref: f9ba2890-d3af-4f77-9a88-3be1b3d38577 }}
+  **Alternatives Considered**:
+  --{ ref: f9ba2890-d3af-4f77-9a88-3be1b3d38577 }--
+  {{ ref: 514553c8-64c3-4704-9b0c-18c41be7656d }}
+  - Inferring levels from naming conventions or directory sizes: rejected — heuristic and unstable across commits, and an unstable T₀ poisons the anchor term
+  --{ ref: 514553c8-64c3-4704-9b0c-18c41be7656d }--
+--{ ref: 068a7c86-57e2-4026-b2ba-44ec799f9969 }--
+
+{{ ref: 8513ce5c-e669-413f-9d64-65fcf447cf82, is_toggleable: true }}
+### **Mechanism**: SCC Condensation (Tarjan)
+  {{ ref: dbf77753-cb0c-412d-9f29-78c9d5235edf }}
+  **Purpose**: Identify the atoms of restructuring — strongly connected components can never be separated across an acyclic boundary, so they must move as units.
+  --{ ref: dbf77753-cb0c-412d-9f29-78c9d5235edf }--
+  {{ ref: 2584d319-1fce-4f5a-8583-a749b1553f36 }}
+  **Approach**: Iterative (explicit-stack) Tarjan over hard edges produces SCCs and the condensation DAG. All subsequent phases operate on the condensation; singleton SCCs are ordinary symbols.
+  --{ ref: 2584d319-1fce-4f5a-8583-a749b1553f36 }--
+  {{ ref: d3ac266b-798d-44f4-ac5d-5b30edf5ce69 }}
+  **Time Complexity**: O(V + E)
+  --{ ref: d3ac266b-798d-44f4-ac5d-5b30edf5ce69 }--
+  {{ ref: f4e717c9-81aa-4581-abba-19e672d1c92c }}
+  **Space Complexity**: O(V)
+  --{ ref: f4e717c9-81aa-4581-abba-19e672d1c92c }--
+  {{ ref: 54bb26d8-7f49-422a-b4c5-ca0eaaaa47ca }}
+  **Pseudocode**:
+  --{ ref: 54bb26d8-7f49-422a-b4c5-ca0eaaaa47ca }--
+  {{ ref: b5c998d9-304d-45d0-b936-dcabd9ebe90d }}
+  ```plain text
+  condense(graph):
+    // iterative tarjan, no recursion (must survive 100k nodes)
+    for each unvisited v: strongconnect(v) with explicit stack
+    build quotient dag: edge (scc_a -> scc_b) iff some member edge crosses
+    return (dag, membership)
+  ```
+  --{ ref: b5c998d9-304d-45d0-b936-dcabd9ebe90d }--
+  {{ ref: be360efb-9fb9-4d08-83d1-9c5e87e5c373 }}
+  **Trade-offs**:
+  --{ ref: be360efb-9fb9-4d08-83d1-9c5e87e5c373 }--
+  {{ ref: dbc58c66-d6f0-42bb-9e83-b866e74c9bf2 }}
+  - Linear-time and exact — no reason to approximate
+  --{ ref: dbc58c66-d6f0-42bb-9e83-b866e74c9bf2 }--
+  {{ ref: 58013faa-b011-47be-9e71-1330b6cc16d4 }}
+  - Large SCCs become indivisible blobs; that is precisely what the shatter phase addresses
+  --{ ref: 58013faa-b011-47be-9e71-1330b6cc16d4 }--
+  {{ ref: 6df75699-cbf0-49c8-8c72-0191f76bf46b }}
+  **Alternatives Considered**:
+  --{ ref: 6df75699-cbf0-49c8-8c72-0191f76bf46b }--
+  {{ ref: 982b6cfa-9d13-4a33-8aa3-5f40f719ba9d }}
+  - Kosaraju: same complexity, two passes; Tarjan chosen for single-pass cache behavior
+  --{ ref: 982b6cfa-9d13-4a33-8aa3-5f40f719ba9d }--
+--{ ref: 8513ce5c-e669-413f-9d64-65fcf447cf82 }--
+
+{{ ref: b09322bd-7ad1-489b-a058-13e2d0c33086, is_toggleable: true }}
+### **Mechanism**: Cycle Shattering — Minimum Feedback Arc Set
+  {{ ref: f52916bf-9e62-4db1-9162-249af9662add }}
+  **Purpose**: For each non-trivial SCC, suggest the cheapest set of edges whose removal makes it acyclic — the most actionable output the tool produces.
+  --{ ref: f52916bf-9e62-4db1-9162-249af9662add }--
+  {{ ref: 4277703c-8123-4943-a128-e18b4e115cd4 }}
+  **Approach**: Exact for SCCs ≤ 300 nodes: ILP with lazy cycle constraints (HiGHS) — start with no constraints, solve, find a remaining cycle, add its constraint, repeat. Heuristic above: Eades–Lin–Smyth vertex ordering plus local search. Every suggestion carries an `exact` flag.
+  --{ ref: 4277703c-8123-4943-a128-e18b4e115cd4 }--
+  {{ ref: b7fc2585-78f0-4682-8fb6-b60d1270700f }}
+  **Time Complexity**: ILP worst-case exponential, bounded by node-count threshold and `timeout-seconds`; ELS is O(V + E).
+  --{ ref: b7fc2585-78f0-4682-8fb6-b60d1270700f }--
+  {{ ref: 27cd8e60-c051-4bb9-bc1e-a5023a079e12 }}
+  **Space Complexity**: O(V + E) plus active cycle constraints.
+  --{ ref: 27cd8e60-c051-4bb9-bc1e-a5023a079e12 }--
+  {{ ref: 6afd7cce-25c0-4601-a6dc-bf83de7a175d }}
+  **Pseudocode**:
+  --{ ref: 6afd7cce-25c0-4601-a6dc-bf83de7a175d }--
+  {{ ref: 8a34c435-4b3d-4313-aade-b00456551e96 }}
+  ```plain text
+  shatter(scc):
+    if |scc| <= ilp_threshold:
+      repeat:
+        x = solve_ilp(minimize sum w(e) * cut(e), constraints)
+        c = find_cycle(scc minus cut edges)
+        if none: return (cut edges, exact: true)
+        add constraint: sum cut(e in c) >= 1
+    else:
+      order = eades_lin_smyth(scc); improve by local moves
+      return (backward edges in order, exact: false)
+  ```
+  --{ ref: 8a34c435-4b3d-4313-aade-b00456551e96 }--
+  {{ ref: 70cd2507-839b-4ea4-be17-5d4567e3fdd8 }}
+  **Trade-offs**:
+  --{ ref: 70cd2507-839b-4ea4-be17-5d4567e3fdd8 }--
+  {{ ref: 07a16c64-38a9-427e-94f5-cf426c5dcf9d }}
+  - Real-world SCCs are overwhelmingly small — exactness where it matters, graceful degradation where it doesn't
+  --{ ref: 07a16c64-38a9-427e-94f5-cf426c5dcf9d }--
+  {{ ref: 93ff366a-a20f-46a7-b81f-bc8b21e0d323 }}
+  - Lazy constraints avoid enumerating exponentially many cycles upfront
+  --{ ref: 93ff366a-a20f-46a7-b81f-bc8b21e0d323 }--
+  {{ ref: 86ddf1f7-7a88-4b8e-9df7-09b245213dbf }}
+  **Alternatives Considered**:
+  --{ ref: 86ddf1f7-7a88-4b8e-9df7-09b245213dbf }--
+  {{ ref: 6f90a445-e756-4802-a5ba-71beafe82b68 }}
+  - Heuristic everywhere: cheaper, but weakens the product's most trusted recommendation
+  --{ ref: 6f90a445-e756-4802-a5ba-71beafe82b68 }--
+  {{ ref: c933abd3-532f-428e-9b16-8454204baff1 }}
+  - Full cycle enumeration ILP: correct but blows up on dense SCCs
+  --{ ref: c933abd3-532f-428e-9b16-8454204baff1 }--
+--{ ref: b09322bd-7ad1-489b-a058-13e2d0c33086 }--
+
+{{ ref: 4afe50d4-ed3b-47d0-a645-5e66a5132c5e, is_toggleable: true }}
+### **Mechanism**: Longest-Path Layering
+  {{ ref: c6d20c5d-c018-4744-bf13-6581cd766807 }}
+  **Purpose**: Assign each condensation node a layer so dependencies always point downward — the scaffold for seeding clusters and rendering layer views.
+  --{ ref: c6d20c5d-c018-4744-bf13-6581cd766807 }--
+  {{ ref: cdf6570f-27a3-4bdb-bfd7-2f6e26aa4254 }}
+  **Approach**: One topological pass: layer(v) = 1 + max layer over hard dependencies; sources sit at layer 1.
+  --{ ref: cdf6570f-27a3-4bdb-bfd7-2f6e26aa4254 }--
+  {{ ref: 9b6ffeb2-bce7-4804-955f-075d1480c71c }}
+  **Time Complexity**: O(V + E)
+  --{ ref: 9b6ffeb2-bce7-4804-955f-075d1480c71c }--
+  {{ ref: 80d1b832-0046-4211-8781-326acb2fd8e9 }}
+  **Space Complexity**: O(V)
+  --{ ref: 80d1b832-0046-4211-8781-326acb2fd8e9 }--
+  {{ ref: 8d94d870-af13-44cf-860f-a3d0ce662bd9 }}
+  **Pseudocode**:
+  --{ ref: 8d94d870-af13-44cf-860f-a3d0ce662bd9 }--
+  {{ ref: 91f60dc5-6759-4f21-ac85-f52ddc53d64f }}
+  ```plain text
+  layer(dag):
+    for v in topological order:
+      layer[v] = 1 + max(layer[dep] for dep in deps(v), default 0)
+  ```
+  --{ ref: 91f60dc5-6759-4f21-ac85-f52ddc53d64f }--
+  {{ ref: 864d97ef-aacc-4d4d-a692-cb3b1261ec3f }}
+  **Trade-offs**:
+  --{ ref: 864d97ef-aacc-4d4d-a692-cb3b1261ec3f }--
+  {{ ref: ee45be72-2bcb-4c67-a28e-7cba6ee26a80 }}
+  - Minimizes height, exposes the natural strata of the codebase
+  --{ ref: ee45be72-2bcb-4c67-a28e-7cba6ee26a80 }--
+  {{ ref: c6f372b8-9c29-41b9-9b9b-48d004a57793 }}
+  - Can produce wide layers; clustering, not layering, handles balance
+  --{ ref: c6f372b8-9c29-41b9-9b9b-48d004a57793 }--
+  {{ ref: abafef45-5817-4a57-8147-20e66417347c }}
+  **Alternatives Considered**:
+  --{ ref: abafef45-5817-4a57-8147-20e66417347c }--
+  {{ ref: 532e0fc1-84b1-4eb3-ad6d-2c49b92d0a76 }}
+  - Coffman–Graham (width-bounded): rejected — width limits are a visualization concern, not a structural one
+  --{ ref: 532e0fc1-84b1-4eb3-ad6d-2c49b92d0a76 }--
+--{ ref: 4afe50d4-ed3b-47d0-a645-5e66a5132c5e }--
+
+{{ ref: ea9c4c4a-1fbb-42cf-98f7-fa2bc3cb7503, is_toggleable: true }}
+### **Mechanism**: Multilevel Acyclic Clustering
+  {{ ref: 731fd0b5-fbdc-463d-adc6-2955596b60d3 }}
+  **Purpose**: Group condensation nodes into the nested container levels (folders → domains → packages → package groups) while every level stays a DAG and respects its member cap.
+  --{ ref: 731fd0b5-fbdc-463d-adc6-2955596b60d3 }--
+  {{ ref: 5aa83381-1b78-48cc-9719-af72bd735ae7 }}
+  **Approach**: Multilevel scheme in the spirit of acyclic partitioners (dagP): **coarsen** by acyclicity-preserving heavy-edge matching, **seed** initial clusters by topological greedy growing along layers, **refine** with Fiduccia–Mattheyses-style single-node moves — each move checked against two vetoes: an incremental quotient-cycle test and the level's capacity vector.
+  --{ ref: 5aa83381-1b78-48cc-9719-af72bd735ae7 }--
+  {{ ref: eba81038-aa63-48e9-a564-e34a78ef1449 }}
+  **Time Complexity**: O(E log V) per level in practice (matching + bounded FM passes).
+  --{ ref: eba81038-aa63-48e9-a564-e34a78ef1449 }--
+  {{ ref: d51f6aaa-46ea-425c-989e-44a1afaec93f }}
+  **Space Complexity**: O(V + E)
+  --{ ref: d51f6aaa-46ea-425c-989e-44a1afaec93f }--
+  {{ ref: 82e56a20-e0d2-409d-b27d-e7000227e068 }}
+  **Pseudocode**:
+  --{ ref: 82e56a20-e0d2-409d-b27d-e7000227e068 }--
+  {{ ref: 7b430a75-e0d5-448f-a4b3-d29d6558c93d }}
+  ```plain text
+  cluster(dag, level_caps):
+    graphs = coarsen chain until small      // matching never merges across a cycle-creating pair
+    parts  = seed(top of chain)             // grow clusters along topological order
+    for g in reverse(graphs):               // uncoarsen
+      project parts onto g
+      repeat fm passes:
+        for v in gain order:
+          if move(v) keeps quotient acyclic and respects caps:
+            apply if gain > 0 (with naming/path cohesion in gain)
+    return parts
+  ```
+  --{ ref: 7b430a75-e0d5-448f-a4b3-d29d6558c93d }--
+  {{ ref: d5aacee9-ba07-44fb-b79b-32007a69d58a }}
+  **Trade-offs**:
+  --{ ref: d5aacee9-ba07-44fb-b79b-32007a69d58a }--
+  {{ ref: a6e7726d-5802-40a7-b783-60178e7ac867 }}
+  - Multilevel scaling reaches 100k nodes where flat refinement stalls in local optima
+  --{ ref: a6e7726d-5802-40a7-b783-60178e7ac867 }--
+  {{ ref: 75345c23-f8e0-4dde-9f92-13d5de91166f }}
+  - The incremental cycle veto is the hot path; it costs more than classic FM but guarantees the inviolable constraint
+  --{ ref: 75345c23-f8e0-4dde-9f92-13d5de91166f }--
+  {{ ref: 813a94b9-e05d-46fa-82d8-ad30f050a143 }}
+  **Alternatives Considered**:
+  --{ ref: 813a94b9-e05d-46fa-82d8-ad30f050a143 }--
+  {{ ref: 2ea618f8-7e74-43ae-b32b-138347458486 }}
+  - Louvain/Leiden community detection: ignores direction — produces cohesive but cyclic clusters
+  --{ ref: 2ea618f8-7e74-43ae-b32b-138347458486 }--
+  {{ ref: 7d635c73-f7fb-4d3a-9cc3-4d6edea175f9 }}
+  - Spectral partitioning: undirected relaxation; same flaw
+  --{ ref: 7d635c73-f7fb-4d3a-9cc3-4d6edea175f9 }--
+  {{ ref: c505286f-d78e-4b0f-8ff3-2c6123a89f09 }}
+  - Flat ILP over the full tree: hopeless at scale
+  --{ ref: c505286f-d78e-4b0f-8ff3-2c6123a89f09 }--
+--{ ref: ea9c4c4a-1fbb-42cf-98f7-fa2bc3cb7503 }--
+
+{{ ref: 3977e557-5c1b-4b1f-9cd4-025a42344778, is_toggleable: true }}
+### **Mechanism**: Capacitated File Packing & Conditional Splits
+  {{ ref: e8fe6f11-6270-4697-a148-cbd8132021c5 }}
+  **Purpose**: Assign symbols to files under the 250-production-SLOC cap, keeping cohesion high — and turn impossible cases into actionable guidance.
+  --{ ref: e8fe6f11-6270-4697-a148-cbd8132021c5 }--
+  {{ ref: 8871529c-fe45-4b8e-8e04-3ee15a0081df }}
+  **Approach**: Within each folder, Kruskal-style agglomeration: sort symbol-pair affinities (edge weight + naming cohesion) descending, merge groups while combined size fits the cap and the folder's file DAG stays acyclic. Oversized **acyclic** groups split by min-weight topological cut (DP over the topological order). Oversized **cyclic** groups (SCCs > cap) are never split — they emit a **conditional split**: the shatter phase's break suggestions become preconditions, plus the resulting legal split. A single symbol over the cap is flagged `oversized symbol` and its file is exempt.
+  --{ ref: 8871529c-fe45-4b8e-8e04-3ee15a0081df }--
+  {{ ref: 2fa5869f-b5f6-4f67-8ed9-b2ea9b962b63 }}
+  **Time Complexity**: O(P log P) for P affinity pairs per folder; cut DP is O(n²) on group size.
+  --{ ref: 2fa5869f-b5f6-4f67-8ed9-b2ea9b962b63 }--
+  {{ ref: 0f065cdf-bc9b-4498-88f2-7e7f3229091b }}
+  **Space Complexity**: O(P)
+  --{ ref: 0f065cdf-bc9b-4498-88f2-7e7f3229091b }--
+  {{ ref: c0c1b73c-c776-4f51-a2b0-9a94572d3de2 }}
+  **Pseudocode**:
+  --{ ref: c0c1b73c-c776-4f51-a2b0-9a94572d3de2 }--
+  {{ ref: 6b276763-b634-42d4-828e-8250afe91797 }}
+  ```plain text
+  pack(folder, cap):
+    groups = singleton per scc-atom
+    for (a, b) in affinity desc:
+      if size(a)+size(b) <= cap and merge keeps file-level dag: merge
+    for g in groups where size(g) > cap:
+      if g is single oversized symbol: flag exempt
+      elif g is acyclic: split at min-weight topological cut
+      else: emit conditional_split(preconditions = mfas(g))
+  ```
+  --{ ref: 6b276763-b634-42d4-828e-8250afe91797 }--
+  {{ ref: c582cc1d-3d85-4871-a867-9e325fd94fc1 }}
+  **Trade-offs**:
+  --{ ref: c582cc1d-3d85-4871-a867-9e325fd94fc1 }--
+  {{ ref: a9775304-9e19-40c3-82f5-1b82557e725b }}
+  - Cohesion-first merging keeps related symbols together instead of bin-packing arbitrarily
+  --{ ref: a9775304-9e19-40c3-82f5-1b82557e725b }--
+  {{ ref: 9dc4401b-2d6a-40fd-b54b-3b654ae2d63e }}
+  - Capacity is measured in production SLOC only (non-blank, non-comment, excluding doc comments and cfg(test) regions) — formatter-sensitive, hence the ±10% borderline band; test-support files are capped by the same measure over their own SLOC (`[tests].helper-cap`)
+  --{ ref: 9dc4401b-2d6a-40fd-b54b-3b654ae2d63e }--
+  {{ ref: ab769294-3938-4f01-b56d-9b2239a134d3 }}
+  **Alternatives Considered**:
+  --{ ref: ab769294-3938-4f01-b56d-9b2239a134d3 }--
+  {{ ref: 2c120f2e-2dab-4fc0-95e5-95e14231c6ad }}
+  - First-fit-decreasing bin packing: optimal sizes, scrambled cohesion — files are not bins
+  --{ ref: 2c120f2e-2dab-4fc0-95e5-95e14231c6ad }--
+  {{ ref: 2b5d4649-167c-4a30-a02e-f64d69bfb376 }}
+  - Treating the cap as soft: silently produces 600-line files, defeating the requirement
+  --{ ref: 2b5d4649-167c-4a30-a02e-f64d69bfb376 }--
+--{ ref: 3977e557-5c1b-4b1f-9cd4-025a42344778 }--
+
+{{ ref: e5a5ad8b-f2e8-4324-90f5-1876cf04f085, is_toggleable: true }}
+### **Mechanism**: Visibility Derivation (LCA)
+  {{ ref: 6c10dbd7-e942-4eae-884f-60558a104b64 }}
+  **Purpose**: Compute each symbol's minimal export scope — exported only because someone consumes it, never by default.
+  --{ ref: 6c10dbd7-e942-4eae-884f-60558a104b64 }--
+  {{ ref: 75733cc1-9d1d-490e-9e79-e4f21dbfd89d }}
+  **Approach**: For each symbol, the derived scope is the lowest common ancestor (binary-lifting LCA over the candidate tree) of all consumer locations. Transitive type exposure propagates: parameter and return types of an exported function inherit at least that function's scope. Current exports wider than derived surface as `visibility` findings.
+  --{ ref: 75733cc1-9d1d-490e-9e79-e4f21dbfd89d }--
+  {{ ref: 89536b35-5229-4de5-b812-8a04663a3d86 }}
+  **Time Complexity**: O(E log V) total (one LCA per consumer edge).
+  --{ ref: 89536b35-5229-4de5-b812-8a04663a3d86 }--
+  {{ ref: 8595ec13-51f3-45f9-b3a0-33d57de225c3 }}
+  **Space Complexity**: O(V log V) for ancestor tables.
+  --{ ref: 8595ec13-51f3-45f9-b3a0-33d57de225c3 }--
+  {{ ref: 516df6a4-d771-47b7-8a27-4d85543ab238 }}
+  **Pseudocode**:
+  --{ ref: 516df6a4-d771-47b7-8a27-4d85543ab238 }--
+  {{ ref: 769e93b8-72dd-43b5-838c-92f1a39f4428 }}
+  ```plain text
+  derive_visibility(tree, edges):
+    scope[s] = lca over { container(c) for each consumer c of s }
+    repeat until fixpoint:                    // transitive type exposure
+      for exported f: for t in signature_types(f):
+        scope[t] = widest(scope[t], scope[f])
+  ```
+  --{ ref: 769e93b8-72dd-43b5-838c-92f1a39f4428 }--
+  {{ ref: f89ba46b-a4e2-41b0-9eb9-9a9392736042 }}
+  **Trade-offs**:
+  --{ ref: f89ba46b-a4e2-41b0-9eb9-9a9392736042 }--
+  {{ ref: 7d2c7a7b-5f64-413a-843b-5003a966e9c0 }}
+  - Mechanizes FR-8 exactly; barrel contents per folder/domain follow directly from derived scopes
+  --{ ref: 7d2c7a7b-5f64-413a-843b-5003a966e9c0 }--
+  {{ ref: cab16b63-7186-4d2d-9131-be2b083740b0 }}
+  - The fixpoint is required: signature types of public functions are reachable by external consumers even when no internal edge says so
+  --{ ref: cab16b63-7186-4d2d-9131-be2b083740b0 }--
+  {{ ref: 44f8c485-0346-460a-9be3-c15a8041acc7 }}
+  **Alternatives Considered**:
+  --{ ref: 44f8c485-0346-460a-9be3-c15a8041acc7 }--
+  {{ ref: 4c96ad33-d40b-4e89-a088-50c2427b8ff8 }}
+  - Trusting declared exports: measures habit, not need — most codebases over-export
+  --{ ref: 4c96ad33-d40b-4e89-a088-50c2427b8ff8 }--
+--{ ref: e5a5ad8b-f2e8-4324-90f5-1876cf04f085 }--
+
+{{ ref: 9d0d9960-0ed6-435f-90e9-3146ede7cdd5, is_toggleable: true }}
+### **Mechanism**: Test Projection (Three-Valued Polarity)
+  {{ ref: f129be9d-8772-4ceb-a004-177aaf61f389 }}
+  **Purpose**: Place test code without scattering it — and enforce that production never depends on it.
+  --{ ref: f129be9d-8772-4ceb-a004-177aaf61f389 }--
+  {{ ref: 5e3bfefe-c033-4ba7-81de-77e1268d4664 }}
+  **Approach**: Adapters classify every symbol as Production, TestCase, or TestSupport. The optimizer runs on production + TestSupport only. After packing, TestCase files are **projected**: each spec follows its subject under the detected per-package convention (co-located sibling vs mirrored test folder — detected by majority, echoed in the report). TestSupport clusters like ordinary code inside the test polarity zone under the standard cap; TestCase files are cap-exempt. Any production → test edge is a hard violation.
+  --{ ref: 5e3bfefe-c033-4ba7-81de-77e1268d4664 }--
+  {{ ref: c76217dd-5d8c-4bc8-807f-833e6417d1bb }}
+  **Time Complexity**: O(V + E)
+  --{ ref: c76217dd-5d8c-4bc8-807f-833e6417d1bb }--
+  {{ ref: d06405a3-c26f-4237-af7e-62f803e2395d }}
+  **Space Complexity**: O(V)
+  --{ ref: d06405a3-c26f-4237-af7e-62f803e2395d }--
+  {{ ref: 794dbf6b-b3e4-47b9-865e-086b63628c8e }}
+  **Pseudocode**:
+  --{ ref: 794dbf6b-b3e4-47b9-865e-086b63628c8e }--
+  {{ ref: 18552323-7fe6-4a8e-bf39-b8b405dc3bd7 }}
+  ```plain text
+  project(candidate, convention):
+    for spec in testcase_files:
+      subject = dominant production subject of spec
+      place spec next to subject per convention(package(subject))
+    validate: no edge production -> {testcase, testsupport}
+    validate: no edge testsupport -> testcase
+  ```
+  --{ ref: 18552323-7fe6-4a8e-bf39-b8b405dc3bd7 }--
+  {{ ref: 7a38c3b6-491f-4afd-90ff-8bd638dff0a0 }}
+  **Trade-offs**:
+  --{ ref: 7a38c3b6-491f-4afd-90ff-8bd638dff0a0 }--
+  {{ ref: 871c91b8-3efb-4adb-b3e2-038e585a537f }}
+  - Spec location is a convention, not a degree of freedom — deriving it preserves developer expectations
+  --{ ref: 871c91b8-3efb-4adb-b3e2-038e585a537f }--
+  {{ ref: 3cf5cc71-b9e6-4e0b-abc8-2658b2ee7a25 }}
+  - Helpers genuinely are shared code and deserve real clustering, hence the third polarity value
+  --{ ref: 3cf5cc71-b9e6-4e0b-abc8-2658b2ee7a25 }--
+  {{ ref: e49786b9-bc14-4d10-bf18-a266a76ae800 }}
+  **Alternatives Considered**:
+  --{ ref: e49786b9-bc14-4d10-bf18-a266a76ae800 }--
+  {{ ref: d7c5f31f-1408-478d-ba5c-fd005b174ea3 }}
+  - Two-valued polarity: cannot distinguish cap-exempt mirrored specs from cap-bound shared fixtures
+  --{ ref: d7c5f31f-1408-478d-ba5c-fd005b174ea3 }--
+  {{ ref: 9f36c3ba-1c80-4412-b815-e18d93254d92 }}
+  - Optimizing spec placement freely: mathematically fine, practically absurd (specs drift away from subjects)
+  --{ ref: 9f36c3ba-1c80-4412-b815-e18d93254d92 }--
+--{ ref: 9d0d9960-0ed6-435f-90e9-3146ede7cdd5 }--
+
+{{ ref: c54bf9d8-c99d-4d7b-b4a9-60767ccf7f62, is_toggleable: true }}
+### **Mechanism**: Candidate Diversification (Variation of Information)
+  {{ ref: 27b166a6-b8f8-4e7a-b515-a49e885ec75b }}
+  **Purpose**: Return k genuinely different high-quality candidates, not k near-clones of one local optimum.
+  --{ ref: 27b166a6-b8f8-4e7a-b515-a49e885ec75b }--
+  {{ ref: 1a02d795-7e0c-4169-8b41-8ca6b882fa81 }}
+  **Approach**: Run 10·k deterministic seeded restarts of the cluster+pack stages; collect the local-optima pool; keep those within the score tolerance band of the best; greedily select k by max-min variation of information (Meilă's metric over the induced partitions). If the surviving pool collapses below k, return fewer with `solutionSpaceConverged: true` — itself a meaningful signal.
+  --{ ref: 1a02d795-7e0c-4169-8b41-8ca6b882fa81 }--
+  {{ ref: bc1f7618-2ea7-4ad2-963c-64194e5f2a94 }}
+  **Time Complexity**: 10·k pipeline runs (rayon-parallel) + O(pool² · V) for pairwise VI.
+  --{ ref: bc1f7618-2ea7-4ad2-963c-64194e5f2a94 }--
+  {{ ref: f4732c2c-a0a8-4dcd-b80e-ec9315433f97 }}
+  **Space Complexity**: O(pool · V)
+  --{ ref: f4732c2c-a0a8-4dcd-b80e-ec9315433f97 }--
+  {{ ref: c2fcd11c-4dc6-43e2-b8af-8b3f4edc7dde }}
+  **Pseudocode**:
+  --{ ref: c2fcd11c-4dc6-43e2-b8af-8b3f4edc7dde }--
+  {{ ref: f1265fb6-f87e-4d9f-8671-6bd9f7c38a22 }}
+  ```plain text
+  diversify(snapshot, k):
+    pool = parallel [ solve(seed = base + i) for i in 0 .. 10 * k ]
+    pool = filter(score within (1 + tolerance) * best)
+    pick best; repeat: pick argmax of min vi-distance to picked
+    return picked (annotate convergence if fewer than k)
+  ```
+  --{ ref: f1265fb6-f87e-4d9f-8671-6bd9f7c38a22 }--
+  {{ ref: 14e0024e-8020-4c6a-b2bf-7cda087c7e1b }}
+  **Trade-offs**:
+  --{ ref: 14e0024e-8020-4c6a-b2bf-7cda087c7e1b }--
+  {{ ref: 0689b868-b99b-4f3d-935d-a997150fff72 }}
+  - VI is a true metric on partitions — principled distance, no ad-hoc similarity hacks
+  --{ ref: 0689b868-b99b-4f3d-935d-a997150fff72 }--
+  {{ ref: 1b7240d4-078d-4532-a885-db57fa0e436d }}
+  - 10× oversampling costs runtime but is embarrassingly parallel
+  --{ ref: 1b7240d4-078d-4532-a885-db57fa0e436d }--
+  {{ ref: c148abe4-5d4a-48ef-aa02-bc61eeffc2ae }}
+  **Alternatives Considered**:
+  --{ ref: c148abe4-5d4a-48ef-aa02-bc61eeffc2ae }--
+  {{ ref: 48744223-1129-497a-884e-33479565e171 }}
+  - Rand index / Jaccard: not metrics in the useful sense, insensitive to hierarchical moves
+  --{ ref: 48744223-1129-497a-884e-33479565e171 }--
+  {{ ref: 3b6e778a-a1c7-4141-96e4-cc9135ba9c43 }}
+  - Returning the top-k by score alone: produces near-duplicates, useless for human choice
+  --{ ref: 3b6e778a-a1c7-4141-96e4-cc9135ba9c43 }--
+--{ ref: c54bf9d8-c99d-4d7b-b4a9-60767ccf7f62 }--
+
+{{ ref: 37db2572-f788-81b5-bddd-cb137639c088 }}
+---
+--{ ref: 37db2572-f788-81b5-bddd-cb137639c088 }--
+
+{{ ref: 37db2572-f788-8146-870d-df006d773acd }}
+## 📚 Tech Stack
+--{ ref: 37db2572-f788-8146-870d-df006d773acd }--
+
+{{ ref: 37db2572-f788-814a-8c12-f1a8a861ee0c, is_toggleable: true }}
+### Core Technologies
+  {{ ref: 37db2572-f788-8142-91f7-ea5df6011247 }}
+  - **Rust** stable 1.85+ — single static binary; performance requirement is explicit (100k-symbol budget)
+  --{ ref: 37db2572-f788-8142-91f7-ea5df6011247 }--
+  {{ ref: 37db2572-f788-8191-b8b6-c3b8a5584209 }}
+  - **Cargo workspace** — seven crates with a strict one-way dependency graph (the tool obeys its own rules)
+  --{ ref: 37db2572-f788-8191-b8b6-c3b8a5584209 }--
+--{ ref: 37db2572-f788-814a-8c12-f1a8a861ee0c }--
+
+{{ ref: 37db2572-f788-8105-93c4-fb1d2ffc3cd1, is_toggleable: true }}
+### Libraries & Dependencies
+  {{ ref: 37db2572-f788-813c-bdb0-d486c00dd4a1 }}
+  - **clap**: CLI argument parsing with derive API — the de-facto standard, generates help/completion
+  --{ ref: 37db2572-f788-813c-bdb0-d486c00dd4a1 }--
+  {{ ref: 37db2572-f788-8106-a56c-d8429fc5baea }}
+  - **serde + serde_json + toml**: snapshot and `AnalyzeResult` serialization; `strata.toml` config
+  --{ ref: 37db2572-f788-8106-a56c-d8429fc5baea }--
+  {{ ref: 281037e2-0ef3-4f27-961f-ed97143f4bdc }}
+  - **highs**: ILP solver bindings for exact MFAS with lazy cycle constraints — open-source, no license friction
+  --{ ref: 281037e2-0ef3-4f27-961f-ed97143f4bdc }--
+  {{ ref: 9b9b7022-08ec-4d52-8a18-aaca7275d187 }}
+  - **swc_ecma_parser**: TypeScript/JSX parsing — Rust-native, battle-tested, fast
+  --{ ref: 9b9b7022-08ec-4d52-8a18-aaca7275d187 }--
+  {{ ref: bff9fab2-6b2a-42c2-ae17-d3eff3cb4dd2 }}
+  - **syn + ra_ap_\*** (rust-analyzer crates): Rust parsing and cross-crate name resolution — the only viable Rust-native binder
+  --{ ref: bff9fab2-6b2a-42c2-ae17-d3eff3cb4dd2 }--
+  {{ ref: 366298ab-a035-4eb5-9885-dc203766905a }}
+  - **rustpython-parser**: Python parsing — Rust-native; scope resolution implemented in-adapter
+  --{ ref: 366298ab-a035-4eb5-9885-dc203766905a }--
+  {{ ref: d21b97ee-1916-4dd9-be71-90b9933a4abd }}
+  - **rayon**: data parallelism for per-file parsing, per-SCC shattering, and multi-start diversification
+  --{ ref: d21b97ee-1916-4dd9-be71-90b9933a4abd }--
+  {{ ref: 6b1e1131-d027-449a-9294-8d64514baa9a }}
+  - **blake3**: content hashing for snapshot identity and caller-side result caching
+  --{ ref: 6b1e1131-d027-449a-9294-8d64514baa9a }--
+  {{ ref: 10fb6c47-90ea-4ef2-abbd-06c4a1cf5517 }}
+  - **smol_str**: cheap interned identifiers across 100k+ symbols
+  --{ ref: 10fb6c47-90ea-4ef2-abbd-06c4a1cf5517 }--
+  {{ ref: b84a951f-ec4c-4c66-af6e-b672532c1dfd }}
+  - **proptest + criterion** (dev): property tests for constraint invariants; benchmarks for the performance budget
+  --{ ref: b84a951f-ec4c-4c66-af6e-b672532c1dfd }--
+--{ ref: 37db2572-f788-8105-93c4-fb1d2ffc3cd1 }--
+
+{{ ref: 37db2572-f788-814d-a624-ed87f5331545 }}
+---
+--{ ref: 37db2572-f788-814d-a624-ed87f5331545 }--
+
+{{ ref: 37db2572-f788-81fc-baba-e7e37b80d4d3 }}
+## 🔗 References
+--{ ref: 37db2572-f788-81fc-baba-e7e37b80d4d3 }--
+
+{{ ref: 37db2572-f788-8103-a0f1-d7ef02f4c406, is_toggleable: true }}
+### Internal Documentation
+  {{ ref: 37db2572-f788-815b-adb6-e779a341e7fe }}
+  - [Architectural Principles]{{ mention: page:f832e8d8-3873-44d6-a5bf-4e78f7765a36 }} — fail-fast, immutability, and one-way layering principles this tool both follows and enforces
+  --{ ref: 37db2572-f788-815b-adb6-e779a341e7fe }--
+  {{ ref: 4220a1fd-510a-42c1-818b-2cdbd3a77142 }}
+  - [Codebase Overview]{{ mention: page:df2ea0db-ed4e-427e-aa96-e7ca44e55119 }} — the `theriety/core` monorepo, Strata's first analysis target
+  --{ ref: 4220a1fd-510a-42c1-818b-2cdbd3a77142 }--
+  {{ ref: e0d11227-cd4c-4e17-be7e-0f0564fa7c59 }}
+  - [Coding Bible]{{ mention: page:9e628dcd-1585-4412-a15a-c220487c0fbf }} — comment style, naming, and commit conventions applied throughout
+  --{ ref: e0d11227-cd4c-4e17-be7e-0f0564fa7c59 }--
+--{ ref: 37db2572-f788-8103-a0f1-d7ef02f4c406 }--
+
+{{ ref: 37db2572-f788-81e6-9db1-c1d863d11bc6, is_toggleable: true }}
+### External Resources
+  {{ ref: 37db2572-f788-8125-9c80-f9491cacc3b7 }}
+  - D.L. Parnas, *On the Criteria To Be Used in Decomposing Systems into Modules*, CACM 15(12), 1972 — the criterion this tool mechanizes
+  --{ ref: 37db2572-f788-8125-9c80-f9491cacc3b7 }--
+  {{ ref: 37db2572-f788-8100-8a61-c87e7dd1cb71 }}
+  - R. Tarjan, *Depth-first search and linear graph algorithms*, SIAM J. Computing 1(2), 1972 — SCC condensation
+  --{ ref: 37db2572-f788-8100-8a61-c87e7dd1cb71 }--
+  {{ ref: 4912f906-3c1f-480f-a8e6-4953c2de2e0b }}
+  - P. Eades, X. Lin, W.F. Smyth, *A fast and effective heuristic for the feedback arc set problem*, IPL 47, 1993 — heuristic MFAS
+  --{ ref: 4912f906-3c1f-480f-a8e6-4953c2de2e0b }--
+  {{ ref: faed8b51-b081-4129-9a48-5acaa60ff0a8 }}
+  - J. Herrmann et al., *Acyclic partitioning of large directed acyclic graphs* (dagP), 2017 — the multilevel acyclic clustering scheme adapted here
+  --{ ref: faed8b51-b081-4129-9a48-5acaa60ff0a8 }--
+  {{ ref: a8462045-0db4-47cd-9cb8-3baa483fbf43 }}
+  - M. Meilă, *Comparing clusterings — an information based distance*, J. Multivariate Analysis 98, 2007 — variation of information
+  --{ ref: a8462045-0db4-47cd-9cb8-3baa483fbf43 }--
+  {{ ref: 802a9fc5-e257-4bc9-9068-117d0c88ecaf }}
+  - HiGHS solver — [highs.dev](http://highs.dev/) — open-source LP/MIP used for exact MFAS
+  --{ ref: 802a9fc5-e257-4bc9-9068-117d0c88ecaf }--
+--{ ref: 37db2572-f788-81e6-9db1-c1d863d11bc6 }--
+
+{{ ref: 37db2572-f788-81bf-baac-eae35cd56ac7 }}
+---
+--{ ref: 37db2572-f788-81bf-baac-eae35cd56ac7 }--

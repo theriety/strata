@@ -1,0 +1,1009 @@
+---
+type: notion_page
+ref: 37db2572-f788-81db-aa87-d189be40b121
+title: Dev Notes
+last_edited_time: 2026-06-12T21:32:00.000Z
+---
+
+{{ type: child_page, ref: 37db2572-f788-8136-9e8e-c296f1b8f1cd }}
+[[ Template ] Deployment]{{ type: page, ref: 37db2572-f788-8136-9e8e-c296f1b8f1cd }}
+--{ ref: 37db2572-f788-8136-9e8e-c296f1b8f1cd }--
+
+{{ ref: 37db2572-f788-8126-94e7-e1c0255d2974 }}
+
+--{ ref: 37db2572-f788-8126-94e7-e1c0255d2974 }--
+
+{{ type: callout, ref: 37db2572-f788-8108-bf09-fa741434e909, color: blue_background, icon: 📋 }}
+**Conventions** — use consistently across all sections:
+  **Status**: 🟢 Complete · 🟡 Pending / In progress · 🟠 Needs investigation · 🔴 Blocked (note dependency)
+  **Status Prefix Rule**: Any section whose content carries a status mark (AD, FI, PI, CN, OQ, SD, MI, and any nested sub-entry) **must be prefixed with the current status emoji** in its heading or toggle summary — exactly one emoji reflecting the live state, not the placeholder list of options. Update the prefix whenever the status changes so the heading and the inline `Status:` field always agree.
+  **Severity** (toggle background color in OQ / SD): [Red]{{ color: red }} Critical · [Orange]{{ color: orange }} Blocking · [Yellow]{{ color: yellow }} Clarification · [Gray]{{ color: gray }} Nice-to-have
+--{ ref: 37db2572-f788-8108-bf09-fa741434e909 }--
+
+{{ type: child_page, ref: 37db2572-f788-818d-9410-fd8503226263 }}
+[Code Review [Review Date and Feature]]{{ type: page, ref: 37db2572-f788-818d-9410-fd8503226263 }}
+--{ ref: 37db2572-f788-818d-9410-fd8503226263 }--
+
+{{ type: child_page, ref: 37db2572-f788-8110-ae8f-cf9df5441487 }}
+[Audit Report]{{ type: page, ref: 37db2572-f788-8110-ae8f-cf9df5441487 }}
+--{ ref: 37db2572-f788-8110-ae8f-cf9df5441487 }--
+
+{{ ref: 37db2572-f788-81cb-9ead-df89206c0f9f }}
+---
+--{ ref: 37db2572-f788-81cb-9ead-df89206c0f9f }--
+
+{{ ref: 37db2572-f788-81aa-b8e0-fc59dc7f93fb }}
+## 🧠 Architecture Decisions
+--{ ref: 37db2572-f788-81aa-b8e0-fc59dc7f93fb }--
+
+{{ type: toggle, ref: 0da4410f-4733-4524-94c2-f6b4515c52ac }}
+> 🟢 AD-1: Constraint priority — acyclicity above capacity
+  - **Context**: An over-cap cyclic symbol group cannot satisfy both the file size cap and sibling acyclicity — splitting it creates cyclic files, keeping it whole breaks the cap. The collision had to be resolved by a fixed priority order.
+  - **Decision**: Constraint order is fixed: acyclicity > test polarity > capacity > cohesion > anchoring. Over-cap SCCs stay whole and emit a conditional split whose preconditions are the shatter phase's MFAS break suggestions.
+  - **Rationale**:
+    - Cyclic files defeat the tool's core purpose; an oversized file is merely unpleasant
+    - The collision becomes a feature: capacity findings route users directly to cycle-breaking guidance
+  - **Alternatives Rejected**:
+    - *Capacity as inviolable*: forces illegal cyclic splits — mathematically unsatisfiable alongside acyclicity
+    - *Both soft*: lets the optimizer trade away one-way flow for cosmetic gains
+  - **Status**: 🟢
+--{ ref: 0da4410f-4733-4524-94c2-f6b4515c52ac }--
+
+{{ type: toggle, ref: 37db2572-f788-8154-9f05-cf3d394f318d }}
+> 🟢 AD-2: Dual modes as one μ parameter
+  - **Context**: Users need both an incremental restructure reachable from today's layout and an unbiased greenfield answer.
+  - **Decision**: One objective, one solver; anchored mode sets μ > 0 with path cohesion on, greenfield sets μ = 0 **and** β = 0 (naming-token cohesion only).
+  - **Rationale**:
+    - Two solvers would drift apart; one coefficient dial cannot
+    - Splitting naming cohesion from path cohesion stops the current layout leaking into greenfield results through path similarity
+  - **Alternatives Rejected**:
+    - *Separate anchored and greenfield pipelines*: double maintenance, incomparable scores
+    - *A single path-similarity bonus in both modes*: smuggles the current tree back into greenfield via paths
+  - **Status**: 🟢
+--{ ref: 37db2572-f788-8154-9f05-cf3d394f318d }--
+
+{{ type: toggle, ref: a3b38c91-f0e1-4ecc-8f70-d684bfb49cc2 }}
+> 🟢 AD-3: Three-valued test polarity with projected spec placement
+  - **Context**: Tests mirror their subjects by convention; treating spec files as free optimization variables would scatter them across the tree.
+  - **Decision**: Polarity is Production | TestCase | TestSupport. TestCase placement is projected (spec follows subject under the detected per-package convention); TestSupport clusters like code inside the test polarity zone under the standard cap; TestCase files are cap-exempt.
+  - **Rationale**:
+    - Spec location is a convention, not a degree of freedom — deriving it preserves developer expectations
+    - Helpers genuinely are shared code and deserve real clustering
+  - **Alternatives Rejected**:
+    - *Two-valued polarity*: cannot distinguish cap-exempt mirrored specs from cap-bound shared fixtures
+    - *Ignoring tests entirely*: misses production → test leaks, the polarity rule's whole point
+  - **Status**: 🟢
+--{ ref: a3b38c91-f0e1-4ecc-8f70-d684bfb49cc2 }--
+
+{{ type: toggle, ref: 2aca7891-6c88-4681-91b9-1d7acacab563 }}
+> 🟠 AD-4: Native parser stacks over tree-sitter
+  - **Context**: Adapters need symbol-level reference graphs, which require name resolution (binding), not just syntax.
+  - **Decision**: Native stacks — swc for TypeScript, syn plus rust-analyzer (`ra_ap_*`) crates for Rust, RustPython parser with a custom scope resolver for Python — behind a shared parse → bind trait.
+  - **Rationale**:
+    - Binding accuracy is the product's foundation; tree-sitter gives uniform syntax but no semantics
+    - All three stacks are Rust-native: single binary, no FFI, no subprocess management
+  - **Alternatives Rejected**:
+    - *tree-sitter everywhere*: uniform and fast, but resolution would be reinvented per language anyway
+    - *Language-server subprocesses*: accurate but slow, fragile, and non-deterministic
+  - **Status**: 🟠 decision adopted; the `ra_ap_*` binder spike (PI-9 phase 1, findings → CN-1) is pending — flip to 🟢 once the spike confirms feasibility
+--{ ref: 2aca7891-6c88-4681-91b9-1d7acacab563 }--
+
+{{ type: toggle, ref: 3991fc9d-e504-44f2-8128-8265c8df83a8 }}
+> 🟢 AD-5: Library-first programmatic surface — no HTTP service
+  - **Context**: CI bots, dashboards, and custom tooling need programmatic access to analysis results. An earlier draft proposed a one-shot HTTP API for this.
+  - **Decision**: Programmatic usage is served by the embeddable Rust library crate (`strata-engine`) exposing `analyze(snapshot, config)` as a pure, deterministic function. There is no HTTP server, no `serve` command, and no `api` crate — the CLI is a thin shell over the same library surface.
+  - **Rationale**:
+    - Determinism (same input ⇒ same output) makes the pure function the right contract; callers cache by blake3 snapshot hash if they need to
+    - No service to deploy, secure, version, or operate — integration is a Cargo dependency, and the no-network trust story stays trivial
+    - Any consumer that genuinely wants HTTP can wrap the library in a few lines, outside this project's scope
+  - **Alternatives Rejected**:
+    - *One-shot HTTP API (axum)*: adds a network surface, auth questions, and operational burden for functionality a library call already provides
+    - *Stateful sessions with incremental updates*: cache invalidation against changing code is a project of its own
+  - **Status**: 🟢
+--{ ref: 3991fc9d-e504-44f2-8128-8265c8df83a8 }--
+
+{{ type: toggle, ref: d8607712-d5e4-431a-aa7f-72afcdaafa00 }}
+> 🟢 AD-6: Custom CSR graph instead of petgraph
+  - **Context**: The solver iterates adjacency millions of times at 100k-node scale; representation overhead compounds.
+  - **Decision**: A purpose-built compressed-sparse-row representation with interned identifiers in `core/graph`, instead of a general-purpose graph crate.
+  - **Rationale**:
+    - Cache locality and struct-of-arrays layout matter at this scale; petgraph's generality costs both
+    - The solver needs exactly two access patterns (forward and reverse adjacency) — a small surface to own
+  - **Alternatives Rejected**:
+    - *petgraph*: excellent crate, but its node/edge indirection and generic storage are overhead with no payoff here
+  - **Measurements**: to be captured as a CN benchmark page once `core` lands
+  - **Status**: 🟢
+--{ ref: d8607712-d5e4-431a-aa7f-72afcdaafa00 }--
+
+{{ type: toggle, ref: 694b0020-a79b-4921-84bb-40eed3f77948 }}
+> 🟢 AD-7: Exact MFAS below 300 nodes, heuristic above
+  - **Context**: Cycle-break suggestions are the most actionable output, but minimum feedback arc set is NP-hard.
+  - **Decision**: ILP with lazy cycle constraints (HiGHS) for SCCs ≤ 300 nodes; Eades–Lin–Smyth plus local search above; every suggestion carries an `exact` flag.
+  - **Rationale**:
+    - Real-world SCCs are overwhelmingly small — exactness where it matters, graceful degradation where it doesn't
+    - Honest uncertainty: heuristic results must never masquerade as proofs
+  - **Alternatives Rejected**:
+    - *Heuristic everywhere*: cheaper, but weakens the product's most trusted recommendation
+    - *Exact everywhere*: unbounded runtime on adversarial SCCs
+  - **Status**: 🟢
+--{ ref: 694b0020-a79b-4921-84bb-40eed3f77948 }--
+
+{{ type: toggle, ref: 973f3817-20fb-4b60-aff5-8e0e6635a77d }}
+> 🟢 AD-8: Rust-native StrataError enum instead of the @theriety/core taxonomy
+  - **Context**: Theriety convention mandates that errors come exclusively from `@theriety/core` with reasons in the `code` field — but that is a TypeScript package, and Strata is a standalone Rust workspace that cannot link it.
+  - **Decision**: A single public `StrataError` enum defined in `engine` and re-exported by `strata-engine`, one variant per failure class, each with a stable SCREAMING_SNAKE code mirroring the `code`-field convention (e.g. `ConfigInvalid` → `CONFIG_INVALID`).
+  - **Rationale**:
+    - A deliberate, documented deviation beats a silent one — this AD is the record
+    - One enum keeps the CLI exit-code mapping and library error matching trivially exhaustive
+  - **Alternatives Rejected**:
+    - *FFI or codegen bridge to *`*@theriety/core*`: absurd complexity for a standalone offline tool
+    - *Per-crate error types*: forces consumers to match across crates; the single enum is the semver contract
+  - **Status**: 🟢
+--{ ref: 973f3817-20fb-4b60-aff5-8e0e6635a77d }--
+
+{{ ref: 37db2572-f788-817e-afbe-ecba3a9cb8e3 }}
+---
+--{ ref: 37db2572-f788-817e-afbe-ecba3a9cb8e3 }--
+
+{{ ref: 37db2572-f788-81a5-904f-c39894034b43 }}
+## 🔩 Features
+--{ ref: 37db2572-f788-81a5-904f-c39894034b43 }--
+
+{{ type: child_page, ref: 37db2572-f788-81b5-a75e-daee8436a4e2 }}
+[🟡 FI-1: Multi-language IR extraction]{{ type: page, ref: 37db2572-f788-81b5-a75e-daee8436a4e2 }}
+--{ ref: 37db2572-f788-81b5-a75e-daee8436a4e2 }--
+
+{{ type: child_page, ref: 972f27b6-435c-4bb0-92dd-da70066cb25e }}
+[🟡 FI-2: Structural violation detection and CI gating]{{ type: page, ref: 972f27b6-435c-4bb0-92dd-da70066cb25e }}
+--{ ref: 972f27b6-435c-4bb0-92dd-da70066cb25e }--
+
+{{ type: child_page, ref: def09c53-39dd-4660-a475-da8e4d4cfd08 }}
+[🟡 FI-3: Dual-mode restructure candidates]{{ type: page, ref: def09c53-39dd-4660-a475-da8e4d4cfd08 }}
+--{ ref: def09c53-39dd-4660-a475-da8e4d4cfd08 }--
+
+{{ type: child_page, ref: 043b974b-70c9-48ce-b06e-1e505ea7d4f1 }}
+[🟡 FI-4: Cycle-break suggestions and conditional splits]{{ type: page, ref: 043b974b-70c9-48ce-b06e-1e505ea7d4f1 }}
+--{ ref: 043b974b-70c9-48ce-b06e-1e505ea7d4f1 }--
+
+{{ type: child_page, ref: 19a2e218-b44a-431f-bfdb-388c4c2c2c26 }}
+[🟡 FI-5: Embeddable Rust library and CLI surface]{{ type: page, ref: 19a2e218-b44a-431f-bfdb-388c4c2c2c26 }}
+--{ ref: 19a2e218-b44a-431f-bfdb-388c4c2c2c26 }--
+
+{{ ref: 37db2572-f788-819f-92ed-f0c85864e29a }}
+---
+--{ ref: 37db2572-f788-819f-92ed-f0c85864e29a }--
+
+{{ ref: 37db2572-f788-8139-a219-d90969bf403d }}
+## ⏳ Pending Implementations
+--{ ref: 37db2572-f788-8139-a219-d90969bf403d }--
+
+{{ type: child_page, ref: 37db2572-f788-81cb-bb9e-cb6e3ca36178 }}
+[Implementation Draft]{{ type: page, ref: 37db2572-f788-81cb-bb9e-cb6e3ca36178 }}
+--{ ref: 37db2572-f788-81cb-bb9e-cb6e3ca36178 }--
+
+{{ type: toggle, ref: 37db2572-f788-818a-8159-cb7ada97623f }}
+> 🟡 PI-1: Scaffold the strata workspace and the ir crate
+  - **Depends on**: — (first implementation task)
+  - **Scope**: new repository `strata/` — `Cargo.toml` (workspace), `crates/ir/` complete, compiling stubs for `crates/core`, `crates/engine`, `crates/cli`
+  - **Current State**: nothing exists; the Strata spec (this page's parent) is the sole source of truth
+  - **Target State**: a building workspace where `crates/ir` exposes `Node`, `NodeKind`, `Polarity`, `Edge`, `EdgeKind`, `Hardness`, `ScopeLevel`, `ContainerTree`, `IntermediateRepresentation`, the adapter contract (`Adapter` trait, `SourceSet`, `IrFragment`), and `Snapshot` with blake3 content hashing, serde round-tripping, and validation (dangling-edge and container-tree well-formedness checks), fully unit-tested
+  - **Changes Required**:
+    1. `Cargo.toml` — workspace with members `crates/ir`, `crates/core`, `crates/engine`, `crates/cli`; crate package names use the `strata-` prefix (`strata-ir`, `strata-core`, …) while directories keep the short name; shared lints and shared deps (serde, blake3, smol_str)
+    1. `crates/ir/src/node.rs` — node types exactly as specified in Reference → Type Reference
+    1. `crates/ir/src/edge.rs` — edge types with hardness and confidence
+    1. `crates/ir/src/container.rs` — laminar container tree with parent links and level enum (file, folder, domain, package, package group)
+    1. `crates/ir/src/snapshot.rs` — assembly, validation returning structured errors, blake3 hashing over a canonical serialization, `schema_version` field
+    1. `crates/ir/src/adapter.rs` — shared `Adapter` trait (parse → bind), `SourceSet`, and the `IrFragment` alias, exactly as in Reference → Component Specifications
+    1. unit tests per module covering construction, validation failures, hash stability, and serde round-trips
+  - **Semantics**: greenfield addition; no behavioral surface beyond the new crate
+  - **Breaking**: No
+  - **Conventions to Follow**: Coding Bible — lowercase comments, doc comments on every public item, conventional commits; Rust idioms — snake_case files, kebab-case crate names
+  - **Acceptance Criteria**:
+    - [ ] `cargo build` succeeds for the whole workspace
+    - [ ] hashing the same snapshot twice yields the same hash; reordering input nodes yields the same hash (canonical form)
+    - [ ] validation rejects an edge referencing a missing node with a structured error
+    - [ ] serde JSON round-trip preserves every field
+  - **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`
+  - **Out of Scope**: any algorithm in `core`; adapters; CLI behavior beyond compiling stubs
+  - **References**: Strata spec — Reference page (Type Reference, File Structure); AD-1, AD-3
+  - **AI Coder Prompt**:
+    ```markdown
+    # Task: Scaffold the strata workspace and the ir crate
+
+    ## Context
+    You are creating a new Rust repository named strata: a read-only code-architecture analyzer that models codebases as typed directed multigraphs and recommends laminar restructures. The ir crate is the contract between language adapters and the graph solver - everything else depends on it.
+
+    ## Goal
+    A building Cargo workspace whose ir crate fully implements the snapshot contract with hashing, validation, and tests.
+
+    ## Current Behavior
+    Empty repository.
+
+    ## Desired Behavior
+    Workspace members: crates/ir (complete), crates/core, crates/engine, crates/cli (compiling stubs).
+    crates/ir exposes:
+    - Node { id: NodeId, name: SmolStr, kind: NodeKind, polarity: Polarity, container: ContainerId, declared_visibility: ScopeLevel, effective_size: u32 }
+    - NodeKind = Symbol | Type; Polarity = Production | TestCase | TestSupport
+    - Edge { source, target, kind: EdgeKind, hardness: Hardness, confidence: f64 }
+    - EdgeKind = ValueImport | TypeReference | Inheritance | Call | ReExport; Hardness = Hard | Soft
+    - ContainerTree with levels file < folder < domain < package < package_group, parent links, well-formedness validation
+    - IntermediateRepresentation { schema_version: u32, nodes, edges, containers }; IrFragment = IntermediateRepresentation (one adapter's slice)
+    - Adapter trait: parse(sources: &SourceSet) -> SyntaxSet and bind(syntax: SyntaxSet) -> IrFragment, both fallible with structured errors
+    - Snapshot::assemble(ir) -> Result<Snapshot, SnapshotError>: validates (no dangling edge endpoints, container tree is a forest of correct levels) then computes a blake3 hash over a canonical (sorted) serialization
+
+    ## Scope
+    - Files to modify: Cargo.toml, crates/ir/** (node.rs, edge.rs, container.rs, snapshot.rs, adapter.rs, lib.rs, tests), stub lib.rs + Cargo.toml for core, engine, cli
+    - Files that must not change: none (greenfield)
+
+    ## Step-by-Step Instructions
+    1. Create the workspace manifest with shared lints (deny clippy warnings) and shared dependencies: serde (derive), serde_json, blake3, smol_str.
+    2. Implement ir modules in the order node, edge, container, snapshot, adapter; re-export the public surface from lib.rs.
+    3. Write unit tests: hash stability under node reordering, validation failure cases, serde round-trips.
+    4. Add compiling stub crates for core, engine, cli.
+
+    ## Constraints & Conventions
+    - All comments lowercase; every public item carries a /// doc comment explaining purpose.
+    - No panics in library code: all fallible paths return structured errors.
+    - Deterministic hashing: canonicalize ordering before hashing.
+
+    ## Acceptance Criteria
+    - [ ] cargo build succeeds for the workspace
+    - [ ] identical snapshots hash identically regardless of input ordering
+    - [ ] dangling edges and malformed container trees are rejected with structured errors
+    - [ ] serde round-trip preserves all fields
+
+    ## Verification
+    Run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+    Expected: all green, no warnings.
+
+    ## Deliverables
+    - Code committed with message: feat(ir): scaffold workspace and snapshot contract
+    ```
+  - **Status**: 🟡 Not started
+--{ ref: 37db2572-f788-818a-8159-cb7ada97623f }--
+
+{{ type: toggle, ref: 441308ee-be53-4cf2-8297-abd9968254f1 }}
+> 🟡 PI-2: Implement core graph engine — CSR, condensation, layering
+  - **Depends on**: PI-1
+  - **Scope**: `crates/core/src/graph/` ([csr.rs](http://csr.rs/), [intern.rs](http://intern.rs/)), `crates/core/src/condense.rs`, `crates/core/src/layer.rs`
+  - **Current State**: `crates/core` is a compiling stub from PI-1
+  - **Target State**: a CSR graph built from an `ir` snapshot (forward + reverse adjacency, interned identifiers); iterative Tarjan SCC producing a condensation DAG with a membership map; longest-path layering over the condensation — all deterministic and property-tested
+  - **Changes Required**:
+    1. `graph/intern.rs` — identifier interner with stable insertion-order indices
+    1. `graph/csr.rs` — CSR construction from snapshot edges filtered by hardness, with forward and reverse views
+    1. `condense.rs` — iterative (explicit-stack) Tarjan over hard edges; condensation DAG plus `NodeId → SccId` map
+    1. `layer.rs` — `layer(v) = 1 + max(layer(deps))` in one topological pass
+    1. property tests: condensation acyclic for random graphs; layering respects every edge; determinism across runs
+  - **Semantics**: pure additions; no public API outside `core`
+  - **Breaking**: No
+  - **Conventions to Follow**: same as PI-1
+  - **Acceptance Criteria**:
+    - [ ] condensation of any random directed graph contains no cycle (property test, 10k cases)
+    - [ ] no hard edge in the condensation points from a lower layer to a higher one
+    - [ ] 100k-node synthetic graph condenses and layers in under 2 s in release mode
+  - **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-core`
+  - **Out of Scope**: shattering, clustering, packing, scoring — subsequent PIs
+  - **References**: Strata spec — Mechanism sections (SCC Condensation, Longest-Path Layering); AD-6
+  - **AI Coder Prompt**:
+    ```markdown
+    # Task: Implement core graph engine - CSR, condensation, layering
+
+    ## Context
+    You are working in the strata repository (read-only code-architecture analyzer). The ir crate (complete) defines snapshots of nodes and typed edges. The core crate must now gain its graph foundation: CSR adjacency, Tarjan condensation, and longest-path layering. core depends only on ir and contains zero language knowledge and zero I/O.
+
+    ## Goal
+    Deterministic, linear-time graph foundation for all later solver phases.
+
+    ## Current Behavior
+    crates/core is an empty stub.
+
+    ## Desired Behavior
+    - graph/intern.rs: string interner with stable insertion-order indices
+    - graph/csr.rs: build_csr(snapshot, hardness_filter) -> Csr with forward and reverse adjacency
+    - condense.rs: condense(csr) -> Condensation { dag: Csr, membership: Vec<SccId> } using iterative Tarjan (explicit stack - no recursion, must survive 100k nodes)
+    - layer.rs: layer(condensation) -> Vec<u32> via one topological pass, layer(v) = 1 + max over hard deps
+
+    ## Scope
+    - Files to modify: crates/core/src/graph/intern.rs, crates/core/src/graph/csr.rs, crates/core/src/condense.rs, crates/core/src/layer.rs, crates/core/src/lib.rs, tests
+    - Files that must not change: crates/ir/**
+
+    ## Step-by-Step Instructions
+    1. Implement the interner, then CSR construction with both adjacency directions.
+    2. Implement iterative Tarjan; collect SCCs in deterministic order; build the condensation DAG with deduplicated edges.
+    3. Implement longest-path layering over the condensation.
+    4. Add property tests (proptest): acyclic condensation, edge-respecting layers, run-to-run determinism.
+    5. Add a release-mode benchmark over a 100k-node synthetic graph.
+
+    ## Constraints & Conventions
+    - All comments lowercase; /// doc comments on public items.
+    - No hash-map iteration-order leaks into outputs - sort or use index-ordered structures.
+    - No recursion in graph traversals.
+
+    ## Acceptance Criteria
+    - [ ] property tests pass over 10k random graphs
+    - [ ] condense + layer on 100k synthetic nodes completes under 2 s in release
+    - [ ] identical inputs produce identical outputs across runs
+
+    ## Verification
+    Run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-core
+    Expected: all green, no warnings.
+
+    ## Deliverables
+    - Code committed with message: feat(core): csr graph, tarjan condensation, longest-path layering
+    ```
+  - **Status**: 🟡 Not started
+--{ ref: 441308ee-be53-4cf2-8297-abd9968254f1 }--
+
+{{ type: toggle, ref: f4ca0a1f-dfe3-42d3-8133-d96717d2545c }}
+> 🟡 PI-3: Cycle shattering — exact and heuristic MFAS
+  - **Depends on**: PI-2
+  - **Scope**: `crates/core/src/shatter.rs`; `highs` dependency added to `core`
+  - **Current State**: condensation (PI-2) identifies SCCs but offers no way to break them
+  - **Target State**: per-SCC minimum feedback arc set suggestions — ILP with lazy cycle constraints (HiGHS) for SCCs up to `ilp-threshold` (default 300), Eades–Lin–Smyth ordering plus local search above, every result carrying an `exact` flag; SCCs processed rayon-parallel within the `timeout-seconds` budget
+  - **Changes Required**:
+    1. `shatter.rs` — `shatter(scc, weights, limits) -> BreakSet { edges, exact }`
+    1. ILP path: lazy-constraint loop — solve, find a remaining cycle, add its constraint, repeat until acyclic
+    1. heuristic path: ELS vertex ordering with backward edges as the cut, improved by single-move local search
+    1. timeout fallback: an ILP over budget degrades to the heuristic answer with `exact: false`
+    1. tests: brute-force cross-check on random graphs ≤ 8 nodes; result-acyclicity property test; determinism across runs and thread counts
+  - **Semantics**: pure additions inside `core`
+  - **Breaking**: No
+  - **Conventions to Follow**: same as PI-1
+  - **Acceptance Criteria**:
+    - [ ] ILP cut weight equals the brute-force minimum on all random graphs ≤ 8 nodes
+    - [ ] removing suggested edges always yields an acyclic subgraph (property test)
+    - [ ] SCCs above the threshold return heuristic results flagged `exact: false`
+  - **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-core`
+  - **Out of Scope**: conditional splits (PI-5); violation narration (PI-11, PI-12)
+  - **References**: Strata spec — Mechanism (Cycle Shattering); AD-7
+  - **AI Coder Prompt**:
+    ```markdown
+    # Task: Implement cycle shattering - exact and heuristic MFAS
+
+    ## Context
+    You are working in the strata repository (read-only code-architecture analyzer). crates/core already provides csr graphs, tarjan condensation, and longest-path layering. Cycle-break suggestions are the product's most trusted output: for each non-trivial scc, find the cheapest edge set whose removal makes it acyclic.
+
+    ## Goal
+    shatter(scc, weights, limits) -> BreakSet { edges: Vec<EdgeRef>, exact: bool } in crates/core/src/shatter.rs.
+
+    ## Desired Behavior
+    - |scc| <= limits.ilp_threshold (default 300): ILP via the highs crate, minimize sum w(e) * cut(e), lazy cycle constraints (start unconstrained, solve, find a remaining cycle, add constraint sum cut(e in cycle) >= 1, repeat). Return exact: true.
+    - larger sccs or ILP timeout (limits.timeout_seconds): eades-lin-smyth vertex ordering, cut = backward edges, improve with single-vertex local moves. Return exact: false.
+    - process sccs in parallel with rayon; outputs deterministic regardless of thread schedule.
+
+    ## Scope
+    - Files to modify: crates/core/src/shatter.rs, crates/core/src/lib.rs, crates/core/Cargo.toml (add highs), tests
+    - Files that must not change: crates/ir/**, graph/condense/layer modules
+
+    ## Step-by-Step Instructions
+    1. Implement the ELS heuristic first (it is also the ILP fallback).
+    2. Implement the lazy-constraint ILP loop with a cycle finder over the residual graph.
+    3. Wire the threshold/timeout dispatch and rayon parallelism per scc.
+    4. Tests: brute-force minimum cross-check for graphs <= 8 nodes (proptest), acyclicity after cut, determinism.
+
+    ## Constraints & Conventions
+    - All comments lowercase; /// doc comments on public items.
+    - Heuristic results must never report exact: true.
+    - No panics; timeouts return structured results, not errors.
+
+    ## Acceptance Criteria
+    - [ ] exact results match brute force on small graphs
+    - [ ] cut edges always break all cycles
+    - [ ] deterministic output across runs and thread counts
+
+    ## Verification
+    Run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-core
+
+    ## Deliverables
+    - Code committed with message: feat(core): mfas shattering with exact ilp and els fallback
+    ```
+  - **Status**: 🟡 Not started
+--{ ref: f4ca0a1f-dfe3-42d3-8133-d96717d2545c }--
+
+{{ type: toggle, ref: 37db2572-f788-8199-9180-d37d9e4c4959 }}
+> 🟡 PI-4: Multilevel acyclic clustering
+  - **Depends on**: PI-2
+  - **Scope**: `crates/core/src/cluster/` ([coarsen.rs](http://coarsen.rs/), [seed.rs](http://seed.rs/), [refine.rs](http://refine.rs/))
+  - **Current State**: the condensation DAG is layered (PI-2) but not grouped into container levels
+  - **Target State**: a multilevel dagP-style clusterer assigning condensation nodes to nested container levels (folders → domains → packages → package groups): acyclicity-preserving heavy-edge coarsening, topological greedy seeding along layers, FM-style refinement where every move passes two vetoes — an incremental quotient-cycle test and the level's capacity vector
+  - **Changes Required**:
+    1. `cluster/coarsen.rs` — heavy-edge matching that never merges a cycle-creating pair; coarsening chain until small
+    1. `cluster/seed.rs` — initial clusters grown greedily along topological order
+    1. `cluster/refine.rs` — gain-ordered single-node moves with the cycle and capacity vetoes; naming and path cohesion contributions inside the gain function
+    1. property tests: quotient acyclic at every level; member caps never exceeded; refinement never worsens the objective
+  - **Semantics**: pure additions inside `core`
+  - **Breaking**: No
+  - **Conventions to Follow**: same as PI-1
+  - **Acceptance Criteria**:
+    - [ ] every level's quotient graph is acyclic after clustering (property test, 10k cases)
+    - [ ] no container exceeds its member cap
+    - [ ] 100k-node synthetic graph clusters within the 60 s end-to-end budget's clustering share
+  - **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-core`
+  - **Out of Scope**: file-level packing (PI-5); full objective scoring (PI-7)
+  - **References**: Strata spec — Mechanism (Multilevel Acyclic Clustering); dagP (Herrmann et al. 2017)
+  - **AI Coder Prompt**:
+    ```markdown
+    # Task: Implement multilevel acyclic clustering
+
+    ## Context
+    You are working in the strata repository. crates/core provides csr graphs, condensation, layering, and shattering. Clustering must group condensation nodes into nested container levels (folder, domain, package, package group) while every level's quotient graph stays a dag and respects member caps.
+
+    ## Goal
+    cluster(dag, layers, level_caps, cohesion) -> Vec<LevelAssignment> in crates/core/src/cluster/{coarsen.rs,seed.rs,refine.rs}.
+
+    ## Desired Behavior
+    - coarsen: acyclicity-preserving heavy-edge matching, chain until the graph is small
+    - seed: greedy growing of clusters along topological order at the top of the chain
+    - refine: uncoarsen level by level; fm passes with gain-ordered single-node moves; each move vetoed unless the quotient stays acyclic (incremental cycle check) and the target cluster respects its cap; gains include naming/path cohesion terms
+    - deterministic given identical inputs and seed
+
+    ## Scope
+    - Files to modify: crates/core/src/cluster/**, crates/core/src/lib.rs, tests
+    - Files that must not change: crates/ir/**, existing core modules
+
+    ## Step-by-Step Instructions
+    1. Implement coarsening with the cycle-safe matching rule.
+    2. Implement seeding along layers.
+    3. Implement fm refinement with the incremental quotient-cycle veto (this is the hot path - keep it incremental, not a full recomputation per move).
+    4. Property tests: acyclic quotients, cap compliance, no objective regression from refinement.
+
+    ## Constraints & Conventions
+    - All comments lowercase; /// doc comments on public items.
+    - No hash-map iteration-order leaks into outputs.
+
+    ## Acceptance Criteria
+    - [ ] acyclic quotient at every level over 10k random dags
+    - [ ] caps respected
+    - [ ] deterministic across runs
+
+    ## Verification
+    Run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-core
+
+    ## Deliverables
+    - Code committed with message: feat(core): multilevel acyclic clustering with capacity vetoes
+    ```
+  - **Status**: 🟡 Not started
+--{ ref: 37db2572-f788-8199-9180-d37d9e4c4959 }--
+
+{{ type: toggle, ref: 14c62d8b-9818-4477-becf-70aa868c3092 }}
+> 🟡 PI-5: Capacitated file packing and conditional splits
+  - **Depends on**: PI-3, PI-4
+  - **Scope**: `crates/core/src/pack.rs`
+  - **Current State**: clustering yields folder-level groups (PI-4) and shattering yields break suggestions (PI-3); symbols are not yet assigned to files
+  - **Target State**: within each folder, Kruskal-style agglomeration of SCC-atoms by affinity (edge weight + naming cohesion) under the 250-production-SLOC cap with a file-level DAG check; oversized **acyclic** groups split at the min-weight topological cut; oversized **cyclic** groups emit conditional splits whose preconditions are the MFAS break suggestions; a single symbol over the cap is flagged `oversized symbol` and its file exempt
+  - **Changes Required**:
+    1. `pack.rs` — affinity computation and descending agglomeration with cap + DAG guards
+    1. min-weight topological cut (DP over topological order) for oversized acyclic groups
+    1. conditional-split emission reusing PI-3 break sets as preconditions
+    1. oversized-symbol exemption flagging
+    1. tests: cap compliance, folder file-DAG acyclicity, conditional splits only for cyclic over-cap groups
+  - **Semantics**: pure additions inside `core`
+  - **Breaking**: No
+  - **Conventions to Follow**: same as PI-1
+  - **Acceptance Criteria**:
+    - [ ] no produced file exceeds the cap except flagged oversized-symbol exemptions
+    - [ ] every folder's file graph is acyclic (property test)
+    - [ ] conditional splits appear only for cyclic over-cap groups and always carry non-empty preconditions
+  - **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-core`
+  - **Out of Scope**: visibility derivation and test projection (PI-6)
+  - **References**: Strata spec — Mechanism (Capacitated File Packing & Conditional Splits); AD-1
+  - **AI Coder Prompt**:
+    ```markdown
+    # Task: Implement capacitated file packing and conditional splits
+
+    ## Context
+    You are working in the strata repository. Clustering (PI-4) groups scc-atoms into folders; shattering (PI-3) computes minimal break sets for cyclic groups. Packing assigns symbols to files under the 250-production-sloc cap, cohesion first, and turns impossible cases into actionable guidance.
+
+    ## Goal
+    pack(folder, cap, shatter_results) -> Packing { files, conditional_splits, exemptions } in crates/core/src/pack.rs.
+
+    ## Desired Behavior
+    - kruskal-style agglomeration: sort symbol-pair affinities (edge weight + naming cohesion) descending; merge groups while combined size fits the cap and the folder's file dag stays acyclic
+    - oversized acyclic group: split at the min-weight topological cut (dp over topological order, o(n^2) on group size)
+    - oversized cyclic group (scc > cap): never split illegally - emit conditional_split { preconditions: mfas break set, resulting split }
+    - single symbol over cap: flag oversized-symbol exemption
+
+    ## Scope
+    - Files to modify: crates/core/src/pack.rs, crates/core/src/lib.rs, tests
+    - Files that must not change: other core modules
+
+    ## Step-by-Step Instructions
+    1. Implement affinity computation and the guarded agglomeration loop.
+    2. Implement the topological min-cut dp.
+    3. Wire conditional splits from shatter results; add the exemption path.
+    4. Property tests: cap compliance, file-dag acyclicity, conditional-split invariants.
+
+    ## Constraints & Conventions
+    - All comments lowercase; /// doc comments on public items.
+    - Capacity counts production sloc only (effective_size from ir nodes).
+
+    ## Acceptance Criteria
+    - [ ] cap respected everywhere except flagged exemptions
+    - [ ] file dags acyclic
+    - [ ] cyclic over-cap groups always produce preconditions, never illegal splits
+
+    ## Verification
+    Run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-core
+
+    ## Deliverables
+    - Code committed with message: feat(core): capacitated file packing and conditional splits
+    ```
+  - **Status**: 🟡 Not started
+--{ ref: 14c62d8b-9818-4477-becf-70aa868c3092 }--
+
+{{ type: toggle, ref: 53259315-802c-4832-affc-9913ace3c606 }}
+> 🟡 PI-6: Visibility derivation and test projection
+  - **Depends on**: PI-5
+  - **Scope**: `crates/core/src/visibility.rs`, `crates/core/src/project.rs`
+  - **Current State**: candidates have full container trees (PI-5) but no export scopes, and test code is still unplaced
+  - **Target State**: each symbol's derived scope computed as the LCA (binary lifting) of all consumer locations with the transitive type-exposure fixpoint; current exports wider than derived surfaced as `visibility` findings; TestCase files projected next to their subjects under the detected per-package convention (co-located sibling vs mirrored folder, by majority); TestSupport clustered in the test polarity zone; any production → test or TestSupport → TestCase edge reported as a hard violation
+  - **Changes Required**:
+    1. `visibility.rs` — binary-lifting LCA tables over the candidate tree; per-symbol scope derivation
+    1. `visibility.rs` — type-exposure fixpoint: signature types of an exported function inherit at least its scope
+    1. `project.rs` — per-package convention detection (majority vote, echoed in the report) and spec placement beside the dominant subject
+    1. `project.rs` — polarity validation emitting `polarity` violations
+    1. tests: fixpoint termination, projection correctness for both conventions, leak detection
+  - **Semantics**: pure additions inside `core`
+  - **Breaking**: No
+  - **Conventions to Follow**: same as PI-1
+  - **Acceptance Criteria**:
+    - [ ] derived scope of every symbol covers all its consumers (property test)
+    - [ ] the type-exposure fixpoint terminates and widens scopes monotonically
+    - [ ] specs land beside their subjects under both conventions in fixtures; production → test and TestSupport → TestCase edges are flagged
+  - **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-core`
+  - **Out of Scope**: scoring (PI-7); rendering (PI-12)
+  - **References**: Strata spec — Mechanism (Visibility Derivation, Test Projection); AD-3
+  - **AI Coder Prompt**:
+    ```markdown
+    # Task: Implement visibility derivation and test projection
+
+    ## Context
+    You are working in the strata repository. Packing (PI-5) produces candidate container trees. Two phases remain before scoring: derive each symbol's minimal export scope, and place test code by convention rather than optimization.
+
+    ## Goal
+    derive_visibility(tree, edges) -> Vec<ScopeLevel> in crates/core/src/visibility.rs and project(candidate, polarity) -> Projection in crates/core/src/project.rs.
+
+    ## Desired Behavior
+    - visibility: scope[s] = lca over container(c) for each consumer c of s, via binary-lifting lca; then iterate the type-exposure fixpoint: for every exported f, every type in f's signature gets at least f's scope; report current exports wider than derived as visibility findings
+    - projection: detect each package's spec convention (co-located sibling vs mirrored test folder) by majority; place each testcase file next to its dominant production subject under that convention; testsupport clusters like code in the test polarity zone; validate no production -> {testcase, testsupport} edge and no testsupport -> testcase edge
+
+    ## Scope
+    - Files to modify: crates/core/src/visibility.rs, crates/core/src/project.rs, crates/core/src/lib.rs, tests
+    - Files that must not change: other core modules
+
+    ## Step-by-Step Instructions
+    1. Build lca ancestor tables (o(v log v)) per candidate tree.
+    2. Derive scopes, then run the widening fixpoint to convergence.
+    3. Implement convention detection and spec placement.
+    4. Implement polarity validation.
+    5. Tests: scope coverage property, fixpoint termination, both conventions, leak detection.
+
+    ## Constraints & Conventions
+    - All comments lowercase; /// doc comments on public items.
+    - Fixpoint must be monotone (scopes only widen) to guarantee termination.
+
+    ## Acceptance Criteria
+    - [ ] every consumer is within its provider's derived scope
+    - [ ] specs follow subjects under the detected convention
+    - [ ] production -> test and testsupport -> testcase edges always produce violations
+
+    ## Verification
+    Run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-core
+
+    ## Deliverables
+    - Code committed with message: feat(core): lca visibility derivation and test projection
+    ```
+  - **Status**: 🟡 Not started
+--{ ref: 53259315-802c-4832-affc-9913ace3c606 }--
+
+{{ type: toggle, ref: a71fbc10-48e4-4ca2-823d-0a5c4636db6b }}
+> 🟡 PI-7: Scoring and candidate diversification
+  - **Depends on**: PI-5, PI-6
+  - **Scope**: `crates/core/src/score.rs`, `crates/core/src/diversify.rs`
+  - **Current State**: single candidates can be produced end-to-end but not ranked or diversified
+  - **Target State**: the full objective J(T) with per-candidate breakdowns (cut / imbalance / naming / path / anchor); 10·k deterministic seeded restarts of cluster+pack (rayon-parallel); score-tolerance filtering; greedy max-min selection by variation of information; `solutionSpaceConverged: true` when fewer than k survive
+  - **Changes Required**:
+    1. `score.rs` — weighted cut with height penalty, imbalance, naming, path, and anchor terms; breakdown struct
+    1. `diversify.rs` — multi-start pool (seed = base + i), tolerance filter, pairwise VI matrix, greedy max-min pick
+    1. mode wiring: anchored (μ > 0, β > 0) vs greenfield (μ = 0, β = 0) as coefficient presets only
+    1. tests: VI metric properties (symmetry, identity, triangle inequality on samples); determinism; convergence flag
+  - **Semantics**: pure additions inside `core`
+  - **Breaking**: No
+  - **Conventions to Follow**: same as PI-1
+  - **Acceptance Criteria**:
+    - [ ] identical snapshot + config + seed yields byte-identical candidate sets
+    - [ ] returned candidates are pairwise ≥ `min-distance` apart in VI
+    - [ ] fewer than k candidates always sets `solutionSpaceConverged: true`
+  - **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-core`
+  - **Out of Scope**: DTO assembly and delta narration (PI-11)
+  - **References**: Strata spec — Mechanism (Objective Function & μ-Modes, Candidate Diversification); AD-2
+  - **AI Coder Prompt**:
+    ```markdown
+    # Task: Implement scoring and candidate diversification
+
+    ## Context
+    You are working in the strata repository. All structural phases exist (condense, shatter, layer, cluster, pack, visibility, projection). Now candidates must be ranked by the objective and diversified so users choose between genuinely different structures.
+
+    ## Goal
+    score(candidate, coefficients) -> ScoreBreakdown in crates/core/src/score.rs and diversify(snapshot, config) -> Vec<Candidate> in crates/core/src/diversify.rs.
+
+    ## Desired Behavior
+    - objective: j(t) = sum over edges of w(e) * c(e) * h(lca_t(e)) + lambda * imbalance - alpha * naming - beta * path + mu * d(t, t0); hard constraints are vetoes upstream, never penalty terms
+    - modes differ only by coefficients: anchored mu > 0 and beta > 0; greenfield mu = 0 and beta = 0
+    - diversify: run 10*k seeded restarts of cluster+pack in parallel (seed = base + i); keep candidates within (1 + score_tolerance) * best; greedily select k by max-min variation of information; if fewer survive, return them with solution_space_converged = true
+
+    ## Scope
+    - Files to modify: crates/core/src/score.rs, crates/core/src/diversify.rs, crates/core/src/lib.rs, tests
+    - Files that must not change: other core modules
+
+    ## Step-by-Step Instructions
+    1. Implement the score terms and the breakdown struct.
+    2. Implement vi over induced partitions (meila's metric).
+    3. Implement the multi-start pool and greedy max-min selection.
+    4. Tests: vi metric sanity, determinism across thread counts, convergence flag behavior.
+
+    ## Constraints & Conventions
+    - All comments lowercase; /// doc comments on public items.
+    - Parallel results must be reduced in deterministic order.
+
+    ## Acceptance Criteria
+    - [ ] byte-identical output for identical seed
+    - [ ] selected candidates pairwise >= min-distance in vi
+    - [ ] convergence flag set iff fewer than k returned
+
+    ## Verification
+    Run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-core
+
+    ## Deliverables
+    - Code committed with message: feat(core): objective scoring and vi diversification
+    ```
+  - **Status**: 🟡 Not started
+--{ ref: a71fbc10-48e4-4ca2-823d-0a5c4636db6b }--
+
+{{ type: toggle, ref: 95eaaa3d-eaf4-43af-bc4a-6b38fdd86786 }}
+> 🟡 PI-8: TypeScript adapter — swc parse and bind
+  - **Depends on**: PI-1
+  - **Scope**: `crates/adapter-typescript` ([parse.rs](http://parse.rs/), [bind.rs](http://bind.rs/), [sloc.rs](http://sloc.rs/), [lib.rs](http://lib.rs/)) plus root `Cargo.toml` workspace-member registration
+  - **Current State**: only the shared `Adapter` trait exists (PI-1); no language adapter is implemented
+  - **Target State**: a complete TypeScript adapter — swc parsing (TS/TSX), module-graph resolution (relative imports, `tsconfig.json` paths, package entry points), symbol binding to typed edges (value import / type reference / inheritance / call; re-exports emitted as-is for engine-side flattening), polarity classification (`*.spec.ts*`, `*.test.ts*`, `__tests__/` → TestCase; shared fixtures and helpers consumed only by tests → TestSupport), and production SLOC per symbol excluding comments and JSDoc
+  - **Changes Required**:
+    1. `parse.rs` — rayon-parallel per-file parsing via `swc_ecma_parser`
+    1. `bind.rs` — module graph construction, scope analysis, edge emission with confidence (dynamic `import()` of non-literal paths and similar score below 1.0)
+    1. `sloc.rs` — non-blank, non-comment counting attributed per symbol
+    1. `lib.rs` — `Adapter` trait implementation; fixture-based integration tests
+  - **Semantics**: new crate; no changes to `ir` or `core`
+  - **Breaking**: No
+  - **Conventions to Follow**: same as PI-1
+  - **Acceptance Criteria**:
+    - [ ] a fixture repo produces the expected node and edge sets exactly
+    - [ ] `import type` edges are emitted soft; value imports hard
+    - [ ] SLOC matches hand-counted fixtures; spec files classify as TestCase
+  - **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-adapter-typescript`
+  - **Out of Scope**: re-export flattening (engine, PI-11); Rust and Python adapters (PI-9, PI-10)
+  - **References**: Strata spec — FI-1; AD-4; Requirements FR-2
+  - **AI Coder Prompt**:
+    ```markdown
+    # Task: Implement the TypeScript adapter - swc parse and bind
+
+    ## Context
+    You are working in the strata repository. The ir crate defines the Adapter trait (parse -> bind) and the IrFragment contract. This adapter turns TypeScript sources into language-agnostic ir fragments. The solver must never see typescript-specific constructs.
+
+    ## Goal
+    A strata-adapter-typescript crate implementing Adapter end to end.
+
+    ## Desired Behavior
+    - parse: swc_ecma_parser over ts/tsx, rayon-parallel per file
+    - bind: resolve the module graph (relative paths, tsconfig paths, package entries); emit edges with kinds value-import, type-reference (soft where erased at runtime), inheritance, call; re-exports emitted as-is; unresolvable dynamic constructs get confidence < 1.0 instead of being dropped
+    - polarity: *.spec.ts*, *.test.ts*, __tests__/ -> TestCase; helpers consumed only by tests -> TestSupport; else Production
+    - sloc: non-blank, non-comment lines excluding jsdoc, attributed per symbol (effective_size)
+
+    ## Scope
+    - Files to modify: crates/adapter-typescript/** (parse.rs, bind.rs, sloc.rs, lib.rs, Cargo.toml, fixtures), root Cargo.toml (register the workspace member)
+    - Files that must not change: crates/ir/**, crates/core/**
+
+    ## Step-by-Step Instructions
+    1. Implement parsing with swc; collect per-file syntax trees.
+    2. Build the module graph and symbol tables; emit nodes and edges.
+    3. Implement polarity classification and sloc counting.
+    4. Add fixture repos with exact expected fragments as integration tests.
+
+    ## Constraints & Conventions
+    - All comments lowercase; /// doc comments on public items.
+    - Parse failures raise AdapterParseFailure with the file path; do not skip silently.
+
+    ## Acceptance Criteria
+    - [ ] fixture fragments match expectations exactly
+    - [ ] type-only edges are soft; value edges hard
+    - [ ] deterministic output ordering
+
+    ## Verification
+    Run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-adapter-typescript
+
+    ## Deliverables
+    - Code committed with message: feat(adapter-typescript): swc parse and bind to ir fragments
+    ```
+  - **Status**: 🟡 Not started
+--{ ref: 95eaaa3d-eaf4-43af-bc4a-6b38fdd86786 }--
+
+{{ type: toggle, ref: bddf5962-90bd-4d07-9eff-b45f5c6ba6f4 }}
+> 🟡 PI-9: Rust adapter — syn and ra_ap binder
+  - **Depends on**: PI-1
+  - **Scope**: `crates/adapter-rust` ([parse.rs](http://parse.rs/), [bind.rs](http://bind.rs/), [sloc.rs](http://sloc.rs/), [lib.rs](http://lib.rs/)) plus root `Cargo.toml` workspace-member registration; includes the AD-4 binder spike
+  - **Current State**: no Rust adapter; AD-4 flags the `ra_ap_*` binder as the effort long pole needing an early spike
+  - **Target State**: spike first — a throwaway validation that `ra_ap_*` crates resolve cross-crate references on a fixture cargo workspace within acceptable time and memory, written up as a CN page; then the full adapter: syn parsing, ra_ap name resolution, `cfg(test)` and `#[cfg(test)] mod tests` polarity classification, production SLOC excluding doc comments and `cfg(test)` regions
+  - **Changes Required**:
+    1. spike (separate commit): minimal binary resolving a 3-crate fixture workspace; findings recorded in a Component Note
+    1. `parse.rs` — syn-based parsing per file
+    1. `bind.rs` — ra_ap-backed cross-crate resolution; edge emission with kinds and confidence; macro-generated references scored below 1.0
+    1. `sloc.rs` — SLOC excluding doc comments and `cfg(test)` regions
+    1. fixture workspace integration tests
+  - **Semantics**: new crate; no changes to `ir` or `core`
+  - **Breaking**: No
+  - **Conventions to Follow**: same as PI-1
+  - **Acceptance Criteria**:
+    - [ ] spike findings documented (resolution coverage, time, memory) in a CN page before the full implementation starts
+    - [ ] cross-crate edges resolve correctly on the fixture workspace
+    - [ ] `cfg(test)` code classifies as TestCase/TestSupport and is excluded from production SLOC
+  - **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-adapter-rust`
+  - **Out of Scope**: TypeScript and Python adapters; engine integration
+  - **References**: Strata spec — FI-1; AD-4 (🟠 spike requirement); Requirements FR-2
+  - **AI Coder Prompt**:
+    ```markdown
+    # Task: Implement the Rust adapter - syn parse and ra_ap bind
+
+    ## Context
+    You are working in the strata repository. The Rust binder is the highest-risk dependency (AD-4): ra_ap_* crates are the only viable rust-native cross-crate resolver. A spike must precede the full adapter.
+
+    ## Goal
+    Phase 1 (spike commit): validate ra_ap resolution on a 3-crate fixture workspace; record coverage, time, and memory. Phase 2: a strata-adapter-rust crate implementing the Adapter trait.
+
+    ## Desired Behavior
+    - parse: syn per file
+    - bind: ra_ap-backed name resolution across the cargo workspace; edges with kinds value-import (use), type-reference, inheritance (trait impls), call; macro-expanded references get confidence < 1.0
+    - polarity: #[cfg(test)] items and tests/ -> TestCase; shared test utilities -> TestSupport
+    - sloc: non-blank, non-comment, excluding /// doc comments and cfg(test) regions
+
+    ## Scope
+    - Files to modify: crates/adapter-rust/** (parse.rs, bind.rs, sloc.rs, lib.rs, Cargo.toml, fixtures), root Cargo.toml (register the workspace member)
+    - Files that must not change: crates/ir/**, crates/core/**
+
+    ## Step-by-Step Instructions
+    1. Spike: minimal binary loading the fixture workspace through ra_ap; print resolution coverage; commit findings.
+    2. Implement parse, bind, sloc, and the trait impl.
+    3. Fixture workspace integration tests with exact expected fragments.
+
+    ## Constraints & Conventions
+    - All comments lowercase; /// doc comments on public items.
+    - Bind failures (broken manifest, missing lockfile) raise AdapterBindFailure.
+
+    ## Acceptance Criteria
+    - [ ] spike documented before phase 2
+    - [ ] cross-crate edges correct on fixtures
+    - [ ] cfg(test) excluded from production sloc
+
+    ## Verification
+    Run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-adapter-rust
+
+    ## Deliverables
+    - Commit 1: spike(adapter-rust): ra_ap binder feasibility
+    - Commit 2: feat(adapter-rust): syn parse and ra_ap bind to ir fragments
+    ```
+  - **Status**: 🟡 Not started
+--{ ref: bddf5962-90bd-4d07-9eff-b45f5c6ba6f4 }--
+
+{{ type: toggle, ref: 6d8f514b-7585-4522-855c-bc21b6510736 }}
+> 🟡 PI-10: Python adapter — rustpython parse and bind
+  - **Depends on**: PI-1
+  - **Scope**: `crates/adapter-python` ([parse.rs](http://parse.rs/), [bind.rs](http://bind.rs/), [sloc.rs](http://sloc.rs/), [lib.rs](http://lib.rs/)) plus root `Cargo.toml` workspace-member registration
+  - **Current State**: no Python adapter; scope resolution must be implemented in-adapter (no off-the-shelf Rust-native Python binder)
+  - **Target State**: rustpython-parser parsing plus a custom scope resolver (module, class, and function scopes; absolute and relative imports; `__init__.py` packages); dynamic constructs (`getattr`, `importlib`, `__all__` manipulation) emit confidence-scored edges below 1.0 rather than being dropped; polarity via `test_*.py` / `*_test.py` / `tests/` and conftest conventions; SLOC excluding comments and docstrings
+  - **Changes Required**:
+    1. `parse.rs` — rustpython-parser per file
+    1. `bind.rs` — scope resolver and import graph; edge emission with kinds and confidence
+    1. `sloc.rs` — non-blank, non-comment, non-docstring counting per symbol
+    1. `lib.rs` — `Adapter` trait implementation; fixture-package integration tests
+  - **Semantics**: new crate; no changes to `ir` or `core`
+  - **Breaking**: No
+  - **Conventions to Follow**: same as PI-1
+  - **Acceptance Criteria**:
+    - [ ] fixture package produces expected nodes and edges, including relative imports
+    - [ ] `getattr`-style dynamic access yields edges with confidence < 1.0
+    - [ ] docstrings excluded from SLOC; `conftest.py` classifies as TestSupport
+  - **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-adapter-python`
+  - **Out of Scope**: type-stub (`.pyi`) analysis — future enhancement
+  - **References**: Strata spec — FI-1; AD-4; Requirements FR-2
+  - **AI Coder Prompt**:
+    ```markdown
+    # Task: Implement the Python adapter - rustpython parse and custom scope bind
+
+    ## Context
+    You are working in the strata repository. Python has no rust-native binder, so scope resolution is implemented inside the adapter. Honest uncertainty matters: dynamic constructs must yield low-confidence edges, not silence.
+
+    ## Goal
+    A strata-adapter-python crate implementing the Adapter trait.
+
+    ## Desired Behavior
+    - parse: rustpython-parser per file, rayon-parallel
+    - bind: custom resolver over module/class/function scopes; absolute and relative imports; __init__.py packages; edges with kinds value-import, type-reference (annotations, soft), inheritance, call; getattr/importlib/__all__ tricks -> confidence < 1.0
+    - polarity: test_*.py, *_test.py, tests/ -> TestCase; conftest.py and shared fixtures -> TestSupport; else Production
+    - sloc: non-blank, non-comment, excluding docstrings
+
+    ## Scope
+    - Files to modify: crates/adapter-python/** (parse.rs, bind.rs, sloc.rs, lib.rs, Cargo.toml, fixtures), root Cargo.toml (register the workspace member)
+    - Files that must not change: crates/ir/**, crates/core/**
+
+    ## Step-by-Step Instructions
+    1. Implement parsing and the scope-resolver symbol tables.
+    2. Emit nodes and edges with confidence scoring for dynamic constructs.
+    3. Implement polarity classification and sloc counting.
+    4. Fixture-package integration tests with exact expected fragments.
+
+    ## Constraints & Conventions
+    - All comments lowercase; /// doc comments on public items.
+    - Annotation-only references are soft edges (erased at runtime).
+
+    ## Acceptance Criteria
+    - [ ] fixture fragments match expectations exactly
+    - [ ] dynamic constructs produce confidence < 1.0 edges
+    - [ ] docstrings excluded from sloc
+
+    ## Verification
+    Run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-adapter-python
+
+    ## Deliverables
+    - Code committed with message: feat(adapter-python): rustpython parse and scope-resolver bind
+    ```
+  - **Status**: 🟡 Not started
+--{ ref: 6d8f514b-7585-4522-855c-bc21b6510736 }--
+
+{{ type: toggle, ref: 6286e0dd-cda3-4130-a3da-ea826f5308a1 }}
+> 🟡 PI-11: Engine orchestration and public library surface
+  - **Depends on**: PI-7, PI-8 (the TypeScript adapter suffices for the first end-to-end path; PI-9 and PI-10 plug in as they land)
+  - **Scope**: `crates/engine/src/` ([lib.rs](http://lib.rs/), [config.rs](http://config.rs/), [snapshot.rs](http://snapshot.rs/), [result.rs](http://result.rs/)); crate published as `strata-engine`
+  - **Current State**: solver and at least one adapter exist but nothing connects them; no config loading; no public surface
+  - **Target State**: the complete orchestration and the stable programmatic surface — source discovery and language dispatch (rayon), fragment merging, re-export flattening with the depth guard (`ReExportDepthExceeded`), blake3 snapshot hashing, `strata.toml` loading with defaults and validation (`ConfigInvalid`), pure `analyze(snapshot, config)` running the core pipeline, `AnalyzeResult` DTO assembly with delta narration vs the current tree, and the `StrataError` enum; `ir` types re-exported so consumers can assemble snapshots directly (AD-5)
+  - **Changes Required**:
+    1. `config.rs` — full `strata.toml` schema with every default from the Reference; structured validation errors
+    1. `lib.rs` — `snapshot_from_root`, `analyze`, `load_config`; adapter registry and parallel dispatch
+    1. `snapshot.rs` — snapshot assembly: merge fragments, flatten re-export chains (guarded), validate, hash
+    1. `result.rs` — `AnalyzeResult` matching the Reference DTO exactly; delta narration (move grouping with reasons)
+    1. integration tests: fixture root → full `AnalyzeResult`; determinism; the spec's library usage example compiles and runs
+  - **Semantics**: public API surface — this crate defines the semver contract
+  - **Breaking**: No (first release)
+  - **Conventions to Follow**: same as PI-1; public DTO fields are camelCase in JSON via serde rename
+  - **Acceptance Criteria**:
+    - [ ] `analyze` is pure: identical snapshot + config + seed ⇒ byte-identical `AnalyzeResult`
+    - [ ] `AnalyzeConfig::default()` equals a config-less CLI run; every `strata.toml` key optional
+    - [ ] the Usage Example from the main spec page compiles and runs against a fixture
+  - **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-engine`
+  - **Out of Scope**: CLI commands and rendering (PI-12)
+  - **References**: Strata spec — Reference (Library, Configuration, DTOs, Error Reference); AD-5; FI-5
+  - **AI Coder Prompt**:
+    ```markdown
+    # Task: Implement engine orchestration and the public library surface
+
+    ## Context
+    You are working in the strata repository. core (full pipeline) and at least the typescript adapter are complete. engine is the only crate that sees both sides, and it doubles as the public strata-engine library crate (AD-5): no http, no network, pure functions.
+
+    ## Goal
+    snapshot_from_root, analyze, and load_config in crates/engine, plus the AnalyzeResult dto with delta narration.
+
+    ## Desired Behavior
+    - load_config(path) -> AnalyzeConfig: full strata.toml schema, every key optional, defaults exactly as in the spec reference; unknown keys or out-of-range values -> ConfigInvalid
+    - snapshot_from_root(root, config) -> Snapshot: discover sources by glob, dispatch adapters in parallel, merge fragments, flatten re-export chains (depth guard -> ReExportDepthExceeded), validate, blake3-hash
+    - analyze(snapshot, config) -> AnalyzeResult: pure function running condense -> shatter -> layer -> cluster -> pack -> visibility -> project -> score -> diversify per mode; assemble dto with score breakdowns, conditional splits, violations, and delta narration vs the current tree
+    - re-export all ir types; define StrataError with all variants from the error reference
+
+    ## Scope
+    - Files to modify: crates/engine/** (lib.rs, config.rs, snapshot.rs, result.rs, Cargo.toml, tests)
+    - Files that must not change: crates/ir/**, crates/core/**, adapter crates
+
+    ## Step-by-Step Instructions
+    1. Implement config with serde + validation.
+    2. Implement snapshot assembly (merge, flatten, hash).
+    3. Implement analyze orchestration and the dto (serde camelCase).
+    4. Implement delta narration: group moves, attach reasons (over cap, sole consumer, naming cohesion, follows subject).
+    5. Integration tests on fixtures incl. determinism and the spec's usage example as a doc test.
+
+    ## Constraints & Conventions
+    - All comments lowercase; /// doc comments on public items.
+    - analyze performs no i/o and reads no global state.
+    - No panics across the crate boundary; everything returns StrataError.
+
+    ## Acceptance Criteria
+    - [ ] byte-identical results for identical inputs
+    - [ ] defaults equal config-less behavior
+    - [ ] dto serializes exactly to the documented json shape
+
+    ## Verification
+    Run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test -p strata-engine
+
+    ## Deliverables
+    - Code committed with message: feat(engine): orchestration, config, and public library surface
+    ```
+  - **Status**: 🟡 Not started
+--{ ref: 6286e0dd-cda3-4130-a3da-ea826f5308a1 }--
+
+{{ type: toggle, ref: cbe1c5ac-a6fb-4737-bb37-3b6aba88bba0 }}
+> 🟡 PI-12: CLI commands, rendering, and end-to-end parity
+  - **Depends on**: PI-11
+  - **Scope**: `crates/cli/src/` ([main.rs](http://main.rs/), commands/, [render.rs](http://render.rs/)); `tests/e2e/`
+  - **Current State**: the engine surface is complete; the CLI is a compiling stub from PI-1
+  - **Target State**: the five commands (`analyze`, `tree`, `diff`, `violations`, `report`) with all flags, defaults, and exit codes exactly as documented in the Reference; TTY-aware rendering (summary on TTY, JSON when piped); end-to-end tests over TypeScript, Rust, and Python fixture repos; and a **parity test** asserting the CLI's JSON output is byte-identical to the library's serialized `AnalyzeResult` for the same inputs (external-crate criterion from Requirements)
+  - **Changes Required**:
+    1. `main.rs` + `commands/` — clap derive definitions matching the Reference flag tables
+    1. `render.rs` — violation tables, candidate trees, diff move lists, Markdown report
+    1. exit-code mapping: 0 success, 1 error, 2 reserved for `violations --fail-on` matches; `borderline` never gates
+    1. `tests/e2e/` — fixture repos per language; golden-file outputs; the parity test
+  - **Semantics**: shell only — no logic unavailable to library consumers
+  - **Breaking**: No
+  - **Conventions to Follow**: same as PI-1
+  - **Acceptance Criteria**:
+    - [ ] every Usage Example on the main spec page reproduces as documented against fixtures
+    - [ ] `violations --fail-on` exits 2 on matches, 0 otherwise; `borderline` findings never exit 2
+    - [ ] CLI JSON output is byte-identical to the library result for the same snapshot + config + seed
+  - **Verification**: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --workspace`
+  - **Out of Scope**: new analysis features; packaging/distribution
+  - **References**: Strata spec — Reference (API Interfaces); Requirements (CLI & Library criteria); FI-5
+  - **AI Coder Prompt**:
+    ```markdown
+    # Task: Implement CLI commands, rendering, and end-to-end parity
+
+    ## Context
+    You are working in the strata repository. The strata-engine crate is complete. The cli crate must be a thin clap shell - argument parsing, rendering, exit codes - with zero business logic.
+
+    ## Goal
+    Commands analyze, tree, diff, violations, report matching the spec reference exactly, plus e2e and parity tests.
+
+    ## Desired Behavior
+    - analyze: --root, --config, --mode, -k/--candidates, --output, --format, --seed, --jobs; exit 0 when analysis completes (violations are findings, not failures)
+    - tree: --input, --mode, --candidate, --current, --symbols, --depth
+    - diff: positional refs (mode/index or current); prints vi distance + grouped moves
+    - violations: --root, --fail-on, --format; exit 2 iff a --fail-on class is present; borderline never gates
+    - report: --input, --output; markdown rendering
+    - tty-aware default format: summary on tty, json when piped
+
+    ## Scope
+    - Files to modify: crates/cli/** (main.rs, commands/*.rs, render.rs), tests/e2e/**
+    - Files that must not change: crates/engine/**, crates/core/**, crates/ir/**, adapters
+
+    ## Step-by-Step Instructions
+    1. Define clap structs mirroring the reference flag tables (defaults included).
+    2. Implement rendering: violation table, candidate tree, diff move list, markdown report.
+    3. Map StrataError variants to exit code 1 with the documented error codes on stderr.
+    4. Build fixture repos (ts, rust, python) and golden-file e2e tests.
+    5. Add the parity test: run analyze via cli --format json and via the library; assert byte equality.
+
+    ## Constraints & Conventions
+    - All comments lowercase; /// doc comments on public items.
+    - No logic in cli that the library cannot perform.
+
+    ## Acceptance Criteria
+    - [ ] all documented usage examples reproduce on fixtures
+    - [ ] exit codes 0/1/2 behave exactly as documented
+    - [ ] parity test passes byte-for-byte
+
+    ## Verification
+    Run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --workspace
+
+    ## Deliverables
+    - Code committed with message: feat(cli): commands, rendering, e2e fixtures, and parity test
+    ```
+  - **Status**: 🟡 Not started
+--{ ref: cbe1c5ac-a6fb-4737-bb37-3b6aba88bba0 }--
+
+{{ ref: ab1be737-d029-43a2-817f-cf2705b56c8f }}
+---
+--{ ref: ab1be737-d029-43a2-817f-cf2705b56c8f }--
+
+{{ ref: 9f1e0b81-3d90-46d6-a387-c6629989867a }}
+## 📓 Component Notes
+--{ ref: 9f1e0b81-3d90-46d6-a387-c6629989867a }--
+
+{{ type: child_page, ref: 37db2572-f788-8116-a6fe-df8d1ffa2fb2 }}
+[🟡 CN-1: ra_ap Binder Spike Findings]{{ type: page, ref: 37db2572-f788-8116-a6fe-df8d1ffa2fb2 }}
+--{ ref: 37db2572-f788-8116-a6fe-df8d1ffa2fb2 }--
+
+{{ ref: a13a0f25-1cef-4aad-9380-dacb99d233cf }}
+---
+--{ ref: a13a0f25-1cef-4aad-9380-dacb99d233cf }--

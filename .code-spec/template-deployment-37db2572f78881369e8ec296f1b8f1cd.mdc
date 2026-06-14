@@ -1,0 +1,54 @@
+---
+type: notion_page
+ref: 37db2572-f788-8136-9e8e-c296f1b8f1cd
+title: "[ Template ] Deployment"
+last_edited_time: 2026-06-12T10:13:00.000Z
+---
+
+{{ ref: 37db2572-f788-815e-8cef-f43a67e49dc6, color: gray }}
+[ Note: This page is optional. Only include deployment details if your design involves a deployment process. Otherwise, you should delete this page. ]
+--{ ref: 37db2572-f788-815e-8cef-f43a67e49dc6 }--
+
+{{ ref: 37db2572-f788-81fb-84ea-c142cd2676c7, is_toggleable: true }}
+### Environment Configuration
+  {{ ref: 37db2572-f788-81fb-a87b-c07bb15f4566 }}
+
+  --{ ref: 37db2572-f788-81fb-a87b-c07bb15f4566 }--
+  {{ ref: 37db2572-f788-8164-b86c-dacd07b5122c }}
+  ```typescript
+  // environment variables
+  interface EnvironmentConfig {
+    NODE_ENV: 'development' | 'staging' | 'production';
+    DATABASE_URL: string;
+    API_KEY: string;
+    LOG_LEVEL: 'debug' | 'info' | 'warn' | 'error';
+  }
+  ```
+  --{ ref: 37db2572-f788-8164-b86c-dacd07b5122c }--
+--{ ref: 37db2572-f788-81fb-84ea-c142cd2676c7 }--
+
+{{ ref: 37db2572-f788-81c7-aff1-f3d2fef8694c, is_toggleable: true }}
+### Deployment Process
+  {{ ref: 37db2572-f788-8179-933c-faab7e7a1910 }}
+  1. [[ Build and test in CI/CD pipeline ]]{{ color: gray }}
+  --{ ref: 37db2572-f788-8179-933c-faab7e7a1910 }--
+  {{ ref: 37db2572-f788-81a4-9a7d-ece2f5e9a786 }}
+  1. [[ Deploy to staging environment ]]{{ color: gray }}
+  --{ ref: 37db2572-f788-81a4-9a7d-ece2f5e9a786 }--
+  {{ ref: 37db2572-f788-819b-93ae-ffa70fbe8a2b }}
+  1. [[ Run smoke tests ]]{{ color: gray }}
+  --{ ref: 37db2572-f788-819b-93ae-ffa70fbe8a2b }--
+  {{ ref: 37db2572-f788-819b-b2ee-eb0bbad70698 }}
+  1. [[ Deploy to production with canary/blue-green strategy ]]{{ color: gray }}
+  --{ ref: 37db2572-f788-819b-b2ee-eb0bbad70698 }--
+  {{ ref: 37db2572-f788-81e6-830d-d7646e2fd45c }}
+  1. [[ Monitor metrics and alerts ]]{{ color: gray }}
+  --{ ref: 37db2572-f788-81e6-830d-d7646e2fd45c }--
+--{ ref: 37db2572-f788-81c7-aff1-f3d2fef8694c }--
+
+{{ ref: 37db2572-f788-815e-b184-f46a6f511d2d, is_toggleable: true }}
+### Rollback Procedure
+  {{ ref: 37db2572-f788-8121-b423-f42fe3d71b3d }}
+  [[ How to quickly rollback if issues are detected ]]{{ color: gray }}
+  --{ ref: 37db2572-f788-8121-b423-f42fe3d71b3d }--
+--{ ref: 37db2572-f788-815e-b184-f46a6f511d2d }--

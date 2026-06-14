@@ -1,0 +1,59 @@
+---
+type: notion_page
+ref: 972f27b6-435c-4bb0-92dd-da70066cb25e
+title: "🟡 FI-2: Structural violation detection and CI gating"
+last_edited_time: 2026-06-12T21:32:00.000Z
+---
+
+{{ ref: befa2eeb-87b8-4896-b4e9-dcade70f155b }}
+- **Status**: ⏳ Planned
+--{ ref: befa2eeb-87b8-4896-b4e9-dcade70f155b }--
+{{ ref: 7fb47aaf-100d-4eb5-a195-6719f85c2977 }}
+- **Depends on**: FI-1
+--{ ref: 7fb47aaf-100d-4eb5-a195-6719f85c2977 }--
+{{ ref: 6f76800a-316e-477e-9ea9-899ab549b0bc }}
+- **PRs**: None yet
+--{ ref: 6f76800a-316e-477e-9ea9-899ab549b0bc }--
+{{ ref: 12c5d1f3-e1af-488f-a1e8-f1b85202340c }}
+- **Surface Area**: `crates/core` (condense, visibility, project), current-structure analysis in `crates/engine`, `strata violations` in `crates/cli`
+--{ ref: 12c5d1f3-e1af-488f-a1e8-f1b85202340c }--
+{{ ref: e2be4e50-af7f-4777-af0f-09b692e8afe7 }}
+- **Description**: Detects structural violations in the current layout without proposing any restructure: sibling cycles over hard edges at every container level, production → test polarity leaks, capacity breaches against the 250-production-SLOC file cap and the member caps above it, and symbols exported wider than their derived scope. Findings within ±10% of a cap are classified `borderline` instead of `violation`. `strata violations --fail-on <classes>` turns selected classes into a CI gate via exit code 2.
+--{ ref: e2be4e50-af7f-4777-af0f-09b692e8afe7 }--
+{{ ref: 50161219-77f0-4431-925a-265f490df3a8 }}
+- **Usage**:
+--{ ref: 50161219-77f0-4431-925a-265f490df3a8 }--
+
+{{ ref: 2599dca8-7ba9-4394-99e1-a1b8dba80f88 }}
+```bash
+$ strata violations --root . --fail-on cycle,polarity
+KIND      SEVERITY    LOCATION                                  DETAIL
+cycle     violation   packages/data/{store.rs, codec.rs}        2-file cycle; break codec.rs -> store.rs (w=1.0, exact)
+polarity  violation   packages/api/server.ts -> tests/util.ts   production imports test support
+capacity  borderline  packages/core/engine.rs                   263 prod sloc (cap 250, +5%)
+$ echo $?
+2
+```
+--{ ref: 2599dca8-7ba9-4394-99e1-a1b8dba80f88 }--
+
+{{ ref: b8c6a5f1-78c6-4731-9b4f-5b2159361a5f }}
+- **Code** *(proposed shape in *`*engine/result.rs*`*)*:
+--{ ref: b8c6a5f1-78c6-4731-9b4f-5b2159361a5f }--
+
+{{ ref: 6fa0c0d3-617d-410b-99a6-2440f4c5818f }}
+```rust
+pub struct Finding {
+  pub kind: FindingKind,      // cycle | polarity | capacity | visibility
+  pub severity: Severity,     // violation | borderline
+  pub location: Vec<NodeRef>, // offending symbols / files / containers
+  pub detail: String,         // human narration incl. break suggestions
+}
+```
+--{ ref: 6fa0c0d3-617d-410b-99a6-2440f4c5818f }--
+
+{{ ref: 41e55228-2706-40a1-ad72-a82fc3b659f1 }}
+- **Behaviour**: Analysis always exits `0` when it completes — violations are findings, not failures; exit `2` is reserved for `--fail-on` matches. `borderline` findings (within ±10% of a cap) never gate, absorbing formatter churn. Cycle findings embed the shatter phase's break suggestions with their `exact` flag, so the violation table doubles as a fix list.
+--{ ref: 41e55228-2706-40a1-ad72-a82fc3b659f1 }--
+{{ ref: 92b81bde-a8c9-41f4-8f1d-1f9b8328c9bf }}
+- **Compatibility**: First release. New finding kinds may be added in minor versions; an unrecognized class in `--fail-on` raises `ConfigInvalid`, so CI configurations fail loudly rather than silently not gating.
+--{ ref: 92b81bde-a8c9-41f4-8f1d-1f9b8328c9bf }--

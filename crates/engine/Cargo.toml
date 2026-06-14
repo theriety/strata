@@ -1,0 +1,15 @@
+[package]
+name = "strata-engine"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "strata_engine"
+path = "src/lib.rs"
+
+[dependencies]
+strata-ir = { path = "../ir" }
+strata-core = { path = "../core" }
+
+[lints]
+workspace = true
