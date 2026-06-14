@@ -7,13 +7,17 @@
 //! exact MFAS via ILP with lazy cycle constraints and an Eades–Lin–Smyth
 //! fallback ([`shatter`]). Commit 4 layers dagP-style multilevel acyclic
 //! clustering on top — coarsen, seed, refine — where acyclicity is an inviolable
-//! veto and capacity a hard cap ([`cluster`]). It re-exports the IR contract so
-//! downstream crates have a single solver-facing entry point.
+//! veto and capacity a hard cap ([`cluster`]). Commit 5 adds capacitated file
+//! packing — cohesion-first Kruskal agglomeration of SCC atoms under the
+//! production-SLOC cap, with conditional splits for oversized cyclic groups
+//! ([`pack`]). It re-exports the IR contract so downstream crates have a single
+//! solver-facing entry point.
 
 pub mod cluster;
 pub mod condense;
 pub mod graph;
 pub mod layer;
+pub mod pack;
 pub mod shatter;
 
 pub use strata_ir as ir;
