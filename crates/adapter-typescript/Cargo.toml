@@ -1,0 +1,22 @@
+[package]
+name = "strata-adapter-typescript"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "strata_adapter_typescript"
+path = "src/lib.rs"
+
+[dependencies]
+strata-ir = { path = "../ir" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+smol_str = { workspace = true }
+rayon = { workspace = true }
+swc_common = "23"
+swc_ecma_ast = "25"
+swc_ecma_parser = "41"
+swc_ecma_visit = "25"
+
+[lints]
+workspace = true

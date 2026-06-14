@@ -95,3 +95,27 @@
 - **Reason**: wrong-integration
 - **Impact on spec**: none
 - **Severity**: minor
+
+### D-13: Followed the real `Adapter` trait contract rather than the draft's free-function API
+- **When**: Commit 8 (feat(adapter-typescript): swc parse and bind to IR fragments)
+- **Draft said**: a free `parse(files) -> Vec<ParsedModule>` / `bind(modules) -> ...` API returning `ParsedModule` directly, with an `AdapterParseFailure` error type
+- **What I did instead**: implemented the actual `strata_ir::Adapter` trait — `parse(&self, &[SourceFile]) -> Result<Vec<ParseTree>, AdapterError>` and `bind(&self, Vec<ParseTree>) -> Result<IrFragment, AdapterError>` — threading the `ParsedModule` summary through the opaque `ParseTree.payload` as canonical JSON; errors use the real `AdapterError::{Parse, Bind}` variants
+- **Reason**: wrong-integration
+- **Impact on spec**: surface-change
+- **Severity**: minor
+
+### D-14: `bind` takes a `tsconfig` alias table as an explicit parameter
+- **When**: Commit 8
+- **Draft said**: binding resolves `tsconfig` `paths` aliases without specifying where the alias table comes from
+- **What I did instead**: the `TypeScriptAdapter` reads `root/tsconfig.json` once at construction (`tsconfig::load_aliases`) and passes the resulting `BTreeMap<SmolStr, SmolStr>` into `bind::bind(&modules, root, aliases)`, keeping the binder a pure function of its inputs (no filesystem reads at bind time)
+- **Reason**: missing-symbol
+- **Impact on spec**: surface-change
+- **Severity**: minor
+
+### D-15: Pure barrel re-exports produce no edges under the per-symbol node model
+- **When**: Commit 8
+- **Draft said**: re-exports (`export ... from '...'`) are emitted as-is as re-export edges
+- **What I did instead**: a re-export edge requires both a resolved target export and a *local* node to anchor the source end; a pure barrel file (e.g. `index.ts` with only re-exports and no local declarations) has no local node, so it emits no edge — matching the main spec's intent that barrels become invisible to the solver. Re-export edge emission is otherwise implemented for files that both re-export and declare locally
+- **Reason**: behavior-change
+- **Impact on spec**: behavior-change
+- **Severity**: minor

@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/ir", "crates/core", "crates/engine", "crates/cli"]
+members = [
+    "crates/ir",
+    "crates/core",
+    "crates/engine",
+    "crates/cli",
+    "crates/adapter-typescript",
+]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
