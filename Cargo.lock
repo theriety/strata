@@ -3069,8 +3069,18 @@ dependencies = [
 name = "strata-engine"
 version = "0.1.0"
 dependencies = [
+ "glob",
+ "rayon",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "strata-adapter-python",
+ "strata-adapter-rust",
+ "strata-adapter-typescript",
  "strata-core",
  "strata-ir",
+ "thiserror",
+ "toml",
 ]
 
 [[package]]

@@ -10,6 +10,16 @@ path = "src/lib.rs"
 [dependencies]
 strata-ir = { path = "../ir" }
 strata-core = { path = "../core" }
+strata-adapter-typescript = { path = "../adapter-typescript" }
+strata-adapter-rust = { path = "../adapter-rust" }
+strata-adapter-python = { path = "../adapter-python" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+smol_str = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true }
+toml = "1"
+glob = "0.3"
 
 [lints]
 workspace = true

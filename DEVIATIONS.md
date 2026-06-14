@@ -183,3 +183,51 @@
 - **Reason**: wrong-integration
 - **Impact on spec**: surface-change
 - **Severity**: minor
+
+### D-24: Engine orchestration split into error.rs and snapshot.rs modules
+- **When**: Commit 12 (feat(engine): orchestration, config, and public library surface)
+- **Draft said**: lib.rs holds `StrataError`, `snapshot_from_root`, and `analyze` directly (3-file slice: config/result/lib)
+- **What I did instead**: kept lib.rs to crate docs + `pub mod`/`pub use` only (RST-MODL-04) and placed logic in `error.rs`, `snapshot.rs`, and `analyze.rs` alongside `config.rs`/`result.rs`, matching the reference file tree which already lists a separate engine `snapshot.rs`
+- **Reason**: standard-violation
+- **Impact on spec**: surface-change
+- **Severity**: minor
+
+### D-25: AnalyzeResult uses a nested `modes { anchored, greenfield }` shape
+- **When**: Commit 12
+- **Draft said**: the result.rs toggle types `AnalyzeResult` with flat `anchored: ModeResult` and `greenfield: Option<ModeResult>` fields
+- **What I did instead**: followed the main spec's authoritative usage example (`result.modes.anchored`) and the reference DTO interface, which nest both modes under a `modes` object with `summary` and `current` siblings; both modes are `Option<ModeResult>` so an unrequested mode is omitted
+- **Reason**: wrong-integration
+- **Impact on spec**: surface-change
+- **Severity**: minor
+
+### D-26: Config DTOs are engine-native serde structs, not core algorithm types
+- **When**: Commit 12
+- **Draft said**: `AnalyzeConfig` fields are typed as core's `LevelCaps`, `EdgeWeights`, `Coefficients`, `SolverLimits`, `DiversityConfig`
+- **What I did instead**: defined engine-native `CapacityConfig`/`WeightsConfig`/`ObjectiveConfig`/`SolverConfig`/`DiversityConfig` serde structs mirroring `strata.toml` exactly (with kebab-case key renames and a `file` SLOC cap that `LevelCaps` lacks), converting into core types at use sites; core's tuned algorithm types do not derive serde and omit config-only fields
+- **Reason**: arch-conflict
+- **Impact on spec**: surface-change
+- **Severity**: minor
+
+### D-27: analyze returns the current tree as the sole candidate per mode
+- **When**: Commit 12
+- **Draft said**: `analyze` runs the full condense -> shatter -> layer -> cluster -> pack -> visibility -> project -> score -> diversify pipeline
+- **What I did instead**: wired the deterministic structural phases that consume only a `Snapshot` (condensation for cycle findings, polarity matrix, LCA visibility findings, current-tree scoring, tree rendering, per-mode results); candidate-tree reconstruction (cluster/pack/project view-extraction glue) is not in this slice's file set, so each `ModeResult` returns the rendered current tree as its sole candidate, keeping `analyze` pure and deterministic. The full restructuring search is a follow-up
+- **Reason**: arch-conflict
+- **Impact on spec**: behavior-change
+- **Severity**: major
+
+### D-28: analyze now runs the diversifying restructure search (supersedes D-27)
+- **When**: Commit 12 (feat(engine): orchestration, config, and public library surface)
+- **Draft said**: `analyze` runs the full condense -> shatter -> layer -> cluster -> pack -> visibility -> project -> score -> diversify pipeline returning up to k diverse candidates per mode
+- **What I did instead**: wired the real search — a `PipelineSolver: Solver` runs `condense -> layer -> coarsen -> seed -> refine` per seed (seeded by a deterministic layer jitter so distinct seeds explore distinct local optima), `diversify` selects up to k max-min-VI candidates, and each surviving partition is reconstructed into a laminar candidate `ContainerTree` (one folder per cluster, files reparented by their symbols' majority cluster), scored under the mode coefficients, and narrated via `narrate_delta`; `pairwise_distance` is the VI matrix. The candidate reconstruction is a folder-level grouping rather than the full `pack`/`project` view-extraction (SLOC-cap file splitting and spec-follows-subject projection are not glued in this slice), so `conditional_splits` stays empty and tree depth is root->folder->file
+- **Reason**: arch-conflict
+- **Impact on spec**: behavior-change
+- **Severity**: minor
+
+### D-29: narrate_delta groups by destination-container id, on changed parent path
+- **When**: Commit 12
+- **Draft said**: "group moves by destination container, attach the dominant reason per group"
+- **What I did instead**: the prior attempt keyed groups by each moved container's OWN id (one entry per moved unit). Fixed to key by the candidate-tree PARENT (the destination container), detecting a move by a changed parent path and coalescing every unit relocated into one destination into a single `Move` whose `from`/`to` are the parent paths and `symbols` the moved leaf names; root moves key under a `u32::MAX` sentinel
+- **Reason**: standard-violation
+- **Impact on spec**: behavior-change
+- **Severity**: minor
