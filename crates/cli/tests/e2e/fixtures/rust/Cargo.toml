@@ -1,0 +1,13 @@
+# A standalone fixture crate analyzed at runtime by the CLI e2e parity test.
+# The empty `[workspace]` table makes it a self-contained workspace so cargo and
+# rust-analyzer load it in isolation, never as a member of the outer workspace.
+[workspace]
+
+[package]
+name = "strata-e2e-rust-fixture"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "strata_e2e_rust_fixture"
+path = "src/lib.rs"

@@ -1,0 +1,12 @@
+ts [packageGroup]
+  src [package]
+    src/rectangle.ts [domain]
+      src/rectangle.ts [folder]
+        src/rectangle.ts [file] 2 sloc
+          - Rectangle (file)
+          - summarize (file)
+    src/shape.ts [domain]
+      src/shape.ts [folder]
+        src/shape.ts [file] 2 sloc
+          - Shape (file)
+          - describeShape (file)

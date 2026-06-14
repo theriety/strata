@@ -9,6 +9,16 @@ path = "src/main.rs"
 
 [dependencies]
 strata-engine = { path = "../engine" }
+clap = { version = "4", features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+strata-engine = { path = "../engine" }
+
+[[test]]
+name = "parity"
+path = "tests/e2e/parity.rs"
 
 [lints]
 workspace = true

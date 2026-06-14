@@ -1,0 +1,41 @@
+# Strata report
+
+Snapshot `1c5072657680ee94fe4bf336abb5a44a07d77fb59782202e24ae42cd56937d31`.
+
+- 6 symbols, 4 edges, 1 files
+
+## Current layout
+
+Score `3.3000`.
+
+- cut `3.3000`, imbalance `0.0000`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+
+### Violations
+
+- **Visibility** (Violation) at Shape: `Shape` is exported at Package but needed only at File
+- **Visibility** (Violation) at describe_shape: `describe_shape` is exported at Package but needed only at File
+- **Visibility** (Violation) at Rectangle: `Rectangle` is exported at Package but needed only at File
+- **Visibility** (Violation) at summarize: `summarize` is exported at Package but needed only at File
+
+## Anchored candidates
+
+### Candidate 1 (score `4.3000`)
+
+- cut `3.3000`, imbalance `0.0000`, naming `-0.0000`, path `-0.0000`, anchor `1.0000`
+
+**Moves**
+
+- Move `cluster-0`: rust -> workspace (cohesion gain)
+- Move `src/lib.rs`: rust/src -> workspace/cluster-0 (cohesion gain)
+
+## Greenfield candidates
+
+### Candidate 1 (score `3.3000`)
+
+- cut `3.3000`, imbalance `0.0000`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+
+**Moves**
+
+- Move `cluster-0`: rust -> workspace (cohesion gain)
+- Move `src/lib.rs`: rust/src -> workspace/cluster-0 (cohesion gain)
+

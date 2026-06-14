@@ -231,3 +231,11 @@
 - **Reason**: standard-violation
 - **Impact on spec**: behavior-change
 - **Severity**: minor
+
+### D-30: default `strata.toml` uses `[diversity]`, not the reference's `[diversify]`
+- **When**: Commit 13 (feat(cli): commands, rendering, e2e fixtures, and parity test)
+- **Draft said**: the reference default-config TOML names the diversification block `[diversify]`
+- **What I did instead**: emitted the block as `[diversity]` in the shipped `strata.toml`, matching the `AnalyzeConfig.diversity` serde field (commit 12, D-26). Using `[diversify]` makes the engine reject its own default config with `CONFIG_INVALID: unknown field`, which broke the rust fixture's `analyze`/`violations` runs until corrected
+- **Reason**: stale-symbol
+- **Impact on spec**: surface-change
+- **Severity**: minor

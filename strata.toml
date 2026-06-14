@@ -1,0 +1,74 @@
+# Strata configuration — every key is optional and the file itself is optional.
+# Each value below is the built-in default, so an empty file (or no file at all)
+# behaves identically to this one. CLI flags override these; these override the
+# built-in defaults.
+
+[adapters]
+# Enabled language adapters. One or more of: typescript, rust, python.
+languages = ["typescript", "rust", "python"]
+# Source-inclusion globs, relative to the analysis root.
+include = ["**/*"]
+# Source-exclusion globs, applied after inclusion.
+exclude = ["**/node_modules/**", "**/target/**", "**/.venv/**"]
+
+[analysis]
+# Restructuring mode: anchored | greenfield | both.
+mode = "both"
+# Diverse candidates to return per mode (k).
+candidates = 3
+# Deterministic base seed: same snapshot + config + seed => identical output.
+seed = 42
+# Parallelism hint; 0 = all logical cores and never affects results.
+jobs = 0
+
+[capacity]
+# Production SLOC per file (non-blank, non-comment).
+file = 250
+# File nodes per folder.
+folder = 15
+# Folders per domain.
+domain = 12
+# Domains per package.
+package = 10
+# Packages per package group.
+package-group = 12
+
+[objective]
+# lambda: sibling size-imbalance penalty weight.
+imbalance = 0.1
+# alpha: naming-token cohesion bonus weight (both modes).
+naming = 0.3
+# beta: current-path cohesion bonus weight (anchored only).
+path = 0.2
+# mu: move-distance anchoring penalty weight (anchored only).
+anchor = 1.0
+
+[weights]
+# Weight of a runtime value import.
+value-import = 1.0
+# Weight of a subtype / implements relationship.
+inheritance = 1.5
+# Weight of a direct call.
+call = 1.0
+# Weight of a type reference.
+type-reference = 0.3
+# Weight of a re-export (zero — flattened during normalization).
+re-export = 0.0
+
+[solver]
+# Maximum SCC size that attempts the exact ILP.
+ilp-threshold = 300
+# Per-SCC exact-solve budget, in seconds, before the heuristic fallback.
+timeout-seconds = 60
+
+[diversity]
+# Restart pool multiplier: pool size = this x k.
+seeds-per-candidate = 10
+# Maximum relative score gap for a candidate to remain in the keep-band.
+score-tolerance = 0.05
+# Minimum pairwise variation-of-information between returned candidates.
+min-distance = 0.05
+
+[tests]
+# File cap (in production SLOC) for test-support files; test-case files exempt.
+helper-cap = 250
