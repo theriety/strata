@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 
+use smol_str::SmolStr;
 use strata_core::cluster::coarsen::coarsen_chain;
 use strata_core::cluster::refine::{GainFn, refine};
 use strata_core::cluster::seed::{SeedLevel, seed};
@@ -51,7 +52,7 @@ pub fn analyze(snapshot: &Snapshot, config: &AnalyzeConfig) -> Result<AnalyzeRes
     let tree = &ir.containers;
 
     let violations = collect_violations(snapshot, config);
-    let current_node = render_tree(tree, &ir.nodes)?;
+    let current_node = render_tree(tree, &ir.nodes, &|node| Some(node.container))?;
     let current_breakdown = score_current(snapshot, &Coefficients::anchored());
 
     let mode = config.analysis.mode;
@@ -442,10 +443,14 @@ struct CandidateTree {
 
 /// Reconstructs a candidate [`ContainerTree`] from a symbol-to-cluster map.
 ///
-/// Each original file container is reparented under the folder of the cluster its
-/// symbols predominantly land in, and the clusters become folder containers under
-/// a single package-group root. The result is a legal laminar tree whose level
-/// ascent (file < folder < package-group) the scorer and renderer both accept.
+/// Each original file is reparented into the folder of the cluster its symbols
+/// predominantly land in, and that folder is named after a *real* directory: the
+/// plurality three-segment path prefix of the cluster's member files. From that
+/// prefix the full five-level laminar chain (package group → package → domain →
+/// folder → file) is interned with directory-derived names — never synthetic
+/// `cluster-N` labels — so the candidate reads as a concrete proposed layout. File
+/// leaf names stay the original repo-relative path so `move_distance` and
+/// `narrate_delta`, which match candidate↔current files by name, stay accurate.
 fn candidate_tree(snapshot: &Snapshot, cluster_of: &BTreeMap<u32, ClusterId>) -> CandidateTree {
     let ir = snapshot.ir();
 
@@ -460,71 +465,36 @@ fn candidate_tree(snapshot: &Snapshot, cluster_of: &BTreeMap<u32, ClusterId>) ->
             .or_default() += 1;
     }
 
-    let files: BTreeMap<u32, &Container> = ir
+    // original file containers, sorted by path for deterministic interning.
+    let mut files: Vec<&Container> = ir
         .containers
         .containers()
         .iter()
         .filter(|container| container.level == ScopeLevel::File)
-        .map(|container| (container.id.0, container))
         .collect();
+    files.sort_by(|left, right| left.name.cmp(&right.name));
 
-    // assign a dense container-id range: root = 0, folders next, files last, so the
-    // candidate tree never collides with the snapshot's own ids.
-    let root_id = ContainerId(0);
-    let mut clusters: Vec<ClusterId> = votes.values().filter_map(dominant_cluster).collect();
-    clusters.sort_by_key(|cluster| cluster.0);
-    clusters.dedup();
-    let folder_id_of: BTreeMap<ClusterId, ContainerId> = clusters
-        .iter()
-        .enumerate()
-        .map(|(index, cluster)| {
-            (
-                *cluster,
-                ContainerId(u32::try_from(index + 1).unwrap_or(u32::MAX)),
-            )
-        })
-        .collect();
-
-    let mut containers = vec![Container {
-        id: root_id,
-        name: smol_str::SmolStr::new("workspace"),
-        level: ScopeLevel::PackageGroup,
-        parent: None,
-    }];
-    for cluster in &clusters {
-        if let Some(folder_id) = folder_id_of.get(cluster) {
-            containers.push(Container {
-                id: *folder_id,
-                name: smol_str::SmolStr::new(format!("cluster-{}", cluster.0)),
-                level: ScopeLevel::Folder,
-                parent: Some(root_id),
-            });
-        }
-    }
-
-    let file_base = clusters.len() + 1;
-    let mut placement = BTreeMap::new();
-    let mut file_id_of: BTreeMap<u32, ContainerId> = BTreeMap::new();
-    for (offset, (original_id, container)) in files.iter().enumerate() {
-        let new_id = ContainerId(u32::try_from(file_base + offset).unwrap_or(u32::MAX));
-        let cluster = votes
-            .get(original_id)
+    let cluster_of_file = |id: u32| {
+        votes
+            .get(&id)
             .and_then(dominant_cluster)
-            .unwrap_or(ClusterId(0));
-        let parent = folder_id_of
-            .get(&cluster)
-            .copied()
-            .or_else(|| folder_id_of.values().next().copied())
-            .unwrap_or(root_id);
-        containers.push(Container {
-            id: new_id,
-            name: container.name.clone(),
-            level: ScopeLevel::File,
-            parent: Some(parent),
-        });
-        file_id_of.insert(*original_id, new_id);
-    }
+            .unwrap_or(ClusterId(0))
+    };
 
+    let folder_key_of = cluster_folder_keys(&files, &cluster_of_file);
+
+    // the root keeps the snapshot's own package-group name (the repository).
+    let root_name = ir
+        .containers
+        .containers()
+        .iter()
+        .find(|container| container.level == ScopeLevel::PackageGroup)
+        .map_or_else(|| SmolStr::new("workspace"), |group| group.name.clone());
+
+    let (containers, file_id_of) =
+        build_candidate_containers(&files, &cluster_of_file, &folder_key_of, root_name);
+
+    let mut placement = BTreeMap::new();
     for node in &ir.nodes {
         if let Some(file_id) = file_id_of.get(&node.container.0) {
             placement.insert(node.id.0, *file_id);
@@ -537,12 +507,141 @@ fn candidate_tree(snapshot: &Snapshot, cluster_of: &BTreeMap<u32, ClusterId>) ->
     }
 }
 
+/// Computes each cluster's representative folder: the plurality three-segment
+/// path prefix over the cluster's member files, ties broken lexicographically.
+fn cluster_folder_keys(
+    files: &[&Container],
+    cluster_of_file: &dyn Fn(u32) -> ClusterId,
+) -> BTreeMap<ClusterId, SmolStr> {
+    let mut folder_tally: BTreeMap<ClusterId, BTreeMap<SmolStr, u32>> = BTreeMap::new();
+    for container in files {
+        let segments: Vec<&str> = container
+            .name
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        let folder = prefix_key(&segments, 3);
+        *folder_tally
+            .entry(cluster_of_file(container.id.0))
+            .or_default()
+            .entry(folder)
+            .or_default() += 1;
+    }
+    folder_tally
+        .iter()
+        .map(|(cluster, tally)| (*cluster, dominant_folder(tally)))
+        .collect()
+}
+
+/// Interns the five-level laminar chain (package group → package → domain →
+/// folder → file) for each file under its cluster's representative folder,
+/// returning the container list and the candidate file id of each original file.
+///
+/// `intern` assigns dense ids in parent-before-child order, satisfying the
+/// container tree's density and ascending-level invariants.
+fn build_candidate_containers(
+    files: &[&Container],
+    cluster_of_file: &dyn Fn(u32) -> ClusterId,
+    folder_key_of: &BTreeMap<ClusterId, SmolStr>,
+    root_name: SmolStr,
+) -> (Vec<Container>, BTreeMap<u32, ContainerId>) {
+    let mut containers: Vec<Container> = Vec::new();
+    let mut by_key: BTreeMap<(ScopeLevel, SmolStr), ContainerId> = BTreeMap::new();
+    let group = intern(
+        &mut containers,
+        &mut by_key,
+        ScopeLevel::PackageGroup,
+        root_name,
+        None,
+    );
+
+    let mut file_id_of: BTreeMap<u32, ContainerId> = BTreeMap::new();
+    for container in files {
+        let folder_key = folder_key_of
+            .get(&cluster_of_file(container.id.0))
+            .cloned()
+            .unwrap_or_else(|| SmolStr::new("workspace"));
+        let segments: Vec<&str> = folder_key
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        let package = intern(
+            &mut containers,
+            &mut by_key,
+            ScopeLevel::Package,
+            prefix_key(&segments, 1),
+            Some(group),
+        );
+        let domain = intern(
+            &mut containers,
+            &mut by_key,
+            ScopeLevel::Domain,
+            prefix_key(&segments, 2),
+            Some(package),
+        );
+        let folder = intern(
+            &mut containers,
+            &mut by_key,
+            ScopeLevel::Folder,
+            prefix_key(&segments, 3),
+            Some(domain),
+        );
+        let file = intern(
+            &mut containers,
+            &mut by_key,
+            ScopeLevel::File,
+            container.name.clone(),
+            Some(folder),
+        );
+        file_id_of.insert(container.id.0, file);
+    }
+    (containers, file_id_of)
+}
+
 /// Returns the cluster with the most votes, ties broken by the lower cluster id.
 fn dominant_cluster(tally: &BTreeMap<ClusterId, u32>) -> Option<ClusterId> {
     tally
         .iter()
         .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)))
         .map(|(cluster, _)| *cluster)
+}
+
+/// Returns the most common folder key, ties broken by the lexicographically
+/// smallest key so the chosen directory name is deterministic across runs.
+fn dominant_folder(tally: &BTreeMap<SmolStr, u32>) -> SmolStr {
+    tally
+        .iter()
+        .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)))
+        .map_or_else(|| SmolStr::new("workspace"), |(folder, _)| folder.clone())
+}
+
+/// Builds a stable container key from the first `take` path segments.
+fn prefix_key(segments: &[&str], take: usize) -> SmolStr {
+    let bounded = take.clamp(1, segments.len().max(1));
+    SmolStr::new(segments.get(..bounded).unwrap_or(segments).join("/"))
+}
+
+/// Interns a container by `(level, key)`, returning the existing id on a hit and
+/// otherwise pushing a new densely-numbered container.
+fn intern(
+    containers: &mut Vec<Container>,
+    by_key: &mut BTreeMap<(ScopeLevel, SmolStr), ContainerId>,
+    level: ScopeLevel,
+    key: SmolStr,
+    parent: Option<ContainerId>,
+) -> ContainerId {
+    if let Some(&id) = by_key.get(&(level, key.clone())) {
+        return id;
+    }
+    let id = ContainerId(u32::try_from(containers.len()).unwrap_or(u32::MAX));
+    containers.push(Container {
+        id,
+        name: key.clone(),
+        level,
+        parent,
+    });
+    by_key.insert((level, key), id);
+    id
 }
 
 /// Builds the scorer's [`ScoreCandidate`] view from a node-placement function over
@@ -637,11 +736,16 @@ fn container_sizes(
     tree: &ContainerTree,
 ) -> Vec<ContainerSizes> {
     let ir = snapshot.ir();
-    // each file's production SLOC is the count of symbols placed in it.
+    // each file's production SLOC is the sum of effective_size over the production
+    // nodes placed in it (test-zoned nodes already carry zero size).
     let mut file_sloc: BTreeMap<u32, u32> = BTreeMap::new();
     for node in &ir.nodes {
+        if node.polarity != Polarity::Production {
+            continue;
+        }
         if let Some(container) = placement(node.id.0) {
-            *file_sloc.entry(container.0).or_default() += 1;
+            let entry = file_sloc.entry(container.0).or_default();
+            *entry = entry.saturating_add(node.effective_size);
         }
     }
 
@@ -787,7 +891,8 @@ fn build_candidate(
         &score_candidate(snapshot, &placement, &reconstructed.tree, distance),
         coefficients,
     );
-    let node = render_tree(&reconstructed.tree, &snapshot.ir().nodes)?;
+    let placement_of = |node: &Node| reconstructed.placement.get(&node.id.0).copied();
+    let node = render_tree(&reconstructed.tree, &snapshot.ir().nodes, &placement_of)?;
     let delta = narrate_delta(current_tree, &reconstructed.tree);
 
     Ok(Candidate {
@@ -816,7 +921,11 @@ fn level_caps(config: &AnalyzeConfig) -> LevelCaps {
 /// # Errors
 ///
 /// Returns [`StrataError::SnapshotInvalid`] if the tree has no root container.
-fn render_tree(tree: &ContainerTree, nodes: &[Node]) -> Result<ContainerNode, StrataError> {
+fn render_tree(
+    tree: &ContainerTree,
+    nodes: &[Node],
+    placement: &dyn Fn(&Node) -> Option<ContainerId>,
+) -> Result<ContainerNode, StrataError> {
     let containers = tree.containers();
     let mut children_by_parent: BTreeMap<u32, Vec<&Container>> = BTreeMap::new();
     let mut roots = Vec::new();
@@ -830,7 +939,7 @@ fn render_tree(tree: &ContainerTree, nodes: &[Node]) -> Result<ContainerNode, St
         }
     }
 
-    let symbols_by_container = symbols_by_container(nodes);
+    let contents = file_contents_by_container(nodes, placement);
 
     // a forest with several roots is wrapped under a synthetic package group so
     // the DTO is always a single tree; a lone root is rendered directly.
@@ -840,17 +949,13 @@ fn render_tree(tree: &ContainerTree, nodes: &[Node]) -> Result<ContainerNode, St
                 reason: "container tree has no root".to_owned(),
             },
         }),
-        [root] => Ok(render_node(
-            root,
-            &children_by_parent,
-            &symbols_by_container,
-        )),
+        [root] => Ok(render_node(root, &children_by_parent, &contents)),
         many => Ok(ContainerNode {
             name: "workspace".to_owned(),
             level: Level::PackageGroup,
             children: Some(
                 many.iter()
-                    .map(|root| render_node(root, &children_by_parent, &symbols_by_container))
+                    .map(|root| render_node(root, &children_by_parent, &contents))
                     .collect(),
             ),
             symbols: None,
@@ -863,20 +968,18 @@ fn render_tree(tree: &ContainerTree, nodes: &[Node]) -> Result<ContainerNode, St
 fn render_node(
     container: &Container,
     children_by_parent: &BTreeMap<u32, Vec<&Container>>,
-    symbols_by_container: &BTreeMap<u32, Vec<SymbolPlacement>>,
+    contents: &BTreeMap<u32, FileContents>,
 ) -> ContainerNode {
     if container.level == ScopeLevel::File {
-        let symbols = symbols_by_container
-            .get(&container.id.0)
-            .cloned()
-            .unwrap_or_default();
-        let production_sloc = symbols.len();
+        let file = contents.get(&container.id.0);
+        let symbols = file.map(|file| file.symbols.clone()).unwrap_or_default();
+        let production_sloc = file.map_or(0, |file| file.production_sloc);
         return ContainerNode {
             name: container.name.to_string(),
             level: Level::from(container.level),
             children: None,
             symbols: Some(symbols),
-            production_sloc: Some(u32::try_from(production_sloc).unwrap_or(u32::MAX)),
+            production_sloc: Some(production_sloc),
         };
     }
 
@@ -885,7 +988,7 @@ fn render_node(
         .map(|children| {
             children
                 .iter()
-                .map(|child| render_node(child, children_by_parent, symbols_by_container))
+                .map(|child| render_node(child, children_by_parent, contents))
                 .collect()
         })
         .unwrap_or_default();
@@ -899,17 +1002,41 @@ fn render_node(
     }
 }
 
-/// Groups symbol placements by their owning container id.
-fn symbols_by_container(nodes: &[Node]) -> BTreeMap<u32, Vec<SymbolPlacement>> {
-    let mut by_container: BTreeMap<u32, Vec<SymbolPlacement>> = BTreeMap::new();
+/// A file container's rendered contents: the symbols placed in it and the sum of
+/// production SLOC over its production-polarity symbols.
+struct FileContents {
+    /// The symbol placements rendered for the file, in node order.
+    symbols: Vec<SymbolPlacement>,
+    /// True production SLOC: the sum of `effective_size` over the production
+    /// nodes placed in the file (test-zoned nodes already carry zero size).
+    production_sloc: u32,
+}
+
+/// Groups symbol placements and sums production SLOC by the container each node
+/// is placed in, using `placement` to map a node to its (current or candidate)
+/// file container.
+fn file_contents_by_container(
+    nodes: &[Node],
+    placement: &dyn Fn(&Node) -> Option<ContainerId>,
+) -> BTreeMap<u32, FileContents> {
+    let mut by_container: BTreeMap<u32, FileContents> = BTreeMap::new();
     for node in nodes {
-        by_container
-            .entry(node.container.0)
-            .or_default()
-            .push(SymbolPlacement {
-                name: node.name.to_string(),
-                visibility: Level::from(node.visibility),
+        let Some(container) = placement(node) else {
+            continue;
+        };
+        let entry = by_container
+            .entry(container.0)
+            .or_insert_with(|| FileContents {
+                symbols: Vec::new(),
+                production_sloc: 0,
             });
+        entry.symbols.push(SymbolPlacement {
+            name: node.name.to_string(),
+            visibility: Level::from(node.visibility),
+        });
+        if node.polarity == Polarity::Production {
+            entry.production_sloc = entry.production_sloc.saturating_add(node.effective_size);
+        }
     }
     by_container
 }
@@ -982,6 +1109,24 @@ mod tests {
             ContainerTree::new(vec![container(0, "root", ScopeLevel::File, None)]),
         );
         Snapshot::assemble(ir).unwrap_or_else(|_| minimal_snapshot())
+    }
+
+    /// Collects every container's name, level, and any rendered production SLOC
+    /// over a tree, pre-order.
+    fn collect_tree(
+        node: &ContainerNode,
+        names: &mut Vec<String>,
+        sloc: &mut Vec<u32>,
+        levels: &mut Vec<Level>,
+    ) {
+        names.push(node.name.clone());
+        levels.push(node.level);
+        if let Some(value) = node.production_sloc {
+            sloc.push(value);
+        }
+        for child in node.children.iter().flatten() {
+            collect_tree(child, names, sloc, levels);
+        }
     }
 
     /// Builds a config requesting `k` candidates in both modes.
@@ -1165,6 +1310,74 @@ mod tests {
         let level = result.map_or(Level::File, |result| result.current.tree.level);
 
         assert_eq!(level, Level::PackageGroup);
+    }
+
+    #[test]
+    fn should_build_candidates_with_real_names_and_five_levels() {
+        // two files under a real directory path, each holding a multi-line
+        // production symbol, plus a hard edge so clustering has a pair to group.
+        let sized = |id: u32, name: &str, container: u32, size: u32| Node {
+            id: NodeId(id),
+            name: SmolStr::new(name),
+            kind: NodeKind::Symbol,
+            polarity: Polarity::Production,
+            container: ContainerId(container),
+            visibility: ScopeLevel::File,
+            effective_size: size,
+        };
+        let snapshot = snapshot(
+            vec![sized(0, "alpha", 4, 10), sized(1, "beta", 5, 7)],
+            vec![edge(0, 1)],
+            vec![
+                container(0, "strata", ScopeLevel::PackageGroup, None),
+                container(1, "crates", ScopeLevel::Package, Some(0)),
+                container(2, "crates/engine", ScopeLevel::Domain, Some(1)),
+                container(3, "crates/engine/src", ScopeLevel::Folder, Some(2)),
+                container(4, "crates/engine/src/alpha.rs", ScopeLevel::File, Some(3)),
+                container(5, "crates/engine/src/beta.rs", ScopeLevel::File, Some(3)),
+            ],
+        );
+
+        let candidate = analyze(&snapshot, &config_with_k(1))
+            .ok()
+            .and_then(|result| result.modes.anchored)
+            .and_then(|mode| mode.candidates.into_iter().next());
+
+        let mut names = Vec::new();
+        let mut sloc = Vec::new();
+        let mut levels = Vec::new();
+        if let Some(candidate) = &candidate {
+            collect_tree(&candidate.tree, &mut names, &mut sloc, &mut levels);
+        }
+        assert!(!names.is_empty(), "expected an anchored candidate");
+
+        // names are real directory-derived, never synthetic cluster labels.
+        assert!(
+            names.iter().all(|name| !name.contains("cluster-")),
+            "expected real names, got {names:?}"
+        );
+        assert!(names.iter().any(|name| name == "crates"));
+        assert!(names.iter().any(|name| name == "crates/engine/src"));
+
+        // the full five-level laminar hierarchy is present.
+        for expected in [
+            Level::PackageGroup,
+            Level::Package,
+            Level::Domain,
+            Level::Folder,
+            Level::File,
+        ] {
+            assert!(
+                levels.contains(&expected),
+                "missing {expected:?} in {levels:?}"
+            );
+        }
+
+        // production SLOC sums effective_size (10, 7), not the symbol count (1).
+        assert!(
+            sloc.contains(&10) && sloc.contains(&7),
+            "expected summed effective_size, got {sloc:?}"
+        );
     }
 
     #[test]
