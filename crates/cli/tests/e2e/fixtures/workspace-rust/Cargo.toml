@@ -1,0 +1,10 @@
+# A standalone fixture workspace analyzed at runtime by the CLI e2e parity test.
+# Three crates in a value/type/trait dependency chain: util <- core <- app, with
+# a cross-crate trait impl, method calls, and a `pub use` re-export.
+#
+# This is itself a `[workspace]`, so cargo and rust-analyzer load it in isolation
+# and never treat it as a member of the outer strata workspace (which lists its
+# members explicitly and excludes this fixture tree).
+[workspace]
+resolver = "2"
+members = ["crates/util", "crates/core", "crates/app"]

@@ -1,0 +1,34 @@
+nested-python [packageGroup]
+  app.py [package]
+    app.py [domain]
+      app.py [folder]
+        app.py [file] 3 sloc
+          - run (file)
+          - load (file)
+  geometry [package]
+    geometry/__init__.py [domain]
+      geometry/__init__.py [folder]
+        geometry/__init__.py [file] 0 sloc
+          - Dimensions (file)
+          - Shape (file)
+          - Rectangle (file)
+          - describe (file)
+    geometry/rectangle.py [domain]
+      geometry/rectangle.py [folder]
+        geometry/rectangle.py [file] 5 sloc
+          - Rectangle (file)
+          - describe (file)
+    geometry/shape.py [domain]
+      geometry/shape.py [folder]
+        geometry/shape.py [file] 5 sloc
+          - Dimensions (file)
+          - Shape (file)
+  tests [package]
+    tests/conftest.py [domain]
+      tests/conftest.py [folder]
+        tests/conftest.py [file] 0 sloc
+          - make_dimensions (file)
+    tests/test_app.py [domain]
+      tests/test_app.py [folder]
+        tests/test_app.py [file] 0 sloc
+          - test_run_describes_a_rectangle (file)

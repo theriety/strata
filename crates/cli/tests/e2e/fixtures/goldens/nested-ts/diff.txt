@@ -1,0 +1,1 @@
+move src/__tests__/support.ts, src/app.ts, src/geometry/index.ts, src/geometry/rectangle.ts, src/geometry/shape.ts :: nested-ts/src/src/__tests__ -> nested-ts/src/src/__tests__/src/__tests__/app.spec.ts (cohesion gain)

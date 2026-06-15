@@ -297,6 +297,44 @@ fn should_be_deterministic_across_repeated_analyze_runs() {
 }
 
 #[test]
+fn should_be_deterministic_across_repeated_analyze_runs_for_the_new_fixtures() {
+    // the determinism gate every new fixture must clear before its goldens are
+    // blessed: an identical root + config yields byte-identical json on a repeat
+    // run, so the committed goldens can never flake on ordering. Each fixture is a
+    // richer or violation-focused shape than the original three.
+    for name in [
+        "workspace-rust",
+        "nested-python",
+        "nested-ts",
+        "cyclic",
+        "over-capacity",
+        "polarity-leak",
+    ] {
+        let root = fixture(name);
+        let root_str = root.to_str().unwrap_or_default();
+        let args = [
+            "analyze",
+            "--root",
+            root_str,
+            "--config",
+            PURE_DEFAULTS,
+            "--format",
+            "json",
+        ];
+
+        let first = run(&args);
+        let second = run(&args);
+
+        assert_eq!(first.code, 0, "the first run exits 0 for {name}");
+        assert_eq!(second.code, 0, "the second run exits 0 for {name}");
+        assert_eq!(
+            first.stdout, second.stdout,
+            "two runs deliver byte-identical json for {name}"
+        );
+    }
+}
+
+#[test]
 fn should_deliver_the_current_tree_for_the_rust_fixture() {
     let result = analyze_to_file("rust");
     let result_str = result.to_str().unwrap_or_default();

@@ -18,8 +18,22 @@ use std::process::Command;
 
 use strata_engine::{AnalyzeConfig, analyze, snapshot_from_root};
 
-/// Every language fixture the parity and golden suites run against.
-const FIXTURES: [&str; 3] = ["ts", "rust", "python"];
+/// Every structurally clean fixture the parity and golden suites drive as a
+/// group.
+///
+/// These fixtures carry no `cycle` or `polarity` hard violation, so the gating
+/// invariants below (`--fail-on cycle` never raises the reserved exit 2) hold for
+/// every member. The three violation-focused fixtures (`cyclic`, `over-capacity`,
+/// `polarity-leak`) are deliberately *excluded* here — each would gate one of the
+/// shared invariants — and instead receive their own parity and golden tests.
+const FIXTURES: [&str; 6] = [
+    "ts",
+    "rust",
+    "python",
+    "workspace-rust",
+    "nested-python",
+    "nested-ts",
+];
 
 /// Returns the absolute path to a named language fixture under this crate.
 fn fixture(name: &str) -> PathBuf {
@@ -190,6 +204,66 @@ fn should_match_the_goldens_for_the_python_fixture() {
 #[test]
 fn should_match_the_goldens_for_the_rust_fixture() {
     assert_goldens("rust");
+}
+
+#[test]
+fn should_match_the_library_result_for_the_rust_workspace_fixture() {
+    assert_parity("workspace-rust");
+}
+
+#[test]
+fn should_match_the_library_result_for_the_nested_python_fixture() {
+    assert_parity("nested-python");
+}
+
+#[test]
+fn should_match_the_library_result_for_the_nested_typescript_fixture() {
+    assert_parity("nested-ts");
+}
+
+#[test]
+fn should_match_the_library_result_for_the_cyclic_fixture() {
+    assert_parity("cyclic");
+}
+
+#[test]
+fn should_match_the_library_result_for_the_over_capacity_fixture() {
+    assert_parity("over-capacity");
+}
+
+#[test]
+fn should_match_the_library_result_for_the_polarity_leak_fixture() {
+    assert_parity("polarity-leak");
+}
+
+#[test]
+fn should_match_the_goldens_for_the_rust_workspace_fixture() {
+    assert_goldens("workspace-rust");
+}
+
+#[test]
+fn should_match_the_goldens_for_the_nested_python_fixture() {
+    assert_goldens("nested-python");
+}
+
+#[test]
+fn should_match_the_goldens_for_the_nested_typescript_fixture() {
+    assert_goldens("nested-ts");
+}
+
+#[test]
+fn should_match_the_goldens_for_the_cyclic_fixture() {
+    assert_goldens("cyclic");
+}
+
+#[test]
+fn should_match_the_goldens_for_the_over_capacity_fixture() {
+    assert_goldens("over-capacity");
+}
+
+#[test]
+fn should_match_the_goldens_for_the_polarity_leak_fixture() {
+    assert_goldens("polarity-leak");
 }
 
 #[test]

@@ -1,0 +1,2 @@
+capacity [borderline] over-capacity, borderline.py, borderline.py, borderline.py, borderline.py :: file `borderline.py` holds 250 against a cap of 250
+capacity [violation] over-capacity, huge.py, huge.py, huge.py, huge.py :: file `huge.py` holds 300 against a cap of 250

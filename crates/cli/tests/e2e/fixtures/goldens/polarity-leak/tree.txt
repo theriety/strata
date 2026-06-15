@@ -1,0 +1,11 @@
+polarity-leak [packageGroup]
+  conftest.py [package]
+    conftest.py [domain]
+      conftest.py [folder]
+        conftest.py [file] 0 sloc
+          - sample_fixture (file)
+  service.py [package]
+    service.py [domain]
+      service.py [folder]
+        service.py [file] 1 sloc
+          - serve (file)

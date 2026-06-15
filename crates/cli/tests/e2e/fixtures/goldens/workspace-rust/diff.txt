@@ -1,0 +1,1 @@
+move crates/core/src/lib.rs, crates/util/src/lib.rs :: workspace-rust/crates -> workspace-rust/crates/crates/app/crates/app/src (cohesion gain)

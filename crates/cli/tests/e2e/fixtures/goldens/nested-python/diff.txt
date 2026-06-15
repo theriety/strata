@@ -1,0 +1,1 @@
+move geometry/__init__.py, geometry/rectangle.py, geometry/shape.py, tests/conftest.py, tests/test_app.py :: nested-python -> nested-python/app.py/app.py/app.py (cohesion gain)
