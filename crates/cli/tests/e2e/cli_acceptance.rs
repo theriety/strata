@@ -667,3 +667,637 @@ fn should_print_top_level_help_and_exit_zero() {
         "the top-level help lists the usage"
     );
 }
+
+#[test]
+fn should_deliver_a_well_formed_violations_json_face_for_a_violation_carrying_fixture() {
+    // the json face of the gate is the serialized AnalyzeResult: it must parse and
+    // carry the same capacity findings the table face lists. over-capacity emits
+    // both a hard and a borderline capacity finding, so the violations json array
+    // holds exactly those two capacity entries — proving the gate's machine-readable
+    // surface is well-formed and complete.
+    let root = fixture("over-capacity");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "violations",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(outcome.code, 0, "the json face is a finding, not a failure");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
+    let kinds: Vec<&str> = parsed
+        .pointer("/current/violations")
+        .and_then(serde_json::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.get("kind").and_then(serde_json::Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        kinds,
+        vec!["capacity", "capacity"],
+        "the violations json carries both capacity findings (hard + borderline): {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_match_the_analyze_json_face_only_when_no_capacity_finding_exists() {
+    // capacity findings are computed in the violations path, never in engine analyze;
+    // so the two json faces agree byte-for-byte for a visibility-only fixture (rust)
+    // but genuinely diverge for over-capacity, where the violations face gains two
+    // capacity entries the analyze face omits. This pins the exact, asymmetric
+    // relationship — not an assumed equality.
+    let rust = fixture("rust");
+    let rust_str = rust.to_str().unwrap_or_default();
+    let analyze_rust = run(&[
+        "analyze",
+        "--root",
+        rust_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+    let violations_rust = run(&[
+        "violations",
+        "--root",
+        rust_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(analyze_rust.code, 0, "analyze json exits 0 for rust");
+    assert_eq!(violations_rust.code, 0, "violations json exits 0 for rust");
+    assert_eq!(
+        analyze_rust.stdout, violations_rust.stdout,
+        "with no capacity finding the two json faces are byte-identical"
+    );
+
+    let over = fixture("over-capacity");
+    let over_str = over.to_str().unwrap_or_default();
+    let analyze_over = run(&[
+        "analyze",
+        "--root",
+        over_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+    let violations_over = run(&[
+        "violations",
+        "--root",
+        over_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(
+        analyze_over.code, 0,
+        "analyze json exits 0 for over-capacity"
+    );
+    assert_eq!(
+        violations_over.code, 0,
+        "violations json exits 0 for over-capacity"
+    );
+    assert_ne!(
+        analyze_over.stdout, violations_over.stdout,
+        "the violations face gains capacity findings the analyze face omits"
+    );
+}
+
+#[test]
+fn should_gate_each_violation_class_against_its_triggering_fixture() {
+    // the headline gate matrix: each fixture carries exactly one hard class, and
+    // naming that class with --fail-on raises the reserved exit 2 — the CI contract.
+    // cyclic -> cycle, polarity-leak -> polarity, over-capacity -> capacity:violation.
+    for (name, selector) in [
+        ("cyclic", "cycle"),
+        ("polarity-leak", "polarity"),
+        ("over-capacity", "capacity:violation"),
+    ] {
+        let root = fixture(name);
+        let root_str = root.to_str().unwrap_or_default();
+
+        let outcome = run(&[
+            "violations",
+            "--root",
+            root_str,
+            "--config",
+            PURE_DEFAULTS,
+            "--fail-on",
+            selector,
+        ]);
+
+        assert_eq!(
+            outcome.code, 2,
+            "{name} gates on its hard {selector} class with exit 2"
+        );
+    }
+}
+
+#[test]
+fn should_not_gate_a_clean_fixture_on_the_cycle_class() {
+    // exit 2 is reserved for a real hard-violation match: nested-python carries no
+    // cycle, so the same selector that gates cyclic leaves it at 0.
+    let root = fixture("nested-python");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "violations",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--fail-on",
+        "cycle",
+    ]);
+
+    assert_eq!(outcome.code, 0, "a cycle-free fixture never gates on cycle");
+}
+
+#[test]
+fn should_never_gate_on_a_borderline_only_capacity_selector() {
+    // a borderline finding never gates CI: over-capacity carries a borderline
+    // capacity finding, but `capacity:borderline` matches nothing that gates, so the
+    // run stays at 0 even though the borderline finding is present and reported.
+    let root = fixture("over-capacity");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "violations",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--fail-on",
+        "capacity:borderline",
+    ]);
+
+    assert_eq!(
+        outcome.code, 0,
+        "a borderline-qualified selector never raises the gating exit 2"
+    );
+}
+
+#[test]
+fn should_gate_when_a_mixed_multi_selector_matches_one_class() {
+    // a multi-selector --fail-on gates when any listed class is present: cyclic
+    // matches only the `cycle` member of the set, and that alone raises exit 2.
+    let root = fixture("cyclic");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "violations",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--fail-on",
+        "cycle,polarity,capacity:violation",
+    ]);
+
+    assert_eq!(
+        outcome.code, 2,
+        "a single matched class in a mixed selector still gates"
+    );
+}
+
+#[test]
+fn should_render_a_greenfield_candidate_tree_for_the_workspace_fixture() {
+    // workspace-rust is the fixture whose greenfield (mu = 0) regroup produces a real
+    // multi-level tree: the cross-crate files collapse under one cohesive folder, so
+    // a greenfield candidate tree descends the full container hierarchy down to files.
+    let result = analyze_to_file("workspace-rust");
+    let result_str = result.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "tree",
+        "--input",
+        result_str,
+        "--mode",
+        "greenfield",
+        "--candidate",
+        "1",
+    ]);
+
+    let _ = std::fs::remove_file(&result);
+    assert_eq!(outcome.code, 0, "a greenfield candidate tree renders");
+    assert!(
+        outcome.stdout.contains("workspace-rust [packageGroup]"),
+        "the greenfield tree is rooted at the package group: {}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("crates/core/src/lib.rs [file]"),
+        "the regrouped files descend to real file leaves: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
+    // the greenfield delta of workspace-rust moves the cross-crate files into the
+    // single cohesive folder, so the diff narrates at least one move group.
+    let result = analyze_to_file("workspace-rust");
+    let result_str = result.to_str().unwrap_or_default();
+
+    let outcome = run(&["diff", "--input", result_str, "current", "greenfield/1"]);
+
+    let _ = std::fs::remove_file(&result);
+    assert_eq!(outcome.code, 0, "the greenfield diff renders");
+    assert!(
+        outcome.stdout.contains("move "),
+        "the regroup is narrated as a move: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_omit_a_vi_distance_line_for_a_cross_mode_diff() {
+    // the variation-of-information matrix only covers same-mode candidate pairs, so a
+    // cross-mode diff (anchored/1 vs greenfield/1) narrates the right candidate's
+    // moves but emits no `vi distance` line — the guard in commands/diff.rs only
+    // writes the distance when both references share a mode. Pinned empirically: the
+    // cross-mode run carries moves yet never a distance line.
+    let result = analyze_to_file("workspace-rust");
+    let result_str = result.to_str().unwrap_or_default();
+
+    let outcome = run(&["diff", "--input", result_str, "anchored/1", "greenfield/1"]);
+
+    let _ = std::fs::remove_file(&result);
+    assert_eq!(outcome.code, 0, "a cross-mode diff renders and exits 0");
+    assert!(
+        !outcome.stdout.contains("vi distance"),
+        "a cross-mode diff carries no variation-of-information distance: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_report_a_vi_distance_line_for_a_same_mode_candidate_pair() {
+    // the complement of the cross-mode case: over-capacity yields two anchored
+    // candidates, and a same-mode diff (anchored/1 vs anchored/2) reports their
+    // pairwise variation-of-information distance as a fixed-precision `vi distance`
+    // line below the move narration.
+    let result = analyze_to_file("over-capacity");
+    let result_str = result.to_str().unwrap_or_default();
+
+    let outcome = run(&["diff", "--input", result_str, "anchored/1", "anchored/2"]);
+
+    let _ = std::fs::remove_file(&result);
+    assert_eq!(outcome.code, 0, "a same-mode diff renders and exits 0");
+    assert!(
+        outcome.stdout.contains("vi distance "),
+        "a same-mode pair reports its variation-of-information distance: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_report_no_moves_for_a_self_diff() {
+    // diffing the current layout against itself is a degenerate but legal reference
+    // pair: it short-circuits to the `no moves` sentinel rather than narrating an
+    // empty delta or erroring.
+    let result = analyze_to_file("workspace-rust");
+    let result_str = result.to_str().unwrap_or_default();
+
+    let outcome = run(&["diff", "--input", result_str, "current", "current"]);
+
+    let _ = std::fs::remove_file(&result);
+    assert_eq!(outcome.code, 0, "a self-diff renders and exits 0");
+    assert_eq!(
+        outcome.stdout, "no moves\n",
+        "a current-vs-current diff is the `no moves` sentinel"
+    );
+}
+
+#[test]
+fn should_truncate_the_workspace_tree_at_each_requested_depth() {
+    // depth truncates at container depth (root is depth 0): depth 0 prints only the
+    // root, depth 1 adds its single child level, and a depth past the tree height is
+    // a no-op that renders the full hierarchy. workspace-rust has a genuine multi-
+    // level tree, so the truncation is observable rather than vacuous.
+    let result = analyze_to_file("workspace-rust");
+    let result_str = result.to_str().unwrap_or_default();
+    let base = [
+        "tree",
+        "--input",
+        result_str,
+        "--mode",
+        "greenfield",
+        "--candidate",
+        "1",
+    ];
+
+    let mut depth0 = base.to_vec();
+    depth0.extend(["--depth", "0"]);
+    let at_zero = run(&depth0);
+    let mut depth1 = base.to_vec();
+    depth1.extend(["--depth", "1"]);
+    let at_one = run(&depth1);
+    let mut depth99 = base.to_vec();
+    depth99.extend(["--depth", "99"]);
+    let at_height = run(&depth99);
+    let full = run(&base);
+
+    let _ = std::fs::remove_file(&result);
+    assert_eq!(at_zero.code, 0, "depth 0 renders");
+    assert_eq!(at_one.code, 0, "depth 1 renders");
+    assert_eq!(at_height.code, 0, "an over-height depth renders");
+    assert_eq!(full.code, 0, "the untruncated tree renders");
+    // depth 0 is the root line alone.
+    assert_eq!(
+        at_zero.stdout, "workspace-rust [packageGroup]\n",
+        "depth 0 prints only the root container"
+    );
+    // depth 1 adds exactly the next container level and no deeper.
+    assert!(
+        at_one.stdout.contains("crates [package]") && !at_one.stdout.contains("[domain]"),
+        "depth 1 stops one level below the root: {}",
+        at_one.stdout
+    );
+    // a depth past the tree height is a no-op equal to the untruncated render.
+    assert_eq!(
+        at_height.stdout, full.stdout,
+        "a depth larger than the tree height renders the full tree"
+    );
+}
+
+#[test]
+fn should_write_a_report_to_a_file_matching_its_stdout_form() {
+    // report --output writes the same Markdown it would otherwise print: the file
+    // contents must equal the stdout form for the same input, so persisting a report
+    // never silently reshapes it.
+    let result = analyze_to_file("rust");
+    let result_str = result.to_str().unwrap_or_default();
+    let report_path = std::env::temp_dir().join(format!("strata-accept-report-{}.md", nanos()));
+    let report_str = report_path.to_str().unwrap_or_default();
+
+    let to_file = run(&["report", "--input", result_str, "--output", report_str]);
+    let to_stdout = run(&["report", "--input", result_str]);
+    let written = std::fs::read_to_string(&report_path).unwrap_or_default();
+
+    let _ = std::fs::remove_file(&result);
+    let _ = std::fs::remove_file(&report_path);
+    assert_eq!(to_file.code, 0, "report --output exits 0");
+    assert_eq!(to_stdout.code, 0, "report to stdout exits 0");
+    assert!(
+        to_file.stdout.is_empty(),
+        "report --output writes nothing to stdout"
+    );
+    assert_eq!(
+        written, to_stdout.stdout,
+        "the written file equals the stdout report form"
+    );
+}
+
+#[test]
+fn should_cap_the_candidate_count_per_mode_at_the_requested_k() {
+    // -k (a.k.a --candidates) bounds the candidates produced per mode: over-capacity
+    // is rich enough to yield two per mode, so -k 2 yields at most two in each, and
+    // the per-mode headline count never exceeds the requested ceiling.
+    let root = fixture("over-capacity");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "-k",
+        "2",
+        "--mode",
+        "both",
+        "--format",
+        "summary",
+    ]);
+
+    assert_eq!(outcome.code, 0, "a -k run exits 0");
+    let candidate_lines = outcome
+        .stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("candidate "))
+        .count();
+    // both modes together render at most 2 candidate headlines each -> at most 4.
+    assert!(
+        candidate_lines <= 4,
+        "two modes capped at k=2 yield at most four candidate headlines, saw {candidate_lines}: {}",
+        outcome.stdout
+    );
+    assert!(
+        candidate_lines >= 1,
+        "the run still produces at least one candidate: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_produce_byte_identical_output_for_two_runs_with_the_same_seed() {
+    // the deterministic-seed contract: two analyze runs with the same --seed over the
+    // same root and config yield byte-identical json, so a seeded run is perfectly
+    // reproducible.
+    let root = fixture("workspace-rust");
+    let root_str = root.to_str().unwrap_or_default();
+    let args = [
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--seed",
+        "424242",
+        "--format",
+        "json",
+    ];
+
+    let first = run(&args);
+    let second = run(&args);
+
+    assert_eq!(first.code, 0, "the first seeded run exits 0");
+    assert_eq!(second.code, 0, "the second seeded run exits 0");
+    assert_eq!(
+        first.stdout, second.stdout,
+        "two runs with the same seed are byte-identical"
+    );
+}
+
+#[test]
+fn should_produce_identical_output_regardless_of_the_jobs_count() {
+    // determinism under parallelism: forcing single-threaded execution (--jobs 1)
+    // yields the same json as the default parallelism, so the result never depends on
+    // the worker count.
+    let root = fixture("workspace-rust");
+    let root_str = root.to_str().unwrap_or_default();
+    let single = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--jobs",
+        "1",
+        "--format",
+        "json",
+    ]);
+    let default = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(single.code, 0, "the single-threaded run exits 0");
+    assert_eq!(default.code, 0, "the default-parallelism run exits 0");
+    assert_eq!(
+        single.stdout, default.stdout,
+        "the result is independent of the jobs count"
+    );
+}
+
+#[test]
+fn should_omit_the_anchored_section_for_a_greenfield_only_run() {
+    // --mode greenfield emits only the greenfield section: workspace-rust produces a
+    // real greenfield candidate, and the summary names `mode greenfield` while
+    // carrying no anchored section at all (no `mode anchored`, no `Anchored`).
+    let root = fixture("workspace-rust");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--mode",
+        "greenfield",
+        "--format",
+        "summary",
+    ]);
+
+    assert_eq!(outcome.code, 0, "a greenfield-only run exits 0");
+    assert!(
+        outcome.stdout.contains("mode greenfield:"),
+        "the greenfield section is present: {}",
+        outcome.stdout
+    );
+    assert!(
+        !outcome.stdout.contains("mode anchored"),
+        "a greenfield-only run omits the anchored section"
+    );
+    assert!(
+        !outcome.stdout.contains("Anchored"),
+        "a greenfield-only run carries no anchored heading"
+    );
+}
+
+#[test]
+fn should_error_on_an_empty_repository_with_a_stable_code() {
+    // an empty repository has no source files, so the engine cannot build a container
+    // tree: analyze fails its snapshot validation and exits 1 with the stable
+    // `error[SNAPSHOT_INVALID]` code (caused by "container tree has no root"). This is
+    // the current, intentional behavior — an empty repo is a hard, coded error rather
+    // than an empty success summary. Built at runtime because git cannot commit an
+    // empty directory.
+    let empty = std::env::temp_dir().join(format!("strata-accept-empty-{}", nanos()));
+    let created = std::fs::create_dir_all(&empty).is_ok();
+    let empty_str = empty.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        empty_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
+
+    let _ = std::fs::remove_dir_all(&empty);
+    assert!(created, "the empty temp directory was created");
+    assert_eq!(
+        outcome.code, 1,
+        "an empty repository is a stable error (exit 1), never the gating 2"
+    );
+    assert!(
+        outcome.stderr.contains("error[SNAPSHOT_INVALID]"),
+        "the empty-repo error carries its stable code: {}",
+        outcome.stderr
+    );
+}
+
+#[test]
+fn should_produce_byte_identical_json_with_and_without_show_suggestions() {
+    // --show-suggestions only enriches the summary face; the json face already
+    // serializes every candidate's tree, so the flag is a documented no-op there: the
+    // json output is byte-identical with and without it.
+    let root = fixture("rust");
+    let root_str = root.to_str().unwrap_or_default();
+    let base = [
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ];
+
+    let plain = run(&base);
+    let mut with_flag = base.to_vec();
+    with_flag.push("--show-suggestions");
+    let shown = run(&with_flag);
+
+    assert_eq!(plain.code, 0, "the plain json run exits 0");
+    assert_eq!(shown.code, 0, "the suggestion json run exits 0");
+    assert_eq!(
+        plain.stdout, shown.stdout,
+        "--show-suggestions is a no-op on the json face"
+    );
+}
+
+#[test]
+fn should_error_on_an_invalid_config_with_a_stable_code() {
+    // a malformed --config is a hard, coded error: the config loader rejects the TOML
+    // and the run exits 1 with the stable `error[CONFIG_INVALID]` code — never the
+    // gating 2, and never a silent fallback to defaults (a present-but-invalid file is
+    // an error, unlike an absent one).
+    let bad = std::env::temp_dir().join(format!("strata-accept-badconfig-{}.toml", nanos()));
+    let written = std::fs::write(&bad, b"this is = not valid = toml ][\n").is_ok();
+    let bad_str = bad.to_str().unwrap_or_default();
+    let root = fixture("rust");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze", "--root", root_str, "--config", bad_str, "--format", "summary",
+    ]);
+
+    let _ = std::fs::remove_file(&bad);
+    assert!(written, "the malformed config file was written");
+    assert_eq!(
+        outcome.code, 1,
+        "an invalid config is a stable error (exit 1), never the gating 2"
+    );
+    assert!(
+        outcome.stderr.contains("error[CONFIG_INVALID]"),
+        "the invalid-config error carries its stable code: {}",
+        outcome.stderr
+    );
+}
