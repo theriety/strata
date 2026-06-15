@@ -177,9 +177,8 @@ fn should_print_the_recommended_structure_only_when_show_suggestions_is_set() {
         "the suggestion header leads the rendered tree"
     );
     assert!(
-        shown.stdout.contains("workspace [packageGroup]")
-            && shown.stdout.contains("src/lib.rs [file]"),
-        "the rendered candidate tree carries its container names"
+        shown.stdout.contains("rust [packageGroup]") && shown.stdout.contains("src/lib.rs [file]"),
+        "the rendered candidate tree carries its real directory-derived names"
     );
     assert!(
         !plain.stdout.contains("suggested structure"),
@@ -221,8 +220,10 @@ fn should_deliver_the_analyze_summary_for_the_python_fixture() {
 fn should_pin_the_anchor_term_apart_for_the_two_modes() {
     // anchored (mu > 0) carries a non-zero anchor penalty that raises its score
     // above the otherwise-identical greenfield (mu = 0) candidate; pinning both
-    // proves the two modes are genuinely distinct and not a shared code path.
-    let root = fixture("rust");
+    // proves the two modes are genuinely distinct and not a shared code path. The
+    // two-file python fixture regroups one file, so the move-distance penalty is
+    // non-zero and the two modes' scores genuinely diverge.
+    let root = fixture("python");
     let root_str = root.to_str().unwrap_or_default();
 
     let anchored = run(&[
@@ -251,11 +252,11 @@ fn should_pin_the_anchor_term_apart_for_the_two_modes() {
     assert_eq!(anchored.code, 0, "anchored mode exits 0");
     assert_eq!(greenfield.code, 0, "greenfield mode exits 0");
     assert!(
-        anchored.stdout.contains("candidate 1 score 4.3000"),
+        anchored.stdout.contains("candidate 1 score 6.2111"),
         "anchored score carries the anchor penalty"
     );
     assert!(
-        greenfield.stdout.contains("candidate 1 score 3.3000"),
+        greenfield.stdout.contains("candidate 1 score 5.7111"),
         "greenfield score omits the anchor penalty"
     );
     assert!(
@@ -313,8 +314,8 @@ fn should_deliver_the_current_tree_for_the_rust_fixture() {
         "the tree is rooted at the package group"
     );
     assert!(
-        outcome.stdout.contains("src/lib.rs [file] 6 sloc"),
-        "the file node carries its production sloc"
+        outcome.stdout.contains("src/lib.rs [file] 16 sloc"),
+        "the file node carries its production sloc summed from effective_size"
     );
     insta::assert_snapshot!("tree_current_rust", outcome.stdout);
 }
@@ -332,11 +333,11 @@ fn should_deliver_the_current_tree_for_the_multi_file_python_fixture() {
         "tree renders a multi-file structure and exits 0"
     );
     assert!(
-        outcome.stdout.contains("pkg/rectangle.py [file] 2 sloc"),
+        outcome.stdout.contains("pkg/rectangle.py [file] 6 sloc"),
         "both source files appear as file nodes"
     );
     assert!(
-        outcome.stdout.contains("pkg/shape.py [file] 2 sloc"),
+        outcome.stdout.contains("pkg/shape.py [file] 3 sloc"),
         "both source files appear as file nodes"
     );
     insta::assert_snapshot!("tree_current_python", outcome.stdout);
@@ -416,8 +417,9 @@ fn should_deliver_the_anchored_diff_for_the_rust_fixture() {
 
 #[test]
 fn should_deliver_the_greenfield_diff_for_the_multi_file_python_fixture() {
-    // the greenfield (mu = 0) delta over a two-file fixture coalesces the co-moved
-    // files into one grouped entry; pinning it covers the multi-symbol narration.
+    // the greenfield (mu = 0) delta regroups the two cohesive files under one real
+    // folder: the file already in that folder stays, the other is narrated as a
+    // move, exercising the path-delta narration end to end.
     let result = analyze_to_file("python");
     let result_str = result.to_str().unwrap_or_default();
 
@@ -426,8 +428,8 @@ fn should_deliver_the_greenfield_diff_for_the_multi_file_python_fixture() {
     let _ = std::fs::remove_file(&result);
     assert_eq!(outcome.code, 0, "diff renders and exits 0");
     assert!(
-        outcome.stdout.contains("pkg/rectangle.py, pkg/shape.py"),
-        "co-moved files coalesce into one grouped entry"
+        outcome.stdout.contains("move pkg/shape.py"),
+        "the regrouped file is narrated as a move"
     );
     insta::assert_snapshot!("diff_current_greenfield_python", outcome.stdout);
 }

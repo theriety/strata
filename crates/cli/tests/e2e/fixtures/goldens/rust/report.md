@@ -19,14 +19,11 @@ Score `3.3000`.
 
 ## Anchored candidates
 
-### Candidate 1 (score `4.3000`)
+### Candidate 1 (score `3.3000`)
 
-- cut `3.3000`, imbalance `0.0000`, naming `-0.0000`, path `-0.0000`, anchor `1.0000`
+- cut `3.3000`, imbalance `0.0000`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
-**Moves**
-
-- Move `cluster-0`: rust -> workspace (cohesion gain)
-- Move `src/lib.rs`: rust/src -> workspace/cluster-0 (cohesion gain)
+No moves versus the current layout.
 
 ## Greenfield candidates
 
@@ -34,8 +31,5 @@ Score `3.3000`.
 
 - cut `3.3000`, imbalance `0.0000`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
-**Moves**
-
-- Move `cluster-0`: rust -> workspace (cohesion gain)
-- Move `src/lib.rs`: rust/src -> workspace/cluster-0 (cohesion gain)
+No moves versus the current layout.
 

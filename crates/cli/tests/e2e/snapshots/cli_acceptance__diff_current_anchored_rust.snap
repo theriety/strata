@@ -1,6 +1,5 @@
 ---
 source: crates/cli/tests/e2e/cli_acceptance.rs
-expression: stdout
+expression: outcome.stdout
 ---
-move cluster-0 :: rust -> workspace (cohesion gain)
-move src/lib.rs :: rust/src -> workspace/cluster-0 (cohesion gain)
+no moves

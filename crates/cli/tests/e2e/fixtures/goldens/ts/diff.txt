@@ -1,2 +1,1 @@
-move cluster-0 :: ts -> workspace (cohesion gain)
-move src/rectangle.ts, src/shape.ts :: ts/src -> workspace/cluster-0 (cohesion gain)
+move src/shape.ts :: ts/src -> ts/src/src/rectangle.ts/src/rectangle.ts (cohesion gain)
