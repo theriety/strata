@@ -1,0 +1,11 @@
+snapshot 6f6eff93efab8376097bc1ddc50dc68dc39b4e1092ef209226d1b1190ab25233
+summary: 14 symbols, 13 edges, 3 files
+current score: 79.3541
+visibility [violation] describe :: `describe` is exported at Package but needed only at File
+visibility [violation] combined_total :: `combined_total` is exported at Package but needed only at File
+visibility [violation] Report :: `Report` is exported at Package but needed only at File
+visibility [violation] ReMeasure :: `ReMeasure` is exported at Package but needed only at File
+mode anchored: 1 candidate(s)
+  candidate 1 score 21.3398 (1 move group(s))
+mode greenfield: 1 candidate(s)
+  candidate 1 score 20.5541 (1 move group(s))

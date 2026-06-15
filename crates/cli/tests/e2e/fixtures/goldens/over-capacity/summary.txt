@@ -1,0 +1,14 @@
+snapshot f65608f46ad3008d746880149ebd93c1d934c98cecb1743c136f1acaed37b33a
+summary: 275 symbols, 0 edges, 2 files
+current score: 0.0083
+no violations
+mode anchored: 3 candidate(s)
+  (fewer than k candidates; solution space converged)
+  candidate 1 score 0.0083 (0 move group(s))
+  candidate 2 score 0.0083 (0 move group(s))
+  candidate 3 score 0.0083 (0 move group(s))
+mode greenfield: 3 candidate(s)
+  (fewer than k candidates; solution space converged)
+  candidate 1 score 0.0083 (0 move group(s))
+  candidate 2 score 0.0083 (0 move group(s))
+  candidate 3 score 0.0083 (0 move group(s))

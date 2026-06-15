@@ -3,15 +3,25 @@
 //! Where `parity.rs` pins the AD-5 library/CLI byte-parity guarantee and the
 //! committed goldens, this suite is the user-facing acceptance layer: it drives
 //! the *compiled* binary the way a developer or a CI pipeline would (via
-//! `assert_cmd`), and asserts the delivered output of every command — `analyze`,
-//! `tree`, `report`, `diff`, and `violations` — with `insta` snapshots plus
-//! explicit exit-code and invariant assertions.
+//! `assert_cmd`), and asserts the *behaviour* of every command — `analyze`,
+//! `tree`, `report`, `diff`, and `violations` — through exit codes and structural
+//! invariants.
+//!
+//! Oracle layering, by design:
+//! - **Goldens** (in `parity.rs`) are the single oracle for rendered output —
+//!   `tree`, `diff`, `violations`, `report`, and `analyze --format summary`. Bless
+//!   them with `STRATA_BLESS=1`.
+//! - **These hand-written asserts** check exit codes and structural invariants
+//!   (the node/edge census, candidate counts, header presence, `move ...`
+//!   narration, a `[violation]` line) — never the exact rendered bytes, which the
+//!   goldens own.
+//! - **Parity** (in `parity.rs`) pins library↔CLI byte-equality of the json face.
 //!
 //! Determinism is engineered, not hoped for. Every analysis is run with an
 //! explicit non-existent `--config`, so the binary always falls back to the
 //! built-in defaults regardless of the working directory the test harness runs
 //! from; an identical snapshot and config therefore yield byte-identical output
-//! (the deterministic-by-contract guarantee), and the snapshots never flake on
+//! (the deterministic-by-contract guarantee), and the invariants never flake on
 //! ordering. Both μ-modes are exercised: anchored (μ > 0, a non-zero anchor term)
 //! and greenfield (μ = 0, no anchor term), so the mode-dependent score and
 //! narration are both pinned.
@@ -100,6 +110,22 @@ fn analyze_to_file(name: &str) -> PathBuf {
     path
 }
 
+/// Extracts the candidate-1 score from a summary face by parsing the float that
+/// follows the first `score ` token.
+///
+/// The summary renders each candidate as `candidate 1 score <f> (...)`, so the
+/// first `score ` occurrence is candidate 1's. A malformed or absent score yields
+/// `f64::NAN` so a comparison against it fails loudly rather than passing by
+/// accident — the workspace forbids `unwrap`/`expect`, so no parse panics here.
+fn candidate_one_score(summary: &str) -> f64 {
+    summary
+        .split_once("score ")
+        .map(|(_, rest)| rest)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|token| token.parse::<f64>().ok())
+        .unwrap_or(f64::NAN)
+}
+
 /// Returns a process-unique nanosecond stamp for temp paths.
 fn nanos() -> u128 {
     std::time::SystemTime::now()
@@ -144,7 +170,6 @@ fn should_deliver_the_analyze_summary_for_the_rust_fixture() {
         outcome.stdout.contains("mode greenfield: 1 candidate(s)"),
         "greenfield candidates are reported"
     );
-    insta::assert_snapshot!("analyze_summary_rust", outcome.stdout);
 }
 
 #[test]
@@ -213,7 +238,6 @@ fn should_deliver_the_analyze_summary_for_the_python_fixture() {
             .contains("summary: 4 symbols, 4 edges, 2 files"),
         "the two-file census is delivered"
     );
-    insta::assert_snapshot!("analyze_summary_python", outcome.stdout);
 }
 
 #[test]
@@ -251,13 +275,14 @@ fn should_pin_the_anchor_term_apart_for_the_two_modes() {
 
     assert_eq!(anchored.code, 0, "anchored mode exits 0");
     assert_eq!(greenfield.code, 0, "greenfield mode exits 0");
+    // the invariant, not the exact bytes (those are pinned by the summary golden):
+    // the anchor penalty strictly raises the anchored candidate's score above the
+    // otherwise-identical greenfield one.
+    let anchored_score = candidate_one_score(&anchored.stdout);
+    let greenfield_score = candidate_one_score(&greenfield.stdout);
     assert!(
-        anchored.stdout.contains("candidate 1 score 6.2111"),
-        "anchored score carries the anchor penalty"
-    );
-    assert!(
-        greenfield.stdout.contains("candidate 1 score 5.7111"),
-        "greenfield score omits the anchor penalty"
+        anchored_score > greenfield_score,
+        "the anchor penalty raises the anchored score ({anchored_score}) above greenfield ({greenfield_score})"
     );
     assert!(
         !anchored.stdout.contains("mode greenfield"),
@@ -355,7 +380,6 @@ fn should_deliver_the_current_tree_for_the_rust_fixture() {
         outcome.stdout.contains("src/lib.rs [file] 16 sloc"),
         "the file node carries its production sloc summed from effective_size"
     );
-    insta::assert_snapshot!("tree_current_rust", outcome.stdout);
 }
 
 #[test]
@@ -378,7 +402,6 @@ fn should_deliver_the_current_tree_for_the_multi_file_python_fixture() {
         outcome.stdout.contains("pkg/shape.py [file] 3 sloc"),
         "both source files appear as file nodes"
     );
-    insta::assert_snapshot!("tree_current_python", outcome.stdout);
 }
 
 #[test]
@@ -401,7 +424,20 @@ fn should_truncate_a_candidate_tree_at_the_requested_depth() {
 
     let _ = std::fs::remove_file(&result);
     assert_eq!(outcome.code, 0, "a candidate tree renders and exits 0");
-    insta::assert_snapshot!("tree_candidate_rust_depth2", outcome.stdout);
+    // depth truncation is exercised exhaustively by parity's workspace-tree test;
+    // here we keep only the structural invariant that --depth 2 truncates above the
+    // symbol leaves: the root container is present, but no per-symbol leaf line
+    // (rendered as `  - <name>`) survives at depth 2.
+    assert!(
+        outcome.stdout.contains("rust [packageGroup]"),
+        "the truncated tree is still rooted at the package group: {}",
+        outcome.stdout
+    );
+    assert!(
+        !outcome.stdout.contains("- Shape"),
+        "depth 2 truncates above the file's symbol leaves: {}",
+        outcome.stdout
+    );
 }
 
 #[test]
@@ -430,12 +466,14 @@ fn should_deliver_a_well_formed_report_for_the_rust_fixture() {
         outcome.stdout.contains("## Greenfield candidates"),
         "the greenfield section is present"
     );
-    // the objective J(T) is surfaced per layout as a fixed-precision score line.
+    // the objective J(T) is surfaced per layout as a fixed-precision score line; the
+    // exact score bytes are pinned by the `report.md` golden, so here we assert only
+    // the structural invariant that the current-layout score line is present.
     assert!(
-        outcome.stdout.contains("Score `3.3000`."),
-        "the current objective J(T) is reported"
+        outcome.stdout.contains("\nScore `"),
+        "the current layout reports its objective J(T) as a score line: {}",
+        outcome.stdout
     );
-    insta::assert_snapshot!("report_rust", outcome.stdout);
 }
 
 #[test]
@@ -450,7 +488,12 @@ fn should_deliver_the_anchored_diff_for_the_rust_fixture() {
         outcome.code, 0,
         "diff renders the structural delta and exits 0"
     );
-    insta::assert_snapshot!("diff_current_anchored_rust", outcome.stdout);
+    // the rust fixture's anchored/1 equals the current layout, so the delta is the
+    // `no moves` sentinel; the exact bytes are owned by the `diff.txt` golden.
+    assert_eq!(
+        outcome.stdout, "no moves\n",
+        "an anchored candidate identical to the current layout is the `no moves` sentinel"
+    );
 }
 
 #[test]
@@ -469,7 +512,6 @@ fn should_deliver_the_greenfield_diff_for_the_multi_file_python_fixture() {
         outcome.stdout.contains("move pkg/shape.py"),
         "the regrouped file is narrated as a move"
     );
-    insta::assert_snapshot!("diff_current_greenfield_python", outcome.stdout);
 }
 
 #[test]
@@ -497,7 +539,6 @@ fn should_flag_visibility_violations_for_the_over_exported_rust_fixture() {
         outcome.stdout.contains("visibility [violation] Shape"),
         "an over-exported symbol is flagged"
     );
-    insta::assert_snapshot!("violations_rust", outcome.stdout);
 }
 
 #[test]

@@ -8,10 +8,16 @@
 //! library result. Because `analyze` is pure and deterministic, an identical root
 //! and config always produce an identical result, so the comparison is stable.
 //!
-//! The golden tests then exercise the downstream commands — `tree`, `diff`,
-//! `violations`, and `report` — against the saved result for every fixture and
-//! assert their human-readable output is byte-identical to a committed golden
-//! file. Set `STRATA_BLESS=1` to regenerate the goldens from the current binary.
+//! The golden tests then exercise the rendered faces of the downstream commands —
+//! `tree`, `diff`, `violations`, `report`, and `analyze --format summary` —
+//! against the saved result for every fixture and assert their human-readable
+//! output is byte-identical to a committed golden file. Set `STRATA_BLESS=1` to
+//! regenerate the goldens from the current binary.
+//!
+//! Oracle layering, by design: **goldens here are the single oracle for rendered
+//! output** (one bless path, `STRATA_BLESS=1`); the hand-written asserts in
+//! `cli_acceptance.rs` check only exit codes and structural invariants; and the
+//! parity test above pins library↔CLI byte-equality of the json face.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -168,6 +174,15 @@ fn assert_goldens(name: &str) {
         run_strata(&["violations", "--root", root_str, "--format", "table"]);
     assert_eq!(violations_code, 0, "violations exits 0 for {name}");
     assert_golden(name, "violations.txt", &violations_out);
+
+    // the analyze-summary rendered face: run over the same root, both modes, so the
+    // committed golden pins the human-readable summary bytes (census, scores, and
+    // per-mode candidate headlines) the same deterministic way the other goldens are.
+    let (summary_code, summary_out) = run_strata(&[
+        "analyze", "--root", root_str, "--mode", "both", "--format", "summary",
+    ]);
+    assert_eq!(summary_code, 0, "analyze summary exits 0 for {name}");
+    assert_golden(name, "summary.txt", &summary_out);
 
     let (report_code, report_out) = run_strata(&["report", "--input", result_str]);
     assert_eq!(report_code, 0, "report exits 0 for {name}");

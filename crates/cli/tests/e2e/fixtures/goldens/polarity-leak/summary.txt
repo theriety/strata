@@ -1,0 +1,8 @@
+snapshot b15b386f3f11d23998f8eb73bb45713a2c46f57fe5cf6f00f06d525092634625
+summary: 2 symbols, 1 edges, 2 files
+current score: 17.0000
+polarity [violation] serve, sample_fixture :: production symbol `serve` depends on test code `sample_fixture`
+mode anchored: 1 candidate(s)
+  candidate 1 score 3.5000 (1 move group(s))
+mode greenfield: 1 candidate(s)
+  candidate 1 score 3.0000 (1 move group(s))

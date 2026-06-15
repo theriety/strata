@@ -1,7 +1,3 @@
----
-source: crates/cli/tests/e2e/cli_acceptance.rs
-expression: outcome.stdout
----
 snapshot f6b6dcc98073ffac6abe3443e0083a47fa44935eba80e405c2a40835b76706a5
 summary: 4 symbols, 4 edges, 2 files
 current score: 20.7111

@@ -1,5 +1,0 @@
----
-source: crates/cli/tests/e2e/cli_acceptance.rs
-expression: outcome.stdout
----
-move pkg/shape.py :: python/pkg -> python/pkg/pkg/rectangle.py/pkg/rectangle.py (cohesion gain)

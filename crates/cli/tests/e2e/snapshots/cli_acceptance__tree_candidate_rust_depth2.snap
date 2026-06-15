@@ -1,7 +1,0 @@
----
-source: crates/cli/tests/e2e/cli_acceptance.rs
-expression: outcome.stdout
----
-rust [packageGroup]
-  src [package]
-    src/lib.rs [domain]
