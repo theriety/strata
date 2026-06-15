@@ -50,6 +50,10 @@ pub enum RefKind {
 pub struct Reference {
     /// The category of the reference (fixes the emitted edge kind).
     pub kind: RefKind,
+    /// The referenced leaf identifier (e.g. `Foo` in `a::b::Foo`). Used as a
+    /// name-based resolution fallback when `goto_definition` cannot pin the
+    /// reference to an in-workspace declaration.
+    pub name: SmolStr,
     /// 0-based byte offset of the reference within its source file. Resolution
     /// runs `goto_definition` at this offset.
     pub offset: u32,
@@ -315,6 +319,7 @@ fn push_impl(
             sloc: 0,
             references: vec![Reference {
                 kind: RefKind::TraitImpl,
+                name: SmolStr::new(segment.ident.to_string()),
                 offset,
                 macro_expanded: false,
             }],
@@ -528,12 +533,14 @@ struct ReferenceCollector {
 }
 
 impl ReferenceCollector {
-    /// Records a reference of `kind` at `span`, stamping the current macro
-    /// context onto it.
-    fn record(&mut self, kind: RefKind, span: Span) {
+    /// Records a reference of `kind` to `ident`, stamping the current macro
+    /// context onto it. The identifier's text is retained so binding can fall
+    /// back to name-based resolution when `goto_definition` comes up empty.
+    fn record(&mut self, kind: RefKind, ident: &syn::Ident) {
         self.references.push(Reference {
             kind,
-            offset: byte_offset(span),
+            name: SmolStr::new(ident.to_string()),
+            offset: byte_offset(ident.span()),
             macro_expanded: self.macro_depth > 0,
         });
     }
@@ -541,12 +548,12 @@ impl ReferenceCollector {
 
 impl<'ast> Visit<'ast> for ReferenceCollector {
     fn visit_use_path(&mut self, use_path: &'ast syn::UsePath) {
-        self.record(RefKind::UsePath, use_path.ident.span());
+        self.record(RefKind::UsePath, &use_path.ident);
         syn::visit::visit_use_path(self, use_path);
     }
 
     fn visit_use_name(&mut self, use_name: &'ast syn::UseName) {
-        self.record(RefKind::UsePath, use_name.ident.span());
+        self.record(RefKind::UsePath, &use_name.ident);
         syn::visit::visit_use_name(self, use_name);
     }
 
@@ -554,19 +561,40 @@ impl<'ast> Visit<'ast> for ReferenceCollector {
         if let syn::Expr::Path(path) = call.func.as_ref()
             && let Some(segment) = path.path.segments.last()
         {
-            self.record(RefKind::Call, segment.ident.span());
+            self.record(RefKind::Call, &segment.ident);
         }
         syn::visit::visit_expr_call(self, call);
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        self.record(RefKind::Call, call.method.span());
+        self.record(RefKind::Call, &call.method);
         syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_struct(&mut self, expr_struct: &'ast syn::ExprStruct) {
+        // A struct literal `Foo { .. }` depends on the constructed type.
+        if let Some(segment) = expr_struct.path.segments.last() {
+            self.record(RefKind::TypeRef, &segment.ident);
+        }
+        syn::visit::visit_expr_struct(self, expr_struct);
+    }
+
+    fn visit_expr_path(&mut self, expr_path: &'ast syn::ExprPath) {
+        // Qualified value paths (`Type::assoc`, `module::ITEM`, `Enum::Variant`)
+        // name a cross-item dependency; bare single-segment paths are usually
+        // locals, so only multi-segment paths are recorded. Direct call callees
+        // are already handled by `visit_expr_call`; duplicates collapse in bind.
+        if expr_path.path.segments.len() > 1
+            && let Some(segment) = expr_path.path.segments.last()
+        {
+            self.record(RefKind::Call, &segment.ident);
+        }
+        syn::visit::visit_expr_path(self, expr_path);
     }
 
     fn visit_type_path(&mut self, type_path: &'ast syn::TypePath) {
         if let Some(segment) = type_path.path.segments.last() {
-            self.record(RefKind::TypeRef, segment.ident.span());
+            self.record(RefKind::TypeRef, &segment.ident);
         }
         syn::visit::visit_type_path(self, type_path);
     }
@@ -680,6 +708,58 @@ mod tests {
             trait_decl.map(|decl| decl.name.clone()),
             Some(SmolStr::new("R"))
         );
+    }
+
+    #[test]
+    fn should_record_a_struct_literal_as_a_type_reference() {
+        let declarations = parse_text("fn build() -> () {\n    let _ = Report { label: 1 };\n}\n");
+
+        let type_ref = declarations
+            .iter()
+            .flat_map(|decl| &decl.references)
+            .find(|r| r.kind == RefKind::TypeRef && r.name == "Report");
+        assert!(
+            type_ref.is_some(),
+            "a struct-literal type reference is recorded"
+        );
+    }
+
+    #[test]
+    fn should_record_a_qualified_value_path_as_a_call_reference() {
+        let declarations = parse_text("fn build() -> () {\n    let _ = Report::new();\n}\n");
+
+        let value_ref = declarations
+            .iter()
+            .flat_map(|decl| &decl.references)
+            .find(|r| r.kind == RefKind::Call && r.name == "new");
+        assert!(
+            value_ref.is_some(),
+            "a qualified value-path reference is recorded"
+        );
+    }
+
+    #[test]
+    fn should_not_record_a_bare_local_path_as_a_reference() {
+        let declarations = parse_text("fn build() -> i32 {\n    let total = 1;\n    total\n}\n");
+
+        // `total` is a bare single-segment path expression (a local), so it must
+        // not be recorded as a reference — only qualified paths are.
+        let bare = declarations
+            .iter()
+            .flat_map(|decl| &decl.references)
+            .any(|r| r.name == "total");
+        assert!(!bare, "a bare local path is not recorded as a reference");
+    }
+
+    #[test]
+    fn should_carry_the_leaf_name_on_a_recorded_reference() {
+        let declarations = parse_text("use other::Thing;\nfn f(x: Thing) {}\n");
+
+        let named = declarations
+            .iter()
+            .flat_map(|decl| &decl.references)
+            .find(|r| r.kind == RefKind::TypeRef && r.name == "Thing");
+        assert!(named.is_some(), "the referenced leaf name is retained");
     }
 
     #[test]

@@ -290,6 +290,35 @@ fn should_classify_a_shared_test_utility_as_test_support() -> Result<(), String>
 }
 
 #[test]
+fn should_emit_at_most_one_edge_per_source_target_kind() -> Result<(), String> {
+    let (_nodes, _edges, ir) = build_views()?;
+
+    // Binding deduplicates edges, so the same dependency cited several ways (a
+    // call plus a qualified-path reference, say) collapses to a single edge.
+    let rank = |kind: EdgeKind| match kind {
+        EdgeKind::ValueImport => 0u8,
+        EdgeKind::TypeReference => 1,
+        EdgeKind::Inheritance => 2,
+        EdgeKind::Call => 3,
+        EdgeKind::ReExport => 4,
+    };
+    let mut keys: Vec<(u32, u32, u8)> = ir
+        .edges
+        .iter()
+        .map(|edge| (edge.source.0, edge.target.0, rank(edge.kind)))
+        .collect();
+    let total = keys.len();
+    keys.sort_unstable();
+    keys.dedup();
+    assert_eq!(
+        total,
+        keys.len(),
+        "expected no duplicate (source, target, kind) edges after dedup"
+    );
+    Ok(())
+}
+
+#[test]
 fn should_assemble_into_a_valid_snapshot() -> Result<(), String> {
     let (_nodes, _edges, ir) = build_views()?;
 

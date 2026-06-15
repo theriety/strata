@@ -39,6 +39,11 @@ const CONFIDENCE_STATIC: f64 = 1.0;
 /// honest uncertainty because the reference text is produced by a macro.
 const CONFIDENCE_MACRO: f64 = 0.5;
 
+/// Confidence assigned to an edge resolved only by the name-based fallback: the
+/// semantic database could not pin the reference, but a uniquely-named
+/// in-workspace declaration matches, so the dependency is likely but uncertain.
+const CONFIDENCE_NAME_FALLBACK: f64 = 0.6;
+
 /// A binding failure that aborts fragment emission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindOutcome {
@@ -79,6 +84,7 @@ pub fn bind(files: &[ParsedFile], manifest: &Path, root: &Path) -> Result<IrFrag
     let assignment = NodeAssignment::build(files, root);
     let mut edges = resolve_edges(files, &assignment, &database, workspace_root);
     resolve_re_exports(&assignment, &database, workspace_root, &mut edges);
+    let edges = dedup_edges(edges);
     let mut nodes = assignment.into_nodes();
     classify_polarity(files, &mut nodes, &edges);
 
@@ -206,21 +212,36 @@ fn resolve_reference(
     workspace_root: &Path,
     edges: &mut Vec<Edge>,
 ) {
-    let Some((target_path, target_offset)) =
-        database.resolve(path, reference.offset, workspace_root)
-    else {
-        return;
-    };
-    let Some(target) = assignment.node_at(&target_path, target_offset) else {
-        return;
-    };
     let (kind, hardness) = edge_shape(reference.kind);
-    let confidence = if reference.macro_expanded {
-        CONFIDENCE_MACRO
-    } else {
-        CONFIDENCE_STATIC
-    };
-    push_edge(edges, source, target, kind, hardness, confidence);
+
+    // The semantic database is authoritative: when `goto_definition` lands on a
+    // known declaration, emit that edge with full (or macro-reduced) confidence.
+    if let Some((target_path, target_offset)) =
+        database.resolve(path, reference.offset, workspace_root)
+        && let Some(target) = assignment.node_at(&target_path, target_offset)
+    {
+        let confidence = if reference.macro_expanded {
+            CONFIDENCE_MACRO
+        } else {
+            CONFIDENCE_STATIC
+        };
+        push_edge(edges, source, target, kind, hardness, confidence);
+        return;
+    }
+
+    // Fallback: when resolution comes up empty (intra-crate references RA cannot
+    // pin, module paths, out-of-tree noise), a uniquely-named in-workspace
+    // declaration is a likely target — emitted soft, at reduced confidence.
+    if let Some(target) = assignment.unique_node_named(&reference.name) {
+        push_edge(
+            edges,
+            source,
+            target,
+            kind,
+            Hardness::Soft,
+            CONFIDENCE_NAME_FALLBACK,
+        );
+    }
 }
 
 /// Resolves every `pub use` re-export to its original declaration and emits a
@@ -347,6 +368,53 @@ fn edge_shape(kind: RefKind) -> (EdgeKind, Hardness) {
     }
 }
 
+/// Collapses duplicate edges into one per `(source, target, kind)`, keeping the
+/// strongest: a hard edge dominates a soft one, and within the same hardness the
+/// higher confidence wins. The result is ordered deterministically by endpoints
+/// and kind, so a reference cited many ways contributes a single, meaningful
+/// edge rather than an inflated weight.
+fn dedup_edges(edges: Vec<Edge>) -> Vec<Edge> {
+    use std::collections::btree_map::Entry;
+    let mut best: BTreeMap<(u32, u32, u8), Edge> = BTreeMap::new();
+    for edge in edges {
+        let key = (edge.source.0, edge.target.0, edge_kind_rank(edge.kind));
+        match best.entry(key) {
+            Entry::Vacant(slot) => {
+                slot.insert(edge);
+            }
+            Entry::Occupied(mut slot) => {
+                if is_stronger(&edge, slot.get()) {
+                    slot.insert(edge);
+                }
+            }
+        }
+    }
+    best.into_values().collect()
+}
+
+/// Returns `true` when `candidate` is a stronger edge than `current`: a hard edge
+/// beats a soft one, and within equal hardness a higher confidence beats a lower.
+fn is_stronger(candidate: &Edge, current: &Edge) -> bool {
+    let candidate_hard = candidate.hardness == Hardness::Hard;
+    let current_hard = current.hardness == Hardness::Hard;
+    if candidate_hard != current_hard {
+        return candidate_hard;
+    }
+    candidate.confidence > current.confidence
+}
+
+/// Maps an edge kind to a stable rank, so `(source, target, kind)` keys order
+/// deterministically without relying on an `Ord` impl for [`EdgeKind`].
+fn edge_kind_rank(kind: EdgeKind) -> u8 {
+    match kind {
+        EdgeKind::ValueImport => 0,
+        EdgeKind::TypeReference => 1,
+        EdgeKind::Inheritance => 2,
+        EdgeKind::Call => 3,
+        EdgeKind::ReExport => 4,
+    }
+}
+
 /// Appends an edge, skipping self-loops which carry no dependency information.
 fn push_edge(
     edges: &mut Vec<Edge>,
@@ -375,6 +443,10 @@ struct NodeAssignment {
     nodes: Vec<Node>,
     /// Per-file declaration intervals, sorted by start, for offset lookup.
     intervals: HashMap<SmolStr, Vec<Interval>>,
+    /// Declaration name -> the node(s) declaring it, for the name-based
+    /// resolution fallback. A name mapping to exactly one node is resolvable;
+    /// an ambiguous name (two or more) is left unresolved to stay deterministic.
+    by_name: HashMap<SmolStr, Vec<NodeId>>,
     /// Barrel-local nodes materialized for `pub use` re-exports, each carrying
     /// the source location whose `goto_definition` finds the original symbol.
     re_export_links: Vec<ReExportLink>,
@@ -407,6 +479,7 @@ impl NodeAssignment {
         let containers = ContainerBuilder::build(files, root);
         let mut nodes = Vec::new();
         let mut intervals: HashMap<SmolStr, Vec<Interval>> = HashMap::new();
+        let mut by_name: HashMap<SmolStr, Vec<NodeId>> = HashMap::new();
         let mut re_export_links = Vec::new();
 
         for file in files {
@@ -420,6 +493,10 @@ impl NodeAssignment {
                     end: declaration.byte_end,
                     node: id,
                 });
+                by_name
+                    .entry(declaration.name.clone())
+                    .or_default()
+                    .push(id);
             }
         }
         for file_intervals in intervals.values_mut() {
@@ -444,6 +521,7 @@ impl NodeAssignment {
         Self {
             nodes,
             intervals,
+            by_name,
             re_export_links,
         }
     }
@@ -460,6 +538,16 @@ impl NodeAssignment {
             .filter(|interval| interval.start <= offset && offset < interval.end)
             .max_by_key(|interval| interval.start)
             .map(|interval| interval.node)
+    }
+
+    /// Returns the single in-workspace declaration named `name`, or `None` when
+    /// no declaration or more than one carries that name. Ambiguous names are
+    /// deliberately left unresolved so the fallback never invents an edge.
+    fn unique_node_named(&self, name: &str) -> Option<NodeId> {
+        match self.by_name.get(name)?.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
     }
 
     /// Consumes the assignment, yielding the assembled node set.
@@ -895,6 +983,60 @@ mod tests {
         assert_eq!(
             nodes.first().map(|node| node.visibility),
             Some(ScopeLevel::Package)
+        );
+    }
+
+    #[test]
+    fn should_resolve_a_uniquely_named_declaration_by_name() {
+        let files = [
+            file_with("crates/a/src/lib.rs", vec![declaration("unique", 0, 10)]),
+            file_with("crates/b/src/lib.rs", vec![declaration("other", 0, 10)]),
+        ];
+        let assignment = NodeAssignment::build(&files, Path::new("repo"));
+
+        // a name carried by exactly one declaration resolves to its node.
+        assert_eq!(assignment.unique_node_named("unique"), Some(NodeId(0)));
+        // an absent name resolves to nothing.
+        assert_eq!(assignment.unique_node_named("missing"), None);
+    }
+
+    #[test]
+    fn should_not_resolve_an_ambiguous_name_by_name() {
+        let files = [
+            file_with("crates/a/src/lib.rs", vec![declaration("build", 0, 10)]),
+            file_with("crates/b/src/lib.rs", vec![declaration("build", 0, 10)]),
+        ];
+        let assignment = NodeAssignment::build(&files, Path::new("repo"));
+
+        // two declarations share the name, so the fallback declines to guess.
+        assert_eq!(assignment.unique_node_named("build"), None);
+    }
+
+    #[test]
+    fn should_keep_the_strongest_of_duplicate_edges() {
+        let edges = vec![
+            Edge {
+                source: NodeId(0),
+                target: NodeId(1),
+                kind: EdgeKind::Call,
+                hardness: Hardness::Soft,
+                confidence: 0.6,
+            },
+            Edge {
+                source: NodeId(0),
+                target: NodeId(1),
+                kind: EdgeKind::Call,
+                hardness: Hardness::Hard,
+                confidence: 1.0,
+            },
+        ];
+
+        let deduped = dedup_edges(edges);
+
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(
+            deduped.first().map(|edge| edge.hardness),
+            Some(Hardness::Hard)
         );
     }
 
