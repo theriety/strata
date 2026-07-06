@@ -100,7 +100,11 @@ pub struct ModeResult {
 pub fn diversify(solver: &impl Solver, cfg: &ModeConfig) -> ModeResult {
     let pool = solve_pool(solver, cfg);
     let filtered = filter_by_tolerance(pool, cfg.score_tolerance);
-    let picked = select_diverse(&filtered, cfg.k, cfg.min_distance);
+    let mut picked = select_diverse(&filtered, cfg.k, cfg.min_distance);
+    // selection order is diversity-greedy, not score order; re-sort so the
+    // promised "best score first" contract holds for every candidate, not just
+    // the first (the best stays index 0: it is minimal under the same key).
+    picked.sort_by(candidate_order);
     let converged = picked.len() < cfg.k;
 
     ModeResult {
@@ -131,12 +135,7 @@ fn solve_pool(solver: &impl Solver, cfg: &ModeConfig) -> Vec<SolvedCandidate> {
 /// An empty pool stays empty. The best score is the minimum; a non-negative
 /// tolerance widens the band above it.
 fn filter_by_tolerance(mut pool: Vec<SolvedCandidate>, tolerance: f64) -> Vec<SolvedCandidate> {
-    pool.sort_by(|a, b| {
-        a.score
-            .partial_cmp(&b.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.partition.assignment().cmp(b.partition.assignment()))
-    });
+    pool.sort_by(candidate_order);
 
     let Some(best) = pool.first().map(|candidate| candidate.score) else {
         return pool;
@@ -144,6 +143,14 @@ fn filter_by_tolerance(mut pool: Vec<SolvedCandidate>, tolerance: f64) -> Vec<So
     let ceiling = tolerance_ceiling(best, tolerance);
     pool.retain(|candidate| candidate.score <= ceiling);
     pool
+}
+
+/// Total order on candidates: ascending score (best first), ties broken
+/// deterministically by partition assignment.
+fn candidate_order(a: &SolvedCandidate, b: &SolvedCandidate) -> std::cmp::Ordering {
+    a.score
+        .total_cmp(&b.score)
+        .then_with(|| a.partition.assignment().cmp(b.partition.assignment()))
 }
 
 /// Returns the upper score bound of the keep-band, `(1 + tolerance) * best`,
@@ -492,6 +499,36 @@ mod tests {
         let result = diversify(&solver, &cfg);
 
         assert_eq!(result.candidates.first().map(|c| c.score), Some(1.0));
+    }
+
+    #[test]
+    fn should_sort_selected_candidates_by_score_after_diversity_selection() {
+        // greedy VI selection picks best (1.0) then the most distant, which is
+        // the *worst*-scoring candidate (3.0), then the middle one (2.0). The
+        // returned list must nevertheless ascend by score: 1.0, 2.0, 3.0.
+        let candidates = vec![
+            candidate(&[0, 0, 1, 1], 1.0),
+            candidate(&[0, 0, 1, 2], 2.0),
+            candidate(&[0, 1, 0, 1], 3.0),
+        ];
+        let solver = ScriptedSolver {
+            base: 0,
+            candidates,
+        };
+        let cfg = ModeConfig {
+            k: 3,
+            base_seed: 0,
+            score_tolerance: 10.0,
+            min_distance: 0.1,
+            pool_per_candidate: 10,
+        };
+
+        let result = diversify(&solver, &cfg);
+
+        assert_eq!(result.candidates.len(), 3);
+        assert_eq!(result.candidates.first().map(|c| c.score), Some(1.0));
+        assert_eq!(result.candidates.get(1).map(|c| c.score), Some(2.0));
+        assert_eq!(result.candidates.get(2).map(|c| c.score), Some(3.0));
     }
 
     #[test]
