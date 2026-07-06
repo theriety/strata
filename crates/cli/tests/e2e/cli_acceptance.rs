@@ -2600,8 +2600,9 @@ fn should_render_incremental_container_names_in_the_tree_face() {
 #[test]
 fn should_vary_narration_reasons_and_mark_followed_subjects() {
     // reasons are computed, not canned: the nested-ts delta carries at least
-    // two distinct reasons, never the retired `cohesion gain` stub, and its
-    // spec files carry a followsSubject echoed as a `follows` line in the face.
+    // two distinct reason kinds, and its spec moves carry a `follows` reason
+    // whose subject is echoed as a `follows` line in the face. (the retired
+    // `cohesion gain` stub needs no assert — the MoveReason enum forbids it.)
     let result = analyze_to_file("nested-ts");
     let result_str = result.to_str().unwrap_or_default();
     let contents = std::fs::read_to_string(&result).unwrap_or_default();
@@ -2620,22 +2621,20 @@ fn should_vary_narration_reasons_and_mark_followed_subjects() {
         !narration.is_empty(),
         "the delta narrates moves: {contents}"
     );
-    let reasons: std::collections::BTreeSet<&str> = narration
+    let kinds: std::collections::BTreeSet<&str> = narration
         .iter()
-        .filter_map(|entry| entry.get("reason").and_then(serde_json::Value::as_str))
+        .filter_map(|entry| {
+            entry
+                .pointer("/reason/kind")
+                .and_then(serde_json::Value::as_str)
+        })
         .collect();
     assert!(
-        reasons.len() >= 2,
-        "at least two distinct computed reasons: {reasons:?}"
+        kinds.len() >= 2,
+        "at least two distinct computed reason kinds: {kinds:?}"
     );
     assert!(
-        !reasons.contains("cohesion gain"),
-        "the canned stub reason is retired: {reasons:?}"
-    );
-    assert!(
-        narration.iter().any(|entry| entry
-            .get("followsSubject")
-            .is_some_and(serde_json::Value::is_string)),
+        kinds.contains("follows"),
         "a spec move names the subject it follows: {narration:?}"
     );
     assert_eq!(face.code, 0, "the diff face renders");

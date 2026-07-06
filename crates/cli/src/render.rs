@@ -12,7 +12,7 @@ use std::io::{self, Write};
 
 use strata_engine::{
     AnalyzeResult, Candidate, ContainerNode, CurrentStanding, Level, ModeResult, Move, MoveKind,
-    Severity, Violation, ViolationKind,
+    MoveReason, Severity, Violation, ViolationKind,
 };
 
 /// The output format the `analyze` command renders in.
@@ -144,7 +144,11 @@ fn write_mode_summary(
             out,
             "  current layout is already optimal; candidate 1 is the current tree"
         )?,
-        CurrentStanding::Infeasible => match mode.best_candidate_capacity {
+        CurrentStanding::Infeasible => match mode
+            .candidates
+            .first()
+            .and_then(|candidate| candidate.capacity_remainder)
+        {
             Some(capacity) => {
                 let resolved = current_capacity.saturating_sub(capacity.remaining);
                 writeln!(
@@ -285,7 +289,7 @@ fn write_move(entry: &Move, out: &mut impl Write) -> io::Result<()> {
         if to.is_empty() { "(root)" } else { &to },
         entry.reason
     )?;
-    if let Some(subject) = &entry.follows_subject {
+    if let MoveReason::Follows { subject } = &entry.reason {
         writeln!(out, "    follows {subject}")?;
     }
     Ok(())
@@ -401,13 +405,13 @@ mod tests {
                     },
                     conditional_splits: Vec::new(),
                     delta_narration: Vec::new(),
+                    capacity_remainder: None,
                 }],
                 pairwise_distance: Vec::new(),
                 solution_space_converged: true,
                 current_score: 1.5,
                 current_score_breakdown: zero_breakdown(),
                 current_standing: CurrentStanding::Outscored,
-                best_candidate_capacity: None,
             }),
             greenfield: None,
         };
@@ -447,6 +451,7 @@ mod tests {
             location: vec!["a".to_owned(), "b".to_owned()],
             detail: "dependency cycle".to_owned(),
             break_suggestions: None,
+            capacity: None,
         }
     }
 
@@ -576,6 +581,7 @@ mod tests {
             tree: file_node("lib", 1),
             conditional_splits: Vec::new(),
             delta_narration: Vec::new(),
+            capacity_remainder: None,
         };
         let mut buffer = Vec::new();
 
@@ -598,9 +604,9 @@ mod tests {
                 symbols: vec!["alpha".to_owned()],
                 from: vec!["old".to_owned()],
                 to: vec!["new".to_owned()],
-                reason: "regrouped by clustering".to_owned(),
-                follows_subject: None,
+                reason: MoveReason::Clustering,
             }],
+            capacity_remainder: None,
         };
         let mut buffer = Vec::new();
 
@@ -639,15 +645,18 @@ mod tests {
             location: vec![name.to_owned()],
             detail: format!("{name} over cap"),
             break_suggestions: None,
+            capacity: None,
         };
         let mut result = result_with_candidate();
         result.current.violations = vec![capacity("big_folder"), capacity("huge_file")];
         if let Some(mode) = result.modes.anchored.as_mut() {
             mode.current_standing = CurrentStanding::Infeasible;
-            mode.best_candidate_capacity = Some(CapacityRemainder {
-                remaining: 1,
-                file_level: 1,
-            });
+            if let Some(candidate) = mode.candidates.first_mut() {
+                candidate.capacity_remainder = Some(CapacityRemainder {
+                    remaining: 1,
+                    file_level: 1,
+                });
+            }
         }
         let mut buffer = Vec::new();
 
@@ -664,12 +673,14 @@ mod tests {
 
     #[test]
     fn should_print_the_plain_infeasible_notice_when_the_remainder_is_absent() {
-        // a saved result from an older run has no bestCandidateCapacity field;
+        // a saved result from an older run has no capacityRemainder field;
         // the notice degrades to the plain sentence instead of inventing numbers.
         let mut result = result_with_candidate();
         if let Some(mode) = result.modes.anchored.as_mut() {
             mode.current_standing = CurrentStanding::Infeasible;
-            mode.best_candidate_capacity = None;
+            if let Some(candidate) = mode.candidates.first_mut() {
+                candidate.capacity_remainder = None;
+            }
         }
         let mut buffer = Vec::new();
 

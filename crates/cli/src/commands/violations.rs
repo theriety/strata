@@ -261,6 +261,7 @@ mod tests {
             location: Vec::new(),
             detail: String::new(),
             break_suggestions: None,
+            capacity: None,
         };
         let fail_on = parse_fail_on("capacity:violation").unwrap_or_default();
 
@@ -276,6 +277,7 @@ mod tests {
             location: Vec::new(),
             detail: String::new(),
             break_suggestions: None,
+            capacity: None,
         };
         let fail_on = parse_fail_on("capacity:borderline").unwrap_or_default();
 
@@ -290,6 +292,7 @@ mod tests {
             location: Vec::new(),
             detail: String::new(),
             break_suggestions: None,
+            capacity: None,
         };
         let fail_on = vec![FailOn {
             kind: ViolationKind::Capacity,
@@ -307,6 +310,7 @@ mod tests {
             location: Vec::new(),
             detail: String::new(),
             break_suggestions: None,
+            capacity: None,
         };
         let fail_on = vec![FailOn {
             kind: ViolationKind::Capacity,
@@ -324,6 +328,7 @@ mod tests {
             location: Vec::new(),
             detail: String::new(),
             break_suggestions: None,
+            capacity: None,
         };
         let fail_on = vec![FailOn {
             kind: ViolationKind::Capacity,

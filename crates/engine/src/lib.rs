@@ -33,8 +33,9 @@ pub use crate::config::{
 };
 pub use crate::error::StrataError;
 pub use crate::result::{
-    AnalyzeResult, Candidate, CapacityRemainder, ConditionalSplit, ContainerNode, CurrentStanding,
-    CurrentTree, EdgeBreak, Level, ModeResult, Modes, Move, MoveKind, RESULT_SCHEMA_VERSION,
-    ScoreBreakdown, Severity, Summary, SymbolPlacement, Violation, ViolationKind,
+    AnalyzeResult, Candidate, CapacityBreach, CapacityRemainder, ConditionalSplit, ContainerNode,
+    CurrentStanding, CurrentTree, EdgeBreak, Level, ModeResult, Modes, Move, MoveKind, MoveReason,
+    RESULT_SCHEMA_VERSION, ScoreBreakdown, Severity, Summary, SymbolPlacement, Violation,
+    ViolationKind,
 };
 pub use crate::snapshot::snapshot_from_root;

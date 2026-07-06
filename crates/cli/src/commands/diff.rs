@@ -147,7 +147,7 @@ mod tests {
 
     use strata_engine::{
         Candidate, ContainerNode, CurrentStanding, CurrentTree, Level, ModeResult, Modes, Move,
-        MoveKind, ScoreBreakdown, Summary, SymbolPlacement,
+        MoveKind, MoveReason, ScoreBreakdown, Summary, SymbolPlacement,
     };
 
     use super::*;
@@ -177,7 +177,6 @@ mod tests {
                     current_score: 1.0,
                     current_score_breakdown: zero(),
                     current_standing: CurrentStanding::Outscored,
-                    best_candidate_capacity: None,
                 }),
                 greenfield: None,
             },
@@ -198,9 +197,9 @@ mod tests {
                 symbols: vec!["sym".to_owned()],
                 from: vec!["old".to_owned()],
                 to: vec!["new".to_owned()],
-                reason: "cohesion gain".to_owned(),
-                follows_subject: None,
+                reason: MoveReason::Clustering,
             }],
+            capacity_remainder: None,
         }
     }
 

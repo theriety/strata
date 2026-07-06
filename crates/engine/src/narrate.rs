@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use strata_ir::{ContainerTree, ScopeLevel};
 
-use crate::result::{Move, MoveKind};
+use crate::result::{Move, MoveKind, MoveReason};
 
 /// Per-file facts narration consults when explaining a move.
 ///
@@ -171,7 +171,6 @@ pub(crate) fn narrate(
                     .collect(),
                 to: vec![destination.join("/")],
                 reason,
-                follows_subject: follows,
             }
         })
         .collect()
@@ -313,20 +312,22 @@ const NAMING_COHESION_THRESHOLD: f64 = 0.5;
 
 /// Computes a group's dominant reason, first match wins: followed subject >
 /// cap relief > dependency pull > naming cohesion > clustering fallback.
-fn group_reason(ctx: &GroupContext<'_>) -> String {
+fn group_reason(ctx: &GroupContext<'_>) -> MoveReason {
     if let Some(subject) = ctx.follows {
-        return format!("follows {}", basename(subject));
+        return MoveReason::Follows {
+            subject: subject.to_owned(),
+        };
     }
 
     // cap relief: the first (lexicographically smallest) over-cap source folder.
     for origin in ctx.origins {
         let count = ctx.before.members_of.get(*origin).map_or(0, Vec::len);
         if u32::try_from(count).unwrap_or(u32::MAX) > ctx.facts.folder_cap {
-            return format!(
-                "relieves over-cap folder {} ({count}/{} files)",
-                origin.join("/"),
-                ctx.facts.folder_cap
-            );
+            return MoveReason::RelievesOverCap {
+                container: origin.join("/"),
+                count: u32::try_from(count).unwrap_or(u32::MAX),
+                cap: ctx.facts.folder_cap,
+            };
         }
     }
 
@@ -368,7 +369,10 @@ fn group_reason(ctx: &GroupContext<'_>) -> String {
         }
     }
     if let Some((partner, total)) = best {
-        return format!("pulled by {} (w {total:.1})", basename(partner));
+        return MoveReason::PulledBy {
+            partner: partner.clone(),
+            weight: total,
+        };
     }
 
     // naming cohesion: mean pairwise Jaccard between moved and resident stems.
@@ -388,11 +392,11 @@ fn group_reason(ctx: &GroupContext<'_>) -> String {
             sum / f64::from(pairs)
         };
         if mean >= NAMING_COHESION_THRESHOLD {
-            return format!("naming cohesion {mean:.2} with destination");
+            return MoveReason::NamingCohesion { cohesion: mean };
         }
     }
 
-    "regrouped by clustering".to_owned()
+    MoveReason::Clustering
 }
 
 /// Returns the Jaccard similarity of two token sets (`0.0` when both are empty).
@@ -408,7 +412,7 @@ fn jaccard(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64 {
 }
 
 /// Returns the final path segment.
-fn basename(path: &str) -> &str {
+pub(crate) fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
@@ -602,11 +606,13 @@ mod tests {
         assert_eq!(moves.len(), 1);
         let entry = moves.first();
         assert_eq!(
-            entry.and_then(|m| m.follows_subject.clone()),
-            Some("src/core/app.ts".to_owned())
+            entry.map(|m| m.reason.clone()),
+            Some(MoveReason::Follows {
+                subject: "src/core/app.ts".to_owned(),
+            })
         );
         assert_eq!(
-            entry.map(|m| m.reason.clone()),
+            entry.map(|m| m.reason.to_string()),
             Some("follows app.ts".to_owned())
         );
     }
@@ -630,6 +636,14 @@ mod tests {
 
         assert_eq!(
             moves.first().map(|m| m.reason.clone()),
+            Some(MoveReason::RelievesOverCap {
+                container: "app/src/core".to_owned(),
+                count: 4,
+                cap: 3,
+            })
+        );
+        assert_eq!(
+            moves.first().map(|m| m.reason.to_string()),
             Some("relieves over-cap folder app/src/core (4/3 files)".to_owned())
         );
     }
@@ -663,8 +677,12 @@ mod tests {
 
         let moves = narrate(&current, &candidate, &facts);
 
+        assert!(matches!(
+            moves.first().map(|m| &m.reason),
+            Some(MoveReason::PulledBy { partner, .. }) if partner == "src/core/engine.ts"
+        ));
         assert_eq!(
-            moves.first().map(|m| m.reason.clone()),
+            moves.first().map(|m| m.reason.to_string()),
             Some("pulled by engine.ts (w 2.5)".to_owned())
         );
     }
@@ -683,8 +701,12 @@ mod tests {
 
         let moves = narrate(&current, &candidate, &plain_facts());
 
+        assert!(matches!(
+            moves.first().map(|m| &m.reason),
+            Some(MoveReason::NamingCohesion { .. })
+        ));
         assert_eq!(
-            moves.first().map(|m| m.reason.clone()),
+            moves.first().map(|m| m.reason.to_string()),
             Some("naming cohesion 0.67 with destination".to_owned())
         );
     }
@@ -698,6 +720,10 @@ mod tests {
 
         assert_eq!(
             moves.first().map(|m| m.reason.clone()),
+            Some(MoveReason::Clustering)
+        );
+        assert_eq!(
+            moves.first().map(|m| m.reason.to_string()),
             Some("regrouped by clustering".to_owned())
         );
     }

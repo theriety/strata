@@ -113,7 +113,11 @@ fn write_mode(markdown: &mut String, name: &str, mode: &ModeResult, current_capa
                 "_Current layout is already optimal; candidate 1 is the current tree._\n"
             );
         }
-        CurrentStanding::Infeasible => match mode.best_candidate_capacity {
+        CurrentStanding::Infeasible => match mode
+            .candidates
+            .first()
+            .and_then(|candidate| candidate.capacity_remainder)
+        {
             Some(capacity) => {
                 let resolved = current_capacity.saturating_sub(capacity.remaining);
                 let _ = writeln!(
@@ -198,7 +202,7 @@ mod tests {
 
     use strata_engine::{
         ConditionalSplit, ContainerNode, CurrentTree, EdgeBreak, Level, Modes, Move, MoveKind,
-        Severity, Summary, ViolationKind,
+        MoveReason, Severity, Summary, ViolationKind,
     };
 
     use super::*;
@@ -224,6 +228,7 @@ mod tests {
                     location: vec!["a".to_owned()],
                     detail: "cycle".to_owned(),
                     break_suggestions: None,
+                    capacity: None,
                 }],
             },
             modes: Modes {
@@ -236,7 +241,6 @@ mod tests {
                     current_score: 2.0,
                     current_score_breakdown: zero(),
                     current_standing: CurrentStanding::Outscored,
-                    best_candidate_capacity: None,
                 }),
                 greenfield: None,
             },
@@ -266,9 +270,9 @@ mod tests {
                 symbols: vec!["x".to_owned()],
                 from: vec!["old".to_owned()],
                 to: vec!["new".to_owned()],
-                reason: "cohesion gain".to_owned(),
-                follows_subject: None,
+                reason: MoveReason::Clustering,
             }],
+            capacity_remainder: None,
         }
     }
 

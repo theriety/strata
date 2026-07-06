@@ -37,9 +37,9 @@ use crate::config::AnalyzeConfig;
 use crate::error::StrataError;
 use crate::narrate::{FileFacts, narrate, tokenize};
 use crate::result::{
-    AnalyzeResult, Candidate, CapacityRemainder, ConditionalSplit, ContainerNode, CurrentStanding,
-    CurrentTree, EdgeBreak, Level, ModeResult, Modes, RESULT_SCHEMA_VERSION, ScoreBreakdown,
-    Severity, Summary, SymbolPlacement, Violation, ViolationKind,
+    AnalyzeResult, Candidate, CapacityBreach, CapacityRemainder, ConditionalSplit, ContainerNode,
+    CurrentStanding, CurrentTree, EdgeBreak, Level, ModeResult, Modes, RESULT_SCHEMA_VERSION,
+    ScoreBreakdown, Severity, Summary, SymbolPlacement, Violation, ViolationKind,
 };
 use crate::snapshot::Language;
 
@@ -248,6 +248,7 @@ fn cycle_violations(snapshot: &Snapshot, cycles: &[SccSolution]) -> Vec<Violatio
                 detail: cycle_detail(solution.members.len(), &breaks),
                 location,
                 break_suggestions: Some(breaks),
+                capacity: None,
             }
         })
         .collect()
@@ -354,6 +355,7 @@ fn polarity_violations(snapshot: &Snapshot) -> Vec<Violation> {
                 detail: format!("{source_word} `{source}` depends on {target_word} `{target}`"),
                 location: vec![source, target],
                 break_suggestions: None,
+                capacity: None,
             })
         })
         .collect()
@@ -379,6 +381,7 @@ fn visibility_violations(snapshot: &Snapshot) -> Vec<Violation> {
                 ),
                 location: vec![name],
                 break_suggestions: None,
+                capacity: None,
             }
         })
         .collect()
@@ -494,6 +497,13 @@ fn capacity_finding(
             node.name
         ),
         break_suggestions: None,
+        // for files the container name IS the full repo-relative path; folder
+        // and higher paths are already carried by `location`.
+        capacity: Some(CapacityBreach {
+            measured: measure,
+            cap,
+            path: (node.level == Level::File).then(|| node.name.clone()),
+        }),
     })
 }
 
@@ -578,6 +588,10 @@ fn build_mode_result(
             splits,
         )?;
         candidate.improvement = current_breakdown.total - candidate.score;
+        // an infeasible standing must say what each candidate actually fixes,
+        // so its tree is re-checked against the same caps as the current one.
+        candidate.capacity_remainder =
+            (!capacity_clean).then(|| capacity_remainder(&candidate.tree, config));
         built.push(candidate);
     }
 
@@ -594,25 +608,6 @@ fn build_mode_result(
         CurrentStanding::Infeasible
     };
 
-    // an infeasible standing must say what the best candidate actually fixes,
-    // so its tree is re-checked against the same caps as the current one.
-    let best_candidate_capacity = if capacity_clean {
-        None
-    } else {
-        built.first().map(|best| {
-            let hard: Vec<Level> = walk_all_capacity(&best.tree, config)
-                .into_iter()
-                .filter(|(_, finding)| finding.severity == Severity::Violation)
-                .map(|(level, _)| level)
-                .collect();
-            let file_level = hard.iter().filter(|&&level| level == Level::File).count();
-            CapacityRemainder {
-                remaining: u32::try_from(hard.len()).unwrap_or(u32::MAX),
-                file_level: u32::try_from(file_level).unwrap_or(u32::MAX),
-            }
-        })
-    };
-
     let pairwise_distance = pairwise_distances(&candidates);
     Ok(ModeResult {
         candidates: built,
@@ -621,8 +616,23 @@ fn build_mode_result(
         current_score: current_breakdown.total,
         current_score_breakdown: current_breakdown.into(),
         current_standing,
-        best_candidate_capacity,
     })
+}
+
+/// Counts the hard capacity findings left in a candidate's tree: the total and
+/// how many are file-level breaches, which no move can fix — only conditional
+/// splits can.
+fn capacity_remainder(tree: &ContainerNode, config: &AnalyzeConfig) -> CapacityRemainder {
+    let hard: Vec<Level> = walk_all_capacity(tree, config)
+        .into_iter()
+        .filter(|(_, finding)| finding.severity == Severity::Violation)
+        .map(|(level, _)| level)
+        .collect();
+    let file_level = hard.iter().filter(|&&level| level == Level::File).count();
+    CapacityRemainder {
+        remaining: u32::try_from(hard.len()).unwrap_or(u32::MAX),
+        file_level: u32::try_from(file_level).unwrap_or(u32::MAX),
+    }
 }
 
 /// Returns the variation-of-information matrix over the diversified candidates.
@@ -1223,6 +1233,7 @@ impl<'a> PipelineSolver<'a> {
                 tree: node,
                 conditional_splits: splits.to_vec(),
                 delta_narration: Vec::new(),
+                capacity_remainder: None,
             });
         }
 
@@ -1246,6 +1257,7 @@ impl<'a> PipelineSolver<'a> {
             tree: node,
             conditional_splits: splits.to_vec(),
             delta_narration: delta,
+            capacity_remainder: None,
         })
     }
 }
@@ -2597,7 +2609,6 @@ mod tests {
                     anchor: 0.0,
                 },
                 current_standing: CurrentStanding::Outscored,
-                best_candidate_capacity: None,
             });
 
         // never more than k, always at least one candidate is produced.
@@ -2612,6 +2623,53 @@ mod tests {
         }
         // the pairwise distance matrix is square over the returned candidates.
         assert_eq!(anchored.pairwise_distance.len(), anchored.candidates.len());
+    }
+
+    #[test]
+    fn should_populate_capacity_remainder_on_every_candidate_when_infeasible() {
+        let make = || {
+            snapshot(
+                vec![
+                    node(0, "a", 0, Polarity::Production),
+                    node(1, "b", 1, Polarity::Production),
+                ],
+                vec![edge(0, 1)],
+                vec![
+                    container(0, "src/a.ts", ScopeLevel::File, Some(2)),
+                    container(1, "src/b.ts", ScopeLevel::File, Some(2)),
+                    container(2, "src", ScopeLevel::Folder, None),
+                ],
+            )
+        };
+
+        // a zero file cap makes every file a hard breach: infeasible standing,
+        // so every candidate must carry its own remainder.
+        let mut infeasible_config = config_with_k(2);
+        infeasible_config.capacity.file = 0;
+        let infeasible = analyze(&make(), &infeasible_config)
+            .ok()
+            .and_then(|result| result.modes.anchored);
+        let candidates = infeasible
+            .as_ref()
+            .map_or(&[] as &[_], |mode| &mode.candidates);
+        assert!(!candidates.is_empty());
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.capacity_remainder.is_some())
+        );
+
+        // a clean tree carries no remainder on any candidate.
+        let clean = analyze(&make(), &config_with_k(2))
+            .ok()
+            .and_then(|result| result.modes.anchored);
+        let clean_candidates = clean.as_ref().map_or(&[] as &[_], |mode| &mode.candidates);
+        assert!(!clean_candidates.is_empty());
+        assert!(
+            clean_candidates
+                .iter()
+                .all(|candidate| candidate.capacity_remainder.is_none())
+        );
     }
 
     #[test]
@@ -2689,6 +2747,7 @@ mod tests {
             location: vec![location.to_owned()],
             detail: String::new(),
             break_suggestions: None,
+            capacity: None,
         };
         let mut violations = vec![
             finding(ViolationKind::Capacity, Severity::Borderline, "a"),

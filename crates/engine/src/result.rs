@@ -99,13 +99,9 @@ pub struct ModeResult {
     pub current_score_breakdown: ScoreBreakdown,
     /// Where the current layout stands relative to the candidates.
     pub current_standing: CurrentStanding,
-    /// The hard capacity findings left in the best candidate's tree; present
-    /// only when `current_standing` is `Infeasible`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub best_candidate_capacity: Option<CapacityRemainder>,
 }
 
-/// What the best candidate leaves unresolved of the current capacity breaches.
+/// What a candidate leaves unresolved of the current capacity breaches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CapacityRemainder {
@@ -148,6 +144,10 @@ pub struct Candidate {
     pub conditional_splits: Vec<ConditionalSplit>,
     /// The explained moves versus the current layout.
     pub delta_narration: Vec<Move>,
+    /// The hard capacity findings left in this candidate's tree; present only
+    /// when the mode's `current_standing` is `Infeasible`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_remainder: Option<CapacityRemainder>,
 }
 
 /// The per-term objective decomposition surfaced in the DTO.
@@ -255,10 +255,8 @@ pub enum MoveKind {
 /// One narrated change between the current tree and a candidate.
 ///
 /// `symbols` are the affected names; `from` and `to` are the source and
-/// destination container paths; `reason` is the dominant driver of the move, and
-/// `follows_subject` is set when a spec file trails its subject under test
-/// projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// destination container paths; `reason` is the dominant driver of the move.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Move {
     /// Whether this is a move, split, or merge.
@@ -270,10 +268,71 @@ pub struct Move {
     /// The destination container path(s).
     pub to: Vec<String>,
     /// The dominant reason the change was proposed.
-    pub reason: String,
-    /// Set on projected spec-file moves naming the subject they follow.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub follows_subject: Option<String>,
+    pub reason: MoveReason,
+}
+
+/// The dominant reason a narrated change was proposed, first match wins:
+/// followed subject > cap relief > dependency pull > naming cohesion >
+/// clustering fallback.
+///
+/// `subject` and `partner` carry full repo-relative file paths; the `Display`
+/// impl basenames them, reproducing the prose the CLI faces print.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MoveReason {
+    /// A spec file trails its subject under test projection.
+    Follows {
+        /// The full path of the subject the spec follows.
+        subject: String,
+    },
+    /// The move relieves an over-cap source folder.
+    RelievesOverCap {
+        /// The folded path of the over-cap folder.
+        container: String,
+        /// How many files the folder held.
+        count: u32,
+        /// The folder member cap.
+        cap: u32,
+    },
+    /// The move is pulled by its strongest dependency partner at the destination.
+    PulledBy {
+        /// The full path of the pulling resident file.
+        partner: String,
+        /// The summed two-way edge weight of the pull.
+        weight: f64,
+    },
+    /// The moved files share naming tokens with the destination's residents.
+    NamingCohesion {
+        /// The mean pairwise basename-token Jaccard similarity.
+        cohesion: f64,
+    },
+    /// No stronger signal applied; the clustering regrouped the files.
+    Clustering,
+}
+
+impl std::fmt::Display for MoveReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Follows { subject } => write!(f, "follows {}", crate::narrate::basename(subject)),
+            Self::RelievesOverCap {
+                container,
+                count,
+                cap,
+            } => write!(
+                f,
+                "relieves over-cap folder {container} ({count}/{cap} files)"
+            ),
+            Self::PulledBy { partner, weight } => write!(
+                f,
+                "pulled by {} (w {weight:.1})",
+                crate::narrate::basename(partner)
+            ),
+            Self::NamingCohesion { cohesion } => {
+                write!(f, "naming cohesion {cohesion:.2} with destination")
+            }
+            Self::Clustering => write!(f, "regrouped by clustering"),
+        }
+    }
 }
 
 /// A structural violation of the current layout.
@@ -291,6 +350,24 @@ pub struct Violation {
     /// Edge-break suggestions; present for cycle violations.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub break_suggestions: Option<Vec<EdgeBreak>>,
+    /// The measured size against the breached cap; present for capacity
+    /// violations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<CapacityBreach>,
+}
+
+/// The structured facts of a capacity violation: what was measured against
+/// which cap, and — for file-level breaches — the full path of the file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapacityBreach {
+    /// The measured size (SLOC for files, member count above).
+    pub measured: u32,
+    /// The configured cap the measure breached.
+    pub cap: u32,
+    /// The full repo-relative path; present for file-level breaches only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 /// The class of a structural violation.
@@ -393,5 +470,95 @@ mod tests {
         let json = serde_json::to_string(&CurrentStanding::Outscored).unwrap_or_default();
 
         assert_eq!(json, "\"outscored\"");
+    }
+
+    #[test]
+    fn should_serialize_a_capacity_breach_as_camel_case() {
+        let breach = CapacityBreach {
+            measured: 412,
+            cap: 300,
+            path: Some("src/core/huge.ts".to_owned()),
+        };
+
+        let json = serde_json::to_string(&breach).unwrap_or_default();
+
+        assert_eq!(
+            json,
+            "{\"measured\":412,\"cap\":300,\"path\":\"src/core/huge.ts\"}"
+        );
+        let folder = CapacityBreach {
+            measured: 20,
+            cap: 15,
+            path: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&folder).unwrap_or_default(),
+            "{\"measured\":20,\"cap\":15}"
+        );
+    }
+
+    #[test]
+    fn should_serialize_a_move_reason_with_its_kind_tag() {
+        let reason = MoveReason::Follows {
+            subject: "src/core/app.ts".to_owned(),
+        };
+
+        let json = serde_json::to_string(&reason).unwrap_or_default();
+
+        assert_eq!(
+            json,
+            "{\"kind\":\"follows\",\"subject\":\"src/core/app.ts\"}"
+        );
+        assert_eq!(
+            serde_json::to_string(&MoveReason::Clustering).unwrap_or_default(),
+            "{\"kind\":\"clustering\"}"
+        );
+        assert_eq!(
+            serde_json::to_string(&MoveReason::RelievesOverCap {
+                container: "app/src/core".to_owned(),
+                count: 4,
+                cap: 3,
+            })
+            .unwrap_or_default(),
+            "{\"kind\":\"relievesOverCap\",\"container\":\"app/src/core\",\"count\":4,\"cap\":3}"
+        );
+    }
+
+    #[test]
+    fn should_display_every_reason_as_its_prose() {
+        let cases = vec![
+            (
+                MoveReason::Follows {
+                    subject: "src/core/app.ts".to_owned(),
+                },
+                "follows app.ts",
+            ),
+            (
+                MoveReason::RelievesOverCap {
+                    container: "app/src/core".to_owned(),
+                    count: 4,
+                    cap: 3,
+                },
+                "relieves over-cap folder app/src/core (4/3 files)",
+            ),
+            (
+                MoveReason::PulledBy {
+                    partner: "src/core/engine.ts".to_owned(),
+                    weight: 2.5,
+                },
+                "pulled by engine.ts (w 2.5)",
+            ),
+            (
+                MoveReason::NamingCohesion {
+                    cohesion: 2.0 / 3.0,
+                },
+                "naming cohesion 0.67 with destination",
+            ),
+            (MoveReason::Clustering, "regrouped by clustering"),
+        ];
+
+        for (reason, prose) in cases {
+            assert_eq!(reason.to_string(), prose);
+        }
     }
 }
