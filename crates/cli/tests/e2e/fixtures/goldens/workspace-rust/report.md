@@ -21,7 +21,7 @@ Score `79.1054`.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (score `20.6189`, improvement `+58.4865`)
+### Candidate 1 (improvement `+58.4865`, score `20.6189`)
 
 - cut `20.5000`, imbalance `0.0054`, naming `-0.3000`, path `-0.0865`, anchor `0.5000`
 
@@ -33,7 +33,7 @@ _Fewer than the requested candidates survived; the solution space converged._
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (score `20.2054`, improvement `+59.1000`)
+### Candidate 1 (improvement `+59.1000`, score `20.2054`)
 
 - cut `20.5000`, imbalance `0.0054`, naming `-0.3000`, path `-0.0000`, anchor `0.0000`
 

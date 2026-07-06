@@ -8,7 +8,7 @@ visibility [violation] summarize :: `summarize` is exported at Package but neede
 mode anchored: 1 candidate(s)
   (fewer than k candidates; solution space converged)
   current layout is already optimal; candidate 1 is the current tree
-  candidate 1 score 3.1000 (improvement +0.0000; 0 move group(s))
+  candidate 1 improvement +0.0000 (score 3.1000; 0 move group(s))
 mode greenfield: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 score 3.3000 (improvement +0.0000; 0 move group(s))
+  candidate 1 improvement +0.0000 (score 3.3000; 0 move group(s))

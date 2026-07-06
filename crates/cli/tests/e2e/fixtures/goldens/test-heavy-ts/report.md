@@ -18,7 +18,7 @@ None.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (score `18.3964`, improvement `+111.5076`)
+### Candidate 1 (improvement `+111.5076`, score `18.3964`)
 
 - cut `18.0000`, imbalance `0.2120`, naming `-0.0600`, path `-0.2000`, anchor `0.4444`
 
@@ -31,7 +31,7 @@ _Fewer than the requested candidates survived; the solution space converged._
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (score `18.1520`, improvement `+111.9520`)
+### Candidate 1 (improvement `+111.9520`, score `18.1520`)
 
 - cut `18.0000`, imbalance `0.2120`, naming `-0.0600`, path `-0.0000`, anchor `0.0000`
 

@@ -113,8 +113,10 @@ fn analyze_to_file(name: &str) -> PathBuf {
 /// Extracts the candidate-1 score from a summary face by parsing the float that
 /// follows the first `score ` token.
 ///
-/// The summary renders each candidate as `candidate 1 score <f> (...)`, so the
-/// first `score ` occurrence is candidate 1's. A malformed or absent score yields
+/// The summary renders each candidate as `candidate 1 improvement <i> (score
+/// <f>; ...)`, so the first `score ` occurrence is candidate 1's (the `current
+/// score:` line has a colon, not a space). The token carries a trailing `;` or
+/// `)` which is trimmed before parsing. A malformed or absent score yields
 /// `f64::NAN` so a comparison against it fails loudly rather than passing by
 /// accident — the workspace forbids `unwrap`/`expect`, so no parse panics here.
 fn candidate_one_score(summary: &str) -> f64 {
@@ -122,6 +124,7 @@ fn candidate_one_score(summary: &str) -> f64 {
         .split_once("score ")
         .map(|(_, rest)| rest)
         .and_then(|rest| rest.split_whitespace().next())
+        .map(|token| token.trim_end_matches([';', ')']))
         .and_then(|token| token.parse::<f64>().ok())
         .unwrap_or(f64::NAN)
 }

@@ -1,7 +1,33 @@
 moves (4 group(s), 23 file(s); improvement +141.0413):
-merge src/io/parser.ts, src/model/point.ts, src/model/shape.ts, src/model/vector.ts, src/util/buffer.ts, src/util/clamp.ts, src/util/lerp.ts :: constellation-ts/src/io, constellation-ts/src/model, constellation-ts/src/util -> constellation-ts/src/core (pulled by beta.ts (w 2.0))
+merge 7 file(s) :: constellation-ts/src/io, constellation-ts/src/model, constellation-ts/src/util -> constellation-ts/src/core (pulled by beta.ts (w 2.0))
+    src/io/parser.ts
+    src/model/point.ts
+    src/model/shape.ts
+    src/model/vector.ts
+    src/util/buffer.ts
+    src/util/clamp.ts
+    src/util/lerp.ts
 split src/model/shape.spec.ts :: constellation-ts/src/model -> constellation-ts/src/core (follows point.ts)
     follows src/model/point.ts
-merge src/core/epsilon.ts, src/io/encoder.ts, src/io/reader.ts, src/io/stream.ts, src/io/writer.ts, src/model/matrix.ts, src/model/mesh.ts, src/render/canvas.ts, src/render/raster.ts, src/render/shader.ts, src/render/texture.ts, src/render/viewport.ts, src/util/hash.ts, src/util/logger.ts :: constellation-ts/src/core, constellation-ts/src/io, constellation-ts/src/model, constellation-ts/src/render, constellation-ts/src/util -> constellation-ts/src/core/render (pulled by canvas.spec.ts (w 1.0))
+merge 14 file(s) :: 5 folder(s) -> constellation-ts/src/core/render (pulled by canvas.spec.ts (w 1.0))
+    from constellation-ts/src/core
+    from constellation-ts/src/io
+    from constellation-ts/src/model
+    from constellation-ts/src/render
+    from constellation-ts/src/util
+    src/core/epsilon.ts
+    src/io/encoder.ts
+    src/io/reader.ts
+    src/io/stream.ts
+    src/io/writer.ts
+    src/model/matrix.ts
+    src/model/mesh.ts
+    src/render/canvas.ts
+    src/render/raster.ts
+    src/render/shader.ts
+    src/render/texture.ts
+    src/render/viewport.ts
+    src/util/hash.ts
+    src/util/logger.ts
 split src/util/canvas.spec.ts :: constellation-ts/src/util -> constellation-ts/src/core/render (follows canvas.ts)
     follows src/render/canvas.ts

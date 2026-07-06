@@ -24,7 +24,7 @@ _Current layout violates capacity caps; best candidate resolves 0 of 2 capacity 
 
 _2 file-level breach(es) exceed the file cap; only conditional splits can fix them._
 
-### Candidate 1 (score `0.2174`, improvement `-0.2785`)
+### Candidate 1 (improvement `-0.2785`, score `0.2174`)
 
 - cut `-0.0000`, imbalance `0.0007`, naming `-0.0500`, path `-0.0000`, anchor `0.2667`
 
@@ -40,7 +40,7 @@ _Current layout violates capacity caps; best candidate resolves 0 of 2 capacity 
 
 _2 file-level breach(es) exceed the file cap; only conditional splits can fix them._
 
-### Candidate 1 (score `-0.0493`, improvement `+0.0588`)
+### Candidate 1 (improvement `+0.0588`, score `-0.0493`)
 
 - cut `-0.0000`, imbalance `0.0007`, naming `-0.0500`, path `-0.0000`, anchor `0.0000`
 

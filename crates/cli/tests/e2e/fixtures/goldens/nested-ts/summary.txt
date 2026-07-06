@@ -4,7 +4,7 @@ current score: 38.1190
 no violations
 mode anchored: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 score 14.4921 (improvement +23.6269; 3 move group(s))
+  candidate 1 improvement +23.6269 (score 14.4921; 3 move group(s))
 mode greenfield: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 score 14.2921 (improvement +24.0269; 3 move group(s))
+  candidate 1 improvement +24.0269 (score 14.2921; 3 move group(s))

@@ -5,7 +5,7 @@ polarity [violation] serve, sample_fixture :: production symbol `serve` depends 
 mode anchored: 1 candidate(s)
   (fewer than k candidates; solution space converged)
   current layout is already optimal; candidate 1 is the current tree
-  candidate 1 score 2.1000 (improvement +0.0000; 0 move group(s))
+  candidate 1 improvement +0.0000 (score 2.1000; 0 move group(s))
 mode greenfield: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 score 2.1000 (improvement +0.0000; 0 move group(s))
+  candidate 1 improvement +0.0000 (score 2.1000; 0 move group(s))

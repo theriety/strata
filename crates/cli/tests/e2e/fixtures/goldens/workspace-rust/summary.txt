@@ -7,7 +7,7 @@ visibility [violation] combined_total :: `combined_total` is exported at Package
 visibility [violation] describe :: `describe` is exported at Package but needed only at File
 mode anchored: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 score 20.6189 (improvement +58.4865; 1 move group(s))
+  candidate 1 improvement +58.4865 (score 20.6189; 1 move group(s))
 mode greenfield: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 score 20.2054 (improvement +59.1000; 1 move group(s))
+  candidate 1 improvement +59.1000 (score 20.2054; 1 move group(s))

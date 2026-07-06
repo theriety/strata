@@ -4,13 +4,11 @@ current score: -0.0611
 capacity [violation] over-capacity, pkg, nested, deep, huge_nested.py :: file `pkg/nested/deep/huge_nested.py` holds 300 against a cap of 250
 capacity [violation] over-capacity, workspace, huge.py :: file `huge.py` holds 300 against a cap of 250
 capacity [borderline] over-capacity, workspace, borderline.py :: file `borderline.py` holds 250 against a cap of 250
+current layout violates capacity caps; best candidate resolves 0 of 2 capacity finding(s)
+2 file-level breach(es) exceed the file cap; only conditional splits can fix them
 mode anchored: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  current layout violates capacity caps; best candidate resolves 0 of 2 capacity finding(s)
-  2 file-level breach(es) exceed the file cap; only conditional splits can fix them
-  candidate 1 score 0.2174 (improvement -0.2785; 1 move group(s))
+  candidate 1 improvement -0.2785 (score 0.2174; 1 move group(s))
 mode greenfield: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  current layout violates capacity caps; best candidate resolves 0 of 2 capacity finding(s)
-  2 file-level breach(es) exceed the file cap; only conditional splits can fix them
-  candidate 1 score -0.0493 (improvement +0.0588; 1 move group(s))
+  candidate 1 improvement +0.0588 (score -0.0493; 1 move group(s))
