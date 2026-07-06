@@ -147,8 +147,8 @@ fn write_mode(markdown: &mut String, name: &str, mode: &ModeResult, current_capa
 fn write_candidate(markdown: &mut String, candidate: &Candidate) {
     let _ = writeln!(
         markdown,
-        "### Candidate {} (score `{:.4}`, improvement `{:+.4}`)\n",
-        candidate.index, candidate.score, candidate.improvement
+        "### Candidate {} (improvement `{:+.4}`, score `{:.4}`)\n",
+        candidate.index, candidate.improvement, candidate.score
     );
     write_breakdown(markdown, &candidate.score_breakdown);
 
@@ -174,15 +174,32 @@ fn write_candidate(markdown: &mut String, candidate: &Candidate) {
     for entry in &candidate.delta_narration {
         // from/to hold one complete folded folder path per element (a merge
         // lists several sources), so they join with a comma, never a separator.
-        let _ = writeln!(
-            markdown,
-            "- {:?} `{}`: {} -> {} ({})",
-            entry.kind,
-            entry.symbols.join(", "),
-            entry.from.join(", "),
-            entry.to.join(", "),
-            entry.reason
-        );
+        // groups beyond the inline limit nest their files as list items so a
+        // 14-file merge does not become one unreadable line.
+        if entry.symbols.len() > crate::render::MOVE_INLINE_LIMIT {
+            let _ = writeln!(
+                markdown,
+                "- {:?} {} file(s): {} -> {} ({})",
+                entry.kind,
+                entry.symbols.len(),
+                entry.from.join(", "),
+                entry.to.join(", "),
+                entry.reason
+            );
+            for symbol in &entry.symbols {
+                let _ = writeln!(markdown, "  - `{symbol}`");
+            }
+        } else {
+            let _ = writeln!(
+                markdown,
+                "- {:?} `{}`: {} -> {} ({})",
+                entry.kind,
+                entry.symbols.join(", "),
+                entry.from.join(", "),
+                entry.to.join(", "),
+                entry.reason
+            );
+        }
     }
     let _ = writeln!(markdown);
 }
@@ -306,9 +323,43 @@ mod tests {
         assert!(markdown.contains("Snapshot `abc123`"));
         assert!(markdown.contains("### Violations"));
         assert!(markdown.contains("## Anchored candidates"));
-        assert!(markdown.contains("### Candidate 1"));
+        assert!(markdown.contains("### Candidate 1 (improvement `+1.0000`, score `1.0000`)"));
         assert!(markdown.contains("Conditional splits"));
         assert!(markdown.contains("solution space converged"));
+    }
+
+    #[test]
+    fn should_nest_files_of_a_large_move_group_as_list_items() {
+        let mut result = sample();
+        if let Some(mode) = result.modes.anchored.as_mut()
+            && let Some(subject) = mode.candidates.first_mut()
+        {
+            subject.delta_narration = vec![Move {
+                kind: MoveKind::Merge,
+                symbols: vec![
+                    "a.ts".to_owned(),
+                    "b.ts".to_owned(),
+                    "c.ts".to_owned(),
+                    "d.ts".to_owned(),
+                ],
+                from: vec!["old".to_owned()],
+                to: vec!["new".to_owned()],
+                reason: MoveReason::Clustering,
+            }];
+        }
+
+        let markdown = render_markdown(&result);
+
+        assert!(
+            markdown.contains("- Merge 4 file(s): old -> new (regrouped by clustering)\n"),
+            "the bullet counts instead of joining: {markdown}"
+        );
+        for file in ["a.ts", "b.ts", "c.ts", "d.ts"] {
+            assert!(
+                markdown.contains(&format!("\n  - `{file}`\n")),
+                "{file}: {markdown}"
+            );
+        }
     }
 
     #[test]

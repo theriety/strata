@@ -103,13 +103,74 @@ fn write_summary(
     write_violation_table(&result.current.violations, out)?;
 
     let current_capacity = hard_capacity_count(&result.current.violations);
+    let anchored_notice = result
+        .modes
+        .anchored
+        .as_ref()
+        .and_then(|mode| infeasible_notice(mode, current_capacity));
+    let greenfield_notice = result
+        .modes
+        .greenfield
+        .as_ref()
+        .and_then(|mode| infeasible_notice(mode, current_capacity));
+    // both modes carrying the identical notice would print it twice; say it
+    // once, unindented, above the mode sections instead.
+    let shared = anchored_notice.is_some() && anchored_notice == greenfield_notice;
+    if shared && let Some(lines) = &anchored_notice {
+        for line in lines {
+            writeln!(out, "{line}")?;
+        }
+    }
     if let Some(mode) = &result.modes.anchored {
-        write_mode_summary("anchored", mode, current_capacity, show_suggestions, out)?;
+        let notice = if shared {
+            None
+        } else {
+            anchored_notice.as_deref()
+        };
+        write_mode_summary("anchored", mode, notice, show_suggestions, out)?;
     }
     if let Some(mode) = &result.modes.greenfield {
-        write_mode_summary("greenfield", mode, current_capacity, show_suggestions, out)?;
+        let notice = if shared {
+            None
+        } else {
+            greenfield_notice.as_deref()
+        };
+        write_mode_summary("greenfield", mode, notice, show_suggestions, out)?;
     }
     Ok(())
+}
+
+/// Returns the infeasible-notice lines for a mode, unindented; `None` when the
+/// mode's standing is not `Infeasible`.
+///
+/// The remainder figures come from the mode's own best candidate, so the two
+/// modes' notices can genuinely differ — the caller compares them before
+/// deciding whether to de-duplicate.
+fn infeasible_notice(mode: &ModeResult, current_capacity: u32) -> Option<Vec<String>> {
+    if mode.current_standing != CurrentStanding::Infeasible {
+        return None;
+    }
+    let mut lines = Vec::new();
+    match mode
+        .candidates
+        .first()
+        .and_then(|candidate| candidate.capacity_remainder)
+    {
+        Some(capacity) => {
+            let resolved = current_capacity.saturating_sub(capacity.remaining);
+            lines.push(format!(
+                "current layout violates capacity caps; best candidate resolves {resolved} of {current_capacity} capacity finding(s)"
+            ));
+            if capacity.file_level > 0 {
+                lines.push(format!(
+                    "{} file-level breach(es) exceed the file cap; only conditional splits can fix them",
+                    capacity.file_level
+                ));
+            }
+        }
+        None => lines.push("current layout violates capacity caps".to_owned()),
+    }
+    Some(lines)
 }
 
 /// Counts the hard capacity violations of the current layout.
@@ -125,13 +186,17 @@ pub fn hard_capacity_count(violations: &[Violation]) -> u32 {
 
 /// Writes one mode's candidate headlines to `out`.
 ///
+/// `notice` carries the mode's infeasible-notice lines when they should print
+/// inside this section; the caller withholds them (passing `None`) when both
+/// modes share one notice printed above the sections.
+///
 /// When `show_suggestions` is set and the mode has at least one candidate, the
 /// best candidate's proposed structure (candidates are best-score-first, so the
 /// best is the first) is rendered below the headlines via [`render_tree`].
 fn write_mode_summary(
     name: &str,
     mode: &ModeResult,
-    current_capacity: u32,
+    notice: Option<&[String]>,
     show_suggestions: bool,
     out: &mut impl Write,
 ) -> io::Result<()> {
@@ -144,36 +209,20 @@ fn write_mode_summary(
             out,
             "  current layout is already optimal; candidate 1 is the current tree"
         )?,
-        CurrentStanding::Infeasible => match mode
-            .candidates
-            .first()
-            .and_then(|candidate| candidate.capacity_remainder)
-        {
-            Some(capacity) => {
-                let resolved = current_capacity.saturating_sub(capacity.remaining);
-                writeln!(
-                    out,
-                    "  current layout violates capacity caps; best candidate resolves {resolved} of {current_capacity} capacity finding(s)"
-                )?;
-                if capacity.file_level > 0 {
-                    writeln!(
-                        out,
-                        "  {} file-level breach(es) exceed the file cap; only conditional splits can fix them",
-                        capacity.file_level
-                    )?;
-                }
+        CurrentStanding::Infeasible => {
+            for line in notice.into_iter().flatten() {
+                writeln!(out, "  {line}")?;
             }
-            None => writeln!(out, "  current layout violates capacity caps")?,
-        },
+        }
         CurrentStanding::Outscored => {}
     }
     for candidate in &mode.candidates {
         writeln!(
             out,
-            "  candidate {} score {:.4} (improvement {:+.4}; {} move group(s))",
+            "  candidate {} improvement {:+.4} (score {:.4}; {} move group(s))",
             candidate.index,
-            candidate.score,
             candidate.improvement,
+            candidate.score,
             candidate.delta_narration.len()
         )?;
     }
@@ -273,22 +322,49 @@ pub fn render_diff(candidate: &Candidate, out: &mut impl Write) -> io::Result<()
     Ok(())
 }
 
+/// Move groups larger than this wrap: the header shows a count and the files
+/// (or origins) print one per indented line instead of a single joined run.
+pub(crate) const MOVE_INLINE_LIMIT: usize = 3;
+
 /// Writes one narrated move entry to `out`.
 ///
 /// `from`/`to` hold one complete folded folder path per element (a merge lists
-/// several sources), so they join with a comma, never a path separator.
+/// several sources), so they join with a comma, never a path separator. Groups
+/// beyond [`MOVE_INLINE_LIMIT`] files (or origins) wrap onto indented lines so
+/// a large merge never renders as one unreadable line.
 fn write_move(entry: &Move, out: &mut impl Write) -> io::Result<()> {
-    let from = entry.from.join(", ");
+    let wrap_files = entry.symbols.len() > MOVE_INLINE_LIMIT;
+    let wrap_origins = entry.from.len() > MOVE_INLINE_LIMIT;
+    let files = if wrap_files {
+        format!("{} file(s)", entry.symbols.len())
+    } else {
+        entry.symbols.join(", ")
+    };
+    let from = if wrap_origins {
+        format!("{} folder(s)", entry.from.len())
+    } else {
+        entry.from.join(", ")
+    };
     let to = entry.to.join(", ");
     writeln!(
         out,
         "{} {} :: {} -> {} ({})",
         move_tag(entry.kind),
-        entry.symbols.join(", "),
+        files,
         if from.is_empty() { "(root)" } else { &from },
         if to.is_empty() { "(root)" } else { &to },
         entry.reason
     )?;
+    if wrap_origins {
+        for origin in &entry.from {
+            writeln!(out, "    from {origin}")?;
+        }
+    }
+    if wrap_files {
+        for file in &entry.symbols {
+            writeln!(out, "    {file}")?;
+        }
+    }
     if let MoveReason::Follows { subject } = &entry.reason {
         writeln!(out, "    follows {subject}")?;
     }
@@ -699,6 +775,180 @@ mod tests {
         render(&result, Format::Summary, false, &mut buffer).unwrap_or_default();
 
         let text = String::from_utf8(buffer).unwrap_or_default();
-        assert!(text.contains("candidate 1 score 0.2500 (improvement +1.2500; 0 move group(s))"));
+        assert!(text.contains("candidate 1 improvement +1.2500 (score 0.2500; 0 move group(s))"));
+    }
+
+    #[test]
+    fn should_wrap_a_large_move_group_with_one_line_per_file() {
+        let candidate = Candidate {
+            index: 1,
+            score: 0.0,
+            score_breakdown: zero_breakdown(),
+            improvement: 0.5,
+            tree: file_node("lib", 1),
+            conditional_splits: Vec::new(),
+            delta_narration: vec![Move {
+                kind: MoveKind::Merge,
+                symbols: vec![
+                    "a.ts".to_owned(),
+                    "b.ts".to_owned(),
+                    "c.ts".to_owned(),
+                    "d.ts".to_owned(),
+                ],
+                from: vec!["old".to_owned()],
+                to: vec!["new".to_owned()],
+                reason: MoveReason::Clustering,
+            }],
+            capacity_remainder: None,
+        };
+        let mut buffer = Vec::new();
+
+        render_diff(&candidate, &mut buffer).unwrap_or_default();
+
+        let text = String::from_utf8(buffer).unwrap_or_default();
+        assert!(
+            text.contains("merge 4 file(s) :: old -> new (regrouped by clustering)\n"),
+            "the header counts instead of joining: {text}"
+        );
+        for file in ["a.ts", "b.ts", "c.ts", "d.ts"] {
+            assert!(text.contains(&format!("\n    {file}\n")), "{file}: {text}");
+        }
+    }
+
+    #[test]
+    fn should_summarize_many_origins_with_a_folder_count() {
+        let candidate = Candidate {
+            index: 1,
+            score: 0.0,
+            score_breakdown: zero_breakdown(),
+            improvement: 0.5,
+            tree: file_node("lib", 1),
+            conditional_splits: Vec::new(),
+            delta_narration: vec![Move {
+                kind: MoveKind::Merge,
+                symbols: vec!["a.ts".to_owned()],
+                from: vec![
+                    "one".to_owned(),
+                    "two".to_owned(),
+                    "three".to_owned(),
+                    "four".to_owned(),
+                ],
+                to: vec!["new".to_owned()],
+                reason: MoveReason::Clustering,
+            }],
+            capacity_remainder: None,
+        };
+        let mut buffer = Vec::new();
+
+        render_diff(&candidate, &mut buffer).unwrap_or_default();
+
+        let text = String::from_utf8(buffer).unwrap_or_default();
+        assert!(
+            text.contains("merge a.ts :: 4 folder(s) -> new (regrouped by clustering)\n"),
+            "the header counts the origins: {text}"
+        );
+        for origin in ["one", "two", "three", "four"] {
+            assert!(
+                text.contains(&format!("\n    from {origin}\n")),
+                "{origin}: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn should_print_a_shared_infeasible_notice_once_when_both_modes_match() {
+        let capacity = |name: &str| Violation {
+            kind: ViolationKind::Capacity,
+            severity: Severity::Violation,
+            location: vec![name.to_owned()],
+            detail: format!("{name} over cap"),
+            break_suggestions: None,
+            capacity: None,
+        };
+        let mut result = result_with_candidate();
+        result.current.violations = vec![capacity("big_folder"), capacity("huge_file")];
+        let infeasible = |mode: &mut ModeResult| {
+            mode.current_standing = CurrentStanding::Infeasible;
+            if let Some(candidate) = mode.candidates.first_mut() {
+                candidate.capacity_remainder = Some(CapacityRemainder {
+                    remaining: 1,
+                    file_level: 1,
+                });
+            }
+        };
+        result.modes.greenfield = result.modes.anchored.clone();
+        if let Some(mode) = result.modes.anchored.as_mut() {
+            infeasible(mode);
+        }
+        if let Some(mode) = result.modes.greenfield.as_mut() {
+            infeasible(mode);
+        }
+        let mut buffer = Vec::new();
+
+        render(&result, Format::Summary, false, &mut buffer).unwrap_or_default();
+
+        let text = String::from_utf8(buffer).unwrap_or_default();
+        assert_eq!(
+            text.matches("current layout violates capacity caps")
+                .count(),
+            1,
+            "the shared notice prints once: {text}"
+        );
+        assert!(
+            text.contains(
+                "\ncurrent layout violates capacity caps; best candidate resolves 1 of 2 capacity finding(s)\n"
+            ),
+            "the shared notice is unindented: {text}"
+        );
+    }
+
+    #[test]
+    fn should_keep_per_mode_notices_when_the_remainders_differ() {
+        let capacity = |name: &str| Violation {
+            kind: ViolationKind::Capacity,
+            severity: Severity::Violation,
+            location: vec![name.to_owned()],
+            detail: format!("{name} over cap"),
+            break_suggestions: None,
+            capacity: None,
+        };
+        let mut result = result_with_candidate();
+        result.current.violations = vec![capacity("big_folder"), capacity("huge_file")];
+        result.modes.greenfield = result.modes.anchored.clone();
+        if let Some(mode) = result.modes.anchored.as_mut() {
+            mode.current_standing = CurrentStanding::Infeasible;
+            if let Some(candidate) = mode.candidates.first_mut() {
+                candidate.capacity_remainder = Some(CapacityRemainder {
+                    remaining: 1,
+                    file_level: 1,
+                });
+            }
+        }
+        if let Some(mode) = result.modes.greenfield.as_mut() {
+            mode.current_standing = CurrentStanding::Infeasible;
+            if let Some(candidate) = mode.candidates.first_mut() {
+                candidate.capacity_remainder = Some(CapacityRemainder {
+                    remaining: 0,
+                    file_level: 0,
+                });
+            }
+        }
+        let mut buffer = Vec::new();
+
+        render(&result, Format::Summary, false, &mut buffer).unwrap_or_default();
+
+        let text = String::from_utf8(buffer).unwrap_or_default();
+        assert!(
+            text.contains(
+                "  current layout violates capacity caps; best candidate resolves 1 of 2"
+            ),
+            "the anchored notice stays in its section: {text}"
+        );
+        assert!(
+            text.contains(
+                "  current layout violates capacity caps; best candidate resolves 2 of 2"
+            ),
+            "the greenfield notice stays in its section: {text}"
+        );
     }
 }
