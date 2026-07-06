@@ -1,1 +1,1 @@
-cycle [violation] alpha_step, beta_step :: dependency cycle over 2 symbols
+cycle [violation] alpha_step, beta_step :: 2-symbol cycle; break beta_step -> alpha_step (w=1.0, exact)

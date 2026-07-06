@@ -1,14 +1,14 @@
 # Strata report
 
-Snapshot `b15b386f3f11d23998f8eb73bb45713a2c46f57fe5cf6f00f06d525092634625`.
+Snapshot `40f3eec930029eaff4234078e30369343942e02a4c3f89e060a70b717358bd05`.
 
 - 2 symbols, 1 edges, 2 files
 
 ## Current layout
 
-Score `17.0000`.
+Score `2.1000`.
 
-- cut `16.0000`, imbalance `1.0000`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+- cut `2.0000`, imbalance `0.1000`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
 ### Violations
 
@@ -16,21 +16,23 @@ Score `17.0000`.
 
 ## Anchored candidates
 
-### Candidate 1 (score `3.5000`)
+_Fewer than the requested candidates survived; the solution space converged._
 
-- cut `2.0000`, imbalance `1.0000`, naming `-0.0000`, path `-0.0000`, anchor `0.5000`
+_Current layout is already optimal; candidate 1 is the current tree._
 
-**Moves**
+### Candidate 1 (score `2.1000`, improvement `+0.0000`)
 
-- Move `service.py`: polarity-leak -> polarity-leak/conftest.py/conftest.py/conftest.py (cohesion gain)
+- cut `2.0000`, imbalance `0.1000`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+
+No moves versus the current layout.
 
 ## Greenfield candidates
 
-### Candidate 1 (score `3.0000`)
+_Fewer than the requested candidates survived; the solution space converged._
 
-- cut `2.0000`, imbalance `1.0000`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+### Candidate 1 (score `2.1000`, improvement `+0.0000`)
 
-**Moves**
+- cut `2.0000`, imbalance `0.1000`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
-- Move `service.py`: polarity-leak -> polarity-leak/conftest.py/conftest.py/conftest.py (cohesion gain)
+No moves versus the current layout.
 

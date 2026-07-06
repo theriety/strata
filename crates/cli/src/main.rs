@@ -87,9 +87,10 @@ struct AnalyzeCli {
     /// Repository root to analyze.
     #[arg(long, default_value = ".")]
     root: PathBuf,
-    /// Configuration file (defaults apply when absent).
-    #[arg(long, default_value = "./strata.toml")]
-    config: PathBuf,
+    /// Configuration file (defaults to `<root>/strata.toml`; built-in defaults
+    /// apply when absent).
+    #[arg(long)]
+    config: Option<PathBuf>,
     /// Restructuring mode.
     #[arg(long)]
     mode: Option<ModeChoice>,
@@ -154,9 +155,10 @@ struct ViolationsCli {
     /// Repository root.
     #[arg(long, default_value = ".")]
     root: PathBuf,
-    /// Configuration file (defaults apply when absent).
-    #[arg(long, default_value = "./strata.toml")]
-    config: PathBuf,
+    /// Configuration file (defaults to `<root>/strata.toml`; built-in defaults
+    /// apply when absent).
+    #[arg(long)]
+    config: Option<PathBuf>,
     /// Parallelism for parsing.
     #[arg(long)]
     jobs: Option<u32>,
@@ -204,7 +206,7 @@ fn main() -> ExitCode {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
 
-    match dispatch(cli.command, &mut stdout) {
+    match dispatch(cli.command, &mut stdout, &mut stderr) {
         Ok(code) => code,
         Err(error) => {
             report_error(&error, &mut stderr);
@@ -248,18 +250,48 @@ fn clap_exit_code(kind: clap::error::ErrorKind) -> u8 {
 /// # Errors
 ///
 /// Returns the command's [`StrataError`], which the caller maps to exit code `1`.
-fn dispatch(command: Command, out: &mut impl Write) -> Result<ExitCode, StrataError> {
+fn dispatch(
+    command: Command,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> Result<ExitCode, StrataError> {
     match command {
-        Command::Analyze(args) => run_analyze(args, out),
+        Command::Analyze(args) => run_analyze(args, out, err),
         Command::Tree(args) => run_tree(args, out),
         Command::Diff(args) => run_diff(args, out),
-        Command::Violations(args) => run_violations(args, out),
+        Command::Violations(args) => run_violations(args, out, err),
         Command::Report(args) => run_report(args, out),
     }
 }
 
+/// Resolves the effective config path: an explicit `--config` wins (warning to
+/// `err` when the file is missing), otherwise the root's own `strata.toml`.
+fn resolve_config_path(
+    explicit: Option<PathBuf>,
+    root: &std::path::Path,
+    err: &mut impl Write,
+) -> PathBuf {
+    match explicit {
+        Some(path) => {
+            if !path.exists() {
+                let _ = writeln!(
+                    err,
+                    "warning: config {} not found; using built-in defaults",
+                    path.display()
+                );
+            }
+            path
+        }
+        None => root.join("strata.toml"),
+    }
+}
+
 /// Runs `analyze`, honoring `--output` (a file) over the provided sink.
-fn run_analyze(cli: AnalyzeCli, out: &mut impl Write) -> Result<ExitCode, StrataError> {
+fn run_analyze(
+    cli: AnalyzeCli,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> Result<ExitCode, StrataError> {
     let format = Format::resolve(
         cli.format.map(format_from_choice),
         out_is_terminal(),
@@ -271,9 +303,10 @@ fn run_analyze(cli: AnalyzeCli, out: &mut impl Write) -> Result<ExitCode, Strata
         jobs: cli.jobs,
         mode: cli.mode.map(Mode::from),
     };
+    let config = resolve_config_path(cli.config, &cli.root, err);
     let args = AnalyzeArgs {
         root: cli.root,
-        config: cli.config,
+        config,
         overrides,
         format,
         show_suggestions: cli.show_suggestions,
@@ -318,14 +351,19 @@ fn run_diff(cli: DiffCli, out: &mut impl Write) -> Result<ExitCode, StrataError>
 }
 
 /// Runs `violations`, mapping a gating match to exit code `2`.
-fn run_violations(cli: ViolationsCli, out: &mut impl Write) -> Result<ExitCode, StrataError> {
+fn run_violations(
+    cli: ViolationsCli,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> Result<ExitCode, StrataError> {
     let fail_on = match cli.fail_on {
         Some(value) => violations::parse_fail_on(&value)?,
         None => Vec::new(),
     };
+    let config = resolve_config_path(cli.config, &cli.root, err);
     let args = ViolationsArgs {
         root: cli.root,
-        config: cli.config,
+        config,
         jobs: cli.jobs,
         fail_on,
         format: match cli.format {
@@ -376,7 +414,7 @@ fn report_error(error: &StrataError, err: &mut impl Write) {
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, clap_exit_code};
+    use super::{Cli, clap_exit_code, resolve_config_path};
 
     /// Parses `argv` and returns the resulting clap error kind.
     ///
@@ -424,6 +462,37 @@ mod tests {
 
             assert_ne!(clap_exit_code(kind), 2, "argv {argv:?} must not gate");
         }
+    }
+
+    #[test]
+    fn should_parse_analyze_without_an_explicit_config() {
+        let cli = Cli::try_parse_from(["strata", "analyze"]);
+
+        assert!(cli.is_ok(), "--config is optional");
+    }
+
+    #[test]
+    fn should_default_the_config_to_the_root_strata_toml() {
+        let mut err = Vec::new();
+
+        let path = resolve_config_path(None, std::path::Path::new("/some/root"), &mut err);
+
+        assert_eq!(path, std::path::PathBuf::from("/some/root/strata.toml"));
+        assert!(err.is_empty(), "no warning for the implicit default");
+    }
+
+    #[test]
+    fn should_warn_when_an_explicit_config_is_missing() {
+        let mut err = Vec::new();
+        let missing = std::path::PathBuf::from("/nonexistent/strata.toml");
+
+        let path = resolve_config_path(Some(missing.clone()), std::path::Path::new("."), &mut err);
+
+        assert_eq!(path, missing, "the explicit path still wins");
+        let text = String::from_utf8(err).unwrap_or_default();
+        assert!(text.contains(
+            "warning: config /nonexistent/strata.toml not found; using built-in defaults"
+        ));
     }
 
     #[test]

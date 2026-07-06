@@ -1,10 +1,10 @@
 //! The single public error type every engine entry point surfaces.
 //!
-//! All eight failure modes the CLI and library can hit collapse into one typed
-//! [`StrataError`] enum (AD-8): config validation, the two adapter phases, the
-//! solver budget, candidate lookup, input reads, snapshot validation, and the
-//! re-export depth guard. Each variant mirrors the `code`-field convention of the
-//! error reference and carries identifying context so a reader never sees a bare
+//! All seven failure modes the CLI and library can hit collapse into one typed
+//! [`StrataError`] enum (AD-8): config validation, the two adapter phases,
+//! candidate lookup, input reads, snapshot validation, and the re-export depth
+//! guard. Each variant mirrors the `code`-field convention of the error
+//! reference and carries identifying context so a reader never sees a bare
 //! "invalid" message.
 
 use std::path::PathBuf;
@@ -45,18 +45,6 @@ pub enum StrataError {
         /// The underlying adapter bind error.
         #[source]
         source: AdapterError,
-    },
-
-    /// An exact MFAS solve exceeded its per-SCC budget.
-    ///
-    /// Reserved for callers that opt into hard failure on timeout; the default
-    /// pipeline degrades to the heuristic answer instead of raising this.
-    #[error("solver exceeded its {budget_seconds}s budget on an SCC of {scc_size} nodes")]
-    SolverTimeout {
-        /// The number of nodes in the SCC that timed out.
-        scc_size: u32,
-        /// The per-SCC budget in seconds that was exceeded.
-        budget_seconds: u64,
     },
 
     /// A `tree` or `diff` request named a mode or candidate index that the result
@@ -110,7 +98,6 @@ impl StrataError {
             Self::ConfigInvalid { .. } => "CONFIG_INVALID",
             Self::AdapterParseFailure { .. } => "ADAPTER_PARSE_FAILURE",
             Self::AdapterBindFailure { .. } => "ADAPTER_BIND_FAILURE",
-            Self::SolverTimeout { .. } => "SOLVER_TIMEOUT",
             Self::CandidateNotFound { .. } => "CANDIDATE_NOT_FOUND",
             Self::InputUnreadable { .. } => "INPUT_UNREADABLE",
             Self::SnapshotInvalid { .. } => "SNAPSHOT_INVALID",

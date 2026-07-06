@@ -34,7 +34,7 @@ const RE_EXPORT_DEPTH_LIMIT: u32 = 64;
 
 /// A language Strata can analyze, with its file extensions and adapter factory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Language {
+pub(crate) enum Language {
     /// TypeScript / TSX.
     TypeScript,
     /// Rust.
@@ -44,6 +44,9 @@ enum Language {
 }
 
 impl Language {
+    /// Every supported language, for extension-based classification.
+    pub(crate) const ALL: [Self; 3] = [Self::TypeScript, Self::Rust, Self::Python];
+
     /// Resolves a config language name to a [`Language`], if recognized.
     fn from_name(name: &str) -> Option<Self> {
         match name {
@@ -54,8 +57,17 @@ impl Language {
         }
     }
 
+    /// Returns the config-facing name of this language.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::TypeScript => "typescript",
+            Self::Rust => "rust",
+            Self::Python => "python",
+        }
+    }
+
     /// Returns whether `path` belongs to this language by extension.
-    fn matches_extension(self, path: &str) -> bool {
+    pub(crate) fn matches_extension(self, path: &str) -> bool {
         let extension = path.rsplit('.').next().unwrap_or("");
         match self {
             Self::TypeScript => matches!(extension, "ts" | "tsx" | "mts" | "cts"),
@@ -79,9 +91,10 @@ impl Language {
 /// [`Snapshot`].
 ///
 /// File discovery honors `config.adapters.include` and `.exclude` globs relative
-/// to `root`; files are grouped by language and the adapters run in parallel.
-/// Merging re-interns each fragment's node and container ids into one dense
-/// namespace before assembly.
+/// to `root`, plus any `.gitignore` files under `root`; `.git` and
+/// `node_modules` directories are always skipped. Files are grouped by language
+/// and the adapters run in parallel. Merging re-interns each fragment's node and
+/// container ids into one dense namespace before assembly.
 ///
 /// [`Snapshot`]: strata_ir::Snapshot
 ///
@@ -124,8 +137,15 @@ fn enabled_languages(config: &AnalyzeConfig) -> Vec<Language> {
 }
 
 /// Reads every file under `root` that matches the include globs, clears the
-/// exclude globs, and is claimed by an enabled language, returning the source
-/// set as repo-relative paths plus contents.
+/// exclude globs, survives the repo's own `.gitignore` rules, and is claimed by
+/// an enabled language, returning the source set as repo-relative paths plus
+/// contents.
+///
+/// `.gitignore` files under `root` are honored even outside a git checkout, so
+/// build output never pollutes the snapshot; only rules inside `root` apply —
+/// no parent, global, or `.git/info/exclude` sources — keeping the same tree
+/// deterministic across machines. `.git` and `node_modules` directories are
+/// skipped unconditionally, independent of the configurable exclude globs.
 ///
 /// Extension filtering happens here, *before* any file is read, so discovery
 /// never touches non-source files (binaries, lockfiles, images, VCS metadata).
@@ -140,55 +160,54 @@ fn discover_sources(
     let excludes = compile_globs(&config.adapters.exclude)?;
 
     let mut sources = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let entries = std::fs::read_dir(&dir).map_err(|error| StrataError::InputUnreadable {
-            path: dir.clone(),
+    let walker = ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .require_git(false)
+        .parents(false)
+        .git_global(false)
+        .git_exclude(false)
+        .ignore(false)
+        .filter_entry(|entry| {
+            let name = entry.file_name();
+            name != ".git" && name != "node_modules"
+        })
+        .build();
+    for entry in walker {
+        let entry = entry.map_err(|error| StrataError::InputUnreadable {
+            path: root.to_path_buf(),
             reason: error.to_string(),
         })?;
-        for entry in entries {
-            let entry = entry.map_err(|error| StrataError::InputUnreadable {
-                path: dir.clone(),
+        if entry.file_type().is_none_or(|kind| kind.is_dir()) {
+            continue;
+        }
+        let path = entry.path();
+        let Some(relative) = relative_path(root, path) else {
+            continue;
+        };
+        if !includes.iter().any(|glob| glob.matches(&relative)) {
+            continue;
+        }
+        if excludes.iter().any(|glob| glob.matches(&relative)) {
+            continue;
+        }
+        // skip files no enabled language claims, *before* reading them, so a
+        // binary or non-UTF-8 file (e.g. `.git/index`) never aborts the walk.
+        if !languages
+            .iter()
+            .any(|language| language.matches_extension(&relative))
+        {
+            continue;
+        }
+        let contents =
+            std::fs::read_to_string(path).map_err(|error| StrataError::InputUnreadable {
+                path: path.to_path_buf(),
                 reason: error.to_string(),
             })?;
-            let path = entry.path();
-            let metadata = entry
-                .metadata()
-                .map_err(|error| StrataError::InputUnreadable {
-                    path: path.clone(),
-                    reason: error.to_string(),
-                })?;
-            if metadata.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            let Some(relative) = relative_path(root, &path) else {
-                continue;
-            };
-            if !includes.iter().any(|glob| glob.matches(&relative)) {
-                continue;
-            }
-            if excludes.iter().any(|glob| glob.matches(&relative)) {
-                continue;
-            }
-            // skip files no enabled language claims, *before* reading them, so a
-            // binary or non-UTF-8 file (e.g. `.git/index`) never aborts the walk.
-            if !languages
-                .iter()
-                .any(|language| language.matches_extension(&relative))
-            {
-                continue;
-            }
-            let contents =
-                std::fs::read_to_string(&path).map_err(|error| StrataError::InputUnreadable {
-                    path: path.clone(),
-                    reason: error.to_string(),
-                })?;
-            sources.push(SourceFile {
-                path: SmolStr::new(&relative),
-                contents,
-            });
-        }
+        sources.push(SourceFile {
+            path: SmolStr::new(&relative),
+            contents,
+        });
     }
     // sort so discovery order — and therefore every downstream id — is stable.
     sources.sort_by(|left, right| left.path.cmp(&right.path));
@@ -472,6 +491,63 @@ mod tests {
         let sources = result.unwrap_or_else(|_| Vec::new());
         assert_eq!(sources.len(), 1);
         assert_eq!(sources.first().map(|file| file.path.as_str()), Some("a.ts"));
+    }
+
+    #[test]
+    fn should_honor_gitignore_rules_during_discovery() {
+        // a `.gitignore` under the analyzed root excludes build output (`lib/`)
+        // even when no `.git` directory exists and the config excludes are empty.
+        let dir = TempDir::new();
+        let root = &dir.path;
+
+        let made_lib = std::fs::create_dir_all(root.join("lib")).is_ok();
+        let wrote = std::fs::write(root.join(".gitignore"), "lib/\n").is_ok()
+            && std::fs::write(root.join("kept.ts"), "export const kept = 1;\n").is_ok()
+            && std::fs::write(root.join("lib").join("built.ts"), "export const b = 1;\n").is_ok();
+        assert!(made_lib && wrote, "fixture setup failed");
+
+        let mut config = AnalyzeConfig::default();
+        config.adapters.exclude = Vec::new();
+        let languages = enabled_languages(&config);
+
+        let result = discover_sources(root, &config, &languages);
+
+        let sources = result.unwrap_or_else(|_| Vec::new());
+        assert_eq!(sources.len(), 1);
+        assert_eq!(
+            sources.first().map(|file| file.path.as_str()),
+            Some("kept.ts")
+        );
+    }
+
+    #[test]
+    fn should_always_skip_node_modules_even_without_exclude_globs() {
+        // `node_modules` is skipped by the walker itself, so a config override
+        // that drops the default exclude globs cannot re-include dependencies.
+        let dir = TempDir::new();
+        let root = &dir.path;
+
+        let made = std::fs::create_dir_all(root.join("node_modules").join("dep")).is_ok();
+        let wrote = std::fs::write(root.join("app.ts"), "export const app = 1;\n").is_ok()
+            && std::fs::write(
+                root.join("node_modules").join("dep").join("index.ts"),
+                "export const dep = 1;\n",
+            )
+            .is_ok();
+        assert!(made && wrote, "fixture setup failed");
+
+        let mut config = AnalyzeConfig::default();
+        config.adapters.exclude = Vec::new();
+        let languages = enabled_languages(&config);
+
+        let result = discover_sources(root, &config, &languages);
+
+        let sources = result.unwrap_or_else(|_| Vec::new());
+        assert_eq!(sources.len(), 1);
+        assert_eq!(
+            sources.first().map(|file| file.path.as_str()),
+            Some("app.ts")
+        );
     }
 
     #[test]

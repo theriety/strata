@@ -1,0 +1,4 @@
+# a deliberately tiny file cap so any real module trips a capacity violation,
+# proving the repo-local config was discovered via --root.
+[capacity]
+file = 1

@@ -1,1 +1,2 @@
-move crates/core/src/lib.rs, crates/util/src/lib.rs :: workspace-rust/crates -> workspace-rust/crates/crates/app/crates/app/src (cohesion gain)
+moves (1 group(s), 2 file(s); improvement +58.4865):
+merge crates/app/src/lib.rs, crates/util/src/lib.rs :: workspace-rust/crates/app/src, workspace-rust/crates/util/src -> workspace-rust/crates/core/src (pulled by lib.rs (w 7.8))

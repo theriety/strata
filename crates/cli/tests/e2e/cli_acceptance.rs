@@ -245,9 +245,11 @@ fn should_pin_the_anchor_term_apart_for_the_two_modes() {
     // anchored (mu > 0) carries a non-zero anchor penalty that raises its score
     // above the otherwise-identical greenfield (mu = 0) candidate; pinning both
     // proves the two modes are genuinely distinct and not a shared code path. The
-    // two-file python fixture regroups one file, so the move-distance penalty is
-    // non-zero and the two modes' scores genuinely diverge.
-    let root = fixture("python");
+    // nested-python fixture's candidate regroups files across directories, so the
+    // move-distance penalty is non-zero and the two modes' scores genuinely
+    // diverge. (A flat fixture no longer works here: its best candidate matches
+    // the current layout, so both modes score identically.)
+    let root = fixture("nested-python");
     let root_str = root.to_str().unwrap_or_default();
 
     let anchored = run(&[
@@ -295,6 +297,65 @@ fn should_pin_the_anchor_term_apart_for_the_two_modes() {
 }
 
 #[test]
+fn should_print_the_convergence_notice_exactly_when_the_flag_is_set() {
+    // the summary face's "(fewer than k candidates; solution space converged)"
+    // notice must track the json face's solutionSpaceConverged flag in BOTH
+    // polarities — the renderer once printed it on the flag's negation, and a
+    // single-polarity check would pass under that inversion. `-k` pins each
+    // polarity independent of the clusterer's yield: a tiny fixture can never
+    // fill k=10 (flag true, notice on), and any fixture fills k=1 (flag false,
+    // notice off).
+    for (k, expected) in [("10", true), ("1", false)] {
+        let root = fixture("python");
+        let root_str = root.to_str().unwrap_or_default();
+
+        let json = run(&[
+            "analyze",
+            "--root",
+            root_str,
+            "--config",
+            PURE_DEFAULTS,
+            "-k",
+            k,
+            "--format",
+            "json",
+        ]);
+        let summary = run(&[
+            "analyze",
+            "--root",
+            root_str,
+            "--config",
+            PURE_DEFAULTS,
+            "-k",
+            k,
+            "--format",
+            "summary",
+        ]);
+
+        assert_eq!(json.code, 0, "analyze json exits 0 for k={k}");
+        assert_eq!(summary.code, 0, "analyze summary exits 0 for k={k}");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json.stdout).unwrap_or(serde_json::Value::Null);
+        for mode in ["anchored", "greenfield"] {
+            let flag = parsed
+                .pointer(&format!("/modes/{mode}/solutionSpaceConverged"))
+                .and_then(serde_json::Value::as_bool);
+            assert_eq!(
+                flag,
+                Some(expected),
+                "k={k} {mode} carries the expected convergence flag"
+            );
+        }
+        assert_eq!(
+            summary.stdout.contains("solution space converged"),
+            expected,
+            "k={k}'s summary notice must match its convergence flag: {}",
+            summary.stdout
+        );
+    }
+}
+
+#[test]
 fn should_be_deterministic_across_repeated_analyze_runs() {
     // the deterministic-by-contract guarantee: identical snapshot + config + seed
     // yields byte-identical output, so a snapshot can never flake on ordering.
@@ -334,6 +395,12 @@ fn should_be_deterministic_across_repeated_analyze_runs_for_the_new_fixtures() {
         "cyclic",
         "over-capacity",
         "polarity-leak",
+        "rust-cfg-test",
+        "borderline-only",
+        "testsupport-leak",
+        "constellation-ts",
+        "cyclic-oversized",
+        "test-heavy-ts",
     ] {
         let root = fixture(name);
         let root_str = root.to_str().unwrap_or_default();
@@ -497,11 +564,12 @@ fn should_deliver_the_anchored_diff_for_the_rust_fixture() {
 }
 
 #[test]
-fn should_deliver_the_greenfield_diff_for_the_multi_file_python_fixture() {
-    // the greenfield (mu = 0) delta regroups the two cohesive files under one real
-    // folder: the file already in that folder stays, the other is narrated as a
-    // move, exercising the path-delta narration end to end.
-    let result = analyze_to_file("python");
+fn should_deliver_the_greenfield_diff_for_the_nested_python_fixture() {
+    // the greenfield (mu = 0) delta regroups the scattered files with the
+    // cohesive geometry files under the geometry chain; the relocated files are
+    // narrated as grouped moves under the count header, and the spec file
+    // trails its subject with an explicit follows line.
+    let result = analyze_to_file("nested-python");
     let result_str = result.to_str().unwrap_or_default();
 
     let outcome = run(&["diff", "--input", result_str, "current", "greenfield/1"]);
@@ -509,8 +577,19 @@ fn should_deliver_the_greenfield_diff_for_the_multi_file_python_fixture() {
     let _ = std::fs::remove_file(&result);
     assert_eq!(outcome.code, 0, "diff renders and exits 0");
     assert!(
-        outcome.stdout.contains("move pkg/shape.py"),
-        "the regrouped file is narrated as a move"
+        outcome.stdout.starts_with("moves ("),
+        "the delta opens with the group/file count header: {}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("-> nested-python/geometry"),
+        "the regrouped files land in the geometry chain: {}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("follows app.py"),
+        "the spec file trails its subject: {}",
+        outcome.stdout
     );
 }
 
@@ -649,6 +728,25 @@ fn should_exit_non_zero_with_a_helpful_message_on_a_missing_candidate() {
 }
 
 #[test]
+fn should_reject_an_out_of_range_left_candidate_ref() {
+    // the LEFT side of a candidate-vs-candidate diff is validated like the
+    // right one — it was once resolved lazily, so an out-of-range left ref
+    // silently rendered against nothing and exited 0.
+    let result = analyze_to_file("rust");
+    let result_str = result.to_str().unwrap_or_default();
+
+    let outcome = run(&["diff", "--input", result_str, "anchored/9", "anchored/1"]);
+
+    let _ = std::fs::remove_file(&result);
+    assert_eq!(outcome.code, 1, "a missing left candidate is exit 1");
+    assert!(
+        outcome.stderr.contains("error[CANDIDATE_NOT_FOUND]"),
+        "the error names the missing left candidate: {}",
+        outcome.stderr
+    );
+}
+
+#[test]
 fn should_reject_an_unknown_fail_on_class_as_a_usage_error() {
     let root = fixture("rust");
     let root_str = root.to_str().unwrap_or_default();
@@ -713,9 +811,9 @@ fn should_print_top_level_help_and_exit_zero() {
 fn should_deliver_a_well_formed_violations_json_face_for_a_violation_carrying_fixture() {
     // the json face of the gate is the serialized AnalyzeResult: it must parse and
     // carry the same capacity findings the table face lists. over-capacity emits
-    // both a hard and a borderline capacity finding, so the violations json array
-    // holds exactly those two capacity entries — proving the gate's machine-readable
-    // surface is well-formed and complete.
+    // two hard capacity findings (one nested) and a borderline one, so the
+    // violations json array holds exactly those three capacity entries — proving
+    // the gate's machine-readable surface is well-formed and complete.
     let root = fixture("over-capacity");
     let root_str = root.to_str().unwrap_or_default();
 
@@ -744,19 +842,19 @@ fn should_deliver_a_well_formed_violations_json_face_for_a_violation_carrying_fi
         .unwrap_or_default();
     assert_eq!(
         kinds,
-        vec!["capacity", "capacity"],
-        "the violations json carries both capacity findings (hard + borderline): {}",
+        vec!["capacity", "capacity", "capacity"],
+        "the violations json carries all capacity findings (two hard + borderline): {}",
         outcome.stdout
     );
 }
 
 #[test]
-fn should_match_the_analyze_json_face_only_when_no_capacity_finding_exists() {
-    // capacity findings are computed in the violations path, never in engine analyze;
-    // so the two json faces agree byte-for-byte for a visibility-only fixture (rust)
-    // but genuinely diverge for over-capacity, where the violations face gains two
-    // capacity entries the analyze face omits. This pins the exact, asymmetric
-    // relationship — not an assumed equality.
+fn should_match_the_analyze_json_face_even_when_capacity_findings_exist() {
+    // capacity findings are derived inside engine analyze alongside the other
+    // violation classes, so the violations json face is byte-identical to the
+    // analyze json face for every fixture — including over-capacity, whose
+    // result carries three capacity entries. This pins FR-11: the violations
+    // command adds no findings of its own.
     let rust = fixture("rust");
     let rust_str = rust.to_str().unwrap_or_default();
     let analyze_rust = run(&[
@@ -814,9 +912,153 @@ fn should_match_the_analyze_json_face_only_when_no_capacity_finding_exists() {
         violations_over.code, 0,
         "violations json exits 0 for over-capacity"
     );
-    assert_ne!(
+    assert_eq!(
         analyze_over.stdout, violations_over.stdout,
-        "the violations face gains capacity findings the analyze face omits"
+        "the two json faces stay byte-identical even with capacity findings"
+    );
+    assert!(
+        analyze_over.stdout.contains("\"kind\":\"capacity\""),
+        "the shared result carries the capacity findings: {}",
+        analyze_over.stdout
+    );
+}
+
+#[test]
+fn should_populate_break_suggestions_with_real_names_weights_and_exactness() {
+    // MFAS is wired (D-32 resolved): every cycle violation carries a non-empty
+    // breakSuggestions list whose entries name real symbols, price the break in
+    // the config's edge-weight currency, and flag ILP-proven minimality; the
+    // detail line leads with the first break.
+    let root = fixture("cyclic");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(outcome.code, 0, "analyze json exits 0 for cyclic");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
+
+    let cycles: Vec<&serde_json::Value> = parsed
+        .pointer("/current/violations")
+        .and_then(serde_json::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry.get("kind").and_then(serde_json::Value::as_str) == Some("cycle")
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        !cycles.is_empty(),
+        "the cyclic fixture carries at least one cycle violation: {}",
+        outcome.stdout
+    );
+    for cycle in cycles {
+        let members: Vec<String> = cycle
+            .get("location")
+            .and_then(serde_json::Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let suggestions = cycle
+            .get("breakSuggestions")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !suggestions.is_empty(),
+            "a cycle carries at least one break suggestion: {cycle}"
+        );
+        for suggestion in &suggestions {
+            let source = suggestion.get("source").and_then(serde_json::Value::as_str);
+            let target = suggestion.get("target").and_then(serde_json::Value::as_str);
+            assert!(
+                source.is_some_and(|name| members.iter().any(|member| member == name)),
+                "a break's source is a cycle member: {suggestion}"
+            );
+            assert!(
+                target.is_some_and(|name| members.iter().any(|member| member == name)),
+                "a break's target is a cycle member: {suggestion}"
+            );
+            assert!(
+                suggestion
+                    .get("weight")
+                    .and_then(serde_json::Value::as_f64)
+                    .is_some_and(|weight| weight > 0.0),
+                "a break carries a positive config-priced weight: {suggestion}"
+            );
+            assert!(
+                suggestion.get("exact").and_then(serde_json::Value::as_bool) == Some(true),
+                "a tiny scc solves exactly via the ilp: {suggestion}"
+            );
+        }
+        let detail = cycle
+            .get("detail")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            detail.contains("-symbol cycle; break ") && detail.contains("exact"),
+            "the detail leads with the first break: {detail}"
+        );
+    }
+}
+
+#[test]
+fn should_keep_conditional_splits_empty_for_an_under_cap_scc() {
+    // an SCC under the file cap needs no split, so the cyclic fixture's
+    // candidates all carry an empty (but present) conditionalSplits array.
+    let root = fixture("cyclic");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(outcome.code, 0, "analyze json exits 0 for cyclic");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
+
+    let mut candidates_seen = 0;
+    for mode in ["anchored", "greenfield"] {
+        let candidates = parsed
+            .pointer(&format!("/modes/{mode}/candidates"))
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        candidates_seen += candidates.len();
+        for candidate in candidates {
+            assert_eq!(
+                candidate.get("conditionalSplits"),
+                Some(&serde_json::json!([])),
+                "an under-cap scc never yields a conditional split"
+            );
+        }
+    }
+    assert!(
+        candidates_seen > 0,
+        "both modes deliver candidates to guard: {}",
+        outcome.stdout
     );
 }
 
@@ -951,8 +1193,9 @@ fn should_render_a_greenfield_candidate_tree_for_the_workspace_fixture() {
 
 #[test]
 fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
-    // the greenfield delta of workspace-rust moves the cross-crate files into the
-    // single cohesive folder, so the diff narrates at least one move group.
+    // the greenfield delta of workspace-rust merges the cross-crate files into
+    // the single cohesive folder, so the diff narrates at least one group under
+    // the count header.
     let result = analyze_to_file("workspace-rust");
     let result_str = result.to_str().unwrap_or_default();
 
@@ -961,8 +1204,13 @@ fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
     let _ = std::fs::remove_file(&result);
     assert_eq!(outcome.code, 0, "the greenfield diff renders");
     assert!(
-        outcome.stdout.contains("move "),
-        "the regroup is narrated as a move: {}",
+        outcome.stdout.starts_with("moves ("),
+        "the regroup opens with the group/file count header: {}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("-> workspace-rust/crates/core/src"),
+        "the cross-crate files converge on the folder that dominates by production SLOC: {}",
         outcome.stdout
     );
 }
@@ -990,19 +1238,59 @@ fn should_omit_a_vi_distance_line_for_a_cross_mode_diff() {
 
 #[test]
 fn should_report_a_vi_distance_line_for_a_same_mode_candidate_pair() {
-    // the complement of the cross-mode case: over-capacity yields two anchored
-    // candidates, and a same-mode diff (anchored/1 vs anchored/2) reports their
-    // pairwise variation-of-information distance as a fixed-precision `vi distance`
-    // line below the move narration.
-    let result = analyze_to_file("over-capacity");
+    // the complement of the cross-mode case: a same-mode diff (anchored/1 vs
+    // anchored/2) reports the pair's variation-of-information distance as a
+    // fixed-precision `vi distance` line below the move narration. the tiny
+    // fixtures all converge to a single candidate, so the two-candidate saved
+    // result is grafted from a real one: candidate 1 is cloned as candidate 2
+    // and the pairwise matrix expanded — diff consumes saved results, so the
+    // contract under test is the reader/renderer, not the clusterer's yield.
+    let result = analyze_to_file("python");
     let result_str = result.to_str().unwrap_or_default();
+    let contents = std::fs::read_to_string(&result).unwrap_or_default();
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&contents).unwrap_or(serde_json::Value::Null);
+    let grafted = parsed
+        .pointer_mut("/modes/anchored")
+        .is_some_and(|anchored| {
+            let cloned = anchored
+                .pointer("/candidates/0")
+                .cloned()
+                .map(|mut second| {
+                    if let Some(index) = second.get_mut("index") {
+                        *index = serde_json::json!(2);
+                    }
+                    second
+                });
+            match (
+                cloned,
+                anchored
+                    .get_mut("candidates")
+                    .and_then(serde_json::Value::as_array_mut),
+            ) {
+                (Some(second), Some(candidates)) => {
+                    candidates.push(second);
+                    true
+                }
+                _ => false,
+            }
+        })
+        && parsed
+            .pointer_mut("/modes/anchored/pairwiseDistance")
+            .is_some_and(|matrix| {
+                *matrix = serde_json::json!([[0.0, 0.7], [0.7, 0.0]]);
+                true
+            });
+    let written = std::fs::write(&result, serde_json::to_vec(&parsed).unwrap_or_default()).is_ok();
 
     let outcome = run(&["diff", "--input", result_str, "anchored/1", "anchored/2"]);
 
     let _ = std::fs::remove_file(&result);
+    assert!(grafted, "the second candidate was grafted in: {contents}");
+    assert!(written, "the grafted result was written");
     assert_eq!(outcome.code, 0, "a same-mode diff renders and exits 0");
     assert!(
-        outcome.stdout.contains("vi distance "),
+        outcome.stdout.contains("vi distance 0.7000"),
         "a same-mode pair reports its variation-of-information distance: {}",
         outcome.stdout
     );
@@ -1341,4 +1629,1235 @@ fn should_error_on_an_invalid_config_with_a_stable_code() {
         "the invalid-config error carries its stable code: {}",
         outcome.stderr
     );
+}
+
+#[test]
+fn should_exit_one_with_a_parse_failure_code_on_a_syntax_error_fixture() {
+    // a file the adapter cannot parse is a coded failure, not a crash and not a
+    // silent skip: exit 1 with ADAPTER_PARSE_FAILURE naming the offender.
+    let root = fixture("syntax-error");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
+
+    assert_eq!(outcome.code, 1, "a parse failure is exit 1");
+    assert!(
+        outcome.stderr.contains("error[ADAPTER_PARSE_FAILURE]"),
+        "the error carries its stable code: {}",
+        outcome.stderr
+    );
+    assert!(
+        outcome.stderr.contains("broken.py"),
+        "the error names the unparseable file: {}",
+        outcome.stderr
+    );
+}
+
+#[test]
+fn should_error_on_a_re_export_chain_deeper_than_the_guard() {
+    // the barrel-cycle fixture relays one name through 66 single-line barrels;
+    // flattening walks past the 64-hop guard and must fail with the coded
+    // error rather than hanging or silently truncating the chain.
+    let root = fixture("barrel-cycle");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
+
+    assert_eq!(outcome.code, 1, "an over-deep re-export chain is exit 1");
+    assert!(
+        outcome.stderr.contains("error[RE_EXPORT_DEPTH_EXCEEDED]"),
+        "the error carries its stable code: {}",
+        outcome.stderr
+    );
+}
+
+#[test]
+fn should_report_borderline_capacity_without_gating() {
+    // borderline-only holds one file at exactly the 250 cap: inside the +/-10%
+    // band, so the finding renders as borderline and --fail-on capacity (which
+    // matches hard violations only) must NOT raise the reserved exit 2.
+    let root = fixture("borderline-only");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "violations",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--fail-on",
+        "capacity",
+    ]);
+
+    assert_eq!(outcome.code, 0, "a borderline finding never gates");
+    assert!(
+        outcome.stdout.contains("capacity [borderline]"),
+        "the borderline finding is still reported: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_flag_an_oversized_single_symbol_file_per_d38() {
+    // D-38 guard: the capacity walk has no oversized-symbol exemption, so a
+    // file holding one unsplittable 300-SLOC function still flags against the
+    // 250 cap and gates. The spec's Test Matrix exempts such files; this test
+    // pins the CURRENT behavior and must be retired together with D-38.
+    let root = fixture("oversized");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "violations",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--fail-on",
+        "capacity",
+    ]);
+
+    assert_eq!(outcome.code, 2, "the oversized file gates (no exemption)");
+    assert!(
+        outcome
+            .stdout
+            .contains("file `module.py` holds 300 against a cap of 250"),
+        "the finding reports the uncapped size: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_report_a_test_support_dependency_on_a_test_case_end_to_end() {
+    // the second polarity arm: conftest.py (test support by convention) importing
+    // a symbol from test_app.py (a test case) is a polarity violation that
+    // renders with the support/case wording and gates like any hard violation.
+    let root = fixture("testsupport-leak");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "violations",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--fail-on",
+        "polarity",
+    ]);
+
+    assert_eq!(outcome.code, 2, "a test-support leak gates on polarity");
+    assert!(
+        outcome
+            .stdout
+            .contains("test support `shared_fixture` depends on test case `sample_case`"),
+        "the finding carries the support/case wording: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_score_greenfield_candidates_identically_across_renames() {
+    // greenfield (mu = 0) is rename-invariant: rename-a and rename-b are the
+    // same two-file structure under different file and symbol names (which even
+    // sort differently), so their greenfield candidates score identically and
+    // propose the same (empty) move set. The snapshot hashes differ — names feed
+    // the hash — which is what makes the score equality meaningful.
+    let run_greenfield = |name: &str| {
+        let root = fixture(name);
+        let root_str = root.to_str().unwrap_or_default();
+        run(&[
+            "analyze",
+            "--root",
+            root_str,
+            "--config",
+            PURE_DEFAULTS,
+            "--mode",
+            "greenfield",
+            "--format",
+            "summary",
+        ])
+    };
+
+    let a = run_greenfield("rename-a");
+    let b = run_greenfield("rename-b");
+
+    assert_eq!(a.code, 0, "rename-a analyzes clean");
+    assert_eq!(b.code, 0, "rename-b analyzes clean");
+    let score_a = candidate_one_score(&a.stdout);
+    let score_b = candidate_one_score(&b.stdout);
+    assert!(
+        (score_a - score_b).abs() < 1e-9,
+        "greenfield scores are rename-invariant: {score_a} vs {score_b}"
+    );
+    assert!(
+        a.stdout.contains("; 0 move group(s))") && b.stdout.contains("; 0 move group(s))"),
+        "both propose the same empty move set: {} / {}",
+        a.stdout,
+        b.stdout
+    );
+}
+
+#[test]
+fn should_reject_malformed_and_absent_mode_candidate_refs() {
+    // every bad candidate ref fails coded and non-zero: a non-numeric index, an
+    // unknown mode name, and a well-formed ref into a mode the saved result
+    // never ran.
+    let both = analyze_to_file("rust");
+    let both_str = both.to_str().unwrap_or_default();
+    let malformed_index = run(&["diff", "--input", both_str, "anchored/abc", "anchored/1"]);
+    let unknown_mode = run(&["diff", "--input", both_str, "bogus/1", "anchored/1"]);
+    let _ = std::fs::remove_file(&both);
+
+    // an anchored-only result has no greenfield mode to reference.
+    let root = fixture("rust");
+    let root_str = root.to_str().unwrap_or_default();
+    let anchored_only =
+        std::env::temp_dir().join(format!("strata-accept-anchored-{}.json", nanos()));
+    let anchored_only_str = anchored_only.to_str().unwrap_or_default();
+    let saved = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--mode",
+        "anchored",
+        "--format",
+        "json",
+        "--output",
+        anchored_only_str,
+    ]);
+    let absent_mode = run(&[
+        "diff",
+        "--input",
+        anchored_only_str,
+        "current",
+        "greenfield/1",
+    ]);
+    let _ = std::fs::remove_file(&anchored_only);
+
+    assert_eq!(saved.code, 0, "the anchored-only result saves");
+    for (label, outcome) in [
+        ("a non-numeric index", &malformed_index),
+        ("an unknown mode", &unknown_mode),
+        ("an absent mode", &absent_mode),
+    ] {
+        assert_eq!(outcome.code, 1, "{label} is exit 1, never the gating 2");
+        assert!(
+            outcome.stderr.contains("error[CANDIDATE_NOT_FOUND]"),
+            "{label} fails with the stable code: {}",
+            outcome.stderr
+        );
+    }
+}
+
+#[test]
+fn should_exit_one_on_a_malformed_result_input_for_every_reader() {
+    // all three result readers reject non-JSON input with the same coded error.
+    let bad = std::env::temp_dir().join(format!("strata-accept-badinput-{}.json", nanos()));
+    let bad_str = bad.to_str().unwrap_or_default();
+    let written = std::fs::write(&bad, b"not json {{{").is_ok();
+
+    let tree = run(&["tree", "--input", bad_str, "--current"]);
+    let diff = run(&["diff", "--input", bad_str, "current", "anchored/1"]);
+    let report = run(&["report", "--input", bad_str]);
+
+    let _ = std::fs::remove_file(&bad);
+    assert!(written, "the malformed input file was written");
+    for (label, outcome) in [("tree", &tree), ("diff", &diff), ("report", &report)] {
+        assert_eq!(outcome.code, 1, "{label} rejects malformed input with 1");
+        assert!(
+            outcome.stderr.contains("error[INPUT_UNREADABLE]"),
+            "{label} fails with the stable code: {}",
+            outcome.stderr
+        );
+    }
+}
+
+#[test]
+fn should_reject_a_result_with_an_unsupported_schema_version() {
+    // a saved result stamped with any other schemaVersion — future (999) or the
+    // retired v1 — must be refused up front with a remediable message, not
+    // misread field-by-field.
+    let result = analyze_to_file("rust");
+    let contents = std::fs::read_to_string(&result).unwrap_or_default();
+    let result_str = result.to_str().unwrap_or_default();
+
+    for version in ["999", "1"] {
+        let stamped = contents.replace(
+            "\"schemaVersion\":2",
+            &format!("\"schemaVersion\":{version}"),
+        );
+        assert_ne!(contents, stamped, "the version stamp was found and bumped");
+        let written = std::fs::write(&result, stamped).is_ok();
+
+        let outcome = run(&["tree", "--input", result_str, "--current"]);
+
+        assert!(written, "the v{version} result was written");
+        assert_eq!(
+            outcome.code, 1,
+            "schema version {version} is refused with exit 1"
+        );
+        assert!(
+            outcome.stderr.contains("error[INPUT_UNREADABLE]"),
+            "the refusal carries the stable code: {}",
+            outcome.stderr
+        );
+        assert!(
+            outcome
+                .stderr
+                .contains(&format!("unsupported result schemaVersion {version}")),
+            "the refusal names the offending version: {}",
+            outcome.stderr
+        );
+    }
+    let _ = std::fs::remove_file(&result);
+}
+
+#[test]
+fn should_list_available_candidates_when_no_selector_is_given() {
+    // tree without --current or --candidate lists the candidate headlines so
+    // the user can pick a ref, and exits 0 — discovery is not an error.
+    let result = analyze_to_file("rust");
+    let result_str = result.to_str().unwrap_or_default();
+
+    let outcome = run(&["tree", "--input", result_str]);
+
+    let _ = std::fs::remove_file(&result);
+    assert_eq!(outcome.code, 0, "the listing is a success path");
+    assert!(
+        outcome
+            .stdout
+            .contains("available candidates for anchored:"),
+        "the listing names the mode: {}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("1 (score "),
+        "the listing carries candidate headlines: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_write_analyze_json_to_a_file_byte_identical_to_stdout() {
+    // --output redirects the exact bytes: the file matches what stdout would
+    // have carried (trailing newline included) and stdout stays empty.
+    let root = fixture("python");
+    let root_str = root.to_str().unwrap_or_default();
+    let path = std::env::temp_dir().join(format!("strata-accept-output-{}.json", nanos()));
+    let path_str = path.to_str().unwrap_or_default();
+
+    let to_stdout = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+    let to_file = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+        "--output",
+        path_str,
+    ]);
+
+    let written = std::fs::read_to_string(&path).unwrap_or_default();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(to_stdout.code, 0, "the stdout run exits 0");
+    assert_eq!(to_file.code, 0, "the --output run exits 0");
+    assert!(
+        to_file.stdout.is_empty(),
+        "--output leaves stdout empty: {}",
+        to_file.stdout
+    );
+    assert_eq!(
+        written, to_stdout.stdout,
+        "the file carries byte-identical json"
+    );
+}
+
+#[test]
+fn should_default_to_json_when_stdout_is_piped() {
+    // with no --format and a piped (non-tty) stdout — exactly how this harness
+    // captures output — analyze emits the machine face: parseable json carrying
+    // the schema stamp.
+    let root = fixture("python");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&["analyze", "--root", root_str, "--config", PURE_DEFAULTS]);
+
+    assert_eq!(outcome.code, 0, "the formatless run exits 0");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
+    assert_eq!(
+        parsed
+            .pointer("/schemaVersion")
+            .and_then(serde_json::Value::as_u64),
+        Some(2),
+        "piped output is json with the schema stamp: {}",
+        outcome.stdout
+    );
+}
+
+/// Counts the symbol bullet lines (`- name (visibility)`) in a rendered tree.
+fn symbol_line_count(tree: &str) -> usize {
+    tree.lines()
+        .filter(|line| line.trim_start().starts_with("- "))
+        .count()
+}
+
+#[test]
+fn should_render_every_symbol_exactly_once_with_tree_symbols() {
+    // the acceptance criterion: `tree --symbols` renders each snapshot symbol
+    // exactly once — the bullet count equals the summary census, in both the
+    // current tree and a candidate tree, for a big flat fixture and a nested one.
+    for name in ["over-capacity", "nested-ts"] {
+        let result = analyze_to_file(name);
+        let result_str = result.to_str().unwrap_or_default();
+
+        let json = std::fs::read_to_string(&result).unwrap_or_default();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).unwrap_or(serde_json::Value::Null);
+        let symbols = parsed
+            .pointer("/summary/symbols")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or(0);
+        assert!(symbols > 0, "{name} carries a symbol census");
+
+        let current = run(&["tree", "--input", result_str, "--current", "--symbols"]);
+        let candidate = run(&[
+            "tree",
+            "--input",
+            result_str,
+            "--mode",
+            "anchored",
+            "--candidate",
+            "1",
+            "--symbols",
+        ]);
+
+        let _ = std::fs::remove_file(&result);
+        assert_eq!(current.code, 0, "{name} current tree renders");
+        assert_eq!(candidate.code, 0, "{name} candidate tree renders");
+        assert_eq!(
+            symbol_line_count(&current.stdout),
+            symbols,
+            "{name}'s current tree renders each symbol exactly once"
+        );
+        assert_eq!(
+            symbol_line_count(&candidate.stdout),
+            symbols,
+            "{name}'s candidate tree renders each symbol exactly once"
+        );
+    }
+}
+
+#[test]
+fn should_honor_config_precedence_flags_over_toml_over_defaults() {
+    // the precedence chain end-to-end, probed through the convergence notice
+    // (which fires exactly when fewer candidates survive than k requests). the
+    // python fixture always converges to one candidate, so: the built-in k of 3
+    // shows the notice, a `candidates = 1` toml silences it (1 of 1), and -k 3
+    // over that same toml brings it back — flag > toml > default.
+    let root = fixture("python");
+    let root_str = root.to_str().unwrap_or_default();
+    let toml = std::env::temp_dir().join(format!("strata-accept-precedence-{}.toml", nanos()));
+    let toml_str = toml.to_str().unwrap_or_default();
+    let written = std::fs::write(&toml, b"[analysis]\ncandidates = 1\n").is_ok();
+
+    let defaults = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
+    let from_toml = run(&[
+        "analyze", "--root", root_str, "--config", toml_str, "--format", "summary",
+    ]);
+    let flag_over_toml = run(&[
+        "analyze", "--root", root_str, "--config", toml_str, "-k", "3", "--format", "summary",
+    ]);
+
+    let _ = std::fs::remove_file(&toml);
+    let notice = "(fewer than k candidates; solution space converged)";
+    assert!(written, "the precedence toml was written");
+    assert_eq!(defaults.code, 0, "the defaults run exits 0");
+    assert_eq!(from_toml.code, 0, "the toml run exits 0");
+    assert_eq!(flag_over_toml.code, 0, "the flag run exits 0");
+    assert!(
+        defaults.stdout.contains(notice),
+        "the built-in default k of 3 leaves the pool short, so the notice fires: {}",
+        defaults.stdout
+    );
+    assert!(
+        !from_toml.stdout.contains(notice),
+        "the toml's candidates = 1 overrides the default and silences the notice: {}",
+        from_toml.stdout
+    );
+    assert!(
+        flag_over_toml.stdout.contains(notice),
+        "-k 3 overrides the toml's candidates = 1 and the notice returns: {}",
+        flag_over_toml.stdout
+    );
+}
+
+#[test]
+fn should_flip_a_borderline_finding_to_a_gating_violation_via_a_config_cap() {
+    // the capacity cap is genuinely honored from config: the same 250-SLOC file
+    // that is merely borderline under the default 250 cap becomes a hard,
+    // gating violation once a toml lowers the cap to 150.
+    let root = fixture("borderline-only");
+    let root_str = root.to_str().unwrap_or_default();
+    let toml = std::env::temp_dir().join(format!("strata-accept-lowcap-{}.toml", nanos()));
+    let toml_str = toml.to_str().unwrap_or_default();
+    let written = std::fs::write(&toml, b"[capacity]\nfile = 150\n").is_ok();
+
+    let outcome = run(&[
+        "violations",
+        "--root",
+        root_str,
+        "--config",
+        toml_str,
+        "--fail-on",
+        "capacity",
+    ]);
+
+    let _ = std::fs::remove_file(&toml);
+    assert!(written, "the low-cap toml was written");
+    assert_eq!(
+        outcome.code, 2,
+        "the lowered cap turns borderline into a gate"
+    );
+    assert!(
+        outcome
+            .stdout
+            .contains("file `module.py` holds 250 against a cap of 150"),
+        "the finding reports the configured cap: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_report_improvement_as_current_score_minus_score_in_every_mode() {
+    // the improvement field is exactly the per-mode delta currentScore - score
+    // for every candidate, in both modes — positive means the candidate beats
+    // the current layout under that mode's own coefficients.
+    let root = fixture("nested-python");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(outcome.code, 0, "analyze json exits 0");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
+    let mut candidates_seen = 0;
+    for mode in ["anchored", "greenfield"] {
+        let current_score = parsed
+            .pointer(&format!("/modes/{mode}/currentScore"))
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(f64::NAN);
+        let candidates = parsed
+            .pointer(&format!("/modes/{mode}/candidates"))
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for candidate in candidates {
+            candidates_seen += 1;
+            let score = candidate
+                .get("score")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(f64::NAN);
+            let improvement = candidate
+                .get("improvement")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(f64::NAN);
+            assert!(
+                (improvement - (current_score - score)).abs() < 1e-9,
+                "{mode} improvement {improvement} equals {current_score} - {score}"
+            );
+        }
+    }
+    assert!(
+        candidates_seen > 0,
+        "both modes deliver candidates to check"
+    );
+}
+
+#[test]
+fn should_emit_the_identity_candidate_when_the_current_layout_is_optimal() {
+    // when the cap-clean current layout wins the anchored pool, candidate 1 IS
+    // the current tree: byte-equal JSON, an empty move list, and the summary
+    // face says so instead of proposing churn.
+    let root = fixture("python");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let json = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+    let summary = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
+
+    assert_eq!(json.code, 0, "analyze json exits 0");
+    assert_eq!(summary.code, 0, "analyze summary exits 0");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json.stdout).unwrap_or(serde_json::Value::Null);
+    assert_eq!(
+        parsed
+            .pointer("/modes/anchored/currentStanding")
+            .and_then(serde_json::Value::as_str),
+        Some("optimal"),
+        "the clean tiny fixture stands optimal: {}",
+        json.stdout
+    );
+    assert_eq!(
+        parsed.pointer("/modes/anchored/candidates/0/tree"),
+        parsed.pointer("/current/tree"),
+        "candidate 1 is the current tree verbatim"
+    );
+    assert_eq!(
+        parsed.pointer("/modes/anchored/candidates/0/deltaNarration"),
+        Some(&serde_json::json!([])),
+        "the identity candidate narrates no moves"
+    );
+    assert!(
+        summary
+            .stdout
+            .contains("current layout is already optimal; candidate 1 is the current tree"),
+        "the summary face announces optimality: {}",
+        summary.stdout
+    );
+}
+
+#[test]
+fn should_mark_a_cap_violating_layout_infeasible_with_the_resolution_notice() {
+    // a current layout with a hard capacity violation is never blessed as
+    // optimal: both modes stand infeasible and the summary face reports how
+    // many of the findings the best candidate actually resolves.
+    let root = fixture("over-capacity");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let json = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+    let summary = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
+
+    assert_eq!(json.code, 0, "analyze json exits 0");
+    assert_eq!(summary.code, 0, "analyze summary exits 0");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json.stdout).unwrap_or(serde_json::Value::Null);
+    for mode in ["anchored", "greenfield"] {
+        assert_eq!(
+            parsed
+                .pointer(&format!("/modes/{mode}/currentStanding"))
+                .and_then(serde_json::Value::as_str),
+            Some("infeasible"),
+            "{mode} stands infeasible over a hard cap violation: {}",
+            json.stdout
+        );
+    }
+    assert!(
+        summary
+            .stdout
+            .contains("current layout violates capacity caps; best candidate resolves "),
+        "the summary face reports the resolved findings: {}",
+        summary.stdout
+    );
+    assert!(
+        summary.stdout.contains(" capacity finding(s)"),
+        "the resolution is counted in capacity findings: {}",
+        summary.stdout
+    );
+}
+
+#[test]
+fn should_render_folded_paths_with_no_duplicated_segments() {
+    // narrated paths are folded for display: the cumulative internal container
+    // names (`src`, `src/__tests__`, ...) never leak as duplicated segments
+    // like `src/src` in any diff face.
+    for name in ["nested-ts", "nested-python", "workspace-rust"] {
+        let result = analyze_to_file(name);
+        let result_str = result.to_str().unwrap_or_default();
+
+        let anchored = run(&["diff", "--input", result_str, "current", "anchored/1"]);
+        let greenfield = run(&["diff", "--input", result_str, "current", "greenfield/1"]);
+
+        let _ = std::fs::remove_file(&result);
+        for (mode, outcome) in [("anchored", &anchored), ("greenfield", &greenfield)] {
+            assert_eq!(outcome.code, 0, "{name} {mode} diff renders");
+            for duplicated in ["src/src", "tests/tests", "__tests__/__tests__"] {
+                assert!(
+                    !outcome.stdout.contains(duplicated),
+                    "{name} {mode} diff carries no `{duplicated}`: {}",
+                    outcome.stdout
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn should_never_duplicate_a_segment_in_a_capacity_violation_location() {
+    // the capacity walk builds locations from incremental ancestor names plus
+    // the file's basename, so no segment can appear twice — the regression
+    // shape was `ai, spec, batch, spec, batch, utilities.ts` from folding
+    // full-path file leaves as if they were cumulative names.
+    for name in [
+        "workspace-rust",
+        "nested-python",
+        "nested-ts",
+        "cyclic",
+        "over-capacity",
+        "polarity-leak",
+        "rust-cfg-test",
+        "borderline-only",
+        "testsupport-leak",
+        "constellation-ts",
+        "cyclic-oversized",
+        "test-heavy-ts",
+    ] {
+        let root = fixture(name);
+        let root_str = root.to_str().unwrap_or_default();
+
+        let outcome = run(&[
+            "analyze",
+            "--root",
+            root_str,
+            "--config",
+            PURE_DEFAULTS,
+            "--format",
+            "json",
+        ]);
+
+        assert_eq!(outcome.code, 0, "analyze exits 0 for {name}");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
+        let violations = parsed
+            .pointer("/current/violations")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for violation in violations {
+            if violation.get("kind").and_then(serde_json::Value::as_str) != Some("capacity") {
+                continue;
+            }
+            let location: Vec<&str> = violation
+                .get("location")
+                .and_then(serde_json::Value::as_array)
+                .map(|segments| {
+                    segments
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let unique: std::collections::BTreeSet<&str> = location.iter().copied().collect();
+            assert_eq!(
+                unique.len(),
+                location.len(),
+                "{name} capacity location duplicates a segment: {location:?}"
+            );
+        }
+    }
+}
+
+/// Returns the ancestor container names above the node called `target`, walking
+/// the serialized candidate tree depth-first.
+fn ancestors_of(
+    node: &serde_json::Value,
+    target: &str,
+    trail: &mut Vec<String>,
+) -> Option<Vec<String>> {
+    let name = node
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if name == target {
+        return Some(trail.clone());
+    }
+    trail.push(name.to_owned());
+    if let Some(children) = node.get("children").and_then(serde_json::Value::as_array) {
+        for child in children {
+            if let Some(found) = ancestors_of(child, target, trail) {
+                trail.pop();
+                return Some(found);
+            }
+        }
+    }
+    trail.pop();
+    None
+}
+
+#[test]
+fn should_home_a_test_heavy_cluster_under_its_production_directory() {
+    // test-heavy-ts holds two production files and four spec files in one
+    // cohesive cluster: the name election weighs production SLOC before file
+    // count, so the folder holding the production files never lands under a
+    // `spec` ancestor even though spec files outnumber src ones.
+    let root = fixture("test-heavy-ts");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(outcome.code, 0, "analyze exits 0");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
+    let tree = parsed
+        .pointer("/modes/greenfield/candidates/0/tree")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let mut trail = Vec::new();
+    let ancestors = ancestors_of(&tree, "src/adapters/anthropic/client.ts", &mut trail);
+    assert!(
+        ancestors.is_some(),
+        "client.ts is missing from the best greenfield candidate: {tree}"
+    );
+    let ancestors = ancestors.unwrap_or_default();
+    let has_spec_ancestor = ancestors
+        .iter()
+        .flat_map(|name| name.split('/'))
+        .any(|segment| segment == "spec");
+    assert!(
+        !has_spec_ancestor,
+        "the production file sits under a spec-named ancestor: {ancestors:?}"
+    );
+}
+
+#[test]
+fn should_discover_the_root_local_config_without_an_explicit_flag() {
+    // configured-python carries its own strata.toml with a one-SLOC file cap:
+    // `--root` alone must pick it up (the default config path is root-relative,
+    // not CWD-relative), which surfaces as a capacity violation.
+    let root = fixture("configured-python");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&["analyze", "--root", root_str, "--format", "json"]);
+
+    assert_eq!(outcome.code, 0, "analyze exits 0");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
+    let has_capacity_violation = parsed
+        .pointer("/current/violations")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|violations| {
+            violations.iter().any(|violation| {
+                violation.get("kind").and_then(serde_json::Value::as_str) == Some("capacity")
+            })
+        });
+    assert!(
+        has_capacity_violation,
+        "the root-local one-SLOC cap must trip a capacity violation: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_warn_on_stderr_when_an_explicit_config_is_missing() {
+    // an explicit --config pointing nowhere still succeeds on built-in defaults
+    // (the harness contract), but says so on stderr instead of staying silent —
+    // and the root-local strata.toml must NOT sneak in behind the explicit flag.
+    let root = fixture("configured-python");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(outcome.code, 0, "defaults still apply; the run succeeds");
+    assert!(
+        outcome.stderr.contains("using built-in defaults"),
+        "the missing explicit config warns on stderr: {}",
+        outcome.stderr
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
+    let has_capacity_violation = parsed
+        .pointer("/current/violations")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|violations| {
+            violations.iter().any(|violation| {
+                violation.get("kind").and_then(serde_json::Value::as_str) == Some("capacity")
+            })
+        });
+    assert!(
+        !has_capacity_violation,
+        "the explicit (missing) config wins over the root-local strata.toml: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_render_incremental_container_names_in_the_tree_face() {
+    // interior containers print only their increment over the parent (`src`,
+    // `geometry`), never the full cumulative chain; files keep their full path.
+    let result = analyze_to_file("nested-ts");
+    let result_str = result.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "tree",
+        "--input",
+        result_str,
+        "--mode",
+        "anchored",
+        "--candidate",
+        "1",
+    ]);
+
+    let _ = std::fs::remove_file(&result);
+    assert_eq!(outcome.code, 0, "the candidate tree renders");
+    assert!(
+        outcome.stdout.contains("src [package]"),
+        "an interior container shows its bare increment: {}",
+        outcome.stdout
+    );
+    assert!(
+        !outcome.stdout.contains("nested-ts/src ["),
+        "no interior container leaks its cumulative chain: {}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("src/geometry/rectangle.ts [file]"),
+        "files keep their full path: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_vary_narration_reasons_and_mark_followed_subjects() {
+    // reasons are computed, not canned: the nested-ts delta carries at least
+    // two distinct reasons, never the retired `cohesion gain` stub, and its
+    // spec files carry a followsSubject echoed as a `follows` line in the face.
+    let result = analyze_to_file("nested-ts");
+    let result_str = result.to_str().unwrap_or_default();
+    let contents = std::fs::read_to_string(&result).unwrap_or_default();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&contents).unwrap_or(serde_json::Value::Null);
+
+    let face = run(&["diff", "--input", result_str, "current", "anchored/1"]);
+
+    let _ = std::fs::remove_file(&result);
+    let narration = parsed
+        .pointer("/modes/anchored/candidates/0/deltaNarration")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !narration.is_empty(),
+        "the delta narrates moves: {contents}"
+    );
+    let reasons: std::collections::BTreeSet<&str> = narration
+        .iter()
+        .filter_map(|entry| entry.get("reason").and_then(serde_json::Value::as_str))
+        .collect();
+    assert!(
+        reasons.len() >= 2,
+        "at least two distinct computed reasons: {reasons:?}"
+    );
+    assert!(
+        !reasons.contains("cohesion gain"),
+        "the canned stub reason is retired: {reasons:?}"
+    );
+    assert!(
+        narration.iter().any(|entry| entry
+            .get("followsSubject")
+            .is_some_and(serde_json::Value::is_string)),
+        "a spec move names the subject it follows: {narration:?}"
+    );
+    assert_eq!(face.code, 0, "the diff face renders");
+    assert!(
+        face.stdout.contains("follows "),
+        "the face echoes the followed subject: {}",
+        face.stdout
+    );
+}
+
+#[test]
+fn should_honor_objective_and_weights_config_keys() {
+    // [objective] and [weights] are live, not parsed-and-dropped: zeroing the
+    // imbalance coefficient and doubling the value-import weight each shift the
+    // current score away from the default run's figure. nested-ts carries the
+    // scored value-import edges (python's lone import collapses into its
+    // inheritance/type-reference pair).
+    let root = fixture("nested-ts");
+    let root_str = root.to_str().unwrap_or_default();
+    let current_score = |config: &str| -> f64 {
+        let outcome = run(&[
+            "analyze", "--root", root_str, "--config", config, "--format", "json",
+        ]);
+        assert_eq!(outcome.code, 0, "analyze exits 0 under {config}");
+        serde_json::from_str::<serde_json::Value>(&outcome.stdout)
+            .ok()
+            .and_then(|parsed| {
+                parsed
+                    .pointer("/modes/anchored/currentScore")
+                    .and_then(serde_json::Value::as_f64)
+            })
+            .unwrap_or(f64::NAN)
+    };
+    let objective_toml =
+        std::env::temp_dir().join(format!("strata-accept-objective-{}.toml", nanos()));
+    let weights_toml = std::env::temp_dir().join(format!("strata-accept-weights-{}.toml", nanos()));
+    let objective_written =
+        std::fs::write(&objective_toml, b"[objective]\nimbalance = 0.0\n").is_ok();
+    let weights_written = std::fs::write(&weights_toml, b"[weights]\nvalue-import = 2.0\n").is_ok();
+
+    let baseline = current_score(PURE_DEFAULTS);
+    let objective = current_score(objective_toml.to_str().unwrap_or_default());
+    let weights = current_score(weights_toml.to_str().unwrap_or_default());
+
+    let _ = std::fs::remove_file(&objective_toml);
+    let _ = std::fs::remove_file(&weights_toml);
+    assert!(objective_written, "the objective toml was written");
+    assert!(weights_written, "the weights toml was written");
+    assert!(
+        (baseline - objective).abs() > 1e-9,
+        "[objective].imbalance moves the score: {baseline} vs {objective}"
+    );
+    assert!(
+        (baseline - weights).abs() > 1e-9,
+        "[weights].value-import moves the score: {baseline} vs {weights}"
+    );
+}
+
+#[test]
+fn should_reject_a_zero_seeds_per_candidate_from_config() {
+    // [diversity].seeds-per-candidate is parsed and validated: a zero pool
+    // multiplier is refused up front with the coded error naming the key.
+    let root = fixture("python");
+    let root_str = root.to_str().unwrap_or_default();
+    let toml = std::env::temp_dir().join(format!("strata-accept-seeds-{}.toml", nanos()));
+    let toml_str = toml.to_str().unwrap_or_default();
+    let written = std::fs::write(&toml, b"[diversity]\nseeds-per-candidate = 0\n").is_ok();
+
+    let outcome = run(&[
+        "analyze", "--root", root_str, "--config", toml_str, "--format", "summary",
+    ]);
+
+    let _ = std::fs::remove_file(&toml);
+    assert!(written, "the zero-seeds toml was written");
+    assert_eq!(outcome.code, 1, "the invalid config is exit 1");
+    assert!(
+        outcome.stderr.contains("error[CONFIG_INVALID]"),
+        "the refusal carries the stable code: {}",
+        outcome.stderr
+    );
+    assert!(
+        outcome.stderr.contains("diversity.seeds-per-candidate"),
+        "the refusal names the offending key: {}",
+        outcome.stderr
+    );
+}
+
+#[test]
+fn should_populate_conditional_splits_for_an_over_cap_scc() {
+    // cyclic-oversized carries a three-file import cycle whose SCC exceeds the
+    // file cap: every candidate in both modes shares the same conditional split,
+    // its preconditions byte-identical to the cycle violation's break
+    // suggestions and its resulting file count ceil-packed to two.
+    let root = fixture("cyclic-oversized");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--mode",
+        "both",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(outcome.code, 0, "analyze exits 0");
+    let parsed: serde_json::Value = serde_json::from_str(&outcome.stdout).unwrap_or_default();
+    let suggestions = parsed
+        .pointer("/current/violations")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|violation| violation.get("breakSuggestions"))
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        suggestions.as_array().is_some_and(|list| !list.is_empty()),
+        "the cycle violation carries break suggestions: {suggestions}"
+    );
+    for mode in ["anchored", "greenfield"] {
+        let candidates = parsed
+            .pointer(&format!("/modes/{mode}/candidates"))
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!candidates.is_empty(), "{mode} delivers candidates");
+        for candidate in &candidates {
+            let splits = candidate
+                .get("conditionalSplits")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            assert_eq!(splits.len(), 1, "{mode} candidates carry the one split");
+            let split = splits.first().cloned().unwrap_or_default();
+            assert_eq!(
+                split.get("preconditions"),
+                Some(&suggestions),
+                "{mode} split preconditions mirror the break suggestions"
+            );
+            assert_eq!(
+                split
+                    .get("resultingFiles")
+                    .and_then(serde_json::Value::as_u64),
+                Some(2),
+                "{mode} split ceil-packs the scc into two files"
+            );
+        }
+    }
+}
+
+#[test]
+fn should_outscore_the_current_layout_on_the_constellation_fixture() {
+    // constellation-ts is large enough to coarsen (28 files, three deliberately
+    // misplaced): the reliability invariant demands the current layout be
+    // outscored with a non-negative improvement on every candidate, and no
+    // candidate folder may breach the fifteen-file capacity cap.
+    let root = fixture("constellation-ts");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--mode",
+        "both",
+        "--format",
+        "json",
+    ]);
+
+    assert_eq!(outcome.code, 0, "analyze exits 0");
+    let parsed: serde_json::Value = serde_json::from_str(&outcome.stdout).unwrap_or_default();
+    for mode in ["anchored", "greenfield"] {
+        assert_eq!(
+            parsed
+                .pointer(&format!("/modes/{mode}/currentStanding"))
+                .and_then(serde_json::Value::as_str),
+            Some("outscored"),
+            "{mode} marks the misplaced layout outscored"
+        );
+        let candidates = parsed
+            .pointer(&format!("/modes/{mode}/candidates"))
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!candidates.is_empty(), "{mode} delivers candidates");
+        for candidate in &candidates {
+            let improvement = candidate
+                .get("improvement")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(f64::NAN);
+            assert!(
+                improvement >= 0.0,
+                "{mode} candidate improves on the current layout: {improvement}"
+            );
+            assert!(
+                max_files_per_folder(candidate.get("tree").unwrap_or(&serde_json::Value::Null))
+                    <= 15,
+                "{mode} candidate folders stay within the file cap"
+            );
+        }
+    }
+}
+
+/// Returns the largest number of direct file children any container of `tree`
+/// holds.
+fn max_files_per_folder(tree: &serde_json::Value) -> usize {
+    let children = tree
+        .get("children")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let own = children
+        .iter()
+        .filter(|child| child.get("level").and_then(serde_json::Value::as_str) == Some("file"))
+        .count();
+    children
+        .iter()
+        .map(max_files_per_folder)
+        .fold(own, usize::max)
 }

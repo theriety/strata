@@ -10,7 +10,7 @@
 //! - [`analyze`] is a pure, deterministic function of a snapshot and config that
 //!   returns an owned [`AnalyzeResult`] — no I/O, no global state.
 //!
-//! All eight failure modes collapse into the single [`StrataError`] enum. The
+//! All seven failure modes collapse into the single [`StrataError`] enum. The
 //! crate re-exports the `ir` contract so consumers can assemble snapshots from a
 //! custom adapter and call [`analyze`] directly.
 //!
@@ -19,21 +19,22 @@
 pub mod analyze;
 pub mod config;
 pub mod error;
+mod narrate;
 pub mod result;
 pub mod snapshot;
 
 pub use strata_core as core;
 pub use strata_ir as ir;
 
-pub use crate::analyze::analyze;
+pub use crate::analyze::{BORDERLINE_CAPACITY_MARGIN, analyze};
 pub use crate::config::{
     AdaptersConfig, AnalysisConfig, AnalyzeConfig, CapacityConfig, DiversityConfig, Mode,
     ObjectiveConfig, SolverConfig, TestsConfig, WeightsConfig, load_config,
 };
 pub use crate::error::StrataError;
 pub use crate::result::{
-    AnalyzeResult, Candidate, ConditionalSplit, ContainerNode, CurrentTree, EdgeBreak, Level,
-    ModeResult, Modes, Move, MoveKind, ScoreBreakdown, Severity, Summary, SymbolPlacement,
-    Violation, ViolationKind, narrate_delta,
+    AnalyzeResult, Candidate, CapacityRemainder, ConditionalSplit, ContainerNode, CurrentStanding,
+    CurrentTree, EdgeBreak, Level, ModeResult, Modes, Move, MoveKind, RESULT_SCHEMA_VERSION,
+    ScoreBreakdown, Severity, Summary, SymbolPlacement, Violation, ViolationKind,
 };
 pub use crate::snapshot::snapshot_from_root;

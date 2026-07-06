@@ -1,4 +1,4 @@
-visibility [violation] describe :: `describe` is exported at Package but needed only at File
-visibility [violation] combined_total :: `combined_total` is exported at Package but needed only at File
-visibility [violation] Report :: `Report` is exported at Package but needed only at File
 visibility [violation] ReMeasure :: `ReMeasure` is exported at Package but needed only at File
+visibility [violation] Report :: `Report` is exported at Package but needed only at File
+visibility [violation] combined_total :: `combined_total` is exported at Package but needed only at File
+visibility [violation] describe :: `describe` is exported at Package but needed only at File

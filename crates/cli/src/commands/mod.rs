@@ -15,12 +15,9 @@ pub mod violations;
 use std::path::Path;
 
 use strata_engine::{
-    AnalyzeConfig, AnalyzeResult, Candidate, ModeResult, StrataError, load_config,
+    AnalyzeConfig, AnalyzeResult, Candidate, ModeResult, RESULT_SCHEMA_VERSION, StrataError,
+    load_config,
 };
-
-/// The capacity borderline band: a finding within ±10% of a cap is borderline
-/// and never gates CI (reference `BORDERLINE_CAPACITY_MARGIN`).
-pub const BORDERLINE_CAPACITY_MARGIN: f64 = 0.1;
 
 /// Loads the effective config: the file at `config_path` if it exists, else the
 /// built-in defaults, with the CLI overrides applied last.
@@ -84,17 +81,29 @@ impl ConfigOverrides {
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::InputUnreadable`] if the file cannot be read or does
-/// not deserialize into an `AnalyzeResult`.
+/// Returns [`StrataError::InputUnreadable`] if the file cannot be read, does not
+/// deserialize into an `AnalyzeResult`, or carries an unsupported
+/// `schemaVersion`.
 pub fn read_result(path: &Path) -> Result<AnalyzeResult, StrataError> {
     let text = std::fs::read_to_string(path).map_err(|error| StrataError::InputUnreadable {
         path: path.to_path_buf(),
         reason: error.to_string(),
     })?;
-    serde_json::from_str(&text).map_err(|error| StrataError::InputUnreadable {
-        path: path.to_path_buf(),
-        reason: error.to_string(),
-    })
+    let result: AnalyzeResult =
+        serde_json::from_str(&text).map_err(|error| StrataError::InputUnreadable {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        })?;
+    if result.schema_version != RESULT_SCHEMA_VERSION {
+        return Err(StrataError::InputUnreadable {
+            path: path.to_path_buf(),
+            reason: format!(
+                "unsupported result schemaVersion {}; expected {RESULT_SCHEMA_VERSION}",
+                result.schema_version
+            ),
+        });
+    }
+    Ok(result)
 }
 
 /// Selects one mode's result from `result` by its name (`anchored`/`greenfield`).
@@ -184,6 +193,7 @@ mod tests {
     #[test]
     fn should_report_a_missing_mode_as_candidate_not_found() {
         let result = AnalyzeResult {
+            schema_version: RESULT_SCHEMA_VERSION,
             snapshot_hash: "h".to_owned(),
             summary: strata_engine::Summary {
                 symbols: 0,

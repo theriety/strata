@@ -32,14 +32,23 @@ use strata_engine::{AnalyzeConfig, analyze, snapshot_from_root};
 /// every member. The three violation-focused fixtures (`cyclic`, `over-capacity`,
 /// `polarity-leak`) are deliberately *excluded* here — each would gate one of the
 /// shared invariants — and instead receive their own parity and golden tests.
-const FIXTURES: [&str; 6] = [
+const FIXTURES: [&str; 9] = [
     "ts",
     "rust",
     "python",
     "workspace-rust",
     "nested-python",
     "nested-ts",
+    "rust-cfg-test",
+    "constellation-ts",
+    "test-heavy-ts",
 ];
+
+/// A non-existent config path, forcing the binary onto its built-in defaults so
+/// every analysis is identical no matter which directory the harness runs from —
+/// a configured `strata.toml` in a parent directory must never leak into a run.
+/// The library side pairs it with `AnalyzeConfig::default()`.
+const PURE_DEFAULTS: &str = "/nonexistent/strata-parity.toml";
 
 /// Returns the absolute path to a named language fixture under this crate.
 fn fixture(name: &str) -> PathBuf {
@@ -94,7 +103,15 @@ fn assert_parity(name: &str) {
     let root = fixture(name);
     let root_str = root.to_str().unwrap_or_default();
 
-    let (code, mut stdout) = run_strata(&["analyze", "--root", root_str, "--format", "json"]);
+    let (code, mut stdout) = run_strata(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
     assert_eq!(code, 0, "analyze exits 0 for {name}");
     // the CLI appends one trailing newline the library serialization omits.
     assert_eq!(stdout.pop(), Some(b'\n'), "trailing newline for {name}");
@@ -118,7 +135,15 @@ fn analyze_to_file(name: &str) -> PathBuf {
     let path_str = path.to_str().unwrap_or_default();
 
     let (code, _) = run_strata(&[
-        "analyze", "--root", root_str, "--format", "json", "--output", path_str,
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+        "--output",
+        path_str,
     ]);
     assert_eq!(code, 0, "analyze writes a result file for {name}");
     path
@@ -170,8 +195,15 @@ fn assert_goldens(name: &str) {
 
     let root = fixture(name);
     let root_str = root.to_str().unwrap_or_default();
-    let (violations_code, violations_out) =
-        run_strata(&["violations", "--root", root_str, "--format", "table"]);
+    let (violations_code, violations_out) = run_strata(&[
+        "violations",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "table",
+    ]);
     assert_eq!(violations_code, 0, "violations exits 0 for {name}");
     assert_golden(name, "violations.txt", &violations_out);
 
@@ -179,7 +211,15 @@ fn assert_goldens(name: &str) {
     // committed golden pins the human-readable summary bytes (census, scores, and
     // per-mode candidate headlines) the same deterministic way the other goldens are.
     let (summary_code, summary_out) = run_strata(&[
-        "analyze", "--root", root_str, "--mode", "both", "--format", "summary",
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--mode",
+        "both",
+        "--format",
+        "summary",
     ]);
     assert_eq!(summary_code, 0, "analyze summary exits 0 for {name}");
     assert_golden(name, "summary.txt", &summary_out);
@@ -282,12 +322,52 @@ fn should_match_the_goldens_for_the_polarity_leak_fixture() {
 }
 
 #[test]
+fn should_match_the_library_result_for_the_rust_cfg_test_fixture() {
+    assert_parity("rust-cfg-test");
+}
+
+#[test]
+fn should_match_the_goldens_for_the_rust_cfg_test_fixture() {
+    assert_goldens("rust-cfg-test");
+}
+
+#[test]
+fn should_match_the_library_result_for_the_constellation_fixture() {
+    assert_parity("constellation-ts");
+}
+
+#[test]
+fn should_match_the_goldens_for_the_constellation_fixture() {
+    assert_goldens("constellation-ts");
+}
+
+#[test]
+fn should_match_the_library_result_for_the_cyclic_oversized_fixture() {
+    assert_parity("cyclic-oversized");
+}
+
+#[test]
+fn should_match_the_goldens_for_the_cyclic_oversized_fixture() {
+    assert_goldens("cyclic-oversized");
+}
+
+#[test]
+fn should_match_the_library_result_for_the_test_heavy_fixture() {
+    assert_parity("test-heavy-ts");
+}
+
+#[test]
+fn should_match_the_goldens_for_the_test_heavy_fixture() {
+    assert_goldens("test-heavy-ts");
+}
+
+#[test]
 fn should_exit_zero_for_violations_without_fail_on() {
     for name in FIXTURES {
         let root = fixture(name);
         let root_str = root.to_str().unwrap_or_default();
 
-        let (code, _) = run_strata(&["violations", "--root", root_str]);
+        let (code, _) = run_strata(&["violations", "--root", root_str, "--config", PURE_DEFAULTS]);
 
         assert_eq!(code, 0, "a clean run without --fail-on exits 0 for {name}");
     }
@@ -300,7 +380,15 @@ fn should_keep_exit_code_two_reserved_for_a_fail_on_match() {
         let root = fixture(name);
         let root_str = root.to_str().unwrap_or_default();
 
-        let (code, _) = run_strata(&["violations", "--root", root_str, "--fail-on", "cycle"]);
+        let (code, _) = run_strata(&[
+            "violations",
+            "--root",
+            root_str,
+            "--config",
+            PURE_DEFAULTS,
+            "--fail-on",
+            "cycle",
+        ]);
 
         assert_ne!(code, 2, "a clean fixture never gates for {name}");
     }

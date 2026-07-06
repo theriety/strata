@@ -11,8 +11,8 @@
 use std::io::{self, Write};
 
 use strata_engine::{
-    AnalyzeResult, Candidate, ContainerNode, Level, ModeResult, Move, MoveKind, Severity,
-    Violation, ViolationKind,
+    AnalyzeResult, Candidate, ContainerNode, CurrentStanding, Level, ModeResult, Move, MoveKind,
+    Severity, Violation, ViolationKind,
 };
 
 /// The output format the `analyze` command renders in.
@@ -102,13 +102,25 @@ fn write_summary(
     writeln!(out, "current score: {:.4}", result.current.score)?;
     write_violation_table(&result.current.violations, out)?;
 
+    let current_capacity = hard_capacity_count(&result.current.violations);
     if let Some(mode) = &result.modes.anchored {
-        write_mode_summary("anchored", mode, show_suggestions, out)?;
+        write_mode_summary("anchored", mode, current_capacity, show_suggestions, out)?;
     }
     if let Some(mode) = &result.modes.greenfield {
-        write_mode_summary("greenfield", mode, show_suggestions, out)?;
+        write_mode_summary("greenfield", mode, current_capacity, show_suggestions, out)?;
     }
     Ok(())
+}
+
+/// Counts the hard capacity violations of the current layout.
+pub fn hard_capacity_count(violations: &[Violation]) -> u32 {
+    let count = violations
+        .iter()
+        .filter(|violation| {
+            violation.kind == ViolationKind::Capacity && violation.severity == Severity::Violation
+        })
+        .count();
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 /// Writes one mode's candidate headlines to `out`.
@@ -119,19 +131,45 @@ fn write_summary(
 fn write_mode_summary(
     name: &str,
     mode: &ModeResult,
+    current_capacity: u32,
     show_suggestions: bool,
     out: &mut impl Write,
 ) -> io::Result<()> {
     writeln!(out, "mode {name}: {} candidate(s)", mode.candidates.len())?;
-    if !mode.solution_space_converged {
+    if mode.solution_space_converged {
         writeln!(out, "  (fewer than k candidates; solution space converged)")?;
+    }
+    match mode.current_standing {
+        CurrentStanding::Optimal => writeln!(
+            out,
+            "  current layout is already optimal; candidate 1 is the current tree"
+        )?,
+        CurrentStanding::Infeasible => match mode.best_candidate_capacity {
+            Some(capacity) => {
+                let resolved = current_capacity.saturating_sub(capacity.remaining);
+                writeln!(
+                    out,
+                    "  current layout violates capacity caps; best candidate resolves {resolved} of {current_capacity} capacity finding(s)"
+                )?;
+                if capacity.file_level > 0 {
+                    writeln!(
+                        out,
+                        "  {} file-level breach(es) exceed the file cap; only conditional splits can fix them",
+                        capacity.file_level
+                    )?;
+                }
+            }
+            None => writeln!(out, "  current layout violates capacity caps")?,
+        },
+        CurrentStanding::Outscored => {}
     }
     for candidate in &mode.candidates {
         writeln!(
             out,
-            "  candidate {} score {:.4} ({} move group(s))",
+            "  candidate {} score {:.4} (improvement {:+.4}; {} move group(s))",
             candidate.index,
             candidate.score,
+            candidate.improvement,
             candidate.delta_narration.len()
         )?;
     }
@@ -214,6 +252,17 @@ pub fn render_diff(candidate: &Candidate, out: &mut impl Write) -> io::Result<()
     if candidate.delta_narration.is_empty() {
         return writeln!(out, "no moves");
     }
+    let groups = candidate.delta_narration.len();
+    let files: usize = candidate
+        .delta_narration
+        .iter()
+        .map(|entry| entry.symbols.len())
+        .sum();
+    writeln!(
+        out,
+        "moves ({groups} group(s), {files} file(s); improvement {:+.4}):",
+        candidate.improvement
+    )?;
     for entry in &candidate.delta_narration {
         write_move(entry, out)?;
     }
@@ -221,9 +270,12 @@ pub fn render_diff(candidate: &Candidate, out: &mut impl Write) -> io::Result<()
 }
 
 /// Writes one narrated move entry to `out`.
+///
+/// `from`/`to` hold one complete folded folder path per element (a merge lists
+/// several sources), so they join with a comma, never a path separator.
 fn write_move(entry: &Move, out: &mut impl Write) -> io::Result<()> {
-    let from = entry.from.join("/");
-    let to = entry.to.join("/");
+    let from = entry.from.join(", ");
+    let to = entry.to.join(", ");
     writeln!(
         out,
         "{} {} :: {} -> {} ({})",
@@ -302,7 +354,8 @@ fn severity_tag(severity: Severity) -> &'static str {
 #[cfg(test)]
 mod tests {
     use strata_engine::{
-        ContainerNode, CurrentTree, Modes, ScoreBreakdown, Summary, SymbolPlacement,
+        CapacityRemainder, ContainerNode, CurrentTree, Modes, ScoreBreakdown, Summary,
+        SymbolPlacement,
     };
 
     use super::*;
@@ -310,6 +363,7 @@ mod tests {
     /// Builds an empty-but-valid result with `violations` on its current tree.
     fn result_with(violations: Vec<Violation>) -> AnalyzeResult {
         AnalyzeResult {
+            schema_version: 1,
             snapshot_hash: "deadbeef".to_owned(),
             summary: Summary {
                 symbols: 2,
@@ -337,6 +391,7 @@ mod tests {
                     index: 1,
                     score: 0.25,
                     score_breakdown: zero_breakdown(),
+                    improvement: 1.25,
                     tree: ContainerNode {
                         name: "proposed".to_owned(),
                         level: Level::Folder,
@@ -349,6 +404,10 @@ mod tests {
                 }],
                 pairwise_distance: Vec::new(),
                 solution_space_converged: true,
+                current_score: 1.5,
+                current_score_breakdown: zero_breakdown(),
+                current_standing: CurrentStanding::Outscored,
+                best_candidate_capacity: None,
             }),
             greenfield: None,
         };
@@ -513,6 +572,7 @@ mod tests {
             index: 1,
             score: 0.0,
             score_breakdown: zero_breakdown(),
+            improvement: 0.0,
             tree: file_node("lib", 1),
             conditional_splits: Vec::new(),
             delta_narration: Vec::new(),
@@ -530,6 +590,7 @@ mod tests {
             index: 1,
             score: 0.0,
             score_breakdown: zero_breakdown(),
+            improvement: 1.25,
             tree: file_node("lib", 1),
             conditional_splits: Vec::new(),
             delta_narration: vec![Move {
@@ -537,7 +598,7 @@ mod tests {
                 symbols: vec!["alpha".to_owned()],
                 from: vec!["old".to_owned()],
                 to: vec!["new".to_owned()],
-                reason: "cohesion gain".to_owned(),
+                reason: "regrouped by clustering".to_owned(),
                 follows_subject: None,
             }],
         };
@@ -546,6 +607,87 @@ mod tests {
         render_diff(&candidate, &mut buffer).unwrap_or_default();
 
         let text = String::from_utf8(buffer).unwrap_or_default();
-        assert_eq!(text, "move alpha :: old -> new (cohesion gain)\n");
+        assert_eq!(
+            text,
+            "moves (1 group(s), 1 file(s); improvement +1.2500):\nmove alpha :: old -> new (regrouped by clustering)\n"
+        );
+    }
+
+    #[test]
+    fn should_print_the_optimal_notice_when_the_current_layout_wins() {
+        let mut result = result_with_candidate();
+        if let Some(mode) = result.modes.anchored.as_mut() {
+            mode.current_standing = CurrentStanding::Optimal;
+        }
+        let mut buffer = Vec::new();
+
+        render(&result, Format::Summary, false, &mut buffer).unwrap_or_default();
+
+        let text = String::from_utf8(buffer).unwrap_or_default();
+        assert!(
+            text.contains("current layout is already optimal; candidate 1 is the current tree")
+        );
+    }
+
+    #[test]
+    fn should_print_the_infeasible_notice_with_the_resolved_capacity_count() {
+        // two hard capacity findings today; the best candidate leaves one, a
+        // file-level breach only a conditional split can fix.
+        let capacity = |name: &str| Violation {
+            kind: ViolationKind::Capacity,
+            severity: Severity::Violation,
+            location: vec![name.to_owned()],
+            detail: format!("{name} over cap"),
+            break_suggestions: None,
+        };
+        let mut result = result_with_candidate();
+        result.current.violations = vec![capacity("big_folder"), capacity("huge_file")];
+        if let Some(mode) = result.modes.anchored.as_mut() {
+            mode.current_standing = CurrentStanding::Infeasible;
+            mode.best_candidate_capacity = Some(CapacityRemainder {
+                remaining: 1,
+                file_level: 1,
+            });
+        }
+        let mut buffer = Vec::new();
+
+        render(&result, Format::Summary, false, &mut buffer).unwrap_or_default();
+
+        let text = String::from_utf8(buffer).unwrap_or_default();
+        assert!(text.contains(
+            "current layout violates capacity caps; best candidate resolves 1 of 2 capacity finding(s)"
+        ));
+        assert!(text.contains(
+            "1 file-level breach(es) exceed the file cap; only conditional splits can fix them"
+        ));
+    }
+
+    #[test]
+    fn should_print_the_plain_infeasible_notice_when_the_remainder_is_absent() {
+        // a saved result from an older run has no bestCandidateCapacity field;
+        // the notice degrades to the plain sentence instead of inventing numbers.
+        let mut result = result_with_candidate();
+        if let Some(mode) = result.modes.anchored.as_mut() {
+            mode.current_standing = CurrentStanding::Infeasible;
+            mode.best_candidate_capacity = None;
+        }
+        let mut buffer = Vec::new();
+
+        render(&result, Format::Summary, false, &mut buffer).unwrap_or_default();
+
+        let text = String::from_utf8(buffer).unwrap_or_default();
+        assert!(text.contains("current layout violates capacity caps\n"));
+        assert!(!text.contains("resolves"));
+    }
+
+    #[test]
+    fn should_print_candidate_improvement_in_the_summary() {
+        let result = result_with_candidate();
+        let mut buffer = Vec::new();
+
+        render(&result, Format::Summary, false, &mut buffer).unwrap_or_default();
+
+        let text = String::from_utf8(buffer).unwrap_or_default();
+        assert!(text.contains("candidate 1 score 0.2500 (improvement +1.2500; 0 move group(s))"));
     }
 }

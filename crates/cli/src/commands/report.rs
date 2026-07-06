@@ -10,7 +10,9 @@ use std::fmt::Write as _;
 use std::io::Write;
 use std::path::PathBuf;
 
-use strata_engine::{AnalyzeResult, Candidate, ModeResult, ScoreBreakdown, StrataError, Violation};
+use strata_engine::{
+    AnalyzeResult, Candidate, CurrentStanding, ModeResult, ScoreBreakdown, StrataError, Violation,
+};
 
 use crate::commands::read_result;
 
@@ -65,11 +67,12 @@ fn render_markdown(result: &AnalyzeResult) -> String {
     write_breakdown(&mut markdown, &result.current.score_breakdown);
     write_violations(&mut markdown, &result.current.violations);
 
+    let current_capacity = crate::render::hard_capacity_count(&result.current.violations);
     if let Some(mode) = &result.modes.anchored {
-        write_mode(&mut markdown, "Anchored", mode);
+        write_mode(&mut markdown, "Anchored", mode, current_capacity);
     }
     if let Some(mode) = &result.modes.greenfield {
-        write_mode(&mut markdown, "Greenfield", mode);
+        write_mode(&mut markdown, "Greenfield", mode, current_capacity);
     }
     markdown
 }
@@ -95,13 +98,41 @@ fn write_violations(markdown: &mut String, violations: &[Violation]) {
 }
 
 /// Writes one mode's candidate sections.
-fn write_mode(markdown: &mut String, name: &str, mode: &ModeResult) {
+fn write_mode(markdown: &mut String, name: &str, mode: &ModeResult, current_capacity: u32) {
     let _ = writeln!(markdown, "## {name} candidates\n");
-    if !mode.solution_space_converged {
+    if mode.solution_space_converged {
         let _ = writeln!(
             markdown,
             "_Fewer than the requested candidates survived; the solution space converged._\n"
         );
+    }
+    match mode.current_standing {
+        CurrentStanding::Optimal => {
+            let _ = writeln!(
+                markdown,
+                "_Current layout is already optimal; candidate 1 is the current tree._\n"
+            );
+        }
+        CurrentStanding::Infeasible => match mode.best_candidate_capacity {
+            Some(capacity) => {
+                let resolved = current_capacity.saturating_sub(capacity.remaining);
+                let _ = writeln!(
+                    markdown,
+                    "_Current layout violates capacity caps; best candidate resolves {resolved} of {current_capacity} capacity finding(s)._\n"
+                );
+                if capacity.file_level > 0 {
+                    let _ = writeln!(
+                        markdown,
+                        "_{} file-level breach(es) exceed the file cap; only conditional splits can fix them._\n",
+                        capacity.file_level
+                    );
+                }
+            }
+            None => {
+                let _ = writeln!(markdown, "_Current layout violates capacity caps._\n");
+            }
+        },
+        CurrentStanding::Outscored => {}
     }
     for candidate in &mode.candidates {
         write_candidate(markdown, candidate);
@@ -112,8 +143,8 @@ fn write_mode(markdown: &mut String, name: &str, mode: &ModeResult) {
 fn write_candidate(markdown: &mut String, candidate: &Candidate) {
     let _ = writeln!(
         markdown,
-        "### Candidate {} (score `{:.4}`)\n",
-        candidate.index, candidate.score
+        "### Candidate {} (score `{:.4}`, improvement `{:+.4}`)\n",
+        candidate.index, candidate.score, candidate.improvement
     );
     write_breakdown(markdown, &candidate.score_breakdown);
 
@@ -137,13 +168,15 @@ fn write_candidate(markdown: &mut String, candidate: &Candidate) {
     }
     let _ = writeln!(markdown, "**Moves**\n");
     for entry in &candidate.delta_narration {
+        // from/to hold one complete folded folder path per element (a merge
+        // lists several sources), so they join with a comma, never a separator.
         let _ = writeln!(
             markdown,
             "- {:?} `{}`: {} -> {} ({})",
             entry.kind,
             entry.symbols.join(", "),
-            entry.from.join("/"),
-            entry.to.join("/"),
+            entry.from.join(", "),
+            entry.to.join(", "),
             entry.reason
         );
     }
@@ -173,6 +206,7 @@ mod tests {
     /// Builds a result with one anchored candidate and a cycle violation.
     fn sample() -> AnalyzeResult {
         AnalyzeResult {
+            schema_version: strata_engine::RESULT_SCHEMA_VERSION,
             snapshot_hash: "abc123".to_owned(),
             summary: Summary {
                 symbols: 3,
@@ -196,7 +230,13 @@ mod tests {
                 anchored: Some(ModeResult {
                     candidates: vec![candidate()],
                     pairwise_distance: vec![vec![0.0]],
-                    solution_space_converged: false,
+                    // one candidate against a default k of three: the space converged,
+                    // so the report prints the fewer-than-requested notice.
+                    solution_space_converged: true,
+                    current_score: 2.0,
+                    current_score_breakdown: zero(),
+                    current_standing: CurrentStanding::Outscored,
+                    best_candidate_capacity: None,
                 }),
                 greenfield: None,
             },
@@ -209,6 +249,7 @@ mod tests {
             index: 1,
             score: 1.0,
             score_breakdown: zero(),
+            improvement: 1.0,
             tree: file("lib"),
             conditional_splits: vec![ConditionalSplit {
                 scc: vec!["x".to_owned(), "y".to_owned()],

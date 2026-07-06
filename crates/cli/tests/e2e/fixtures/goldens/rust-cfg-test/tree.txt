@@ -1,0 +1,9 @@
+rust-cfg-test [packageGroup]
+  src [package]
+    src [domain]
+      src [folder]
+        src/lib.rs [file] 6 sloc
+          - double (package)
+          - halve (package)
+          - exercises_double (file)
+          - exercises_halve (file)

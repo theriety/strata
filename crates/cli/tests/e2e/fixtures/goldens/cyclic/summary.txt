@@ -1,8 +1,11 @@
-snapshot b0641f6ffecb2cc3db014aa7f7e64c344d38e107fd94efc65951d0fe2d3666ab
+snapshot aa32abd8ab99c9972ed566bf997ef04eab7331dbe13dac63a9bf5816909618c2
 summary: 2 symbols, 2 edges, 2 files
-current score: 32.0000
-cycle [violation] alpha_step, beta_step :: dependency cycle over 2 symbols
+current score: 4.0000
+cycle [violation] alpha_step, beta_step :: 2-symbol cycle; break beta_step -> alpha_step (w=1.0, exact)
 mode anchored: 1 candidate(s)
-  candidate 1 score 4.5000 (1 move group(s))
+  (fewer than k candidates; solution space converged)
+  current layout is already optimal; candidate 1 is the current tree
+  candidate 1 score 4.0000 (improvement +0.0000; 0 move group(s))
 mode greenfield: 1 candidate(s)
-  candidate 1 score 4.0000 (1 move group(s))
+  (fewer than k candidates; solution space converged)
+  candidate 1 score 4.0000 (improvement +0.0000; 0 move group(s))

@@ -1,11 +1,14 @@
-snapshot 1c5072657680ee94fe4bf336abb5a44a07d77fb59782202e24ae42cd56937d31
+snapshot ec8818699cadd012e33ad01d7e1d1c8d5d1d0f2892f6423ee0b57221dfb3328a
 summary: 6 symbols, 4 edges, 1 files
-current score: 3.3000
+current score: 3.1000
+visibility [violation] Rectangle :: `Rectangle` is exported at Package but needed only at File
 visibility [violation] Shape :: `Shape` is exported at Package but needed only at File
 visibility [violation] describe_shape :: `describe_shape` is exported at Package but needed only at File
-visibility [violation] Rectangle :: `Rectangle` is exported at Package but needed only at File
 visibility [violation] summarize :: `summarize` is exported at Package but needed only at File
 mode anchored: 1 candidate(s)
-  candidate 1 score 3.3000 (0 move group(s))
+  (fewer than k candidates; solution space converged)
+  current layout is already optimal; candidate 1 is the current tree
+  candidate 1 score 3.1000 (improvement +0.0000; 0 move group(s))
 mode greenfield: 1 candidate(s)
-  candidate 1 score 3.3000 (0 move group(s))
+  (fewer than k candidates; solution space converged)
+  candidate 1 score 3.3000 (improvement +0.0000; 0 move group(s))

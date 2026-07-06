@@ -24,6 +24,7 @@ thiserror = "2"
 proptest = "1"
 criterion = "0.5"
 highs = "1"
+ignore = "0.4"
 rayon = "1"
 libc = "0.2"
 

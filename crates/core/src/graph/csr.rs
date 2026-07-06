@@ -6,7 +6,9 @@
 //! single pass over snapshot edges, filtered by hardness, and sorts each row so
 //! the layout is identical across runs and thread counts.
 
-use strata_ir::{Edge, EdgeKind, Hardness, NodeId, Snapshot};
+use strata_ir::{Edge, Hardness, NodeId, Snapshot};
+
+use crate::score::KindWeights;
 
 /// Which edges enter a CSR view.
 ///
@@ -30,26 +32,12 @@ impl HardnessFilter {
     }
 }
 
-/// Default scoring weight for an edge kind, mirroring the `[weights]` config
-/// defaults (a config-less run uses exactly these). Re-exports are flattened
-/// during normalization and carry no weight here.
-fn kind_weight(kind: EdgeKind) -> f32 {
-    match kind {
-        EdgeKind::ValueImport | EdgeKind::Call => 1.0,
-        EdgeKind::Inheritance => 1.5,
-        EdgeKind::TypeReference => 0.3,
-        EdgeKind::ReExport => 0.0,
-    }
-}
-
 /// The weight assigned to a single edge: kind weight scaled by binder confidence.
-fn edge_weight(edge: &Edge) -> f32 {
-    // Edge weights are f32 by the CSR contract (ad-6); narrowing the f64
-    // confidence is intentional and the only lossy step, so the truncation lint
-    // is allowed here alone.
+fn edge_weight(edge: &Edge, weights: &KindWeights) -> f32 {
+    // reason: edge weights are f32 by the CSR contract (ad-6); narrowing the f64 product is intentional and the only lossy step
     #[allow(clippy::cast_possible_truncation)]
-    let confidence = edge.confidence as f32;
-    kind_weight(edge.kind) * confidence
+    let weight = weights.edge_weight(edge.kind, edge.confidence) as f32;
+    weight
 }
 
 /// Compressed sparse row adjacency in a struct-of-arrays layout (ad-6).
@@ -90,6 +78,49 @@ impl Csr {
 
         let targets: Vec<u32> = edges.iter().map(|&(_, column)| column).collect();
         let weights = vec![0.0_f32; targets.len()];
+
+        Self {
+            offsets,
+            targets,
+            weights,
+        }
+    }
+
+    /// Builds a CSR from weighted `edges` over `vertex_count` vertices.
+    ///
+    /// Edges need not be sorted or unique: rows are sorted ascending and the
+    /// weights of parallel edges are summed, so the result is deterministic for
+    /// any input order. This constructor serves quotient views that must carry
+    /// real cut weights (heavy-edge matching and FM gains read them).
+    #[must_use]
+    pub fn from_weighted_edges(vertex_count: usize, edges: &[(u32, u32, f32)]) -> Self {
+        let mut sorted: Vec<(u32, u32, f32)> = edges.to_vec();
+        sorted.sort_by_key(|edge| (edge.0, edge.1));
+
+        // Merge parallel edges by summing their weights.
+        let mut merged: Vec<(u32, u32, f32)> = Vec::with_capacity(sorted.len());
+        for (row, column, weight) in sorted {
+            match merged.last_mut() {
+                Some(last) if last.0 == row && last.1 == column => last.2 += weight,
+                _ => merged.push((row, column, weight)),
+            }
+        }
+
+        let mut offsets = vec![0_u32; vertex_count + 1];
+        for &(row, _, _) in &merged {
+            if let Some(slot) = offsets.get_mut(row as usize + 1) {
+                *slot += 1;
+            }
+        }
+        for index in 1..offsets.len() {
+            let previous = offsets.get(index - 1).copied().unwrap_or(0);
+            if let Some(slot) = offsets.get_mut(index) {
+                *slot += previous;
+            }
+        }
+
+        let targets: Vec<u32> = merged.iter().map(|&(_, column, _)| column).collect();
+        let weights: Vec<f32> = merged.iter().map(|&(_, _, weight)| weight).collect();
 
         Self {
             offsets,
@@ -153,11 +184,22 @@ pub struct GraphViews {
 /// row are sorted ascending so the layout is deterministic.
 #[must_use]
 pub fn build_csr(snapshot: &Snapshot, filter: HardnessFilter) -> GraphViews {
+    build_csr_with(snapshot, filter, &KindWeights::default())
+}
+
+/// [`build_csr`] with an explicit per-kind weight table (the `[weights]` config)
+/// pricing every edge instead of the built-in defaults.
+#[must_use]
+pub fn build_csr_with(
+    snapshot: &Snapshot,
+    filter: HardnessFilter,
+    weights: &KindWeights,
+) -> GraphViews {
     let ir = snapshot.ir();
     let vertex_count = ir.nodes.len();
 
-    let forward = collect_directed(&ir.edges, vertex_count, filter, Direction::Forward);
-    let reverse = collect_directed(&ir.edges, vertex_count, filter, Direction::Reverse);
+    let forward = collect_directed(&ir.edges, vertex_count, filter, Direction::Forward, weights);
+    let reverse = collect_directed(&ir.edges, vertex_count, filter, Direction::Reverse, weights);
 
     GraphViews { forward, reverse }
 }
@@ -188,6 +230,7 @@ fn collect_directed(
     vertex_count: usize,
     filter: HardnessFilter,
     direction: Direction,
+    kind_weights: &KindWeights,
 ) -> Csr {
     // Pass 1: per-row degree, accumulated into the offsets prefix sum.
     let mut offsets = vec![0_u32; vertex_count + 1];
@@ -220,7 +263,7 @@ fn collect_directed(
         .filter(|edge| filter.admits(edge))
         .map(|edge| {
             let (row, column) = direction.endpoints(edge);
-            (row.0, column.0, edge_weight(edge))
+            (row.0, column.0, edge_weight(edge, kind_weights))
         })
         .collect();
     ordered.sort_by_key(|&(row, column, _)| (row, column));
@@ -250,8 +293,8 @@ fn collect_directed(
 mod tests {
     use smol_str::SmolStr;
     use strata_ir::{
-        Container, ContainerId, ContainerTree, IntermediateRepresentation, Node, NodeKind,
-        Polarity, ScopeLevel,
+        Container, ContainerId, ContainerTree, EdgeKind, IntermediateRepresentation, Node,
+        NodeKind, Polarity, ScopeLevel,
     };
 
     use super::*;
@@ -373,6 +416,26 @@ mod tests {
         assert_eq!(
             (graph.forward.vertex_count(), graph.forward.edge_count()),
             (3, 2)
+        );
+    }
+
+    #[test]
+    fn should_sum_parallel_edge_weights_in_the_weighted_constructor() {
+        // two parallel 0 -> 1 edges (1.0 + 0.5) and one 0 -> 2 edge, unsorted.
+        let csr = Csr::from_weighted_edges(3, &[(0, 2, 2.0), (0, 1, 1.0), (0, 1, 0.5)]);
+
+        assert_eq!(csr.neighbors(0), &[1, 2]);
+        let weights: Vec<u32> = csr.weights(0).iter().map(|w| w.to_bits()).collect();
+        assert_eq!(weights, vec![1.5_f32.to_bits(), 2.0_f32.to_bits()]);
+    }
+
+    #[test]
+    fn should_sort_rows_in_the_weighted_constructor() {
+        let csr = Csr::from_weighted_edges(3, &[(2, 0, 1.0), (1, 0, 1.0), (2, 1, 1.0)]);
+
+        assert_eq!(
+            (csr.neighbors(1), csr.neighbors(2), csr.edge_count()),
+            (&[0][..], &[0, 1][..], 3)
         );
     }
 

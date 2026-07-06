@@ -1,14 +1,16 @@
-snapshot f65608f46ad3008d746880149ebd93c1d934c98cecb1743c136f1acaed37b33a
-summary: 275 symbols, 0 edges, 2 files
-current score: 0.0083
-no violations
-mode anchored: 3 candidate(s)
+snapshot 16329a520c6b6c1c80fed2150091544b609f46d4cf39f2094ccab7a8a66bf60d
+summary: 375 symbols, 0 edges, 3 files
+current score: -0.0611
+capacity [violation] over-capacity, pkg, nested, deep, huge_nested.py :: file `pkg/nested/deep/huge_nested.py` holds 300 against a cap of 250
+capacity [violation] over-capacity, workspace, huge.py :: file `huge.py` holds 300 against a cap of 250
+capacity [borderline] over-capacity, workspace, borderline.py :: file `borderline.py` holds 250 against a cap of 250
+mode anchored: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 score 0.0083 (0 move group(s))
-  candidate 2 score 0.0083 (0 move group(s))
-  candidate 3 score 0.0083 (0 move group(s))
-mode greenfield: 3 candidate(s)
+  current layout violates capacity caps; best candidate resolves 0 of 2 capacity finding(s)
+  2 file-level breach(es) exceed the file cap; only conditional splits can fix them
+  candidate 1 score 0.2174 (improvement -0.2785; 1 move group(s))
+mode greenfield: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 score 0.0083 (0 move group(s))
-  candidate 2 score 0.0083 (0 move group(s))
-  candidate 3 score 0.0083 (0 move group(s))
+  current layout violates capacity caps; best candidate resolves 0 of 2 capacity finding(s)
+  2 file-level breach(es) exceed the file cap; only conditional splits can fix them
+  candidate 1 score -0.0493 (improvement +0.0588; 1 move group(s))

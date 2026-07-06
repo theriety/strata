@@ -49,12 +49,14 @@ impl SeedLevel {
 ///
 /// `layers` is indexed by `top`'s vertices. Vertices are visited in descending
 /// layer (ties broken by ascending index) — a topological order for this crate's
-/// dependent → dependency edges — and packed greedily into clusters of at most
-/// `caps`'s `level` cap members. The resulting quotient is acyclic because each
+/// dependent → dependency edges — and packed greedily into clusters whose summed
+/// capacity weight (`top.vertex_weights`; files at the folder level) stays
+/// within `caps`'s `level` cap. The resulting quotient is acyclic because each
 /// cluster owns a contiguous prefix of that order.
 ///
 /// A cap of zero is treated as one so that growth always makes progress; every
-/// vertex still lands in exactly one cluster.
+/// vertex still lands in exactly one cluster, and a single vertex heavier than
+/// the cap (an unsplittable atom) fills a cluster of its own.
 #[must_use]
 pub fn seed(top: &CoarseGraph, layers: &[u32], caps: &LevelCaps, level: SeedLevel) -> Partition {
     let vertex_count = top.graph.vertex_count();
@@ -67,14 +69,19 @@ pub fn seed(top: &CoarseGraph, layers: &[u32], caps: &LevelCaps, level: SeedLeve
     let mut filled = 0_u32;
 
     for vertex in order {
-        if filled == cap {
+        let weight = top
+            .vertex_weights
+            .get(vertex as usize)
+            .copied()
+            .unwrap_or(1);
+        if filled > 0 && filled.saturating_add(weight) > cap {
             cluster += 1;
             filled = 0;
         }
         if let Some(slot) = assignment.get_mut(vertex as usize) {
             *slot = ClusterId(cluster);
         }
-        filled += 1;
+        filled = filled.saturating_add(weight);
     }
 
     let cluster_count = if vertex_count == 0 {
@@ -114,9 +121,13 @@ mod tests {
         let fine_to_coarse = (0..vertex_count)
             .map(|v| u32::try_from(v).unwrap_or(u32::MAX))
             .collect();
+        let layers = layers_of(&graph);
+        let vertex_weights = vec![1; vertex_count];
         CoarseGraph {
             graph,
             fine_to_coarse,
+            layers,
+            vertex_weights,
         }
     }
 
@@ -216,6 +227,43 @@ mod tests {
         let parts = seed(&graph, &layers, &caps, SeedLevel::Folder);
 
         assert_quotient_acyclic(&graph.graph, &parts);
+    }
+
+    #[test]
+    fn should_pack_by_capacity_weight_not_vertex_count() {
+        // three vertices weighing 10, 10, and 3 under a cap of 15: the second
+        // vertex cannot join the first (20 > 15), but the third fits beside it.
+        let mut graph = coarse(3, vec![]);
+        graph.vertex_weights = vec![10, 10, 3];
+        let layers = layers_of(&graph.graph);
+        let caps = LevelCaps {
+            folder: 15,
+            ..LevelCaps::defaults()
+        };
+
+        let parts = seed(&graph, &layers, &caps, SeedLevel::Folder);
+
+        assert_eq!(parts.cluster_count(), 2);
+        assert_eq!(parts.size_of(ClusterId(0)), 1);
+        assert_eq!(parts.size_of(ClusterId(1)), 2);
+    }
+
+    #[test]
+    fn should_grant_an_over_cap_atom_its_own_cluster() {
+        // a single vertex heavier than the cap still lands in exactly one
+        // cluster, alone, and its neighbours open a fresh cluster after it.
+        let mut graph = coarse(2, vec![]);
+        graph.vertex_weights = vec![40, 2];
+        let layers = layers_of(&graph.graph);
+        let caps = LevelCaps {
+            folder: 15,
+            ..LevelCaps::defaults()
+        };
+
+        let parts = seed(&graph, &layers, &caps, SeedLevel::Folder);
+
+        assert_eq!(parts.cluster_count(), 2);
+        assert_eq!(parts.size_of(ClusterId(0)), 1);
     }
 
     #[test]

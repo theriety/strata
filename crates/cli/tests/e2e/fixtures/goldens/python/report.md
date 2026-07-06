@@ -1,14 +1,14 @@
 # Strata report
 
-Snapshot `f6b6dcc98073ffac6abe3443e0083a47fa44935eba80e405c2a40835b76706a5`.
+Snapshot `f7aebca5ce0f1d7d6a6fcb34c7864225161cb8a77e24c1bb7dc3b63e7e1b7da5`.
 
 - 4 symbols, 4 edges, 2 files
 
 ## Current layout
 
-Score `20.7111`.
+Score `5.4111`.
 
-- cut `20.6000`, imbalance `0.1111`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+- cut `5.6000`, imbalance `0.0111`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
 
 ### Violations
 
@@ -16,21 +16,23 @@ None.
 
 ## Anchored candidates
 
-### Candidate 1 (score `6.2111`)
+_Fewer than the requested candidates survived; the solution space converged._
 
-- cut `5.6000`, imbalance `0.1111`, naming `-0.0000`, path `-0.0000`, anchor `0.5000`
+_Current layout is already optimal; candidate 1 is the current tree._
 
-**Moves**
+### Candidate 1 (score `5.4111`, improvement `+0.0000`)
 
-- Move `pkg/shape.py`: python/pkg -> python/pkg/pkg/rectangle.py/pkg/rectangle.py (cohesion gain)
+- cut `5.6000`, imbalance `0.0111`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
+
+No moves versus the current layout.
 
 ## Greenfield candidates
 
-### Candidate 1 (score `5.7111`)
+_Fewer than the requested candidates survived; the solution space converged._
 
-- cut `5.6000`, imbalance `0.1111`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+### Candidate 1 (score `5.6111`, improvement `+0.0000`)
 
-**Moves**
+- cut `5.6000`, imbalance `0.0111`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
-- Move `pkg/shape.py`: python/pkg -> python/pkg/pkg/rectangle.py/pkg/rectangle.py (cohesion gain)
+No moves versus the current layout.
 

@@ -80,8 +80,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use strata_engine::{
-        AnalyzeResult, Candidate, ContainerNode, CurrentTree, Level, ModeResult, Modes,
-        ScoreBreakdown, Summary, SymbolPlacement,
+        AnalyzeResult, Candidate, ContainerNode, CurrentStanding, CurrentTree, Level, ModeResult,
+        Modes, ScoreBreakdown, Summary, SymbolPlacement,
     };
 
     use super::*;
@@ -89,6 +89,7 @@ mod tests {
     /// Builds a result with one anchored candidate over a two-file tree.
     fn sample() -> AnalyzeResult {
         AnalyzeResult {
+            schema_version: strata_engine::RESULT_SCHEMA_VERSION,
             snapshot_hash: "h".to_owned(),
             summary: Summary {
                 symbols: 1,
@@ -108,12 +109,17 @@ mod tests {
                         index: 1,
                         score: 0.5,
                         score_breakdown: zero(),
+                        improvement: 0.5,
                         tree: file("candidate_lib"),
                         conditional_splits: Vec::new(),
                         delta_narration: Vec::new(),
                     }],
                     pairwise_distance: vec![vec![0.0]],
                     solution_space_converged: true,
+                    current_score: 1.0,
+                    current_score_breakdown: zero(),
+                    current_standing: CurrentStanding::Outscored,
+                    best_candidate_capacity: None,
                 }),
                 greenfield: None,
             },

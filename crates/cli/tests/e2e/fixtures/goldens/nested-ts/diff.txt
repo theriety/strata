@@ -1,1 +1,6 @@
-move src/__tests__/support.ts, src/app.ts, src/geometry/index.ts, src/geometry/rectangle.ts, src/geometry/shape.ts :: nested-ts/src/src/__tests__ -> nested-ts/src/src/__tests__/src/__tests__/app.spec.ts (cohesion gain)
+moves (3 group(s), 3 file(s); improvement +23.6269):
+move src/app.ts :: nested-ts/src -> nested-ts/src/geometry (pulled by rectangle.ts (w 2.0))
+move src/__tests__/app.spec.ts :: nested-ts/src/__tests__ -> nested-ts/src/geometry (follows app.ts)
+    follows src/app.ts
+move src/__tests__/support.ts :: nested-ts/src/__tests__ -> nested-ts/src/geometry (follows rectangle.ts)
+    follows src/geometry/rectangle.ts

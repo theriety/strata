@@ -1,14 +1,14 @@
 # Strata report
 
-Snapshot `575e45017b92347e1ab99a28ef9f7a2c843b83b648e816afa787c2b2b009e6cc`.
+Snapshot `b1bf7fe07211ccab218055b0382974c23ac7745739ef90ff487291baa10f701b`.
 
 - 4 symbols, 2 edges, 2 files
 
 ## Current layout
 
-Score `20.1111`.
+Score `4.8111`.
 
-- cut `20.0000`, imbalance `0.1111`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+- cut `5.0000`, imbalance `0.0111`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
 
 ### Violations
 
@@ -16,21 +16,23 @@ None.
 
 ## Anchored candidates
 
-### Candidate 1 (score `5.6111`)
+_Fewer than the requested candidates survived; the solution space converged._
 
-- cut `5.0000`, imbalance `0.1111`, naming `-0.0000`, path `-0.0000`, anchor `0.5000`
+_Current layout is already optimal; candidate 1 is the current tree._
 
-**Moves**
+### Candidate 1 (score `4.8111`, improvement `+0.0000`)
 
-- Move `src/shape.ts`: ts/src -> ts/src/src/rectangle.ts/src/rectangle.ts (cohesion gain)
+- cut `5.0000`, imbalance `0.0111`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
+
+No moves versus the current layout.
 
 ## Greenfield candidates
 
-### Candidate 1 (score `5.1111`)
+_Fewer than the requested candidates survived; the solution space converged._
 
-- cut `5.0000`, imbalance `0.1111`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+### Candidate 1 (score `5.0111`, improvement `+0.0000`)
 
-**Moves**
+- cut `5.0000`, imbalance `0.0111`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
-- Move `src/shape.ts`: ts/src -> ts/src/src/rectangle.ts/src/rectangle.ts (cohesion gain)
+No moves versus the current layout.
 

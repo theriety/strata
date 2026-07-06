@@ -1,0 +1,22 @@
+test-heavy-ts [packageGroup]
+  spec [package]
+    adapters [domain]
+      anthropic [folder]
+        spec/adapters/anthropic/client.spec.ts [file] 0 sloc
+          - shouldCreateClient (file)
+        spec/adapters/anthropic/models.spec.ts [file] 0 sloc
+          - shouldNameTheModel (file)
+        spec/adapters/anthropic/retry.spec.ts [file] 0 sloc
+          - shouldRetryTheClient (file)
+        spec/adapters/anthropic/stream.spec.ts [file] 0 sloc
+          - shouldStreamMessages (file)
+  src [package]
+    adapters [domain]
+      anthropic [folder]
+        src/adapters/anthropic/client.ts [file] 9 sloc
+          - createClient (file)
+          - sendMessage (file)
+          - closeClient (file)
+        src/adapters/anthropic/models.ts [file] 6 sloc
+          - modelName (file)
+          - modelContext (file)

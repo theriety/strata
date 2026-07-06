@@ -9,31 +9,43 @@
 //! current tree's structural violations (cycles, polarity breaches, over-exports)
 //! and scores the current layout.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use smol_str::SmolStr;
-use strata_core::cluster::coarsen::coarsen_chain;
+use strata_core::cluster::coarsen::{CoarseGraph, coarsen_chain, tight_layers};
 use strata_core::cluster::refine::{GainFn, refine};
 use strata_core::cluster::seed::{SeedLevel, seed};
 use strata_core::cluster::{ClusterId, LevelCaps, Partition};
 use strata_core::condense::{Condensation, condense};
 use strata_core::diversify::{ModeConfig, ModeResult as CoreModeResult, SolvedCandidate, Solver};
 use strata_core::diversify::{diversify, vi_distance};
-use strata_core::graph::csr::{HardnessFilter, build_csr};
+use strata_core::graph::csr::{Csr, HardnessFilter, build_csr};
 use strata_core::layer::layer;
 use strata_core::score::{
-    Candidate as ScoreCandidate, Coefficients, ContainerSizes, ScoreBreakdown as CoreBreakdown,
-    ScoredEdge, score,
+    Candidate as ScoreCandidate, Coefficients, CohesionGroup, ContainerSizes, KindWeights,
+    ScoreBreakdown as CoreBreakdown, ScoredEdge, score,
 };
+use strata_core::shatter::{BreakSet, EdgeRef, EdgeWeights, SccView, shatter};
 use strata_core::visibility::derive_visibility;
-use strata_ir::{Container, ContainerId, ContainerTree, Node, Polarity, ScopeLevel, Snapshot};
+use strata_ir::{
+    Container, ContainerId, ContainerTree, Edge, Hardness, Node, NodeId, Polarity, ScopeLevel,
+    Snapshot,
+};
 
 use crate::config::AnalyzeConfig;
 use crate::error::StrataError;
+use crate::narrate::{FileFacts, narrate, tokenize};
 use crate::result::{
-    AnalyzeResult, Candidate, ContainerNode, CurrentTree, Level, ModeResult, Modes, ScoreBreakdown,
-    Severity, Summary, SymbolPlacement, Violation, ViolationKind, narrate_delta,
+    AnalyzeResult, Candidate, CapacityRemainder, ConditionalSplit, ContainerNode, CurrentStanding,
+    CurrentTree, EdgeBreak, Level, ModeResult, Modes, RESULT_SCHEMA_VERSION, ScoreBreakdown,
+    Severity, Summary, SymbolPlacement, Violation, ViolationKind,
 };
+use crate::snapshot::Language;
+
+/// The capacity borderline band: a finding within ±10% of a cap is borderline
+/// and never gates CI (reference `BORDERLINE_CAPACITY_MARGIN`).
+pub const BORDERLINE_CAPACITY_MARGIN: f64 = 0.1;
 
 /// Analyzes `snapshot` under `config`, returning the owned [`AnalyzeResult`].
 ///
@@ -48,24 +60,77 @@ use crate::result::{
 /// Returns [`StrataError::SnapshotInvalid`] if the snapshot's container tree
 /// cannot be rendered (it is otherwise pre-validated at assembly).
 pub fn analyze(snapshot: &Snapshot, config: &AnalyzeConfig) -> Result<AnalyzeResult, StrataError> {
+    // `[analysis].jobs` caps the search's parallelism through a scoped pool so
+    // the library behaves exactly like the CLI (AD-5); results are
+    // thread-count invariant (NFR-1), so `0` (use the global pool) and any
+    // positive count all produce byte-identical output.
+    let jobs = usize::try_from(config.analysis.jobs).unwrap_or(usize::MAX);
+    if jobs == 0 {
+        return analyze_inner(snapshot, config);
+    }
+    match rayon::ThreadPoolBuilder::new().num_threads(jobs).build() {
+        Ok(pool) => pool.install(|| analyze_inner(snapshot, config)),
+        // pool creation fails only on resource exhaustion; the global pool
+        // yields the same bytes, so degrading is safe.
+        Err(_) => analyze_inner(snapshot, config),
+    }
+}
+
+/// The body of [`analyze`], run inside whatever rayon pool the caller scoped.
+fn analyze_inner(
+    snapshot: &Snapshot,
+    config: &AnalyzeConfig,
+) -> Result<AnalyzeResult, StrataError> {
     let ir = snapshot.ir();
     let tree = &ir.containers;
 
-    let violations = collect_violations(snapshot, config);
     let current_node = render_tree(tree, &ir.nodes, &|node| Some(node.container))?;
-    let current_breakdown = score_current(snapshot, &Coefficients::anchored());
+    let weights = config.weights.kind_weights();
+    let cycles = solve_cycles(snapshot, config, &weights);
+    let violations = collect_violations(snapshot, config, &current_node, &cycles);
+    let current_breakdown = score_current(snapshot, &config.objective.anchored(), &weights);
+
+    // identity seeding is anchored-only (AD-2) and requires a cap-clean current
+    // tree: a layout that already breaches a capacity cap is not a legal
+    // candidate, so it may only serve as the delta baseline.
+    let capacity_clean = !violations.iter().any(|violation| {
+        violation.kind == ViolationKind::Capacity && violation.severity == Severity::Violation
+    });
+
+    // conditional splits are layout-invariant (an SCC co-clusters everywhere),
+    // so they are computed once and shared verbatim by every candidate.
+    let splits = conditional_splits(&cycles, snapshot, config.capacity.file);
 
     let mode = config.analysis.mode;
     let anchored = mode
         .includes_anchored()
-        .then(|| build_mode_result(snapshot, config, &Coefficients::anchored()))
+        .then(|| {
+            build_mode_result(
+                snapshot,
+                config,
+                &config.objective.anchored(),
+                capacity_clean,
+                capacity_clean,
+                &splits,
+            )
+        })
         .transpose()?;
     let greenfield = mode
         .includes_greenfield()
-        .then(|| build_mode_result(snapshot, config, &Coefficients::greenfield()))
+        .then(|| {
+            build_mode_result(
+                snapshot,
+                config,
+                &config.objective.greenfield(),
+                false,
+                capacity_clean,
+                &splits,
+            )
+        })
         .transpose()?;
 
     Ok(AnalyzeResult {
+        schema_version: RESULT_SCHEMA_VERSION,
         snapshot_hash: snapshot.hash().to_hex().to_string(),
         summary: summarize(snapshot),
         current: CurrentTree {
@@ -82,61 +147,184 @@ pub fn analyze(snapshot: &Snapshot, config: &AnalyzeConfig) -> Result<AnalyzeRes
 }
 
 /// Builds the coarse census of the snapshot.
+///
+/// Files are classified by the same extension rule the snapshotter routes them
+/// with, so `files_by_language` mirrors the adapter dispatch; a file no adapter
+/// claims (possible only in a hand-assembled snapshot) counts toward `files` but
+/// no language.
 fn summarize(snapshot: &Snapshot) -> Summary {
     let ir = snapshot.ir();
-    let files = ir
-        .containers
-        .containers()
-        .iter()
-        .filter(|container| container.level == ScopeLevel::File)
-        .count();
+    let mut files = 0u32;
+    let mut files_by_language: BTreeMap<String, u32> = BTreeMap::new();
+    for container in ir.containers.containers() {
+        if container.level != ScopeLevel::File {
+            continue;
+        }
+        files = files.saturating_add(1);
+        if let Some(language) = Language::ALL
+            .iter()
+            .find(|language| language.matches_extension(&container.name))
+        {
+            *files_by_language
+                .entry(language.name().to_owned())
+                .or_default() += 1;
+        }
+    }
 
     Summary {
         symbols: u32::try_from(ir.nodes.len()).unwrap_or(u32::MAX),
         edges: u32::try_from(ir.edges.len()).unwrap_or(u32::MAX),
-        files: u32::try_from(files).unwrap_or(u32::MAX),
-        files_by_language: BTreeMap::new(),
+        files,
+        files_by_language,
     }
 }
 
-/// Collects the structural violations of the current tree: dependency cycles,
-/// polarity breaches, and visibility over-exports.
-fn collect_violations(snapshot: &Snapshot, _config: &AnalyzeConfig) -> Vec<Violation> {
+/// Collects the violations of the current tree: dependency cycles, polarity
+/// breaches, visibility over-exports, and capacity findings against the
+/// configured caps.
+fn collect_violations(
+    snapshot: &Snapshot,
+    config: &AnalyzeConfig,
+    tree: &ContainerNode,
+    cycles: &[SccSolution],
+) -> Vec<Violation> {
     let mut violations = Vec::new();
-    violations.extend(cycle_violations(snapshot));
+    violations.extend(cycle_violations(snapshot, cycles));
     violations.extend(polarity_violations(snapshot));
     violations.extend(visibility_violations(snapshot));
+    violations.extend(capacity_violations(tree, config));
+    sort_violations(&mut violations);
     violations
 }
 
+/// Sorts violations into the engine-defined total order — hard violations
+/// before borderline, then kind (cycle, polarity, capacity, visibility), then
+/// location, then detail — so every face, including JSON, shares one order.
+fn sort_violations(violations: &mut [Violation]) {
+    violations.sort_by(|left, right| {
+        severity_rank(left.severity)
+            .cmp(&severity_rank(right.severity))
+            .then_with(|| kind_rank(left.kind).cmp(&kind_rank(right.kind)))
+            .then_with(|| left.location.cmp(&right.location))
+            .then_with(|| left.detail.cmp(&right.detail))
+    });
+}
+
+/// Ranks a severity for the violation ordering: hard violations first.
+fn severity_rank(severity: Severity) -> u8 {
+    match severity {
+        Severity::Violation => 0,
+        Severity::Borderline => 1,
+    }
+}
+
+/// Ranks a kind for the violation ordering, mirroring the emission order.
+fn kind_rank(kind: ViolationKind) -> u8 {
+    match kind {
+        ViolationKind::Cycle => 0,
+        ViolationKind::Polarity => 1,
+        ViolationKind::Capacity => 2,
+        ViolationKind::Visibility => 3,
+    }
+}
+
 /// Reports every multi-node strongly connected component of the hard-edge graph
-/// as a cycle violation.
-fn cycle_violations(snapshot: &Snapshot) -> Vec<Violation> {
-    let views = build_csr(snapshot, HardnessFilter::HardOnly);
-    let condensation = condense(&views.forward);
+/// as a cycle violation, carrying the MFAS break set as suggestions.
+fn cycle_violations(snapshot: &Snapshot, cycles: &[SccSolution]) -> Vec<Violation> {
     let names = node_names(snapshot);
 
-    condensation
-        .members
+    cycles
         .iter()
-        .filter(|members| members.len() > 1)
-        .map(|members| {
-            let location = members
+        .map(|solution| {
+            let location = solution
+                .members
                 .iter()
                 .filter_map(|node| names.get(&node.0).cloned())
                 .collect::<Vec<_>>();
+            let breaks = edge_breaks(solution, &names);
             Violation {
                 kind: ViolationKind::Cycle,
                 severity: Severity::Violation,
-                detail: format!("dependency cycle over {} symbols", members.len()),
+                detail: cycle_detail(solution.members.len(), &breaks),
                 location,
-                break_suggestions: Some(Vec::new()),
+                break_suggestions: Some(breaks),
             }
         })
         .collect()
 }
 
-/// Reports production nodes that depend on test code as polarity breaches.
+/// Maps one SCC's MFAS break set onto named [`EdgeBreak`]s, in the break set's
+/// ascending `(source, target)` order.
+fn edge_breaks(solution: &SccSolution, names: &BTreeMap<u32, String>) -> Vec<EdgeBreak> {
+    let name_of = |local: u32| {
+        solution
+            .members
+            .get(local as usize)
+            .and_then(|node| names.get(&node.0))
+            .cloned()
+            .unwrap_or_default()
+    };
+    solution
+        .break_set
+        .edges
+        .iter()
+        .map(|edge| EdgeBreak {
+            source: name_of(edge.source),
+            target: name_of(edge.target),
+            weight: solution
+                .pair_weights
+                .get(&(edge.source, edge.target))
+                .copied()
+                .unwrap_or(0.0),
+            exact: solution.break_set.exact,
+        })
+        .collect()
+}
+
+/// Renders a cycle violation's detail line, leading with the cheapest break.
+fn cycle_detail(size: usize, breaks: &[EdgeBreak]) -> String {
+    let Some(first) = breaks.first() else {
+        return format!("{size}-symbol cycle");
+    };
+    let method = if first.exact { "exact" } else { "heuristic" };
+    let mut detail = format!(
+        "{size}-symbol cycle; break {} -> {} (w={:.1}, {method})",
+        first.source, first.target, first.weight
+    );
+    if breaks.len() > 1 {
+        let _ = write!(detail, ", +{} more", breaks.len() - 1);
+    }
+    detail
+}
+
+/// Derives the shared conditional splits: one per solved SCC whose production
+/// SLOC exceeds the file cap, with the MFAS break set as preconditions and a
+/// ceil-packed file-count estimate.
+fn conditional_splits(
+    cycles: &[SccSolution],
+    snapshot: &Snapshot,
+    file_cap: u32,
+) -> Vec<ConditionalSplit> {
+    let names = node_names(snapshot);
+    let cap = u64::from(file_cap.max(1));
+    cycles
+        .iter()
+        .filter(|solution| solution.production_sloc > cap)
+        .map(|solution| ConditionalSplit {
+            scc: solution
+                .members
+                .iter()
+                .filter_map(|node| names.get(&node.0).cloned())
+                .collect(),
+            preconditions: edge_breaks(solution, &names),
+            resulting_files: u32::try_from(solution.production_sloc.div_ceil(cap))
+                .unwrap_or(u32::MAX),
+        })
+        .collect()
+}
+
+/// Reports polarity-matrix breaches: production code depending on test code,
+/// and test support depending on a test case.
 fn polarity_violations(snapshot: &Snapshot) -> Vec<Violation> {
     let ir = snapshot.ir();
     let polarity_by_id: BTreeMap<u32, Polarity> = ir
@@ -148,25 +336,25 @@ fn polarity_violations(snapshot: &Snapshot) -> Vec<Violation> {
 
     ir.edges
         .iter()
-        .filter(|edge| {
-            matches!(
-                polarity_by_id.get(&edge.source.0),
-                Some(Polarity::Production)
-            ) && matches!(
-                polarity_by_id.get(&edge.target.0),
-                Some(Polarity::TestCase | Polarity::TestSupport)
-            )
-        })
-        .map(|edge| {
+        .filter_map(|edge| {
+            let source_polarity = polarity_by_id.get(&edge.source.0)?;
+            let target_polarity = polarity_by_id.get(&edge.target.0)?;
+            let (source_word, target_word) = match (source_polarity, target_polarity) {
+                (Polarity::Production, Polarity::TestCase | Polarity::TestSupport) => {
+                    ("production symbol", "test code")
+                }
+                (Polarity::TestSupport, Polarity::TestCase) => ("test support", "test case"),
+                _ => return None,
+            };
             let source = names.get(&edge.source.0).cloned().unwrap_or_default();
             let target = names.get(&edge.target.0).cloned().unwrap_or_default();
-            Violation {
+            Some(Violation {
                 kind: ViolationKind::Polarity,
                 severity: Severity::Violation,
-                detail: format!("production symbol `{source}` depends on test code `{target}`"),
+                detail: format!("{source_word} `{source}` depends on {target_word} `{target}`"),
                 location: vec![source, target],
                 break_suggestions: None,
-            }
+            })
         })
         .collect()
 }
@@ -196,13 +384,141 @@ fn visibility_violations(snapshot: &Snapshot) -> Vec<Violation> {
         .collect()
 }
 
+/// Derives capacity violations from the current tree against the configured caps.
+///
+/// A file over its production-SLOC cap and an interior container over its
+/// member-count cap each yield a finding; a finding within ±10% of its cap is
+/// `borderline` and never gates. Each container is checked against the cap of its
+/// own level.
+fn capacity_violations(tree: &ContainerNode, config: &AnalyzeConfig) -> Vec<Violation> {
+    walk_all_capacity(tree, config)
+        .into_iter()
+        .map(|(_, violation)| violation)
+        .collect()
+}
+
+/// Walks the DTO tree, returning each capacity finding with the level it hit.
+fn walk_all_capacity(tree: &ContainerNode, config: &AnalyzeConfig) -> Vec<(Level, Violation)> {
+    let mut findings = Vec::new();
+    let mut path = Vec::new();
+    append_display_segments(&mut path, tree);
+    walk_capacity(tree, &path, config, &mut findings);
+    findings
+}
+
+/// Recursively checks `node` and its descendants against their level caps.
+fn walk_capacity(
+    node: &ContainerNode,
+    path: &[String],
+    config: &AnalyzeConfig,
+    findings: &mut Vec<(Level, Violation)>,
+) {
+    let (measure, cap) = match node.level {
+        Level::File => (node.production_sloc.unwrap_or(0), config.capacity.file),
+        Level::Folder => (child_count(node), config.capacity.folder),
+        Level::Domain => (child_count(node), config.capacity.domain),
+        Level::Package => (child_count(node), config.capacity.package),
+        Level::PackageGroup => (child_count(node), config.capacity.package_group),
+    };
+
+    if let Some(finding) = capacity_finding(node, path, measure, cap) {
+        findings.push((node.level, finding));
+    }
+
+    if let Some(children) = &node.children {
+        for child in children {
+            let mut child_path = path.to_vec();
+            append_display_segments(&mut child_path, child);
+            walk_capacity(child, &child_path, config, findings);
+        }
+    }
+}
+
+/// Appends `node`'s display segments to `path`.
+///
+/// Interior DTO names are already incremental, so they split directly into
+/// segments; a file contributes only its basename because the finding's
+/// `detail` line carries the full path. Adjacent levels sharing one name (the
+/// synthetic `workspace` chain over a root-level file) contribute it once.
+fn append_display_segments(path: &mut Vec<String>, node: &ContainerNode) {
+    let name = if node.level == Level::File {
+        node.name.rsplit('/').next().unwrap_or(node.name.as_str())
+    } else {
+        node.name.as_str()
+    };
+    for segment in name.split('/').filter(|segment| !segment.is_empty()) {
+        if path.last().map(String::as_str) != Some(segment) {
+            path.push(segment.to_owned());
+        }
+    }
+}
+
+/// Returns the child count of an interior container.
+fn child_count(node: &ContainerNode) -> u32 {
+    node.children.as_ref().map_or(0, |children| {
+        u32::try_from(children.len()).unwrap_or(u32::MAX)
+    })
+}
+
+/// Builds a capacity finding if `measure` is at or over the borderline band of
+/// `cap`, classifying borderline (within ±10%) versus a hard breach.
+fn capacity_finding(
+    node: &ContainerNode,
+    path: &[String],
+    measure: u32,
+    cap: u32,
+) -> Option<Violation> {
+    let cap_f = f64::from(cap);
+    let measure_f = f64::from(measure);
+    let lower = cap_f * (1.0 - BORDERLINE_CAPACITY_MARGIN);
+
+    // below the borderline band entirely: not a finding.
+    if measure_f < lower {
+        return None;
+    }
+    // a hard breach is strictly over the cap; the band around the cap is borderline.
+    let upper = cap_f * (1.0 + BORDERLINE_CAPACITY_MARGIN);
+    let severity = if measure_f > upper {
+        Severity::Violation
+    } else {
+        Severity::Borderline
+    };
+
+    Some(Violation {
+        kind: ViolationKind::Capacity,
+        severity,
+        location: path.to_vec(),
+        detail: format!(
+            "{} `{}` holds {measure} against a cap of {cap}",
+            level_word(node.level),
+            node.name
+        ),
+        break_suggestions: None,
+    })
+}
+
+/// Returns the noun for a container level used in a capacity message.
+fn level_word(level: Level) -> &'static str {
+    match level {
+        Level::File => "file",
+        Level::Folder => "folder",
+        Level::Domain => "domain",
+        Level::Package => "package",
+        Level::PackageGroup => "package group",
+    }
+}
+
 /// Scores the snapshot's current layout under `coefficients`.
 ///
 /// The current candidate carries the snapshot's own edges (each crossing the LCA
 /// level of its endpoints in the current tree), the file-level container sizes,
 /// and a zero move distance, so its objective is the genuine `J(T0)` baseline the
 /// candidates are measured against.
-fn score_current(snapshot: &Snapshot, coefficients: &Coefficients) -> CoreBreakdown {
+fn score_current(
+    snapshot: &Snapshot,
+    coefficients: &Coefficients,
+    weights: &KindWeights,
+) -> CoreBreakdown {
     let ir = snapshot.ir();
     let container_of: BTreeMap<u32, ContainerId> = ir
         .nodes
@@ -215,16 +531,23 @@ fn score_current(snapshot: &Snapshot, coefficients: &Coefficients) -> CoreBreakd
         &ir.containers,
         0.0,
     );
-    score(&candidate, coefficients)
+    score(&candidate, coefficients, weights)
 }
 
 /// Builds one mode's result by running the diversifying restructuring search.
 ///
-/// The mode's [`Coefficients`] select anchored vs greenfield behaviour. The search
-/// runs `condense -> layer -> cluster` per seed (multi-start), scores each layout,
-/// and diversifies to up to `k` genuinely different candidates by max-min
-/// variation of information. Each surviving partition is reconstructed into a
-/// candidate [`ContainerNode`] tree and narrated against the current layout.
+/// The mode's [`Coefficients`] select anchored vs greenfield behaviour. The
+/// search runs the full multilevel scheme per seed (multi-start), scores each
+/// assembled five-level layout under the mode's objective, and diversifies to up
+/// to `k` genuinely different candidates by max-min variation of information.
+/// When `seed_identity` is set (anchored mode on a cap-clean tree) the pool also
+/// carries the identity layout — "change nothing", scored at the true current
+/// tree — so a suggested restructuring can never silently lose to the current
+/// layout. Each surviving partition is reconstructed into a candidate
+/// [`ContainerNode`] tree, priced against the current layout (`improvement`),
+/// and narrated against it. The mode's `current_standing` reports where today's
+/// tree stands: `infeasible` when it breaches a capacity cap, `optimal` when the
+/// identity layout won the pool, `outscored` otherwise.
 ///
 /// # Errors
 ///
@@ -233,31 +556,72 @@ fn build_mode_result(
     snapshot: &Snapshot,
     config: &AnalyzeConfig,
     coefficients: &Coefficients,
+    seed_identity: bool,
+    capacity_clean: bool,
+    splits: &[ConditionalSplit],
 ) -> Result<ModeResult, StrataError> {
-    let solver = PipelineSolver::new(snapshot, config, *coefficients);
+    let solver = PipelineSolver::new(snapshot, config, *coefficients, seed_identity);
     let mode_config = mode_config(config);
     let CoreModeResult {
         candidates,
         solution_space_converged,
     } = diversify(&solver, &mode_config);
 
+    let current_breakdown = score_current(snapshot, coefficients, &config.weights.kind_weights());
     let current_tree = &snapshot.ir().containers;
     let mut built = Vec::with_capacity(candidates.len());
     for (index, solved) in candidates.iter().enumerate() {
-        built.push(build_candidate(
-            snapshot,
+        let mut candidate = solver.build_candidate(
             current_tree,
             solved,
-            coefficients,
             u32::try_from(index + 1).unwrap_or(u32::MAX),
-        )?);
+            splits,
+        )?;
+        candidate.improvement = current_breakdown.total - candidate.score;
+        built.push(candidate);
     }
+
+    let current_standing = if capacity_clean {
+        let identity_won = candidates
+            .first()
+            .is_some_and(|best| solver.identity.as_ref() == Some(&best.partition));
+        if identity_won {
+            CurrentStanding::Optimal
+        } else {
+            CurrentStanding::Outscored
+        }
+    } else {
+        CurrentStanding::Infeasible
+    };
+
+    // an infeasible standing must say what the best candidate actually fixes,
+    // so its tree is re-checked against the same caps as the current one.
+    let best_candidate_capacity = if capacity_clean {
+        None
+    } else {
+        built.first().map(|best| {
+            let hard: Vec<Level> = walk_all_capacity(&best.tree, config)
+                .into_iter()
+                .filter(|(_, finding)| finding.severity == Severity::Violation)
+                .map(|(level, _)| level)
+                .collect();
+            let file_level = hard.iter().filter(|&&level| level == Level::File).count();
+            CapacityRemainder {
+                remaining: u32::try_from(hard.len()).unwrap_or(u32::MAX),
+                file_level: u32::try_from(file_level).unwrap_or(u32::MAX),
+            }
+        })
+    };
 
     let pairwise_distance = pairwise_distances(&candidates);
     Ok(ModeResult {
         candidates: built,
         pairwise_distance,
         solution_space_converged,
+        current_score: current_breakdown.total,
+        current_score_breakdown: current_breakdown.into(),
+        current_standing,
+        best_candidate_capacity,
     })
 }
 
@@ -281,128 +645,633 @@ fn mode_config(config: &AnalyzeConfig) -> ModeConfig {
         base_seed: config.analysis.seed,
         score_tolerance: config.diversity.score_tolerance,
         min_distance: config.diversity.min_distance,
+        pool_per_candidate: config.diversity.seeds_per_candidate as usize,
     }
 }
 
+/// One file container of the current tree: the movable atom of the search.
+///
+/// Clustering, capacity, narration, and move distance all treat the file as
+/// indivisible in this slice (symbol-level packing is the one unglued phase), so
+/// the search graph's vertices are files rather than symbols — which also makes
+/// the folder cap (files per folder) exact instead of approximated in SCC counts.
+struct FileInfo {
+    /// The file's container id in the current tree.
+    container: u32,
+    /// The file's full repo-relative path (its container name).
+    name: SmolStr,
+    /// Summed production SLOC of the symbols currently in the file.
+    production_sloc: u32,
+}
+
+/// Bound on polish sweeps: two passes catch the follow-up moves the first pass
+/// unlocks without ballooning the wall clock.
+const POLISH_SWEEPS: usize = 2;
+
+/// Candidate destination folders examined per move unit during polish.
+const POLISH_TARGETS: usize = 4;
+
 /// The restartable solver that runs the cluster pipeline once per seed.
 ///
-/// All of the seed-independent work — condensation, layering, the coarsening
-/// chain, and the per-SCC scoring inputs — is computed once at construction; each
-/// [`Solver::solve`] call seeds the initial partition deterministically from its
-/// seed, refines it, and scores the induced layout, so every seed yields a pure,
-/// reproducible candidate.
+/// All of the seed-independent work — the weighted file-dependency graph, its
+/// SCC condensation, the coarsening chain, and the per-level cohesion gain
+/// models — is computed once at construction; each [`Solver::solve`] call seeds
+/// the coarsest level deterministically from its seed, refines the partition
+/// down the whole chain, assembles the five-level layout, and polishes it under
+/// the full objective, so every seed yields a pure, reproducible candidate. In
+/// anchored mode the pool additionally carries the identity layout ("change
+/// nothing"), so a suggested restructuring can never silently score worse than
+/// the current tree.
 struct PipelineSolver<'a> {
     /// The analyzed snapshot.
     snapshot: &'a Snapshot,
-    /// The SCC condensation of the snapshot's hard-edge graph.
+    /// The current tree's file containers, ascending container id; vertex `i` of
+    /// the file graph is `files[i]`.
+    files: Vec<FileInfo>,
+    /// File-container id to file-graph vertex.
+    index_of: BTreeMap<u32, u32>,
+    /// The SCC condensation of the weighted hard-edge file graph.
     condensation: Condensation,
-    /// Longest-path layers over the condensation DAG, indexed by SCC.
-    layers: Vec<u32>,
+    /// The coarsening chain over the condensation DAG (base level first).
+    chain: Vec<CoarseGraph>,
+    /// One cohesion gain model per chain level, token sets folded upward.
+    gains: Vec<GainFn>,
+    /// The condensation DAG with every edge reversed, for pull ranking.
+    reverse_dag: Csr,
     /// The per-level member caps.
     caps: LevelCaps,
     /// The objective coefficients for this mode.
     coefficients: Coefficients,
+    /// The configured edge-kind weights pricing the cut term.
+    weights: KindWeights,
+    /// The identity partition (anchored mode on a cap-clean tree), else `None`.
+    identity: Option<Partition>,
+    /// The configured base seed; seed offsets 0 and 1 select identity entries.
+    base_seed: u64,
+    /// The current root's name, reused for candidate package groups.
+    root_name: SmolStr,
+    /// The per-file facts narration consults when explaining moves.
+    facts: FileFacts,
 }
 
 impl<'a> PipelineSolver<'a> {
     /// Builds the solver, computing every seed-independent pipeline input once.
-    fn new(snapshot: &'a Snapshot, config: &AnalyzeConfig, coefficients: Coefficients) -> Self {
-        let views = build_csr(snapshot, HardnessFilter::HardOnly);
-        let condensation = condense(&views.forward);
+    fn new(
+        snapshot: &'a Snapshot,
+        config: &AnalyzeConfig,
+        coefficients: Coefficients,
+        seed_identity: bool,
+    ) -> Self {
+        let ir = snapshot.ir();
+        let weights = config.weights.kind_weights();
+
+        let mut files: Vec<FileInfo> = ir
+            .containers
+            .containers()
+            .iter()
+            .filter(|container| container.level == ScopeLevel::File)
+            .map(|container| FileInfo {
+                container: container.id.0,
+                name: container.name.clone(),
+                production_sloc: 0,
+            })
+            .collect();
+        files.sort_by_key(|file| file.container);
+        let index_of: BTreeMap<u32, u32> = files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| (file.container, u32::try_from(index).unwrap_or(u32::MAX)))
+            .collect();
+        for node in &ir.nodes {
+            if node.polarity != Polarity::Production {
+                continue;
+            }
+            let Some(&index) = index_of.get(&node.container.0) else {
+                continue;
+            };
+            if let Some(file) = files.get_mut(index as usize) {
+                file.production_sloc = file.production_sloc.saturating_add(node.effective_size);
+            }
+        }
+
+        let file_graph = build_file_graph(&ir.edges, &ir.nodes, &index_of, files.len(), &weights);
+        let condensation = condense(&file_graph);
         let layers = layer(&condensation);
+        // an SCC's capacity weight is its file count, so clusters honour the
+        // folder cap in files at every level of the coarsening chain.
+        let scc_weights: Vec<u32> = condensation
+            .members
+            .iter()
+            .map(|members| u32::try_from(members.len()).unwrap_or(u32::MAX))
+            .collect();
         let caps = level_caps(config);
+        let chain = coarsen_chain(&condensation.dag, &layers, &scc_weights, caps.folder.max(1));
+        let gains = level_gains(&files, &condensation, &chain, &coefficients);
+        let reverse_dag = reverse_csr(&condensation.dag);
+
+        let parent_of: BTreeMap<u32, Option<u32>> = ir
+            .containers
+            .containers()
+            .iter()
+            .map(|container| (container.id.0, container.parent.map(|parent| parent.0)))
+            .collect();
+        let identity = seed_identity.then(|| identity_partition(&files, &condensation, &parent_of));
+        let root_name = ir
+            .containers
+            .containers()
+            .iter()
+            .find(|container| container.level == ScopeLevel::PackageGroup)
+            .map_or_else(|| SmolStr::new("workspace"), |group| group.name.clone());
+        let facts = file_facts(snapshot, &weights, config.capacity.folder);
+
         Self {
             snapshot,
+            files,
+            index_of,
             condensation,
-            layers,
+            chain,
+            gains,
+            reverse_dag,
             caps,
             coefficients,
+            weights,
+            identity,
+            base_seed: config.analysis.seed,
+            root_name,
+            facts,
         }
     }
 
-    /// Reconstructs the symbol partition this solver's SCC clustering induces.
-    ///
-    /// Each SCC is clustered into a folder; every member symbol inherits its SCC's
-    /// cluster, so the returned partition is over symbol node ids — the shape the
-    /// diversifier's variation-of-information selection compares.
-    fn symbol_partition(&self, scc_partition: &Partition) -> Partition {
-        let node_count = self.snapshot.ir().nodes.len();
-        let mut assignment = vec![ClusterId(0); node_count];
+    /// Runs the full multilevel scheme for one seed: seed the coarsest level
+    /// under a seed-perturbed layer order, refine it there, then project the
+    /// partition one level finer and re-refine at every level of the chain (the
+    /// uncoarsening loop the spec's cluster pseudocode mandates).
+    fn multilevel(&self, seed_value: u64) -> Partition {
+        let Some(top) = self.chain.last() else {
+            return Partition::from_assignment(Vec::new(), 0);
+        };
+        let perturbed = perturb_layers(&top.layers, seed_value);
+        let mut parts = seed(top, &perturbed, &self.caps, SeedLevel::Folder);
+        if let Some(gain) = self.gains.last() {
+            refine(top, &mut parts, gain, &self.caps, SeedLevel::Folder);
+        }
+        // windows pair [fine, coarse]; walking them in reverse projects the
+        // coarse partition onto the finer graph and re-refines it there, with
+        // gains[i] being the fine graph's cohesion model.
+        for (window, gain) in self.chain.windows(2).zip(&self.gains).rev() {
+            let [fine, coarse] = window else {
+                continue;
+            };
+            parts = coarse.project(&parts);
+            refine(fine, &mut parts, gain, &self.caps, SeedLevel::Folder);
+        }
+        debug_assert_eq!(
+            parts.node_count(),
+            self.condensation.members.len(),
+            "the projected partition must cover every file scc"
+        );
+        parts
+    }
+
+    /// Scores the five-level layout `parts` induces under this mode's
+    /// coefficients.
+    fn evaluate(&self, parts: &Partition) -> f64 {
+        let assembled = self.assemble(parts);
+        let placement = |id: u32| assembled.placement.get(&id).copied();
+        let distance = move_distance(self.snapshot, &assembled.tree);
+        let candidate = score_candidate(self.snapshot, &placement, &assembled.tree, distance);
+        score(&candidate, &self.coefficients, &self.weights).total
+    }
+
+    /// The J(T)-polish pass: sweeps every file SCC in deterministic order and
+    /// greedily relocates it to the strongest-pulling folder whenever the move
+    /// strictly lowers the full five-level objective. Capacity (files per
+    /// folder) and quotient acyclicity stay hard vetoes, never penalties. At
+    /// most [`POLISH_SWEEPS`] passes, stopping early once a sweep applies no
+    /// move. Returns the final score so `solve` never re-evaluates.
+    fn polish(&self, parts: &mut Partition) -> f64 {
+        let mut best = self.evaluate(parts);
+        // live per-folder FILE counts: clusters size in SCCs, caps in files.
+        let mut file_count: Vec<u32> = vec![0; parts.cluster_count()];
         for (scc, members) in self.condensation.members.iter().enumerate() {
-            let cluster = scc_partition
-                .cluster_of(u32::try_from(scc).unwrap_or(u32::MAX))
-                .unwrap_or(ClusterId(0));
-            for member in members {
-                if let Some(slot) = assignment.get_mut(member.0 as usize) {
-                    *slot = cluster;
+            let Some(cluster) = parts.cluster_of(u32::try_from(scc).unwrap_or(u32::MAX)) else {
+                continue;
+            };
+            if let Some(slot) = file_count.get_mut(cluster.0 as usize) {
+                *slot = slot.saturating_add(u32::try_from(members.len()).unwrap_or(u32::MAX));
+            }
+        }
+        for _ in 0..POLISH_SWEEPS {
+            let mut improved = false;
+            for scc in 0..self.condensation.members.len() {
+                let scc32 = u32::try_from(scc).unwrap_or(u32::MAX);
+                let Some(source) = parts.cluster_of(scc32) else {
+                    continue;
+                };
+                let unit_files = self.condensation.members.get(scc).map_or(0, |members| {
+                    u32::try_from(members.len()).unwrap_or(u32::MAX)
+                });
+                for target in self.pull_targets(parts, scc32, source) {
+                    let target_files = file_count
+                        .get(target.0 as usize)
+                        .copied()
+                        .unwrap_or(u32::MAX);
+                    if target_files.saturating_add(unit_files) > self.caps.folder {
+                        continue;
+                    }
+                    if !parts.move_node(scc32, target) {
+                        continue;
+                    }
+                    let total = if is_acyclic(&parts.quotient(&self.condensation.dag)) {
+                        self.evaluate(parts)
+                    } else {
+                        f64::INFINITY
+                    };
+                    if total < best {
+                        best = total;
+                        if let Some(slot) = file_count.get_mut(source.0 as usize) {
+                            *slot = slot.saturating_sub(unit_files);
+                        }
+                        if let Some(slot) = file_count.get_mut(target.0 as usize) {
+                            *slot = slot.saturating_add(unit_files);
+                        }
+                        improved = true;
+                        break;
+                    }
+                    parts.move_node(scc32, source);
                 }
             }
-        }
-        let cluster_count = scc_partition.cluster_count().max(1);
-        Partition::from_assignment(assignment, cluster_count)
-    }
-
-    /// Maps each symbol node id to the folder cluster it lands in under
-    /// `scc_partition`.
-    fn cluster_of_symbol(&self, scc_partition: &Partition) -> BTreeMap<u32, ClusterId> {
-        let mut map = BTreeMap::new();
-        for (scc, members) in self.condensation.members.iter().enumerate() {
-            let cluster = scc_partition
-                .cluster_of(u32::try_from(scc).unwrap_or(u32::MAX))
-                .unwrap_or(ClusterId(0));
-            for member in members {
-                map.insert(member.0, cluster);
+            if !improved {
+                break;
             }
         }
-        map
+        best
+    }
+
+    /// Ranks the folders pulling hardest on `scc` — summed edge weight over both
+    /// directions — and returns up to [`POLISH_TARGETS`] of them, strongest
+    /// first, ties broken by the lower cluster id.
+    fn pull_targets(&self, parts: &Partition, scc: u32, source: ClusterId) -> Vec<ClusterId> {
+        let mut pull: BTreeMap<ClusterId, f64> = BTreeMap::new();
+        for graph in [&self.condensation.dag, &self.reverse_dag] {
+            let weights = graph.weights(scc);
+            for (slot, &neighbour) in graph.neighbors(scc).iter().enumerate() {
+                let Some(cluster) = parts.cluster_of(neighbour) else {
+                    continue;
+                };
+                if cluster == source {
+                    continue;
+                }
+                *pull.entry(cluster).or_insert(0.0) +=
+                    f64::from(weights.get(slot).copied().unwrap_or(0.0));
+            }
+        }
+        let mut ranked: Vec<(ClusterId, f64)> = pull.into_iter().collect();
+        ranked.sort_by(|left, right| {
+            right
+                .1
+                .partial_cmp(&left.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(left.0.cmp(&right.0))
+        });
+        ranked
+            .into_iter()
+            .take(POLISH_TARGETS)
+            .map(|(cluster, _)| cluster)
+            .collect()
+    }
+
+    /// Wraps a finished partition, re-pricing it at the true current tree when
+    /// it converged back to the identity layout, so every identity entry in the
+    /// pool carries one consistent score.
+    fn finish(&self, parts: Partition, total: f64) -> SolvedCandidate {
+        if let Some(identity) = &self.identity
+            && identity == &parts
+        {
+            return self.identity_entry(identity);
+        }
+        SolvedCandidate {
+            partition: parts,
+            score: total,
+        }
+    }
+
+    /// The identity pool entry: the "change nothing" layout scored on the actual
+    /// current tree, so the anchored pool always contains the current score and
+    /// a suggested candidate can never silently lose to it.
+    fn identity_entry(&self, identity: &Partition) -> SolvedCandidate {
+        SolvedCandidate {
+            partition: identity.clone(),
+            score: score_current(self.snapshot, &self.coefficients, &self.weights).total,
+        }
+    }
+
+    /// Groups the file-graph vertices by the folder cluster their SCC lands in,
+    /// members sorted by file path for deterministic emission.
+    fn folder_members(&self, parts: &Partition) -> BTreeMap<u32, Vec<u32>> {
+        let mut members_of: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        for vertex in 0..self.files.len() {
+            let Some(scc) = self.condensation.membership.get(vertex) else {
+                continue;
+            };
+            let Some(cluster) = parts.cluster_of(scc.0) else {
+                debug_assert!(false, "the folder partition must cover every file scc");
+                continue;
+            };
+            members_of
+                .entry(cluster.0)
+                .or_default()
+                .push(u32::try_from(vertex).unwrap_or(u32::MAX));
+        }
+        for members in members_of.values_mut() {
+            members.sort_by(|&left, &right| {
+                let left_name = self
+                    .files
+                    .get(left as usize)
+                    .map_or("", |file| file.name.as_str());
+                let right_name = self
+                    .files
+                    .get(right as usize)
+                    .map_or("", |file| file.name.as_str());
+                left_name.cmp(right_name).then(left.cmp(&right))
+            });
+        }
+        members_of
+    }
+
+    /// Assembles the five-level candidate tree a folder partition induces.
+    ///
+    /// Folders are the partition's non-empty clusters. The upper levels come
+    /// from clustering each level's weighted quotient in turn (folders → domains
+    /// → packages → package groups). Containers are named from the files they
+    /// transitively hold — folders by the plurality parent directory (weighted
+    /// by production SLOC, then file count), domains and packages by two- and
+    /// one-segment path prefixes, the group by the current root's name — and
+    /// file leaves keep their full current paths so file identity stays stable
+    /// across trees.
+    fn assemble(&self, parts: &Partition) -> CandidateTree {
+        if self.files.is_empty() {
+            let root = Container {
+                id: ContainerId(0),
+                name: self.root_name.clone(),
+                level: ScopeLevel::PackageGroup,
+                parent: None,
+            };
+            return CandidateTree {
+                tree: ContainerTree::new(vec![root]),
+                placement: BTreeMap::new(),
+            };
+        }
+
+        let members_of = self.folder_members(parts);
+
+        // one clustering pass per upper level, each over the previous level's
+        // weighted quotient graph.
+        let folder_quotient = parts.quotient(&self.condensation.dag);
+        let domain_parts = cluster_level(&folder_quotient, &self.caps, SeedLevel::Domain);
+        let domain_quotient = domain_parts.quotient(&folder_quotient);
+        let package_parts = cluster_level(&domain_quotient, &self.caps, SeedLevel::Package);
+        let package_quotient = package_parts.quotient(&domain_quotient);
+        let group_parts = cluster_level(&package_quotient, &self.caps, SeedLevel::PackageGroup);
+
+        // ancestry of every non-empty folder cluster, plus the directory tallies
+        // each level's containers are named from.
+        let mut chain_of: BTreeMap<u32, (u32, u32, u32)> = BTreeMap::new();
+        let mut folder_tally: NameTally = BTreeMap::new();
+        let mut domain_tally: NameTally = BTreeMap::new();
+        let mut package_tally: NameTally = BTreeMap::new();
+        for (&folder, members) in &members_of {
+            let domain = domain_parts
+                .cluster_of(folder)
+                .map_or(0, |cluster| cluster.0);
+            let package = package_parts
+                .cluster_of(domain)
+                .map_or(0, |cluster| cluster.0);
+            let group = group_parts
+                .cluster_of(package)
+                .map_or(0, |cluster| cluster.0);
+            chain_of.insert(folder, (domain, package, group));
+            for &vertex in members {
+                let Some(file) = self.files.get(vertex as usize) else {
+                    continue;
+                };
+                let dir = file.name.rsplit_once('/').map_or("", |(dir, _)| dir);
+                let sloc = file.production_sloc;
+                vote(&mut folder_tally, folder, dir_key(dir, usize::MAX), sloc);
+                vote(&mut domain_tally, domain, dir_key(dir, 2), sloc);
+                vote(&mut package_tally, package, dir_key(dir, 1), sloc);
+            }
+        }
+
+        self.emit(
+            &members_of,
+            &chain_of,
+            &folder_tally,
+            &domain_tally,
+            &package_tally,
+        )
+    }
+
+    /// Interns the candidate containers parent-before-child — package groups,
+    /// packages, domains, then each folder with its files — and records every
+    /// symbol's file placement.
+    fn emit(
+        &self,
+        members_of: &BTreeMap<u32, Vec<u32>>,
+        chain_of: &BTreeMap<u32, (u32, u32, u32)>,
+        folder_tally: &NameTally,
+        domain_tally: &NameTally,
+        package_tally: &NameTally,
+    ) -> CandidateTree {
+        let mut containers: Vec<Container> = Vec::new();
+        let mut used: BTreeMap<(Option<u32>, ScopeLevel), BTreeSet<SmolStr>> = BTreeMap::new();
+
+        let groups: BTreeSet<u32> = chain_of.values().map(|&(_, _, group)| group).collect();
+        let mut group_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
+        for &group in &groups {
+            let id = push_container(
+                &mut containers,
+                &mut used,
+                &self.root_name,
+                ScopeLevel::PackageGroup,
+                None,
+            );
+            group_ids.insert(group, id);
+        }
+
+        let packages: BTreeMap<u32, u32> = chain_of
+            .values()
+            .map(|&(_, package, group)| (package, group))
+            .collect();
+        let mut package_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
+        for (&package, &group) in &packages {
+            let name = package_tally
+                .get(&package)
+                .map_or_else(|| SmolStr::new("workspace"), plurality);
+            let id = push_container(
+                &mut containers,
+                &mut used,
+                &name,
+                ScopeLevel::Package,
+                group_ids.get(&group).copied(),
+            );
+            package_ids.insert(package, id);
+        }
+
+        let domains: BTreeMap<u32, u32> = chain_of
+            .values()
+            .map(|&(domain, package, _)| (domain, package))
+            .collect();
+        let mut domain_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
+        for (&domain, &package) in &domains {
+            let key = domain_tally
+                .get(&domain)
+                .map_or_else(|| SmolStr::new("workspace"), plurality);
+            // cumulative names must path-extend the parent's, or display
+            // folding would re-emit the parent's segments under it.
+            let name = extend_under(
+                &final_name(&containers, package_ids.get(&package).copied()),
+                &key,
+            );
+            let id = push_container(
+                &mut containers,
+                &mut used,
+                &name,
+                ScopeLevel::Domain,
+                package_ids.get(&package).copied(),
+            );
+            domain_ids.insert(domain, id);
+        }
+
+        let mut file_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
+        for (&folder, members) in members_of {
+            let Some(&(domain, _, _)) = chain_of.get(&folder) else {
+                continue;
+            };
+            let key = folder_tally
+                .get(&folder)
+                .map_or_else(|| SmolStr::new("workspace"), plurality);
+            let name = extend_under(
+                &final_name(&containers, domain_ids.get(&domain).copied()),
+                &key,
+            );
+            let folder_id = push_container(
+                &mut containers,
+                &mut used,
+                &name,
+                ScopeLevel::Folder,
+                domain_ids.get(&domain).copied(),
+            );
+            for &vertex in members {
+                let Some(file) = self.files.get(vertex as usize) else {
+                    continue;
+                };
+                let id = push_container(
+                    &mut containers,
+                    &mut used,
+                    &file.name,
+                    ScopeLevel::File,
+                    Some(folder_id),
+                );
+                file_ids.insert(vertex, id);
+            }
+        }
+
+        let mut placement = BTreeMap::new();
+        for node in &self.snapshot.ir().nodes {
+            let Some(&vertex) = self.index_of.get(&node.container.0) else {
+                continue;
+            };
+            if let Some(&file_id) = file_ids.get(&vertex) {
+                placement.insert(node.id.0, file_id);
+            }
+        }
+
+        CandidateTree {
+            tree: ContainerTree::new(containers),
+            placement,
+        }
+    }
+
+    /// Builds one DTO [`Candidate`] from a solved partition.
+    ///
+    /// The identity survivor is emitted as a verbatim clone of the current tree
+    /// — zero moves, byte-equal layout — never re-derived through assembly, so
+    /// "already optimal" genuinely means nothing changes. Every other partition
+    /// is assembled, rescored under this mode's coefficients, and narrated
+    /// against the current layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StrataError::SnapshotInvalid`] if the tree cannot be rendered.
+    fn build_candidate(
+        &self,
+        current_tree: &ContainerTree,
+        solved: &SolvedCandidate,
+        index: u32,
+        splits: &[ConditionalSplit],
+    ) -> Result<Candidate, StrataError> {
+        let nodes = &self.snapshot.ir().nodes;
+        if self.identity.as_ref() == Some(&solved.partition) {
+            let breakdown = score_current(self.snapshot, &self.coefficients, &self.weights);
+            let node = render_tree(current_tree, nodes, &|node: &Node| Some(node.container))?;
+            return Ok(Candidate {
+                index,
+                score: breakdown.total,
+                score_breakdown: ScoreBreakdown::from(breakdown),
+                improvement: 0.0,
+                tree: node,
+                conditional_splits: splits.to_vec(),
+                delta_narration: Vec::new(),
+            });
+        }
+
+        let assembled = self.assemble(&solved.partition);
+        let placement = |id: u32| assembled.placement.get(&id).copied();
+        let distance = move_distance(self.snapshot, &assembled.tree);
+        let breakdown = score(
+            &score_candidate(self.snapshot, &placement, &assembled.tree, distance),
+            &self.coefficients,
+            &self.weights,
+        );
+        let placement_of = |node: &Node| assembled.placement.get(&node.id.0).copied();
+        let node = render_tree(&assembled.tree, nodes, &placement_of)?;
+        let delta = narrate(current_tree, &assembled.tree, &self.facts);
+
+        Ok(Candidate {
+            index,
+            score: breakdown.total,
+            score_breakdown: ScoreBreakdown::from(breakdown),
+            improvement: 0.0,
+            tree: node,
+            conditional_splits: splits.to_vec(),
+            delta_narration: delta,
+        })
     }
 }
 
 impl Solver for PipelineSolver<'_> {
     fn solve(&self, seed: u64) -> SolvedCandidate {
-        let scc_partition = cluster_sccs(&self.condensation, &self.layers, &self.caps, seed);
-        let cluster_of = self.cluster_of_symbol(&scc_partition);
-        let candidate_tree = candidate_tree(self.snapshot, &cluster_of);
-        let placement = |id: u32| candidate_tree.placement.get(&id).copied();
-        let move_distance = move_distance(self.snapshot, &candidate_tree.tree);
-        let score_candidate = score_candidate(
-            self.snapshot,
-            &placement,
-            &candidate_tree.tree,
-            move_distance,
-        );
-        let breakdown = score(&score_candidate, &self.coefficients);
-
-        SolvedCandidate {
-            partition: self.symbol_partition(&scc_partition),
-            score: breakdown.total,
+        let offset = seed.wrapping_sub(self.base_seed);
+        if let Some(identity) = &self.identity {
+            if offset == 0 {
+                return self.identity_entry(identity);
+            }
+            if offset == 1 {
+                // "current plus local improvements": refine and polish starting
+                // from the identity layout instead of a fresh seed.
+                let mut parts = identity.clone();
+                if let (Some(base), Some(gain)) = (self.chain.first(), self.gains.first()) {
+                    refine(base, &mut parts, gain, &self.caps, SeedLevel::Folder);
+                }
+                let total = self.polish(&mut parts);
+                return self.finish(parts, total);
+            }
         }
+        let mut parts = self.multilevel(seed);
+        let total = self.polish(&mut parts);
+        self.finish(parts, total)
     }
-}
-
-/// Runs `coarsen -> seed -> refine` over the condensation, deriving a
-/// seed-dependent folder clustering of the SCC DAG.
-///
-/// The coarsening chain and the cohesion-free gain model are deterministic; the
-/// `seed` perturbs the topological seeding order so distinct seeds explore
-/// distinct local optima, exactly as multi-start diversification requires. The
-/// acyclicity and capacity vetoes inside [`refine`] keep every result a legal
-/// laminar clustering.
-fn cluster_sccs(
-    condensation: &Condensation,
-    layers: &[u32],
-    caps: &LevelCaps,
-    seed_value: u64,
-) -> Partition {
-    let chain = coarsen_chain(&condensation.dag, layers);
-    let Some(top) = chain.last() else {
-        return Partition::from_assignment(Vec::new(), 0);
-    };
-    let perturbed_layers = perturb_layers(layers, seed_value);
-    let mut partition = seed(top, &perturbed_layers, caps, SeedLevel::Folder);
-    let gain = GainFn::cut_only(top.graph.vertex_count());
-    refine(top, &mut partition, &gain, caps, SeedLevel::Folder);
-    partition
 }
 
 /// Applies a deterministic seed-driven jitter to the layering used for seeding.
@@ -434,214 +1303,415 @@ fn perturb_layers(layers: &[u32], seed_value: u64) -> Vec<u32> {
 
 /// A reconstructed candidate tree plus the placement of every symbol node.
 struct CandidateTree {
-    /// The candidate container tree: a package-group root over one folder per
-    /// cluster, each holding the file containers whose symbols cluster there.
+    /// The candidate container tree: package groups over packages, domains, and
+    /// folders derived per level, each folder holding whole current files.
     tree: ContainerTree,
     /// The file container each symbol node lands in, keyed by node id.
     placement: BTreeMap<u32, ContainerId>,
 }
 
-/// Reconstructs a candidate [`ContainerTree`] from a symbol-to-cluster map.
-///
-/// Each original file is reparented into the folder of the cluster its symbols
-/// predominantly land in, and that folder is named after a *real* directory: the
-/// plurality three-segment path prefix of the cluster's member files. From that
-/// prefix the full five-level laminar chain (package group → package → domain →
-/// folder → file) is interned with directory-derived names — never synthetic
-/// `cluster-N` labels — so the candidate reads as a concrete proposed layout. File
-/// leaf names stay the original repo-relative path so `move_distance` and
-/// `narrate_delta`, which match candidate↔current files by name, stay accurate.
-fn candidate_tree(snapshot: &Snapshot, cluster_of: &BTreeMap<u32, ClusterId>) -> CandidateTree {
-    let ir = snapshot.ir();
-
-    // each file's destination cluster is the majority cluster of its symbols.
-    let mut votes: BTreeMap<u32, BTreeMap<ClusterId, u32>> = BTreeMap::new();
-    for node in &ir.nodes {
-        let cluster = cluster_of.get(&node.id.0).copied().unwrap_or(ClusterId(0));
-        *votes
-            .entry(node.container.0)
-            .or_default()
-            .entry(cluster)
-            .or_default() += 1;
+/// Builds the weighted file-dependency graph: every hard symbol edge is mapped
+/// onto its endpoints' owning files, intra-file edges vanish (layout cannot cut
+/// them), parallel crossings are summed, and each crossing is priced by the
+/// config's kind-weight table — so heavy-edge matching and FM gains see the same
+/// prices the objective charges.
+fn build_file_graph(
+    edges: &[Edge],
+    nodes: &[Node],
+    index_of: &BTreeMap<u32, u32>,
+    file_count: usize,
+    weights: &KindWeights,
+) -> Csr {
+    let container_of: BTreeMap<u32, u32> = nodes
+        .iter()
+        .map(|node| (node.id.0, node.container.0))
+        .collect();
+    let mut crossings: Vec<(u32, u32, f32)> = Vec::new();
+    for edge in edges {
+        if edge.hardness != Hardness::Hard {
+            continue;
+        }
+        let (Some(source), Some(target)) = (
+            container_of.get(&edge.source.0),
+            container_of.get(&edge.target.0),
+        ) else {
+            continue;
+        };
+        let (Some(&from), Some(&to)) = (index_of.get(source), index_of.get(target)) else {
+            continue;
+        };
+        if from == to {
+            continue;
+        }
+        // reason: csr weights are f32 by contract (ad-6); narrowing the f64 price is the one lossy step
+        #[allow(clippy::cast_possible_truncation)]
+        let weight = weights.edge_weight(edge.kind, edge.confidence) as f32;
+        crossings.push((from, to, weight));
     }
+    Csr::from_weighted_edges(file_count, &crossings)
+}
 
-    // original file containers, sorted by path for deterministic interning.
-    let mut files: Vec<&Container> = ir
+/// Builds the per-file facts narration consults: config-priced edge weights
+/// summed per directed file pair (every edge, the objective's currency),
+/// spec files (symbols exclusively test cases), and the folder cap.
+fn file_facts(snapshot: &Snapshot, weights: &KindWeights, folder_cap: u32) -> FileFacts {
+    let ir = snapshot.ir();
+    let file_of: BTreeMap<u32, &SmolStr> = ir
         .containers
         .containers()
         .iter()
         .filter(|container| container.level == ScopeLevel::File)
+        .map(|container| (container.id.0, &container.name))
         .collect();
-    files.sort_by(|left, right| left.name.cmp(&right.name));
-
-    let cluster_of_file = |id: u32| {
-        votes
-            .get(&id)
-            .and_then(dominant_cluster)
-            .unwrap_or(ClusterId(0))
-    };
-
-    let folder_key_of = cluster_folder_keys(&files, &cluster_of_file);
-
-    // the root keeps the snapshot's own package-group name (the repository).
-    let root_name = ir
-        .containers
-        .containers()
+    let container_of: BTreeMap<u32, u32> = ir
+        .nodes
         .iter()
-        .find(|container| container.level == ScopeLevel::PackageGroup)
-        .map_or_else(|| SmolStr::new("workspace"), |group| group.name.clone());
+        .map(|node| (node.id.0, node.container.0))
+        .collect();
 
-    let (containers, file_id_of) =
-        build_candidate_containers(&files, &cluster_of_file, &folder_key_of, root_name);
+    let mut edge_weights: BTreeMap<(String, String), f64> = BTreeMap::new();
+    for edge in &ir.edges {
+        let (Some(source), Some(target)) = (
+            container_of
+                .get(&edge.source.0)
+                .and_then(|container| file_of.get(container)),
+            container_of
+                .get(&edge.target.0)
+                .and_then(|container| file_of.get(container)),
+        ) else {
+            continue;
+        };
+        if source == target {
+            continue;
+        }
+        *edge_weights
+            .entry((source.to_string(), target.to_string()))
+            .or_insert(0.0) += weights.edge_weight(edge.kind, edge.confidence);
+    }
 
-    let mut placement = BTreeMap::new();
+    // a spec file holds at least one symbol and nothing but test cases.
+    let mut case_only: BTreeMap<u32, bool> = BTreeMap::new();
     for node in &ir.nodes {
-        if let Some(file_id) = file_id_of.get(&node.container.0) {
-            placement.insert(node.id.0, *file_id);
+        let entry = case_only.entry(node.container.0).or_insert(true);
+        *entry &= node.polarity == Polarity::TestCase;
+    }
+    let test_case_files = case_only
+        .iter()
+        .filter(|&(_, &only_cases)| only_cases)
+        .filter_map(|(container, _)| file_of.get(container).map(std::string::ToString::to_string))
+        .collect();
+
+    FileFacts {
+        edge_weights,
+        test_case_files,
+        folder_cap,
+    }
+}
+
+/// Returns `graph` with every edge reversed, weights preserved.
+fn reverse_csr(graph: &Csr) -> Csr {
+    let mut edges: Vec<(u32, u32, f32)> = Vec::with_capacity(graph.edge_count());
+    for vertex in 0..graph.vertex_count() {
+        let from = u32::try_from(vertex).unwrap_or(u32::MAX);
+        let weights = graph.weights(from);
+        for (slot, &to) in graph.neighbors(from).iter().enumerate() {
+            edges.push((to, from, weights.get(slot).copied().unwrap_or(0.0)));
         }
     }
-
-    CandidateTree {
-        tree: ContainerTree::new(containers),
-        placement,
-    }
+    Csr::from_weighted_edges(graph.vertex_count(), &edges)
 }
 
-/// Computes each cluster's representative folder: the plurality three-segment
-/// path prefix over the cluster's member files, ties broken lexicographically.
-fn cluster_folder_keys(
-    files: &[&Container],
-    cluster_of_file: &dyn Fn(u32) -> ClusterId,
-) -> BTreeMap<ClusterId, SmolStr> {
-    let mut folder_tally: BTreeMap<ClusterId, BTreeMap<SmolStr, u32>> = BTreeMap::new();
-    for container in files {
-        let segments: Vec<&str> = container
-            .name
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .collect();
-        let folder = prefix_key(&segments, 3);
-        *folder_tally
-            .entry(cluster_of_file(container.id.0))
-            .or_default()
-            .entry(folder)
-            .or_default() += 1;
-    }
-    folder_tally
-        .iter()
-        .map(|(cluster, tally)| (*cluster, dominant_folder(tally)))
-        .collect()
-}
-
-/// Interns the five-level laminar chain (package group → package → domain →
-/// folder → file) for each file under its cluster's representative folder,
-/// returning the container list and the candidate file id of each original file.
-///
-/// `intern` assigns dense ids in parent-before-child order, satisfying the
-/// container tree's density and ascending-level invariants.
-fn build_candidate_containers(
-    files: &[&Container],
-    cluster_of_file: &dyn Fn(u32) -> ClusterId,
-    folder_key_of: &BTreeMap<ClusterId, SmolStr>,
-    root_name: SmolStr,
-) -> (Vec<Container>, BTreeMap<u32, ContainerId>) {
-    let mut containers: Vec<Container> = Vec::new();
-    let mut by_key: BTreeMap<(ScopeLevel, SmolStr), ContainerId> = BTreeMap::new();
-    let group = intern(
-        &mut containers,
-        &mut by_key,
-        ScopeLevel::PackageGroup,
-        root_name,
-        None,
-    );
-
-    let mut file_id_of: BTreeMap<u32, ContainerId> = BTreeMap::new();
-    for container in files {
-        let folder_key = folder_key_of
-            .get(&cluster_of_file(container.id.0))
-            .cloned()
-            .unwrap_or_else(|| SmolStr::new("workspace"));
-        let segments: Vec<&str> = folder_key
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .collect();
-        let package = intern(
-            &mut containers,
-            &mut by_key,
-            ScopeLevel::Package,
-            prefix_key(&segments, 1),
-            Some(group),
-        );
-        let domain = intern(
-            &mut containers,
-            &mut by_key,
-            ScopeLevel::Domain,
-            prefix_key(&segments, 2),
-            Some(package),
-        );
-        let folder = intern(
-            &mut containers,
-            &mut by_key,
-            ScopeLevel::Folder,
-            prefix_key(&segments, 3),
-            Some(domain),
-        );
-        let file = intern(
-            &mut containers,
-            &mut by_key,
-            ScopeLevel::File,
-            container.name.clone(),
-            Some(folder),
-        );
-        file_id_of.insert(container.id.0, file);
-    }
-    (containers, file_id_of)
-}
-
-/// Returns the cluster with the most votes, ties broken by the lower cluster id.
-fn dominant_cluster(tally: &BTreeMap<ClusterId, u32>) -> Option<ClusterId> {
-    tally
-        .iter()
-        .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)))
-        .map(|(cluster, _)| *cluster)
-}
-
-/// Returns the most common folder key, ties broken by the lexicographically
-/// smallest key so the chosen directory name is deterministic across runs.
-fn dominant_folder(tally: &BTreeMap<SmolStr, u32>) -> SmolStr {
-    tally
-        .iter()
-        .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)))
-        .map_or_else(|| SmolStr::new("workspace"), |(folder, _)| folder.clone())
-}
-
-/// Builds a stable container key from the first `take` path segments.
-fn prefix_key(segments: &[&str], take: usize) -> SmolStr {
-    let bounded = take.clamp(1, segments.len().max(1));
-    SmolStr::new(segments.get(..bounded).unwrap_or(segments).join("/"))
-}
-
-/// Interns a container by `(level, key)`, returning the existing id on a hit and
-/// otherwise pushing a new densely-numbered container.
-fn intern(
-    containers: &mut Vec<Container>,
-    by_key: &mut BTreeMap<(ScopeLevel, SmolStr), ContainerId>,
-    level: ScopeLevel,
-    key: SmolStr,
-    parent: Option<ContainerId>,
-) -> ContainerId {
-    if let Some(&id) = by_key.get(&(level, key.clone())) {
+/// Interns `token` into the dense id space, returning its id.
+fn intern_token(interner: &mut BTreeMap<String, u32>, token: &str) -> u32 {
+    if let Some(&id) = interner.get(token) {
         return id;
     }
+    let id = u32::try_from(interner.len()).unwrap_or(u32::MAX);
+    interner.insert(token.to_owned(), id);
+    id
+}
+
+/// Builds one cohesion gain model per coarsening level.
+///
+/// Base-level vertices are file SCCs: naming tokens come from the member files'
+/// basenames (shared tokenizer with the α scoring term) and path tokens from
+/// their parent-directory segments, interned into dense ids. Every coarser
+/// level unions the token multisets of the finer vertices it contracted, so the
+/// α·naming + β·path bonus stays meaningful up the whole chain.
+fn level_gains(
+    files: &[FileInfo],
+    condensation: &Condensation,
+    chain: &[CoarseGraph],
+    coefficients: &Coefficients,
+) -> Vec<GainFn> {
+    let mut interner: BTreeMap<String, u32> = BTreeMap::new();
+    let mut naming: Vec<Vec<u32>> = Vec::with_capacity(condensation.members.len());
+    let mut path: Vec<Vec<u32>> = Vec::with_capacity(condensation.members.len());
+    for members in &condensation.members {
+        let mut name_tokens = Vec::new();
+        let mut path_tokens = Vec::new();
+        for member in members {
+            let Some(file) = files.get(member.0 as usize) else {
+                continue;
+            };
+            for token in tokenize(&file.name) {
+                name_tokens.push(intern_token(&mut interner, &token));
+            }
+            let dir = file.name.rsplit_once('/').map_or("", |(dir, _)| dir);
+            for segment in dir.split('/').filter(|segment| !segment.is_empty()) {
+                path_tokens.push(intern_token(&mut interner, segment));
+            }
+        }
+        naming.push(name_tokens);
+        path.push(path_tokens);
+    }
+
+    // reason: α/β live in f64 config space but the FM gain arithmetic is f32 by design
+    #[allow(clippy::cast_possible_truncation)]
+    let (alpha, beta) = (coefficients.alpha as f32, coefficients.beta as f32);
+
+    let mut gains = Vec::with_capacity(chain.len());
+    gains.push(GainFn::new(naming.clone(), path.clone(), alpha, beta));
+    for level in chain.iter().skip(1) {
+        let count = level.graph.vertex_count();
+        let mut coarse_naming: Vec<Vec<u32>> = vec![Vec::new(); count];
+        let mut coarse_path: Vec<Vec<u32>> = vec![Vec::new(); count];
+        for (fine, &coarse) in level.fine_to_coarse.iter().enumerate() {
+            if let (Some(slot), Some(tokens)) =
+                (coarse_naming.get_mut(coarse as usize), naming.get(fine))
+            {
+                slot.extend_from_slice(tokens);
+            }
+            if let (Some(slot), Some(tokens)) =
+                (coarse_path.get_mut(coarse as usize), path.get(fine))
+            {
+                slot.extend_from_slice(tokens);
+            }
+        }
+        gains.push(GainFn::new(
+            coarse_naming.clone(),
+            coarse_path.clone(),
+            alpha,
+            beta,
+        ));
+        naming = coarse_naming;
+        path = coarse_path;
+    }
+    gains
+}
+
+/// Builds the identity partition: each file SCC lands in a cluster keyed by the
+/// current parent folder of its dominant member — the file with the largest
+/// production SLOC, ties to the lexicographically smaller path (it only differs
+/// from the literal current layout on cross-folder cycles, which must
+/// co-cluster anyway). Cluster ids are dense over the distinct parent keys in
+/// ascending container-id order; a rootless file keys to a shared sentinel.
+fn identity_partition(
+    files: &[FileInfo],
+    condensation: &Condensation,
+    parent_of: &BTreeMap<u32, Option<u32>>,
+) -> Partition {
+    let keys: Vec<u32> = condensation
+        .members
+        .iter()
+        .map(|members| {
+            let mut dominant: Option<&FileInfo> = None;
+            for member in members {
+                let Some(file) = files.get(member.0 as usize) else {
+                    continue;
+                };
+                let better = dominant.is_none_or(|top| {
+                    file.production_sloc > top.production_sloc
+                        || (file.production_sloc == top.production_sloc && file.name < top.name)
+                });
+                if better {
+                    dominant = Some(file);
+                }
+            }
+            dominant
+                .and_then(|file| parent_of.get(&file.container).copied().flatten())
+                .unwrap_or(u32::MAX)
+        })
+        .collect();
+    let distinct: BTreeSet<u32> = keys.iter().copied().collect();
+    let cluster_of_key: BTreeMap<u32, u32> = distinct
+        .iter()
+        .enumerate()
+        .map(|(index, &key)| (key, u32::try_from(index).unwrap_or(u32::MAX)))
+        .collect();
+    let assignment = keys
+        .iter()
+        .map(|key| ClusterId(cluster_of_key.get(key).copied().unwrap_or(0)))
+        .collect();
+    Partition::from_assignment(assignment, distinct.len())
+}
+
+/// Clusters a weighted quotient graph one level up (folders → domains, domains
+/// → packages, …) with the same multilevel scheme the base level uses, minus
+/// cohesion (upper levels carry no token sets) and seed perturbation (the level
+/// is fully determined by the partition below it, keeping assembly a pure
+/// function of the folder partition).
+fn cluster_level(graph: &Csr, caps: &LevelCaps, level: SeedLevel) -> Partition {
+    let layers = tight_layers(graph);
+    // each quotient vertex is one container of the level below, so capacity
+    // weights are all one: the cap counts members directly.
+    let unit_weights = vec![1_u32; graph.vertex_count()];
+    let cap = match level {
+        SeedLevel::Folder => caps.folder,
+        SeedLevel::Domain => caps.domain,
+        SeedLevel::Package => caps.package,
+        SeedLevel::PackageGroup => caps.package_group,
+    };
+    let chain = coarsen_chain(graph, &layers, &unit_weights, cap.max(1));
+    let Some(top) = chain.last() else {
+        return Partition::from_assignment(Vec::new(), 0);
+    };
+    let mut parts = seed(top, &top.layers, caps, level);
+    refine(
+        top,
+        &mut parts,
+        &GainFn::cut_only(top.graph.vertex_count()),
+        caps,
+        level,
+    );
+    for window in chain.windows(2).rev() {
+        let [fine, coarse] = window else {
+            continue;
+        };
+        parts = coarse.project(&parts);
+        refine(
+            fine,
+            &mut parts,
+            &GainFn::cut_only(fine.graph.vertex_count()),
+            caps,
+            level,
+        );
+    }
+    parts
+}
+
+/// Returns the first `take` segments of `dir` as a container name key, or
+/// `workspace` when the directory is the repository root.
+fn dir_key(dir: &str, take: usize) -> SmolStr {
+    let segments: Vec<&str> = dir
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if segments.is_empty() {
+        return SmolStr::new("workspace");
+    }
+    let bounded = take.min(segments.len());
+    SmolStr::new(segments.get(..bounded).unwrap_or(&segments).join("/"))
+}
+
+/// Returns the final (dedup-suffixed) name of the container `id` interned in
+/// `containers`, or the empty string when the id is absent.
+fn final_name(containers: &[Container], id: Option<ContainerId>) -> SmolStr {
+    id.and_then(|id| containers.get(id.0 as usize))
+        .map_or_else(|| SmolStr::new(""), |container| container.name.clone())
+}
+
+/// Rewrites the elected directory `key` to nest under the parent's cumulative
+/// name: a key that already equals or path-extends the parent passes through,
+/// anything else keeps only its last segment appended to the parent. Mixed
+/// clusters elect directories from foreign subtrees (a folder dominated by
+/// `src/render` landing in a `src/core` domain), and without this rewrite the
+/// display fold would re-emit the foreign prefix (`src/core/src/render`).
+fn extend_under(parent: &str, key: &SmolStr) -> SmolStr {
+    if parent.is_empty()
+        || key.as_str() == parent
+        || key
+            .strip_prefix(parent)
+            .is_some_and(|rest| rest.starts_with('/'))
+    {
+        return key.clone();
+    }
+    let last = key.rsplit('/').next().unwrap_or(key);
+    SmolStr::new(format!("{parent}/{last}"))
+}
+
+/// Per-cluster directory election: each key holds its accumulated
+/// (production SLOC, file count) vote.
+type NameTally = BTreeMap<u32, BTreeMap<SmolStr, (u64, u32)>>;
+
+/// Adds one file's vote for `key` — production SLOC weighs first, file count
+/// second, so test-only files cannot outvote the production home directory.
+fn vote(tally: &mut NameTally, cluster: u32, key: SmolStr, production_sloc: u32) {
+    let (sloc, count) = tally.entry(cluster).or_default().entry(key).or_default();
+    *sloc = sloc.saturating_add(u64::from(production_sloc));
+    *count = count.saturating_add(1);
+}
+
+/// Returns the heaviest-weighted key in `tally`, ties broken by the
+/// lexicographically smallest key so container naming is deterministic across
+/// runs.
+fn plurality<V: Ord>(tally: &BTreeMap<SmolStr, V>) -> SmolStr {
+    tally
+        .iter()
+        .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)))
+        .map_or_else(|| SmolStr::new("workspace"), |(key, _)| key.clone())
+}
+
+/// Pushes a container with the next dense id, deduplicating sibling names with
+/// a numeric suffix so two clusters that elect the same directory stay distinct.
+fn push_container(
+    containers: &mut Vec<Container>,
+    used: &mut BTreeMap<(Option<u32>, ScopeLevel), BTreeSet<SmolStr>>,
+    name: &SmolStr,
+    level: ScopeLevel,
+    parent: Option<ContainerId>,
+) -> ContainerId {
+    let siblings = used
+        .entry((parent.map(|parent| parent.0), level))
+        .or_default();
+    let mut unique = name.clone();
+    let mut suffix = 2_u32;
+    while siblings.contains(&unique) {
+        unique = SmolStr::new(format!("{name}-{suffix}"));
+        suffix = suffix.saturating_add(1);
+    }
+    siblings.insert(unique.clone());
     let id = ContainerId(u32::try_from(containers.len()).unwrap_or(u32::MAX));
     containers.push(Container {
         id,
-        name: key.clone(),
+        name: unique,
         level,
         parent,
     });
-    by_key.insert((level, key), id);
     id
+}
+
+/// Returns whether `graph` is a DAG (Kahn's algorithm visits every vertex).
+fn is_acyclic(graph: &Csr) -> bool {
+    let count = graph.vertex_count();
+    let mut indegree = vec![0_u32; count];
+    for vertex in 0..count {
+        let from = u32::try_from(vertex).unwrap_or(u32::MAX);
+        for &to in graph.neighbors(from) {
+            if let Some(slot) = indegree.get_mut(to as usize) {
+                *slot = slot.saturating_add(1);
+            }
+        }
+    }
+    let mut ready: Vec<u32> = indegree
+        .iter()
+        .enumerate()
+        .filter(|&(_, &degree)| degree == 0)
+        .map(|(vertex, _)| u32::try_from(vertex).unwrap_or(u32::MAX))
+        .collect();
+    let mut visited = 0_usize;
+    while let Some(vertex) = ready.pop() {
+        visited = visited.saturating_add(1);
+        for &to in graph.neighbors(vertex) {
+            if let Some(slot) = indegree.get_mut(to as usize) {
+                *slot = slot.saturating_sub(1);
+                if *slot == 0 {
+                    ready.push(to);
+                }
+            }
+        }
+    }
+    visited == count
 }
 
 /// Builds the scorer's [`ScoreCandidate`] view from a node-placement function over
@@ -685,14 +1755,83 @@ fn score_candidate(
         .collect();
 
     let containers = container_sizes(snapshot, placement, tree);
+    let (cohesion_groups, path_cohesion) = cohesion_inputs(snapshot, placement, tree);
 
     ScoreCandidate {
         edges,
         containers,
-        cohesion_groups: Vec::new(),
-        path_cohesion: 0.0,
+        cohesion_groups,
+        path_cohesion,
         move_distance,
     }
+}
+
+/// Derives the naming-cohesion groups and the path-cohesion fraction of a
+/// placement (the α and β scoring inputs, previously stubbed).
+///
+/// Every parent container that directly holds files forms one group carrying
+/// its production SLOC and the basename token set of each member file. Path
+/// cohesion is the production-SLOC-weighted fraction of files whose parent
+/// container is named exactly by the file's current directory path — an
+/// unchanged layout scores ~1.0 and every relocation dilutes it.
+fn cohesion_inputs(
+    snapshot: &Snapshot,
+    placement: &dyn Fn(u32) -> Option<ContainerId>,
+    tree: &ContainerTree,
+) -> (Vec<CohesionGroup>, f64) {
+    let ir = snapshot.ir();
+    // production SLOC landing in each file container under this placement.
+    let mut file_sloc: BTreeMap<u32, u32> = BTreeMap::new();
+    for node in &ir.nodes {
+        if node.polarity != Polarity::Production {
+            continue;
+        }
+        if let Some(container) = placement(node.id.0) {
+            let slot = file_sloc.entry(container.0).or_default();
+            *slot = slot.saturating_add(node.effective_size);
+        }
+    }
+
+    let name_of: BTreeMap<u32, &SmolStr> = tree
+        .containers()
+        .iter()
+        .map(|container| (container.id.0, &container.name))
+        .collect();
+    let mut groups: BTreeMap<u32, CohesionGroup> = BTreeMap::new();
+    let mut matched = 0_u64;
+    let mut total = 0_u64;
+    for container in tree.containers() {
+        if container.level != ScopeLevel::File {
+            continue;
+        }
+        let Some(parent) = container.parent else {
+            continue;
+        };
+        let sloc = file_sloc.get(&container.id.0).copied().unwrap_or(0);
+        let group = groups.entry(parent.0).or_insert_with(|| CohesionGroup {
+            production_sloc: 0,
+            members: Vec::new(),
+        });
+        group.production_sloc = group.production_sloc.saturating_add(sloc);
+        group.members.push(tokenize(&container.name));
+
+        let dir = container.name.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let parent_name = name_of.get(&parent.0).map_or("", |name| name.as_str());
+        total = total.saturating_add(u64::from(sloc));
+        if parent_name == dir {
+            matched = matched.saturating_add(u64::from(sloc));
+        }
+    }
+
+    let path_cohesion = if total == 0 {
+        0.0
+    } else {
+        // reason: sloc totals fit u32 sums; the f64 mantissa loses nothing material
+        #[allow(clippy::cast_precision_loss)]
+        let ratio = matched as f64 / total as f64;
+        ratio
+    };
+    (groups.into_values().collect(), path_cohesion)
 }
 
 /// Returns the level of the lowest common ancestor of two containers.
@@ -761,9 +1900,9 @@ fn container_sizes(
         }
     }
 
-    // accumulate sizes bottom-up by repeatedly summing known children; the tree is
-    // shallow so a fixpoint over its depth converges quickly.
-    for _ in 0..tree.containers().len() {
+    // accumulate sizes bottom-up by repeatedly summing known children; the
+    // laminar tree is at most five levels deep, so five passes reach fixpoint.
+    for _ in 0..5 {
         for container in tree.containers() {
             let total: u32 = children_by_parent
                 .get(&container.id.0)
@@ -809,6 +1948,14 @@ fn move_distance(snapshot: &Snapshot, candidate: &ContainerTree) -> f64 {
     if total == 0 {
         return 0.0;
     }
+    // match candidate files by the original file's name, which the assembly
+    // preserves; the id → name map avoids a per-node linear scan.
+    let current_name: BTreeMap<u32, &SmolStr> = ir
+        .containers
+        .containers()
+        .iter()
+        .map(|container| (container.id.0, &container.name))
+        .collect();
     let moved = ir
         .nodes
         .iter()
@@ -816,19 +1963,11 @@ fn move_distance(snapshot: &Snapshot, candidate: &ContainerTree) -> f64 {
             let Some(current) = current_paths.get(&node.container.0) else {
                 return false;
             };
-            // match candidate file by the original file's name, which the
-            // reconstruction preserves.
-            let original_name = ir
-                .containers
-                .containers()
-                .iter()
-                .find(|container| container.id == node.container)
-                .map(|container| container.name.clone());
-            let Some(name) = original_name else {
+            let Some(name) = current_name.get(&node.container.0) else {
                 return false;
             };
             candidate_file_name
-                .get(&name)
+                .get(name.as_str())
                 .is_none_or(|candidate_path| candidate_path != current)
         })
         .count();
@@ -859,50 +1998,6 @@ fn container_path_strings(tree: &ContainerTree) -> BTreeMap<u32, Vec<String>> {
         paths.insert(container.id.0, path);
     }
     paths
-}
-
-/// Builds one DTO [`Candidate`] from a solved partition.
-///
-/// The candidate's tree is the reconstructed laminar layout the partition induces;
-/// its score breakdown is recomputed under the mode's coefficients, and its delta
-/// narration is the per-destination move list versus the current tree.
-///
-/// # Errors
-///
-/// Returns [`StrataError::SnapshotInvalid`] if the candidate tree has no root.
-fn build_candidate(
-    snapshot: &Snapshot,
-    current_tree: &ContainerTree,
-    solved: &SolvedCandidate,
-    coefficients: &Coefficients,
-    index: u32,
-) -> Result<Candidate, StrataError> {
-    let cluster_of: BTreeMap<u32, ClusterId> = solved
-        .partition
-        .assignment()
-        .iter()
-        .enumerate()
-        .map(|(node, cluster)| (u32::try_from(node).unwrap_or(u32::MAX), *cluster))
-        .collect();
-    let reconstructed = candidate_tree(snapshot, &cluster_of);
-    let placement = |id: u32| reconstructed.placement.get(&id).copied();
-    let distance = move_distance(snapshot, &reconstructed.tree);
-    let breakdown = score(
-        &score_candidate(snapshot, &placement, &reconstructed.tree, distance),
-        coefficients,
-    );
-    let placement_of = |node: &Node| reconstructed.placement.get(&node.id.0).copied();
-    let node = render_tree(&reconstructed.tree, &snapshot.ir().nodes, &placement_of)?;
-    let delta = narrate_delta(current_tree, &reconstructed.tree);
-
-    Ok(Candidate {
-        index,
-        score: breakdown.total,
-        score_breakdown: ScoreBreakdown::from(breakdown),
-        tree: node,
-        conditional_splits: Vec::new(),
-        delta_narration: delta,
-    })
 }
 
 /// Extracts the per-level member caps from the engine config.
@@ -949,13 +2044,13 @@ fn render_tree(
                 reason: "container tree has no root".to_owned(),
             },
         }),
-        [root] => Ok(render_node(root, &children_by_parent, &contents)),
+        [root] => Ok(render_node(root, &children_by_parent, &contents, "")),
         many => Ok(ContainerNode {
             name: "workspace".to_owned(),
             level: Level::PackageGroup,
             children: Some(
                 many.iter()
-                    .map(|root| render_node(root, &children_by_parent, &contents))
+                    .map(|root| render_node(root, &children_by_parent, &contents, ""))
                     .collect(),
             ),
             symbols: None,
@@ -965,10 +2060,16 @@ fn render_tree(
 }
 
 /// Recursively renders one container and its descendants.
+///
+/// Interior container names are *cumulative* path prefixes internally; the DTO
+/// carries only each node's increment over its parent so a rendered tree never
+/// repeats segments. Files keep their full path (their stable identity) and a
+/// root keeps its own name.
 fn render_node(
     container: &Container,
     children_by_parent: &BTreeMap<u32, Vec<&Container>>,
     contents: &BTreeMap<u32, FileContents>,
+    parent_name: &str,
 ) -> ContainerNode {
     if container.level == ScopeLevel::File {
         let file = contents.get(&container.id.0);
@@ -988,18 +2089,33 @@ fn render_node(
         .map(|children| {
             children
                 .iter()
-                .map(|child| render_node(child, children_by_parent, contents))
+                .map(|child| render_node(child, children_by_parent, contents, &container.name))
                 .collect()
         })
         .unwrap_or_default();
 
     ContainerNode {
-        name: container.name.to_string(),
+        name: increment_name(&container.name, parent_name),
         level: Level::from(container.level),
         children: Some(children),
         symbols: None,
         production_sloc: None,
     }
+}
+
+/// Returns `name`'s increment over its parent's cumulative name: the suffix it
+/// adds when it extends the parent, its last segment when it repeats the parent
+/// outright, and the whole name when the two are unrelated (or at the root).
+fn increment_name(name: &str, parent_name: &str) -> String {
+    if parent_name.is_empty() {
+        return name.to_owned();
+    }
+    if name == parent_name {
+        return name.rsplit('/').next().unwrap_or(name).to_owned();
+    }
+    name.strip_prefix(parent_name)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .map_or_else(|| name.to_owned(), str::to_owned)
 }
 
 /// A file container's rendered contents: the symbols placed in it and the sum of
@@ -1048,6 +2164,98 @@ fn node_names(snapshot: &Snapshot) -> BTreeMap<u32, String> {
         .nodes
         .iter()
         .map(|node| (node.id.0, node.name.to_string()))
+        .collect()
+}
+
+/// One solved multi-member SCC: its members, config-priced internal edges, a
+/// minimum-weight break set, and the members' total production SLOC.
+///
+/// `pair_weights` keys are *local* indices into `members` — the same numbering
+/// the break set's [`EdgeRef`]s use.
+struct SccSolution {
+    /// The SCC's member nodes, ascending id.
+    members: Vec<NodeId>,
+    /// Summed edge weight per directed local pair.
+    pair_weights: BTreeMap<(u32, u32), f64>,
+    /// The MFAS solution over the SCC.
+    break_set: BreakSet,
+    /// Total production SLOC across members (drives conditional splits).
+    production_sloc: u64,
+}
+
+/// Runs MFAS over every multi-member SCC of the hard-edge graph.
+///
+/// SCCs solve sequentially in condensation order: `shatter_all` is unusable
+/// here because each SCC gets its own dense local numbering, and one shared
+/// weight table would collide the [`EdgeRef`]s. Edge prices come from the
+/// config's kind-weight table so break suggestions rank by the same currency
+/// the objective charges.
+fn solve_cycles(
+    snapshot: &Snapshot,
+    config: &AnalyzeConfig,
+    weights: &KindWeights,
+) -> Vec<SccSolution> {
+    let views = build_csr(snapshot, HardnessFilter::HardOnly);
+    let condensation = condense(&views.forward);
+    let ir = snapshot.ir();
+    let limits = config.solver.limits();
+    let node_by_id: BTreeMap<u32, &Node> = ir.nodes.iter().map(|node| (node.id.0, node)).collect();
+
+    condensation
+        .members
+        .iter()
+        .filter(|members| members.len() > 1)
+        .map(|members| {
+            let local: BTreeMap<u32, u32> = members
+                .iter()
+                .enumerate()
+                .map(|(index, node)| (node.0, u32::try_from(index).unwrap_or(u32::MAX)))
+                .collect();
+
+            let mut pair_weights: BTreeMap<(u32, u32), f64> = BTreeMap::new();
+            for edge in &ir.edges {
+                if edge.hardness != Hardness::Hard {
+                    continue;
+                }
+                let (Some(&source), Some(&target)) =
+                    (local.get(&edge.source.0), local.get(&edge.target.0))
+                else {
+                    continue;
+                };
+                if source == target {
+                    continue;
+                }
+                *pair_weights.entry((source, target)).or_insert(0.0) +=
+                    weights.edge_weight(edge.kind, edge.confidence);
+            }
+
+            let view = SccView::new(
+                u32::try_from(members.len()).unwrap_or(u32::MAX),
+                pair_weights
+                    .keys()
+                    .map(|&(source, target)| EdgeRef { source, target }),
+            );
+            let table = EdgeWeights::from_pairs(
+                pair_weights
+                    .iter()
+                    .map(|(&(source, target), &weight)| (EdgeRef { source, target }, weight)),
+            );
+            let break_set = shatter(&view, &table, &limits);
+
+            let production_sloc = members
+                .iter()
+                .filter_map(|node| node_by_id.get(&node.0))
+                .filter(|node| node.polarity == Polarity::Production)
+                .map(|node| u64::from(node.effective_size))
+                .sum();
+
+            SccSolution {
+                members: members.clone(),
+                pair_weights,
+                break_set,
+                production_sloc,
+            }
+        })
         .collect()
 }
 
@@ -1136,6 +2344,35 @@ mod tests {
         config
     }
 
+    /// Builds a file node with `sloc` production SLOC.
+    fn file(name: &str, sloc: u32) -> ContainerNode {
+        ContainerNode {
+            name: name.to_owned(),
+            level: Level::File,
+            children: None,
+            symbols: Some(Vec::new()),
+            production_sloc: Some(sloc),
+        }
+    }
+
+    /// Builds a folder node holding `children`.
+    fn folder(name: &str, children: Vec<ContainerNode>) -> ContainerNode {
+        ContainerNode {
+            name: name.to_owned(),
+            level: Level::Folder,
+            children: Some(children),
+            symbols: None,
+            production_sloc: None,
+        }
+    }
+
+    /// Builds a config with the file cap set to `cap`.
+    fn config_with_file_cap(cap: u32) -> AnalyzeConfig {
+        let mut config = AnalyzeConfig::default();
+        config.capacity.file = cap;
+        config
+    }
+
     #[test]
     fn should_report_a_cycle_as_a_violation() {
         let snapshot = snapshot(
@@ -1172,6 +2409,128 @@ mod tests {
             .unwrap_or_default();
 
         assert!(violations.iter().any(|v| v.kind == ViolationKind::Polarity));
+    }
+
+    #[test]
+    fn should_report_a_test_support_dependency_on_a_test_case() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "helper", 0, Polarity::TestSupport),
+                node(1, "spec", 0, Polarity::TestCase),
+            ],
+            vec![edge(0, 1)],
+            vec![container(0, "file", ScopeLevel::File, None)],
+        );
+
+        let result = analyze(&snapshot, &AnalyzeConfig::default());
+        let violations = result
+            .map(|result| result.current.violations)
+            .unwrap_or_default();
+
+        assert!(violations.iter().any(|v| v.kind == ViolationKind::Polarity
+            && v.detail == "test support `helper` depends on test case `spec`"));
+    }
+
+    #[test]
+    fn should_locate_a_nested_over_cap_file_by_ancestors_and_basename() {
+        // interior DTO names are incremental; the file keeps its full path but
+        // its location contributes only the basename (detail has the path).
+        let tree = folder(
+            "app",
+            vec![folder(
+                "spec",
+                vec![folder(
+                    "agent",
+                    vec![folder(
+                        "mocks",
+                        vec![file("spec/agent/mocks/google/gen.ts", 300)],
+                    )],
+                )],
+            )],
+        );
+
+        let findings = capacity_violations(&tree, &config_with_file_cap(250));
+
+        let location = findings
+            .iter()
+            .find(|f| f.severity == Severity::Violation)
+            .map(|f| f.location.clone())
+            .unwrap_or_default();
+        assert_eq!(location, vec!["app", "spec", "agent", "mocks", "gen.ts"]);
+    }
+
+    #[test]
+    fn should_collapse_repeated_synthetic_levels_in_capacity_locations() {
+        // a root-level file hangs under the synthetic workspace chain, whose
+        // levels all render the same segment; the location keeps it once.
+        let tree = folder(
+            "over-capacity",
+            vec![folder(
+                "workspace",
+                vec![folder(
+                    "workspace",
+                    vec![folder("workspace", vec![file("huge.py", 300)])],
+                )],
+            )],
+        );
+
+        let findings = capacity_violations(&tree, &config_with_file_cap(250));
+
+        let location = findings
+            .iter()
+            .find(|f| f.severity == Severity::Violation)
+            .map(|f| f.location.clone())
+            .unwrap_or_default();
+        assert_eq!(location, vec!["over-capacity", "workspace", "huge.py"]);
+    }
+
+    #[test]
+    fn should_report_a_file_over_its_cap_as_a_hard_violation() {
+        let tree = file("big", 100);
+
+        let findings = capacity_violations(&tree, &config_with_file_cap(10));
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings.first().map(|f| f.severity),
+            Some(Severity::Violation)
+        );
+    }
+
+    #[test]
+    fn should_report_a_file_within_the_band_as_borderline() {
+        // cap 100, file at 105 sits inside the +10% band -> borderline.
+        let tree = file("near", 105);
+
+        let findings = capacity_violations(&tree, &config_with_file_cap(100));
+
+        assert_eq!(
+            findings.first().map(|f| f.severity),
+            Some(Severity::Borderline)
+        );
+    }
+
+    #[test]
+    fn should_not_report_a_file_well_under_its_cap() {
+        let tree = file("small", 10);
+
+        let findings = capacity_violations(&tree, &config_with_file_cap(100));
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn should_count_folder_members_against_the_folder_cap() {
+        let children = (0..20).map(|i| file(&format!("f{i}"), 1)).collect();
+        let tree = folder("dir", children);
+        let mut config = AnalyzeConfig::default();
+        config.capacity.folder = 5;
+
+        let findings = capacity_violations(&tree, &config);
+
+        assert!(findings.iter().any(|f| f.kind == ViolationKind::Capacity
+            && f.severity == Severity::Violation
+            && f.location == vec!["dir".to_owned()]));
     }
 
     #[test]
@@ -1229,6 +2588,16 @@ mod tests {
                 candidates: Vec::new(),
                 pairwise_distance: Vec::new(),
                 solution_space_converged: false,
+                current_score: 0.0,
+                current_score_breakdown: ScoreBreakdown {
+                    cut: 0.0,
+                    imbalance: 0.0,
+                    naming: 0.0,
+                    path: 0.0,
+                    anchor: 0.0,
+                },
+                current_standing: CurrentStanding::Outscored,
+                best_candidate_capacity: None,
             });
 
         // never more than k, always at least one candidate is produced.
@@ -1313,6 +2682,69 @@ mod tests {
     }
 
     #[test]
+    fn should_sort_violations_by_severity_then_kind_then_location() {
+        let finding = |kind, severity, location: &str| Violation {
+            kind,
+            severity,
+            location: vec![location.to_owned()],
+            detail: String::new(),
+            break_suggestions: None,
+        };
+        let mut violations = vec![
+            finding(ViolationKind::Capacity, Severity::Borderline, "a"),
+            finding(ViolationKind::Visibility, Severity::Violation, "b"),
+            finding(ViolationKind::Capacity, Severity::Violation, "z"),
+            finding(ViolationKind::Capacity, Severity::Violation, "a"),
+            finding(ViolationKind::Cycle, Severity::Violation, "y"),
+        ];
+
+        sort_violations(&mut violations);
+
+        let order: Vec<(ViolationKind, Severity, &str)> = violations
+            .iter()
+            .filter_map(|violation| {
+                violation
+                    .location
+                    .first()
+                    .map(|location| (violation.kind, violation.severity, location.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (ViolationKind::Cycle, Severity::Violation, "y"),
+                (ViolationKind::Capacity, Severity::Violation, "a"),
+                (ViolationKind::Capacity, Severity::Violation, "z"),
+                (ViolationKind::Visibility, Severity::Violation, "b"),
+                (ViolationKind::Capacity, Severity::Borderline, "a"),
+            ]
+        );
+    }
+
+    #[test]
+    fn should_elect_names_by_production_sloc_before_file_count() {
+        // two production files under src outweigh five zero-SLOC spec files.
+        let mut tally: NameTally = BTreeMap::new();
+        for _ in 0..5 {
+            vote(&mut tally, 0, SmolStr::new("spec/adapters"), 0);
+        }
+        vote(&mut tally, 0, SmolStr::new("src/adapters"), 60);
+        vote(&mut tally, 0, SmolStr::new("src/adapters"), 60);
+        let elected = tally.get(&0).map(plurality).unwrap_or_default();
+        assert_eq!(elected, "src/adapters");
+
+        // an all-test cluster has zero SLOC everywhere and degrades to the
+        // old file-count plurality.
+        let mut tests_only: NameTally = BTreeMap::new();
+        for _ in 0..3 {
+            vote(&mut tests_only, 0, SmolStr::new("spec/agent"), 0);
+        }
+        vote(&mut tests_only, 0, SmolStr::new("spec/batch"), 0);
+        let fallback = tests_only.get(&0).map(plurality).unwrap_or_default();
+        assert_eq!(fallback, "spec/agent");
+    }
+
+    #[test]
     fn should_build_candidates_with_real_names_and_five_levels() {
         // two files under a real directory path, each holding a multi-line
         // production symbol, plus a hard edge so clustering has a pair to group.
@@ -1356,8 +2788,17 @@ mod tests {
             names.iter().all(|name| !name.contains("cluster-")),
             "expected real names, got {names:?}"
         );
+        // interior names render incrementally: the domain "crates/engine" adds
+        // "engine" over the package "crates", the folder adds "src"; files keep
+        // their full path as their stable identity.
         assert!(names.iter().any(|name| name == "crates"));
-        assert!(names.iter().any(|name| name == "crates/engine/src"));
+        assert!(names.iter().any(|name| name == "engine"));
+        assert!(names.iter().any(|name| name == "src"));
+        assert!(
+            names
+                .iter()
+                .any(|name| name == "crates/engine/src/alpha.rs")
+        );
 
         // the full five-level laminar hierarchy is present.
         for expected in [
@@ -1401,5 +2842,209 @@ mod tests {
         };
 
         assert_eq!(scores(&make()), scores(&make()));
+    }
+
+    /// Builds a production symbol node with an explicit effective size.
+    fn sized_node(id: u32, name: &str, container: u32, size: u32) -> Node {
+        Node {
+            effective_size: size,
+            ..node(id, name, container, Polarity::Production)
+        }
+    }
+
+    #[test]
+    fn should_solve_a_cycle_with_priced_weights_and_a_minimal_break_set() {
+        // a -> b -> c -> a; the c -> a edge is inheritance (1.5), the rest
+        // calls (1.0), so the optimal break is a 1.0 call edge.
+        let snapshot = snapshot(
+            vec![
+                node(0, "a", 0, Polarity::Production),
+                node(1, "b", 1, Polarity::Production),
+                node(2, "c", 2, Polarity::Production),
+            ],
+            vec![
+                edge(0, 1),
+                edge(1, 2),
+                Edge {
+                    kind: EdgeKind::Inheritance,
+                    ..edge(2, 0)
+                },
+            ],
+            vec![
+                container(0, "a.ts", ScopeLevel::File, None),
+                container(1, "b.ts", ScopeLevel::File, None),
+                container(2, "c.ts", ScopeLevel::File, None),
+            ],
+        );
+
+        let solutions = solve_cycles(
+            &snapshot,
+            &AnalyzeConfig::default(),
+            &KindWeights::default(),
+        );
+
+        assert_eq!(solutions.len(), 1);
+        let solution = solutions.first();
+        assert_eq!(
+            solution.map(|s| s.members.clone()),
+            Some(vec![NodeId(0), NodeId(1), NodeId(2)])
+        );
+        let weight_of = |pair: (u32, u32)| {
+            solution
+                .and_then(|s| s.pair_weights.get(&pair))
+                .copied()
+                .unwrap_or(0.0)
+        };
+        assert!((weight_of((0, 1)) - 1.0).abs() < f64::EPSILON);
+        assert!((weight_of((1, 2)) - 1.0).abs() < f64::EPSILON);
+        assert!((weight_of((2, 0)) - 1.5).abs() < f64::EPSILON);
+        assert_eq!(solution.map(|s| s.break_set.exact), Some(true));
+        assert_eq!(solution.map(|s| s.break_set.edges.len()), Some(1));
+        // the pricier inheritance edge must survive.
+        assert!(solution.is_some_and(|s| {
+            s.break_set
+                .edges
+                .iter()
+                .all(|e| !(e.source == 2 && e.target == 0))
+        }));
+        assert_eq!(solution.map(|s| s.production_sloc), Some(3));
+    }
+
+    #[test]
+    fn should_solve_no_cycles_on_an_acyclic_graph() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "a", 0, Polarity::Production),
+                node(1, "b", 1, Polarity::Production),
+            ],
+            vec![edge(0, 1)],
+            vec![
+                container(0, "a.ts", ScopeLevel::File, None),
+                container(1, "b.ts", ScopeLevel::File, None),
+            ],
+        );
+
+        let solutions = solve_cycles(
+            &snapshot,
+            &AnalyzeConfig::default(),
+            &KindWeights::default(),
+        );
+
+        assert!(solutions.is_empty());
+    }
+
+    /// Folder clusters of the identity partition, keyed by file container id.
+    fn identity_clusters(snapshot: &Snapshot, file_containers: &[u32]) -> Vec<Option<ClusterId>> {
+        let solver = PipelineSolver::new(
+            snapshot,
+            &AnalyzeConfig::default(),
+            Coefficients::anchored(),
+            true,
+        );
+        file_containers
+            .iter()
+            .map(|container| {
+                let vertex = solver.index_of.get(container).copied()?;
+                let scc = solver.condensation.membership.get(vertex as usize)?;
+                solver
+                    .identity
+                    .as_ref()
+                    .and_then(|identity| identity.cluster_of(scc.0))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn should_map_singleton_file_sccs_onto_their_current_folders() {
+        // two folders, two files each; identity must reproduce the folders.
+        let snapshot = snapshot(
+            vec![
+                node(0, "a", 2, Polarity::Production),
+                node(1, "b", 3, Polarity::Production),
+                node(2, "c", 4, Polarity::Production),
+                node(3, "d", 5, Polarity::Production),
+            ],
+            vec![],
+            vec![
+                container(0, "left", ScopeLevel::Folder, None),
+                container(1, "right", ScopeLevel::Folder, None),
+                container(2, "left/a.ts", ScopeLevel::File, Some(0)),
+                container(3, "left/b.ts", ScopeLevel::File, Some(0)),
+                container(4, "right/c.ts", ScopeLevel::File, Some(1)),
+                container(5, "right/d.ts", ScopeLevel::File, Some(1)),
+            ],
+        );
+
+        let clusters = identity_clusters(&snapshot, &[2, 3, 4, 5]);
+
+        assert!(clusters.iter().all(Option::is_some));
+        assert_eq!(clusters.first(), clusters.get(1));
+        assert_eq!(clusters.get(2), clusters.get(3));
+        assert_ne!(clusters.first(), clusters.get(2));
+    }
+
+    #[test]
+    fn should_place_a_cross_folder_cycle_by_its_dominant_file() {
+        // the symbol cycle 0 <-> 1 fuses files 2 (left, sloc 5) and 4 (right,
+        // sloc 1) into one file SCC; it must land in left's cluster, beside
+        // left resident file 3.
+        let snapshot = snapshot(
+            vec![
+                sized_node(0, "a", 2, 5),
+                sized_node(1, "b", 4, 1),
+                sized_node(2, "c", 3, 1),
+                sized_node(3, "d", 5, 1),
+            ],
+            vec![edge(0, 1), edge(1, 0)],
+            vec![
+                container(0, "left", ScopeLevel::Folder, None),
+                container(1, "right", ScopeLevel::Folder, None),
+                container(2, "left/a.ts", ScopeLevel::File, Some(0)),
+                container(3, "left/c.ts", ScopeLevel::File, Some(0)),
+                container(4, "right/b.ts", ScopeLevel::File, Some(1)),
+                container(5, "right/d.ts", ScopeLevel::File, Some(1)),
+            ],
+        );
+
+        let clusters = identity_clusters(&snapshot, &[2, 4, 3, 5]);
+
+        assert!(clusters.iter().all(Option::is_some));
+        assert_eq!(
+            clusters.first(),
+            clusters.get(1),
+            "the fused SCC is one cluster"
+        );
+        assert_eq!(
+            clusters.first(),
+            clusters.get(2),
+            "cycle follows dominant left file"
+        );
+        assert_ne!(clusters.first(), clusters.get(3));
+    }
+
+    #[test]
+    fn should_break_a_dominance_tie_by_the_smaller_file_name() {
+        // equal SLOC on both sides of the cycle; "left/a.ts" < "right/b.ts",
+        // so the fused file SCC lands in left, beside left resident file 3.
+        let snapshot = snapshot(
+            vec![
+                sized_node(0, "a", 2, 1),
+                sized_node(1, "b", 4, 1),
+                sized_node(2, "c", 3, 1),
+            ],
+            vec![edge(0, 1), edge(1, 0)],
+            vec![
+                container(0, "left", ScopeLevel::Folder, None),
+                container(1, "right", ScopeLevel::Folder, None),
+                container(2, "left/a.ts", ScopeLevel::File, Some(0)),
+                container(3, "left/c.ts", ScopeLevel::File, Some(0)),
+                container(4, "right/b.ts", ScopeLevel::File, Some(1)),
+            ],
+        );
+
+        let clusters = identity_clusters(&snapshot, &[2, 3]);
+
+        assert!(clusters.iter().all(Option::is_some));
+        assert_eq!(clusters.first(), clusters.get(1));
     }
 }

@@ -96,7 +96,10 @@ pub fn run(args: &DiffArgs, out: &mut impl Write) -> Result<(), StrataError> {
         ) => {
             // a candidate-vs-candidate diff narrates the right candidate's moves
             // against the current tree and reports the pair's VI distance when both
-            // belong to the same mode (the only pairing the matrix covers).
+            // belong to the same mode (the only pairing the matrix covers). the
+            // left reference is resolved too, so an out-of-range left ref fails
+            // with CANDIDATE_NOT_FOUND instead of silently rendering.
+            candidate_at(&result, left_mode, *left_index)?;
             let right_candidate = candidate_at(&result, right_mode, *right_index)?;
             render_diff(right_candidate, out).map_err(|error| write_error(&error))?;
             if left_mode == right_mode {
@@ -143,8 +146,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use strata_engine::{
-        Candidate, ContainerNode, CurrentTree, Level, ModeResult, Modes, Move, MoveKind,
-        ScoreBreakdown, Summary, SymbolPlacement,
+        Candidate, ContainerNode, CurrentStanding, CurrentTree, Level, ModeResult, Modes, Move,
+        MoveKind, ScoreBreakdown, Summary, SymbolPlacement,
     };
 
     use super::*;
@@ -152,6 +155,7 @@ mod tests {
     /// Builds a result with two anchored candidates.
     fn sample() -> AnalyzeResult {
         AnalyzeResult {
+            schema_version: strata_engine::RESULT_SCHEMA_VERSION,
             snapshot_hash: "h".to_owned(),
             summary: Summary {
                 symbols: 1,
@@ -170,6 +174,10 @@ mod tests {
                     candidates: vec![candidate(1), candidate(2)],
                     pairwise_distance: vec![vec![0.0, 0.7], vec![0.7, 0.0]],
                     solution_space_converged: true,
+                    current_score: 1.0,
+                    current_score_breakdown: zero(),
+                    current_standing: CurrentStanding::Outscored,
+                    best_candidate_capacity: None,
                 }),
                 greenfield: None,
             },
@@ -182,6 +190,7 @@ mod tests {
             index,
             score: f64::from(index),
             score_breakdown: zero(),
+            improvement: 0.0,
             tree: file("lib"),
             conditional_splits: Vec::new(),
             delta_narration: vec![Move {

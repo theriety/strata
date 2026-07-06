@@ -21,6 +21,10 @@ pub mod coarsen;
 pub mod refine;
 pub mod seed;
 
+use std::collections::BTreeMap;
+
+use crate::graph::csr::Csr;
+
 /// Identifier of a cluster within a [`Partition`], dense over `0..cluster_count`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClusterId(pub u32);
@@ -127,6 +131,40 @@ impl Partition {
         &self.assignment
     }
 
+    /// Contracts `graph` under this partition: one quotient vertex per cluster,
+    /// cross-cluster edge weights summed, self-loops dropped.
+    ///
+    /// The quotient feeds the next clustering level (folders → domains → …), so
+    /// it must carry real weights: the pull between two clusters is the sum of
+    /// every member edge crossing between them. Deterministic for any input.
+    #[must_use]
+    pub fn quotient(&self, graph: &Csr) -> Csr {
+        let mut crossings: BTreeMap<(u32, u32), f32> = BTreeMap::new();
+        for node in 0..graph.vertex_count() {
+            let node32 = u32::try_from(node).unwrap_or(u32::MAX);
+            let Some(from) = self.cluster_of(node32) else {
+                continue;
+            };
+            let weights = graph.weights(node32);
+            for (slot, &target) in graph.neighbors(node32).iter().enumerate() {
+                let Some(to) = self.cluster_of(target) else {
+                    continue;
+                };
+                if from == to {
+                    continue;
+                }
+                let weight = weights.get(slot).copied().unwrap_or(0.0);
+                *crossings.entry((from.0, to.0)).or_insert(0.0) += weight;
+            }
+        }
+
+        let edges: Vec<(u32, u32, f32)> = crossings
+            .into_iter()
+            .map(|((from, to), weight)| (from, to, weight))
+            .collect();
+        Csr::from_weighted_edges(self.cluster_count(), &edges)
+    }
+
     /// Moves `node` into `target`, updating both source and target member counts.
     ///
     /// A no-op when `node` is out of range or already in `target`. Returns `true`
@@ -148,5 +186,46 @@ impl Partition {
             *slot = target;
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_sum_crossing_weights_in_the_quotient() {
+        // nodes 0 and 1 share cluster 0; node 2 is cluster 1; both crossings
+        // into node 2 merge into one quotient edge with summed weight.
+        let graph = Csr::from_weighted_edges(3, &[(0, 2, 1.0), (1, 2, 2.0)]);
+        let parts = Partition::from_assignment(vec![ClusterId(0), ClusterId(0), ClusterId(1)], 2);
+
+        let quotient = parts.quotient(&graph);
+
+        assert_eq!(quotient.neighbors(0), &[1]);
+        let weights: Vec<u32> = quotient.weights(0).iter().map(|w| w.to_bits()).collect();
+        assert_eq!(weights, vec![3.0_f32.to_bits()]);
+    }
+
+    #[test]
+    fn should_drop_intra_cluster_edges_from_the_quotient() {
+        let graph = Csr::from_weighted_edges(2, &[(0, 1, 5.0)]);
+        let parts = Partition::from_assignment(vec![ClusterId(0), ClusterId(0)], 1);
+
+        let quotient = parts.quotient(&graph);
+
+        assert_eq!((quotient.vertex_count(), quotient.edge_count()), (1, 0));
+    }
+
+    #[test]
+    fn should_size_the_quotient_by_cluster_count() {
+        // an empty cluster still occupies a quotient vertex, keeping ids stable.
+        let graph = Csr::from_weighted_edges(2, &[(0, 1, 1.0)]);
+        let parts = Partition::from_assignment(vec![ClusterId(0), ClusterId(2)], 3);
+
+        let quotient = parts.quotient(&graph);
+
+        assert_eq!(quotient.vertex_count(), 3);
+        assert_eq!(quotient.neighbors(0), &[2]);
     }
 }

@@ -27,9 +27,9 @@ use crate::cluster::Partition;
 /// Configuration for one diversification run.
 ///
 /// `k` is the number of candidates the caller wants; `base_seed` anchors the
-/// `10 * k` restarts at `base_seed + i`. `score_tolerance` widens the keep-band
-/// to `(1 + tolerance) * best`; `min_distance` is the minimum pairwise VI two
-/// selected candidates must exceed to both be kept.
+/// `pool_per_candidate * k` restarts at `base_seed + i`. `score_tolerance`
+/// widens the keep-band to `(1 + tolerance) * best`; `min_distance` is the
+/// minimum pairwise VI two selected candidates must exceed to both be kept.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModeConfig {
     /// How many diverse candidates to return.
@@ -40,6 +40,9 @@ pub struct ModeConfig {
     pub score_tolerance: f64,
     /// Minimum pairwise variation of information between selected candidates.
     pub min_distance: f64,
+    /// Restart pool multiplier: the pool holds `pool_per_candidate * k`
+    /// restarts (the `[diversity].seeds-per-candidate` config key).
+    pub pool_per_candidate: usize,
 }
 
 /// One solved candidate from a single restart: its induced symbol partition and
@@ -79,8 +82,9 @@ pub struct ModeResult {
     pub solution_space_converged: bool,
 }
 
-/// Runs `10 * k` seeded restarts, filters to the score-tolerance band, and
-/// greedily selects up to `k` candidates that are maximally different by VI.
+/// Runs `pool_per_candidate * k` seeded restarts, filters to the
+/// score-tolerance band, and greedily selects up to `k` candidates that are
+/// maximally different by VI.
 ///
 /// The restarts run in parallel via rayon but are reduced in seed order, so the
 /// pool — and therefore the result — is independent of thread scheduling. The
@@ -105,10 +109,11 @@ pub fn diversify(solver: &impl Solver, cfg: &ModeConfig) -> ModeResult {
     }
 }
 
-/// Solves `10 * k` restarts at `base_seed + i` in parallel and returns them in
-/// ascending seed order, so the pool is deterministic regardless of scheduling.
+/// Solves `pool_per_candidate * k` restarts at `base_seed + i` in parallel and
+/// returns them in ascending seed order, so the pool is deterministic
+/// regardless of scheduling.
 fn solve_pool(solver: &impl Solver, cfg: &ModeConfig) -> Vec<SolvedCandidate> {
-    let count = cfg.k.saturating_mul(10);
+    let count = cfg.k.saturating_mul(cfg.pool_per_candidate);
     (0..count)
         .into_par_iter()
         .map(|i| {
@@ -402,6 +407,7 @@ mod tests {
             base_seed: 100,
             score_tolerance: 10.0,
             min_distance: 0.1,
+            pool_per_candidate: 10,
         };
 
         let result = diversify(&solver, &cfg);
@@ -430,6 +436,7 @@ mod tests {
             base_seed: 0,
             score_tolerance: 0.05,
             min_distance: 0.0,
+            pool_per_candidate: 10,
         };
 
         let result = diversify(&solver, &cfg);
@@ -456,6 +463,7 @@ mod tests {
             base_seed: 0,
             score_tolerance: 1.0,
             min_distance: 0.5,
+            pool_per_candidate: 10,
         };
 
         let result = diversify(&solver, &cfg);
@@ -478,6 +486,7 @@ mod tests {
             base_seed: 0,
             score_tolerance: 10.0,
             min_distance: 0.0,
+            pool_per_candidate: 10,
         };
 
         let result = diversify(&solver, &cfg);
@@ -496,6 +505,7 @@ mod tests {
             base_seed: 0,
             score_tolerance: 0.0,
             min_distance: 0.0,
+            pool_per_candidate: 10,
         };
 
         let result = diversify(&solver, &cfg);

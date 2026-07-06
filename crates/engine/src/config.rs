@@ -18,6 +18,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use strata_core::score::{Coefficients, KindWeights};
 use strata_core::shatter::SolverLimits;
 
 use crate::error::StrataError;
@@ -165,6 +166,33 @@ impl Default for ObjectiveConfig {
     }
 }
 
+impl ObjectiveConfig {
+    /// Converts the config into the anchored-mode [`Coefficients`].
+    #[must_use]
+    pub const fn anchored(&self) -> Coefficients {
+        Coefficients {
+            lambda: self.imbalance,
+            alpha: self.naming,
+            beta: self.path,
+            mu: self.anchor,
+        }
+    }
+
+    /// Converts the config into the greenfield-mode [`Coefficients`].
+    ///
+    /// Greenfield is layout-blind (AD-2): the current-path bonus and anchoring
+    /// penalty are forced to zero regardless of what the config says.
+    #[must_use]
+    pub const fn greenfield(&self) -> Coefficients {
+        Coefficients {
+            lambda: self.imbalance,
+            alpha: self.naming,
+            beta: 0.0,
+            mu: 0.0,
+        }
+    }
+}
+
 /// The per-kind edge weights used when cutting dependencies.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -192,6 +220,20 @@ impl Default for WeightsConfig {
             call: 1.0,
             type_reference: 0.3,
             re_export: 0.0,
+        }
+    }
+}
+
+impl WeightsConfig {
+    /// Converts the config into the scorer's [`KindWeights`] table.
+    #[must_use]
+    pub const fn kind_weights(&self) -> KindWeights {
+        KindWeights {
+            value_import: self.value_import,
+            inheritance: self.inheritance,
+            call: self.call,
+            type_reference: self.type_reference,
+            re_export: self.re_export,
         }
     }
 }
@@ -524,5 +566,60 @@ mod tests {
 
         assert_eq!(limits.ilp_threshold, 300);
         assert_eq!(limits.timeout, Duration::from_mins(1));
+    }
+
+    #[test]
+    fn should_map_objective_config_onto_anchored_coefficients() {
+        let objective = ObjectiveConfig {
+            imbalance: 0.4,
+            naming: 0.5,
+            path: 0.6,
+            anchor: 0.7,
+        };
+
+        let coefficients = objective.anchored();
+
+        assert!((coefficients.lambda - 0.4).abs() < f64::EPSILON);
+        assert!((coefficients.alpha - 0.5).abs() < f64::EPSILON);
+        assert!((coefficients.beta - 0.6).abs() < f64::EPSILON);
+        assert!((coefficients.mu - 0.7).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn should_zero_path_and_anchor_in_greenfield_coefficients() {
+        // greenfield is layout-blind: beta and mu are forced to zero even when
+        // the config sets them.
+        let objective = ObjectiveConfig {
+            imbalance: 0.4,
+            naming: 0.5,
+            path: 0.6,
+            anchor: 0.7,
+        };
+
+        let coefficients = objective.greenfield();
+
+        assert!((coefficients.lambda - 0.4).abs() < f64::EPSILON);
+        assert!((coefficients.alpha - 0.5).abs() < f64::EPSILON);
+        assert!(coefficients.beta.abs() < f64::EPSILON);
+        assert!(coefficients.mu.abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn should_map_weights_config_onto_kind_weights() {
+        let weights = WeightsConfig {
+            value_import: 2.0,
+            inheritance: 3.0,
+            call: 4.0,
+            type_reference: 5.0,
+            re_export: 6.0,
+        };
+
+        let table = weights.kind_weights();
+
+        assert!((table.value_import - 2.0).abs() < f64::EPSILON);
+        assert!((table.inheritance - 3.0).abs() < f64::EPSILON);
+        assert!((table.call - 4.0).abs() < f64::EPSILON);
+        assert!((table.type_reference - 5.0).abs() < f64::EPSILON);
+        assert!((table.re_export - 6.0).abs() < f64::EPSILON);
     }
 }

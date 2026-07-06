@@ -232,6 +232,9 @@ fn solve_ilp(
 
     let mut model = problem.optimise(Sense::Minimise);
     model.make_quiet();
+    // Single-threaded solve: HiGHS multi-threading can pick different optimal
+    // vertices run to run, and NFR-1 demands byte-identical output.
+    model.set_option("threads", 1);
     let remaining = timeout.saturating_sub(started.elapsed());
     model.set_option("time_limit", remaining.as_secs_f64());
 

@@ -1,0 +1,10 @@
+snapshot 7ade14d1273c13e52915520cceca5632b33d900bd8c849da1e95662246682e40
+summary: 28 symbols, 48 edges, 28 files
+current score: 251.8387
+no violations
+mode anchored: 1 candidate(s)
+  (fewer than k candidates; solution space converged)
+  candidate 1 score 110.7974 (improvement +141.0413; 4 move group(s))
+mode greenfield: 1 candidate(s)
+  (fewer than k candidates; solution space converged)
+  candidate 1 score 110.0144 (improvement +142.0243; 4 move group(s))

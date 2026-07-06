@@ -1,4 +1,4 @@
+visibility [violation] Rectangle :: `Rectangle` is exported at Package but needed only at File
 visibility [violation] Shape :: `Shape` is exported at Package but needed only at File
 visibility [violation] describe_shape :: `describe_shape` is exported at Package but needed only at File
-visibility [violation] Rectangle :: `Rectangle` is exported at Package but needed only at File
 visibility [violation] summarize :: `summarize` is exported at Package but needed only at File

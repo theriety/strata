@@ -1,13 +1,13 @@
 workspace-rust [packageGroup]
   crates [package]
-    crates/app [domain]
-      crates/app/src [folder]
+    app [domain]
+      src [folder]
         crates/app/src/lib.rs [file] 9 sloc
           - describe (package)
           - combined_total (package)
           - ReMeasure (package)
-    crates/core [domain]
-      crates/core/src [folder]
+    core [domain]
+      src [folder]
         crates/core/src/lib.rs [file] 16 sloc
           - Report (package)
           - new (package)
@@ -16,8 +16,8 @@ workspace-rust [packageGroup]
           - summarize (file)
           - sample_report (file)
           - report_doubles_its_measure (file)
-    crates/util [domain]
-      crates/util/src [folder]
+    util [domain]
+      src [folder]
         crates/util/src/lib.rs [file] 12 sloc
           - Measure (package)
           - new (package)

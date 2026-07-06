@@ -1,21 +1,18 @@
 //! `strata violations`: the CI gate over the current codebase.
 //!
-//! The command snapshots the root, derives the current tree's structural
-//! violations (cycles, polarity breaches, over-exports) via the engine, augments
-//! them with capacity findings counted against the configured caps, and reports
-//! them. `--fail-on <classes>` raises the exit decision to a gating match when a
-//! hard violation of a listed class is present; capacity findings within ±10% of
-//! a cap are reported as `borderline` and never gate.
+//! The command snapshots the root, derives the current tree's violations
+//! (cycles, polarity breaches, over-exports, and capacity findings against the
+//! configured caps) via the engine, and reports them. `--fail-on <classes>`
+//! raises the exit decision to a gating match when a hard violation of a listed
+//! class is present; capacity findings within ±10% of a cap are reported as
+//! `borderline` and never gate.
 
 use std::io::Write;
 use std::path::PathBuf;
 
-use strata_engine::{
-    AnalyzeConfig, ContainerNode, Level, Severity, StrataError, Violation, ViolationKind, analyze,
-    snapshot_from_root,
-};
+use strata_engine::{Severity, StrataError, Violation, ViolationKind, analyze, snapshot_from_root};
 
-use crate::commands::{BORDERLINE_CAPACITY_MARGIN, ConfigOverrides, resolve_config};
+use crate::commands::{ConfigOverrides, resolve_config};
 use crate::render::{write_json, write_violation_table};
 
 /// The output format of the violations face.
@@ -142,20 +139,17 @@ pub fn run(args: &ViolationsArgs, out: &mut impl Write) -> Result<Outcome, Strat
     };
     let config = resolve_config(&args.config, overrides)?;
     let snapshot = snapshot_from_root(&args.root, &config)?;
-    let mut result = analyze(&snapshot, &config)?;
-
-    let mut violations = std::mem::take(&mut result.current.violations);
-    violations.extend(capacity_violations(&result.current.tree, &config));
-    result.current.violations.clone_from(&violations);
+    let result = analyze(&snapshot, &config)?;
 
     match args.format {
         ViolationFormat::Table => {
-            write_violation_table(&violations, out).map_err(|error| write_error(&error))?;
+            write_violation_table(&result.current.violations, out)
+                .map_err(|error| write_error(&error))?;
         }
         ViolationFormat::Json => write_json(&result, out).map_err(|error| write_error(&error))?,
     }
 
-    Ok(gate(&violations, &args.fail_on))
+    Ok(gate(&result.current.violations, &args.fail_on))
 }
 
 /// Decides the gate outcome: a hard (non-borderline) violation matching a listed
@@ -191,106 +185,6 @@ fn matches(selector: FailOn, violation: &Violation) -> bool {
     }
 }
 
-/// Derives capacity violations from the current tree against the configured caps.
-///
-/// A file over its production-SLOC cap and an interior container over its
-/// member-count cap each yield a finding; a finding within ±10% of its cap is
-/// `borderline` and never gates. Each container is checked against the cap of its
-/// own level.
-fn capacity_violations(tree: &ContainerNode, config: &AnalyzeConfig) -> Vec<Violation> {
-    let mut findings = Vec::new();
-    walk_capacity(
-        tree,
-        std::slice::from_ref(&tree.name),
-        config,
-        &mut findings,
-    );
-    findings
-}
-
-/// Recursively checks `node` and its descendants against their level caps.
-fn walk_capacity(
-    node: &ContainerNode,
-    path: &[String],
-    config: &AnalyzeConfig,
-    findings: &mut Vec<Violation>,
-) {
-    let (measure, cap) = match node.level {
-        Level::File => (node.production_sloc.unwrap_or(0), config.capacity.file),
-        Level::Folder => (child_count(node), config.capacity.folder),
-        Level::Domain => (child_count(node), config.capacity.domain),
-        Level::Package => (child_count(node), config.capacity.package),
-        Level::PackageGroup => (child_count(node), config.capacity.package_group),
-    };
-
-    if let Some(finding) = capacity_finding(node, path, measure, cap) {
-        findings.push(finding);
-    }
-
-    if let Some(children) = &node.children {
-        for child in children {
-            let mut child_path = path.to_vec();
-            child_path.push(child.name.clone());
-            walk_capacity(child, &child_path, config, findings);
-        }
-    }
-}
-
-/// Returns the child count of an interior container.
-fn child_count(node: &ContainerNode) -> u32 {
-    node.children.as_ref().map_or(0, |children| {
-        u32::try_from(children.len()).unwrap_or(u32::MAX)
-    })
-}
-
-/// Builds a capacity finding if `measure` is at or over the borderline band of
-/// `cap`, classifying borderline (within ±10%) versus a hard breach.
-fn capacity_finding(
-    node: &ContainerNode,
-    path: &[String],
-    measure: u32,
-    cap: u32,
-) -> Option<Violation> {
-    let cap_f = f64::from(cap);
-    let measure_f = f64::from(measure);
-    let lower = cap_f * (1.0 - BORDERLINE_CAPACITY_MARGIN);
-
-    // below the borderline band entirely: not a finding.
-    if measure_f < lower {
-        return None;
-    }
-    // a hard breach is strictly over the cap; the band around the cap is borderline.
-    let upper = cap_f * (1.0 + BORDERLINE_CAPACITY_MARGIN);
-    let severity = if measure_f > upper {
-        Severity::Violation
-    } else {
-        Severity::Borderline
-    };
-
-    Some(Violation {
-        kind: ViolationKind::Capacity,
-        severity,
-        location: path.to_vec(),
-        detail: format!(
-            "{} `{}` holds {measure} against a cap of {cap}",
-            level_word(node.level),
-            node.name
-        ),
-        break_suggestions: None,
-    })
-}
-
-/// Returns the noun for a container level used in a capacity message.
-fn level_word(level: Level) -> &'static str {
-    match level {
-        Level::File => "file",
-        Level::Folder => "folder",
-        Level::Domain => "domain",
-        Level::Package => "package",
-        Level::PackageGroup => "package group",
-    }
-}
-
 /// Wraps a rendering I/O failure into a [`StrataError`].
 fn write_error(error: &std::io::Error) -> StrataError {
     StrataError::InputUnreadable {
@@ -302,35 +196,6 @@ fn write_error(error: &std::io::Error) -> StrataError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Builds a file node with `sloc` production SLOC.
-    fn file(name: &str, sloc: u32) -> ContainerNode {
-        ContainerNode {
-            name: name.to_owned(),
-            level: Level::File,
-            children: None,
-            symbols: Some(Vec::new()),
-            production_sloc: Some(sloc),
-        }
-    }
-
-    /// Builds a folder node holding `children`.
-    fn folder(name: &str, children: Vec<ContainerNode>) -> ContainerNode {
-        ContainerNode {
-            name: name.to_owned(),
-            level: Level::Folder,
-            children: Some(children),
-            symbols: None,
-            production_sloc: None,
-        }
-    }
-
-    /// Builds a config with the file cap set to `cap`.
-    fn config_with_file_cap(cap: u32) -> AnalyzeConfig {
-        let mut config = AnalyzeConfig::default();
-        config.capacity.file = cap;
-        config
-    }
 
     #[test]
     fn should_parse_a_comma_separated_fail_on_list() {
@@ -415,55 +280,6 @@ mod tests {
         let fail_on = parse_fail_on("capacity:borderline").unwrap_or_default();
 
         assert_eq!(gate(&[borderline], &fail_on), Outcome::Clean);
-    }
-
-    #[test]
-    fn should_report_a_file_over_its_cap_as_a_hard_violation() {
-        let tree = file("big", 100);
-
-        let findings = capacity_violations(&tree, &config_with_file_cap(10));
-
-        assert_eq!(findings.len(), 1);
-        assert_eq!(
-            findings.first().map(|f| f.severity),
-            Some(Severity::Violation)
-        );
-    }
-
-    #[test]
-    fn should_report_a_file_within_the_band_as_borderline() {
-        // cap 100, file at 105 sits inside the +10% band -> borderline.
-        let tree = file("near", 105);
-
-        let findings = capacity_violations(&tree, &config_with_file_cap(100));
-
-        assert_eq!(
-            findings.first().map(|f| f.severity),
-            Some(Severity::Borderline)
-        );
-    }
-
-    #[test]
-    fn should_not_report_a_file_well_under_its_cap() {
-        let tree = file("small", 10);
-
-        let findings = capacity_violations(&tree, &config_with_file_cap(100));
-
-        assert!(findings.is_empty());
-    }
-
-    #[test]
-    fn should_count_folder_members_against_the_folder_cap() {
-        let children = (0..20).map(|i| file(&format!("f{i}"), 1)).collect();
-        let tree = folder("dir", children);
-        let mut config = AnalyzeConfig::default();
-        config.capacity.folder = 5;
-
-        let findings = capacity_violations(&tree, &config);
-
-        assert!(findings.iter().any(|f| f.kind == ViolationKind::Capacity
-            && f.severity == Severity::Violation
-            && f.location == vec!["dir".to_owned()]));
     }
 
     #[test]

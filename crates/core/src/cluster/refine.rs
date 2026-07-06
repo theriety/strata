@@ -204,9 +204,11 @@ impl ReverseEdges {
 /// `level` cap and the cohesion-aware `gain`.
 ///
 /// Each pass scores every node's best legal move (one that keeps the quotient
-/// acyclic and the target within cap), then applies the strictly-positive-gain
-/// moves in descending gain order, ties broken by node index. Passes repeat
-/// until one applies no move. The partition is never left cyclic or over-cap.
+/// acyclic and the target within cap — measured in summed capacity weight from
+/// `g.vertex_weights`, files at the folder level), then applies the
+/// strictly-positive-gain moves in descending gain order, ties broken by node
+/// index. Passes repeat until one applies no move. The partition is never left
+/// cyclic, and no cluster ever grows past the cap.
 pub fn refine(
     g: &CoarseGraph,
     parts: &mut Partition,
@@ -218,6 +220,17 @@ pub fn refine(
     let graph = &g.graph;
     let reverse = ReverseEdges::from_graph(graph);
     let mut quotient = QuotientEdges::from_partition(graph, parts);
+    let vertex_weight =
+        |node: u32| -> u32 { g.vertex_weights.get(node as usize).copied().unwrap_or(1) };
+    let mut cluster_weights = vec![0_u32; parts.cluster_count()];
+    for node in 0..graph.vertex_count() {
+        let node = u32::try_from(node).unwrap_or(u32::MAX);
+        if let Some(cluster) = parts.cluster_of(node)
+            && let Some(slot) = cluster_weights.get_mut(cluster.0 as usize)
+        {
+            *slot = slot.saturating_add(vertex_weight(node));
+        }
+    }
 
     loop {
         let mut moved = false;
@@ -240,7 +253,12 @@ pub fn refine(
             if source == candidate.target {
                 continue;
             }
-            if parts.size_of(candidate.target) >= cap {
+            let weight = vertex_weight(candidate.node);
+            let target_weight = cluster_weights
+                .get(candidate.target.0 as usize)
+                .copied()
+                .unwrap_or(u32::MAX);
+            if target_weight.saturating_add(weight) > cap {
                 continue;
             }
             // The ranking is computed once per pass, but earlier moves shift the
@@ -273,6 +291,12 @@ pub fn refine(
             }
             quotient.apply(&deltas);
             parts.move_node(candidate.node, candidate.target);
+            if let Some(slot) = cluster_weights.get_mut(source.0 as usize) {
+                *slot = slot.saturating_sub(weight);
+            }
+            if let Some(slot) = cluster_weights.get_mut(candidate.target.0 as usize) {
+                *slot = slot.saturating_add(weight);
+            }
             moved = true;
         }
 
@@ -738,14 +762,18 @@ mod tests {
         Csr::from_sorted_edges(vertex_count, &edges)
     }
 
-    /// Wraps a graph as an identity-mapped [`CoarseGraph`].
+    /// Wraps a graph as an identity-mapped [`CoarseGraph`] with flat layers.
     fn coarse(graph: Csr) -> CoarseGraph {
         let fine_to_coarse = (0..graph.vertex_count())
             .map(|v| u32::try_from(v).unwrap_or(u32::MAX))
             .collect();
+        let layers = vec![1_u32; graph.vertex_count()];
+        let vertex_weights = vec![1; graph.vertex_count()];
         CoarseGraph {
             graph,
             fine_to_coarse,
+            layers,
+            vertex_weights,
         }
     }
 
@@ -876,6 +904,26 @@ mod tests {
         refine(&graph, &mut parts, &gain, &caps, SeedLevel::Folder);
 
         // The cap veto kept them apart.
+        assert_ne!(parts.cluster_of(0), parts.cluster_of(1));
+    }
+
+    #[test]
+    fn should_veto_a_move_by_capacity_weight_not_vertex_count() {
+        // 0 -> 1 pull each other, and each cluster holds a single vertex, but
+        // vertex 0 weighs 8 and vertex 1 weighs 10: merged they breach the cap
+        // of 15 even though the target holds just one member.
+        let mut graph = coarse(csr(2, vec![(0, 1)]));
+        graph.vertex_weights = vec![8, 10];
+        let mut parts = partition(&[0, 1], 2);
+        let gain = GainFn::cut_only(2);
+        let caps = LevelCaps {
+            folder: 15,
+            ..LevelCaps::defaults()
+        };
+
+        refine(&graph, &mut parts, &gain, &caps, SeedLevel::Folder);
+
+        // The weighted cap veto kept them apart.
         assert_ne!(parts.cluster_of(0), parts.cluster_of(1));
     }
 

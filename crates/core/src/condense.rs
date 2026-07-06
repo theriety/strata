@@ -218,24 +218,25 @@ impl TarjanState {
 
 /// Builds the quotient DAG over `scc_count` SCCs: an edge `a -> b` exists when
 /// some member edge crosses from SCC `a` to a distinct SCC `b`. Self-loops are
-/// dropped and parallel crossings deduplicated, so the result is a simple DAG.
+/// dropped and parallel crossings collapsed with their weights summed, so the
+/// quotient carries the aggregate pull between SCCs — the currency heavy-edge
+/// matching and FM refinement rank moves by.
 fn build_quotient(csr: &Csr, scc_of: &[u32], scc_count: usize) -> Csr {
-    let mut crossings: Vec<(u32, u32)> = Vec::new();
+    let mut crossings: Vec<(u32, u32, f32)> = Vec::new();
     for node in 0..scc_of.len() {
         let from = scc_of.get(node).copied().unwrap_or(UNVISITED);
         let node = u32::try_from(node).unwrap_or(UNVISITED);
-        for &target in csr.neighbors(node) {
+        let weights = csr.weights(node);
+        for (slot, &target) in csr.neighbors(node).iter().enumerate() {
             let to = scc_of.get(target as usize).copied().unwrap_or(UNVISITED);
             if from != to {
-                crossings.push((from, to));
+                let weight = weights.get(slot).copied().unwrap_or(0.0);
+                crossings.push((from, to, weight));
             }
         }
     }
 
-    crossings.sort_unstable();
-    crossings.dedup();
-
-    Csr::from_sorted_edges(scc_count, &crossings)
+    Csr::from_weighted_edges(scc_count, &crossings)
 }
 
 #[cfg(test)]
@@ -372,6 +373,19 @@ mod tests {
         let condensation = condense(&csr);
 
         assert_eq!(condensation.dag.edge_count(), 1);
+    }
+
+    #[test]
+    fn should_sum_member_edge_weights_onto_the_quotient_edge() {
+        // Two call edges (weight 1.0 each) cross from the {0,1} cycle into node 2:
+        // the single quotient edge must carry their summed weight, not zero.
+        let csr = forward(3, vec![edge(0, 1), edge(1, 0), edge(0, 2), edge(1, 2)]);
+
+        let condensation = condense(&csr);
+
+        // node 2 is the sink (scc 0); the cycle is scc 1 with one edge into it.
+        let weight = condensation.dag.weights(1).first().copied().unwrap_or(0.0);
+        assert!((weight - 2.0).abs() < f32::EPSILON);
     }
 
     #[test]

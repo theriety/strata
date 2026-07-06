@@ -74,6 +74,57 @@ impl Coefficients {
     }
 }
 
+/// Per-kind base edge weights `w(e)` — the `[weights]` config surface.
+///
+/// The default table matches a config-less run; a custom table flows from
+/// `strata.toml` into every consumer that prices an edge: the
+/// CSR builder, the cut term, MFAS break weights, and narration pull weights.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KindWeights {
+    /// Weight of a runtime value import.
+    pub value_import: f64,
+    /// Weight of a subtype / implements relationship.
+    pub inheritance: f64,
+    /// Weight of a direct call.
+    pub call: f64,
+    /// Weight of a type reference.
+    pub type_reference: f64,
+    /// Weight of a re-export (zero by default — flattened during normalization).
+    pub re_export: f64,
+}
+
+impl Default for KindWeights {
+    fn default() -> Self {
+        Self {
+            value_import: 1.0,
+            inheritance: 1.5,
+            call: 1.0,
+            type_reference: 0.3,
+            re_export: 0.0,
+        }
+    }
+}
+
+impl KindWeights {
+    /// Returns the base weight `w(e)` for an edge of `kind`.
+    #[must_use]
+    pub fn weight_of(&self, kind: EdgeKind) -> f64 {
+        match kind {
+            EdgeKind::ValueImport => self.value_import,
+            EdgeKind::Inheritance => self.inheritance,
+            EdgeKind::Call => self.call,
+            EdgeKind::TypeReference => self.type_reference,
+            EdgeKind::ReExport => self.re_export,
+        }
+    }
+
+    /// Returns the weight of a single edge: kind weight × binder confidence.
+    #[must_use]
+    pub fn edge_weight(&self, kind: EdgeKind, confidence: f64) -> f64 {
+        self.weight_of(kind) * confidence
+    }
+}
+
 /// A scored dependency edge of a candidate: its kind-weight, binder confidence,
 /// and the level at which it crosses in the candidate tree.
 ///
@@ -166,17 +217,22 @@ pub struct ScoreBreakdown {
     pub total: f64,
 }
 
-/// Scores a candidate tree under the given coefficients, returning the full
-/// breakdown of J(T).
+/// Scores a candidate tree under the given coefficients and per-kind edge
+/// weights, returning the full breakdown of J(T).
 ///
 /// Each term is computed independently from the candidate's pre-extracted views:
-/// the cut cost sums `w(e) c(e) h(level)` over edges, imbalance sums the squared
-/// coefficient of variation of every container's child sizes, naming and path are
-/// the (negated) cohesion bonuses, and anchor is `mu` times the move distance.
-/// Hard constraints are not scored here.
+/// the cut cost sums `w(e) c(e) h(level)` over edges priced by the `[weights]`
+/// table, imbalance sums the squared coefficient of variation of every
+/// container's child sizes, naming and path are the (negated) cohesion bonuses,
+/// and anchor is `mu` times the move distance. Hard constraints are not scored
+/// here.
 #[must_use]
-pub fn score(candidate: &Candidate, coefficients: &Coefficients) -> ScoreBreakdown {
-    let cut = cut_cost(&candidate.edges);
+pub fn score(
+    candidate: &Candidate,
+    coefficients: &Coefficients,
+    weights: &KindWeights,
+) -> ScoreBreakdown {
+    let cut = cut_cost(&candidate.edges, weights);
     let imbalance = coefficients.lambda * imbalance(&candidate.containers);
     let naming = -coefficients.alpha * naming(&candidate.cohesion_groups);
     let path = -coefficients.beta * candidate.path_cohesion;
@@ -189,17 +245,6 @@ pub fn score(candidate: &Candidate, coefficients: &Coefficients) -> ScoreBreakdo
         path,
         anchor,
         total: cut + imbalance + naming + path + anchor,
-    }
-}
-
-/// Returns the base kind-weight `w(e)`: inheritance is costliest to cut,
-/// re-exports are free (they vanish after barrel flattening).
-fn kind_weight(kind: EdgeKind) -> f64 {
-    match kind {
-        EdgeKind::Inheritance => 1.5,
-        EdgeKind::ValueImport | EdgeKind::Call => 1.0,
-        EdgeKind::TypeReference => 0.3,
-        EdgeKind::ReExport => 0.0,
     }
 }
 
@@ -218,11 +263,13 @@ fn height_penalty(level: ScopeLevel) -> f64 {
 }
 
 /// Sums the height-weighted cut cost `sum_e w(e) c(e) h(lca_T(e))` over the
-/// candidate's edges.
-fn cut_cost(edges: &[ScoredEdge]) -> f64 {
+/// candidate's edges, pricing `w(e)` from the configured `[weights]` table.
+fn cut_cost(edges: &[ScoredEdge], weights: &KindWeights) -> f64 {
     edges
         .iter()
-        .map(|edge| kind_weight(edge.kind) * edge.confidence * height_penalty(edge.lca_level))
+        .map(|edge| {
+            weights.edge_weight(edge.kind, edge.confidence) * height_penalty(edge.lca_level)
+        })
         .sum()
 }
 
@@ -357,7 +404,11 @@ mod tests {
             ..empty_candidate()
         };
 
-        let breakdown = score(&candidate, &Coefficients::greenfield());
+        let breakdown = score(
+            &candidate,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
 
         // 1.5 * 0.5 * 8 = 6.0
         assert!(close(breakdown.cut, 6.0));
@@ -375,7 +426,11 @@ mod tests {
             ..empty_candidate()
         };
 
-        let breakdown = score(&candidate, &Coefficients::greenfield());
+        let breakdown = score(
+            &candidate,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
 
         assert!(close(breakdown.cut, 0.0));
     }
@@ -399,8 +454,18 @@ mod tests {
             ..empty_candidate()
         };
 
-        let cheap = score(&in_file, &Coefficients::greenfield()).cut;
-        let dear = score(&across_packages, &Coefficients::greenfield()).cut;
+        let cheap = score(
+            &in_file,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        )
+        .cut;
+        let dear = score(
+            &across_packages,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        )
+        .cut;
 
         assert!(dear > cheap);
     }
@@ -415,7 +480,11 @@ mod tests {
             ..empty_candidate()
         };
 
-        let breakdown = score(&candidate, &Coefficients::greenfield());
+        let breakdown = score(
+            &candidate,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
 
         assert!(breakdown.imbalance > 0.0);
     }
@@ -434,7 +503,11 @@ mod tests {
             ..empty_candidate()
         };
 
-        let breakdown = score(&candidate, &Coefficients::greenfield());
+        let breakdown = score(
+            &candidate,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
 
         assert!(close(breakdown.imbalance, 0.0));
     }
@@ -450,7 +523,11 @@ mod tests {
             ..empty_candidate()
         };
 
-        let breakdown = score(&candidate, &Coefficients::greenfield());
+        let breakdown = score(
+            &candidate,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
 
         assert!(close(breakdown.naming, -1.0));
     }
@@ -473,7 +550,11 @@ mod tests {
             ..empty_candidate()
         };
 
-        let breakdown = score(&candidate, &Coefficients::greenfield());
+        let breakdown = score(
+            &candidate,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
 
         assert!(close(breakdown.naming, -0.5));
     }
@@ -485,8 +566,16 @@ mod tests {
             ..empty_candidate()
         };
 
-        let greenfield = score(&candidate, &Coefficients::greenfield());
-        let anchored = score(&candidate, &Coefficients::anchored());
+        let greenfield = score(
+            &candidate,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
+        let anchored = score(
+            &candidate,
+            &Coefficients::anchored(),
+            &KindWeights::default(),
+        );
 
         // beta = 0 in greenfield, so the path term vanishes; anchored negates it.
         assert!(close(greenfield.path, 0.0));
@@ -500,8 +589,16 @@ mod tests {
             ..empty_candidate()
         };
 
-        let greenfield = score(&candidate, &Coefficients::greenfield());
-        let anchored = score(&candidate, &Coefficients::anchored());
+        let greenfield = score(
+            &candidate,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
+        let anchored = score(
+            &candidate,
+            &Coefficients::anchored(),
+            &KindWeights::default(),
+        );
 
         assert!(close(greenfield.anchor, 0.0));
         assert!(close(anchored.anchor, 0.25));
@@ -525,7 +622,11 @@ mod tests {
             path_cohesion: 0.5,
             move_distance: 0.2,
         };
-        let breakdown = score(&candidate, &Coefficients::anchored());
+        let breakdown = score(
+            &candidate,
+            &Coefficients::anchored(),
+            &KindWeights::default(),
+        );
 
         let expected = breakdown.cut
             + breakdown.imbalance
@@ -537,8 +638,35 @@ mod tests {
 
     #[test]
     fn should_score_an_empty_candidate_to_zero() {
-        let breakdown = score(&empty_candidate(), &Coefficients::anchored());
+        let breakdown = score(
+            &empty_candidate(),
+            &Coefficients::anchored(),
+            &KindWeights::default(),
+        );
 
         assert!(close(breakdown.total, 0.0));
+    }
+
+    #[test]
+    fn should_default_kind_weights_to_the_config_less_table() {
+        let weights = KindWeights::default();
+
+        for (kind, expected) in [
+            (EdgeKind::ValueImport, 1.0),
+            (EdgeKind::Inheritance, 1.5),
+            (EdgeKind::Call, 1.0),
+            (EdgeKind::TypeReference, 0.3),
+            (EdgeKind::ReExport, 0.0),
+        ] {
+            assert!(close(weights.weight_of(kind), expected));
+        }
+    }
+
+    #[test]
+    fn should_scale_the_edge_weight_by_confidence() {
+        let weights = KindWeights::default();
+
+        // inheritance 1.5 × confidence 0.5 = 0.75.
+        assert!(close(weights.edge_weight(EdgeKind::Inheritance, 0.5), 0.75));
     }
 }

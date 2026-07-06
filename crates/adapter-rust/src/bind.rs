@@ -659,7 +659,13 @@ impl ContainerBuilder {
         paths.dedup();
 
         for path in paths {
-            let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+            let mut segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+            // the trailing segment is the file itself, not a directory; a
+            // root-level file hangs under the synthetic `workspace` chain.
+            segments.pop();
+            if segments.is_empty() {
+                segments.push("workspace");
+            }
 
             let package = intern(
                 &mut containers,

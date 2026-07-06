@@ -1,0 +1,68 @@
+constellation-ts [packageGroup]
+  src [package]
+    core [domain]
+      core [folder]
+        src/core/alpha.ts [file] 3 sloc
+          - alpha (file)
+        src/core/beta.ts [file] 3 sloc
+          - beta (file)
+        src/core/delta.ts [file] 3 sloc
+          - delta (file)
+        src/core/epsilon.ts [file] 3 sloc
+          - epsilon (file)
+        src/core/gamma.ts [file] 3 sloc
+          - gamma (file)
+        src/core/zeta.ts [file] 3 sloc
+          - zeta (file)
+    io [domain]
+      io [folder]
+        src/io/encoder.ts [file] 3 sloc
+          - encoder (file)
+        src/io/parser.ts [file] 3 sloc
+          - parser (file)
+        src/io/reader.ts [file] 3 sloc
+          - reader (file)
+        src/io/stream.ts [file] 3 sloc
+          - stream (file)
+        src/io/writer.ts [file] 3 sloc
+          - writer (file)
+    model [domain]
+      model [folder]
+        src/model/matrix.ts [file] 3 sloc
+          - matrix (file)
+        src/model/mesh.ts [file] 3 sloc
+          - mesh (file)
+        src/model/point.ts [file] 3 sloc
+          - point (file)
+        src/model/shape.spec.ts [file] 0 sloc
+          - shouldShape (file)
+        src/model/shape.ts [file] 3 sloc
+          - shape (file)
+        src/model/vector.ts [file] 3 sloc
+          - vector (file)
+    render [domain]
+      render [folder]
+        src/render/canvas.ts [file] 3 sloc
+          - canvas (file)
+        src/render/raster.ts [file] 3 sloc
+          - raster (file)
+        src/render/shader.ts [file] 3 sloc
+          - shader (file)
+        src/render/texture.ts [file] 3 sloc
+          - texture (file)
+        src/render/viewport.ts [file] 3 sloc
+          - viewport (file)
+    util [domain]
+      util [folder]
+        src/util/buffer.ts [file] 3 sloc
+          - buffer (file)
+        src/util/canvas.spec.ts [file] 0 sloc
+          - shouldCanvas (file)
+        src/util/clamp.ts [file] 3 sloc
+          - clamp (file)
+        src/util/hash.ts [file] 3 sloc
+          - hash (file)
+        src/util/lerp.ts [file] 3 sloc
+          - lerp (file)
+        src/util/logger.ts [file] 3 sloc
+          - logger (file)
