@@ -452,6 +452,7 @@ mod tests {
             name: SmolStr::new(format!("c{id}")),
             level,
             parent: parent.map(ContainerId),
+            synthetic: false,
         }
     }
 

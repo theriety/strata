@@ -12,7 +12,7 @@ use std::io::{self, Write};
 
 use strata_engine::{
     AnalyzeResult, Candidate, ContainerNode, CurrentStanding, Level, ModeResult, Move, MoveKind,
-    MoveReason, Severity, Violation, ViolationKind,
+    Severity, Violation, ViolationKind,
 };
 
 /// The output format the `analyze` command renders in.
@@ -309,66 +309,48 @@ pub fn render_diff(candidate: &Candidate, out: &mut impl Write) -> io::Result<()
     let files: usize = candidate
         .delta_narration
         .iter()
-        .map(|entry| entry.symbols.len())
+        .map(|entry| entry.files.len())
         .sum();
     writeln!(
         out,
         "moves ({groups} group(s), {files} file(s); improvement {:+.4}):",
         candidate.improvement
     )?;
-    for entry in &candidate.delta_narration {
-        write_move(entry, out)?;
+    for line in move_step_lines(&candidate.delta_narration) {
+        writeln!(out, "{line}")?;
     }
     Ok(())
 }
 
-/// Move groups larger than this wrap: the header shows a count and the files
-/// (or origins) print one per indented line instead of a single joined run.
-pub(crate) const MOVE_INLINE_LIMIT: usize = 3;
-
-/// Writes one narrated move entry to `out`.
+/// Renders a candidate's moves as numbered per-file steps — the shared body of
+/// the `diff` and `report` faces so both speak in one voice.
 ///
-/// `from`/`to` hold one complete folded folder path per element (a merge lists
-/// several sources), so they join with a comma, never a path separator. Groups
-/// beyond [`MOVE_INLINE_LIMIT`] files (or origins) wrap onto indented lines so
-/// a large merge never renders as one unreadable line.
-fn write_move(entry: &Move, out: &mut impl Write) -> io::Result<()> {
-    let wrap_files = entry.symbols.len() > MOVE_INLINE_LIMIT;
-    let wrap_origins = entry.from.len() > MOVE_INLINE_LIMIT;
-    let files = if wrap_files {
-        format!("{} file(s)", entry.symbols.len())
-    } else {
-        entry.symbols.join(", ")
-    };
-    let from = if wrap_origins {
-        format!("{} folder(s)", entry.from.len())
-    } else {
-        entry.from.join(", ")
-    };
-    let to = entry.to.join(", ");
-    writeln!(
-        out,
-        "{} {} :: {} -> {} ({})",
-        move_tag(entry.kind),
-        files,
-        if from.is_empty() { "(root)" } else { &from },
-        if to.is_empty() { "(root)" } else { &to },
-        entry.reason
-    )?;
-    if wrap_origins {
-        for origin in &entry.from {
-            writeln!(out, "    from {origin}")?;
+/// Each group prints a header (`{kind} — {reason}`), then one numbered step per
+/// moved file reading `{path} [{from} → {to}]`; step numbers run continuously
+/// across the candidate so the whole change reads as one ordered plan. Lines
+/// carry no trailing newline: `diff` prints them raw, `report` wraps them in a
+/// fenced block. An empty source or destination renders as `(root)`.
+pub(crate) fn move_step_lines(moves: &[Move]) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut step = 1_usize;
+    for entry in moves {
+        lines.push(format!("{} — {}", move_tag(entry.kind), entry.reason));
+        let to = if entry.to.is_empty() {
+            "(root)"
+        } else {
+            &entry.to
+        };
+        for file in &entry.files {
+            let from = if file.from.is_empty() {
+                "(root)"
+            } else {
+                &file.from
+            };
+            lines.push(format!("  {step}. {} [{from} → {to}]", file.path));
+            step = step.saturating_add(1);
         }
     }
-    if wrap_files {
-        for file in &entry.symbols {
-            writeln!(out, "    {file}")?;
-        }
-    }
-    if let MoveReason::Follows { subject } = &entry.reason {
-        writeln!(out, "    follows {subject}")?;
-    }
-    Ok(())
+    lines
 }
 
 /// Writes a violation listing for `violations` to `out`.
@@ -434,8 +416,8 @@ fn severity_tag(severity: Severity) -> &'static str {
 #[cfg(test)]
 mod tests {
     use strata_engine::{
-        CapacityRemainder, ContainerNode, CurrentTree, Modes, ScoreBreakdown, Summary,
-        SymbolPlacement,
+        CapacityRemainder, ContainerNode, CurrentTree, FileMove, Modes, MoveReason, ScoreBreakdown,
+        Summary, SymbolPlacement,
     };
 
     use super::*;
@@ -677,9 +659,11 @@ mod tests {
             conditional_splits: Vec::new(),
             delta_narration: vec![Move {
                 kind: MoveKind::Move,
-                symbols: vec!["alpha".to_owned()],
-                from: vec!["old".to_owned()],
-                to: vec!["new".to_owned()],
+                files: vec![FileMove {
+                    path: "alpha".to_owned(),
+                    from: "old".to_owned(),
+                }],
+                to: "new".to_owned(),
                 reason: MoveReason::Clustering,
             }],
             capacity_remainder: None,
@@ -691,7 +675,7 @@ mod tests {
         let text = String::from_utf8(buffer).unwrap_or_default();
         assert_eq!(
             text,
-            "moves (1 group(s), 1 file(s); improvement +1.2500):\nmove alpha :: old -> new (regrouped by clustering)\n"
+            "moves (1 group(s), 1 file(s); improvement +1.2500):\nmove — regrouped by clustering\n  1. alpha [old → new]\n"
         );
     }
 
@@ -779,7 +763,7 @@ mod tests {
     }
 
     #[test]
-    fn should_wrap_a_large_move_group_with_one_line_per_file() {
+    fn should_number_every_file_of_a_large_move_group() {
         let candidate = Candidate {
             index: 1,
             score: 0.0,
@@ -789,14 +773,14 @@ mod tests {
             conditional_splits: Vec::new(),
             delta_narration: vec![Move {
                 kind: MoveKind::Merge,
-                symbols: vec![
-                    "a.ts".to_owned(),
-                    "b.ts".to_owned(),
-                    "c.ts".to_owned(),
-                    "d.ts".to_owned(),
-                ],
-                from: vec!["old".to_owned()],
-                to: vec!["new".to_owned()],
+                files: ["a.ts", "b.ts", "c.ts", "d.ts"]
+                    .into_iter()
+                    .map(|path| FileMove {
+                        path: path.to_owned(),
+                        from: "old".to_owned(),
+                    })
+                    .collect(),
+                to: "new".to_owned(),
                 reason: MoveReason::Clustering,
             }],
             capacity_remainder: None,
@@ -807,16 +791,19 @@ mod tests {
 
         let text = String::from_utf8(buffer).unwrap_or_default();
         assert!(
-            text.contains("merge 4 file(s) :: old -> new (regrouped by clustering)\n"),
-            "the header counts instead of joining: {text}"
+            text.contains("merge — regrouped by clustering\n"),
+            "the group header names its reason: {text}"
         );
-        for file in ["a.ts", "b.ts", "c.ts", "d.ts"] {
-            assert!(text.contains(&format!("\n    {file}\n")), "{file}: {text}");
+        for (step, file) in ["a.ts", "b.ts", "c.ts", "d.ts"].into_iter().enumerate() {
+            assert!(
+                text.contains(&format!("  {}. {file} [old → new]\n", step + 1)),
+                "{file}: {text}"
+            );
         }
     }
 
     #[test]
-    fn should_summarize_many_origins_with_a_folder_count() {
+    fn should_render_each_files_own_source_in_a_merge() {
         let candidate = Candidate {
             index: 1,
             score: 0.0,
@@ -826,14 +813,17 @@ mod tests {
             conditional_splits: Vec::new(),
             delta_narration: vec![Move {
                 kind: MoveKind::Merge,
-                symbols: vec!["a.ts".to_owned()],
-                from: vec![
-                    "one".to_owned(),
-                    "two".to_owned(),
-                    "three".to_owned(),
-                    "four".to_owned(),
+                files: vec![
+                    FileMove {
+                        path: "a.ts".to_owned(),
+                        from: "one".to_owned(),
+                    },
+                    FileMove {
+                        path: "b.ts".to_owned(),
+                        from: "two".to_owned(),
+                    },
                 ],
-                to: vec!["new".to_owned()],
+                to: "new".to_owned(),
                 reason: MoveReason::Clustering,
             }],
             capacity_remainder: None,
@@ -843,16 +833,8 @@ mod tests {
         render_diff(&candidate, &mut buffer).unwrap_or_default();
 
         let text = String::from_utf8(buffer).unwrap_or_default();
-        assert!(
-            text.contains("merge a.ts :: 4 folder(s) -> new (regrouped by clustering)\n"),
-            "the header counts the origins: {text}"
-        );
-        for origin in ["one", "two", "three", "four"] {
-            assert!(
-                text.contains(&format!("\n    from {origin}\n")),
-                "{origin}: {text}"
-            );
-        }
+        assert!(text.contains("  1. a.ts [one → new]\n"), "{text}");
+        assert!(text.contains("  2. b.ts [two → new]\n"), "{text}");
     }
 
     #[test]

@@ -58,6 +58,7 @@ fn snapshot() -> Option<Snapshot> {
         name: SmolStr::new("root"),
         level: ScopeLevel::File,
         parent: None,
+        synthetic: false,
     }]);
     let ir = IntermediateRepresentation::new(nodes, edges, tree);
 

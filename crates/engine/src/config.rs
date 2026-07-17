@@ -12,7 +12,7 @@
 //! range-checks every value and attributes a dotted key path on failure. Both
 //! stages raise [`StrataError::ConfigInvalid`].
 //!
-//! [`analyze`]: crate::analyze
+//! [`analyze`]: fn@crate::analyze
 
 use std::path::Path;
 use std::time::Duration;
@@ -62,6 +62,11 @@ pub struct AdaptersConfig {
     pub include: Vec<String>,
     /// Source-exclusion globs, applied after inclusion.
     pub exclude: Vec<String>,
+    /// Directory names treated as transparent when deriving container levels, so
+    /// a source file and its test share a domain/folder. One leading source-root
+    /// segment below each package root is stripped (`src/adapters/x` and
+    /// `spec/adapters/x` both resolve to the `adapters` domain).
+    pub source_roots: Vec<String>,
 }
 
 impl Default for AdaptersConfig {
@@ -78,6 +83,15 @@ impl Default for AdaptersConfig {
                 "**/node_modules/**".to_owned(),
                 "**/target/**".to_owned(),
                 "**/.venv/**".to_owned(),
+            ],
+            source_roots: vec![
+                "src".to_owned(),
+                "spec".to_owned(),
+                "test".to_owned(),
+                "tests".to_owned(),
+                "lib".to_owned(),
+                "dist".to_owned(),
+                "__tests__".to_owned(),
             ],
         }
     }
@@ -133,9 +147,9 @@ impl Default for CapacityConfig {
     fn default() -> Self {
         Self {
             file: 250,
-            folder: 15,
-            domain: 12,
-            package: 10,
+            folder: 20,
+            domain: 16,
+            package: 15,
             package_group: 12,
         }
     }
@@ -340,7 +354,11 @@ pub struct AnalyzeConfig {
 impl AnalyzeConfig {
     /// Range-checks every value, attributing a dotted TOML key path on failure.
     ///
-    /// Caps must be positive (a zero cap admits nothing); the seed multiplier and
+    /// Caps must be positive (a zero cap admits nothing), and the folder, domain,
+    /// and package caps must not exceed the built-in `CAP_CEILING` (256) — beyond
+    /// it a cap never fires, so an untrusted `strata.toml` could silently disable
+    /// capacity enforcement while inflating cap-driven working sets. The seed
+    /// multiplier and
     /// candidate count are bounded so the restart pool stays finite; coefficients,
     /// weights, tolerances, and distances must be finite and non-negative. The
     /// first violation found is returned.
@@ -355,6 +373,9 @@ impl AnalyzeConfig {
         positive("capacity.domain", self.capacity.domain)?;
         positive("capacity.package", self.capacity.package)?;
         positive("capacity.package-group", self.capacity.package_group)?;
+        within_ceiling("capacity.folder", self.capacity.folder)?;
+        within_ceiling("capacity.domain", self.capacity.domain)?;
+        within_ceiling("capacity.package", self.capacity.package)?;
         positive("tests.helper-cap", self.tests.helper_cap)?;
         positive("solver.ilp-threshold", self.solver.ilp_threshold)?;
 
@@ -424,6 +445,27 @@ pub fn load_config(path: impl AsRef<Path>) -> Result<AnalyzeConfig, StrataError>
     Ok(config)
 }
 
+/// The inclusive ceiling for the folder, domain, and package member-count caps.
+///
+/// The shipped defaults (20/16/15) sit an order of magnitude below this bound, so
+/// every legitimate configuration fits comfortably; a cap beyond it can never fire
+/// on a sanely sized container, which would turn capacity enforcement into a no-op
+/// and hand an untrusted `strata.toml` a lever over cap-driven working sets.
+const CAP_CEILING: u32 = 256;
+
+/// Returns `Ok` when `value` is at most [`CAP_CEILING`], else a `ConfigInvalid`
+/// naming `key`, the ceiling, and the offending value.
+fn within_ceiling(key: &str, value: u32) -> Result<(), StrataError> {
+    if value <= CAP_CEILING {
+        Ok(())
+    } else {
+        Err(StrataError::ConfigInvalid {
+            key: Some(key.to_owned()),
+            reason: format!("must be at most {CAP_CEILING}, got {value}"),
+        })
+    }
+}
+
 /// Returns `Ok` when `value` is at least one, else a `ConfigInvalid` naming `key`.
 fn positive(key: &str, value: u32) -> Result<(), StrataError> {
     if value >= 1 {
@@ -461,6 +503,9 @@ mod tests {
         assert_eq!(config.analysis.candidates, 3);
         assert_eq!(config.analysis.seed, 42);
         assert_eq!(config.capacity.file, 250);
+        assert_eq!(config.capacity.folder, 20);
+        assert_eq!(config.capacity.domain, 16);
+        assert_eq!(config.capacity.package, 15);
         assert_eq!(config.solver.ilp_threshold, 300);
         assert_eq!(config.diversity.seeds_per_candidate, 10);
     }
@@ -512,6 +557,74 @@ mod tests {
             config.validate(),
             Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "capacity.file"
         ));
+    }
+
+    #[test]
+    fn should_reject_a_folder_cap_above_the_ceiling() {
+        let config = AnalyzeConfig {
+            capacity: CapacityConfig {
+                folder: 257,
+                ..CapacityConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(StrataError::ConfigInvalid { key: Some(key), reason })
+                if key == "capacity.folder" && reason.contains("256") && reason.contains("257")
+        ));
+    }
+
+    #[test]
+    fn should_reject_a_domain_cap_above_the_ceiling() {
+        let config = AnalyzeConfig {
+            capacity: CapacityConfig {
+                domain: 300,
+                ..CapacityConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(StrataError::ConfigInvalid { key: Some(key), reason })
+                if key == "capacity.domain" && reason.contains("256") && reason.contains("300")
+        ));
+    }
+
+    #[test]
+    fn should_reject_a_package_cap_above_the_ceiling() {
+        // u32::MAX is the classic hostile value: the error must format it, not wrap.
+        let config = AnalyzeConfig {
+            capacity: CapacityConfig {
+                package: u32::MAX,
+                ..CapacityConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(StrataError::ConfigInvalid { key: Some(key), reason })
+                if key == "capacity.package" && reason.contains("256") && reason.contains("4294967295")
+        ));
+    }
+
+    #[test]
+    fn should_accept_caps_at_the_ceiling() {
+        // 256 is inclusive: the bound rejects only what lies beyond it.
+        let config = AnalyzeConfig {
+            capacity: CapacityConfig {
+                folder: 256,
+                domain: 256,
+                package: 256,
+                ..CapacityConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(config.validate().is_ok());
     }
 
     #[test]

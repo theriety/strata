@@ -1,5 +1,1 @@
-moves (2 group(s), 4 file(s); improvement +111.5076):
-move spec/adapters/anthropic/client.spec.ts, spec/adapters/anthropic/retry.spec.ts, spec/adapters/anthropic/stream.spec.ts :: test-heavy-ts/spec/adapters/anthropic -> test-heavy-ts/src/adapters/anthropic (follows client.ts)
-    follows src/adapters/anthropic/client.ts
-move spec/adapters/anthropic/models.spec.ts :: test-heavy-ts/spec/adapters/anthropic -> test-heavy-ts/src/adapters/anthropic (follows models.ts)
-    follows src/adapters/anthropic/models.ts
+no moves

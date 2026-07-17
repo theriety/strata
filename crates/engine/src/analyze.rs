@@ -2,9 +2,9 @@
 //!
 //! [`analyze`] performs no I/O and holds no global state, so an identical
 //! snapshot, config, and seed always produce an identical result (AD-5). It runs
-//! the full restructuring pipeline — SCC condensation, longest-path layering,
-//! multilevel acyclic clustering, scoring, and multi-start diversification — to
-//! return up to `k` genuinely different candidate layouts per requested mode, each
+//! the full restructuring pipeline — SCC condensation, the real-directory folder
+//! partition, objective-driven polish, upper-level acyclic clustering, and
+//! scoring — to return up to `k` candidate layouts per requested mode, each
 //! narrated against the current tree. Alongside the candidates it derives the
 //! current tree's structural violations (cycles, polarity breaches, over-exports)
 //! and scores the current layout.
@@ -21,7 +21,6 @@ use strata_core::condense::{Condensation, condense};
 use strata_core::diversify::{ModeConfig, ModeResult as CoreModeResult, SolvedCandidate, Solver};
 use strata_core::diversify::{diversify, vi_distance};
 use strata_core::graph::csr::{Csr, HardnessFilter, build_csr};
-use strata_core::layer::layer;
 use strata_core::score::{
     Candidate as ScoreCandidate, Coefficients, CohesionGroup, ContainerSizes, KindWeights,
     ScoreBreakdown as CoreBreakdown, ScoredEdge, score,
@@ -84,7 +83,12 @@ fn analyze_inner(
     let ir = snapshot.ir();
     let tree = &ir.containers;
 
-    let current_node = render_tree(tree, &ir.nodes, &|node| Some(node.container))?;
+    let current_node = render_tree(
+        tree,
+        &ir.nodes,
+        &|node| Some(node.container),
+        &BTreeMap::new(),
+    )?;
     let weights = config.weights.kind_weights();
     let cycles = solve_cycles(snapshot, config, &weights);
     let violations = collect_violations(snapshot, config, &current_node, &cycles);
@@ -391,8 +395,12 @@ fn visibility_violations(snapshot: &Snapshot) -> Vec<Violation> {
 ///
 /// A file over its production-SLOC cap and an interior container over its
 /// member-count cap each yield a finding; a finding within ±10% of its cap is
-/// `borderline` and never gates. Each container is checked against the cap of its
-/// own level.
+/// `borderline` and never gates. Each container is checked against the cap of
+/// its own level. A folder is measured by the files it holds directly (its real
+/// directory membership), so the interior nodes of a rendered directory chain —
+/// which hold only subdirectories — never spawn findings; domains and above are
+/// measured by direct child count, which counts each nested directory chain
+/// once at its top-level root.
 fn capacity_violations(tree: &ContainerNode, config: &AnalyzeConfig) -> Vec<Violation> {
     walk_all_capacity(tree, config)
         .into_iter()
@@ -418,7 +426,7 @@ fn walk_capacity(
 ) {
     let (measure, cap) = match node.level {
         Level::File => (node.production_sloc.unwrap_or(0), config.capacity.file),
-        Level::Folder => (child_count(node), config.capacity.folder),
+        Level::Folder => (file_child_count(node), config.capacity.folder),
         Level::Domain => (child_count(node), config.capacity.domain),
         Level::Package => (child_count(node), config.capacity.package),
         Level::PackageGroup => (child_count(node), config.capacity.package_group),
@@ -461,6 +469,21 @@ fn child_count(node: &ContainerNode) -> u32 {
     node.children.as_ref().map_or(0, |children| {
         u32::try_from(children.len()).unwrap_or(u32::MAX)
     })
+}
+
+/// Returns the number of file children a folder holds directly.
+///
+/// A rendered directory chain interleaves interior folder nodes that own only
+/// subdirectories; measuring the files at each directory keeps capacity
+/// findings anchored to real membership instead of chain length.
+fn file_child_count(node: &ContainerNode) -> u32 {
+    let files = node.children.as_ref().map_or(0, |children| {
+        children
+            .iter()
+            .filter(|child| child.level == Level::File)
+            .count()
+    });
+    u32::try_from(files).unwrap_or(u32::MAX)
 }
 
 /// Builds a capacity finding if `measure` is at or over the borderline band of
@@ -672,6 +695,71 @@ struct FileInfo {
     name: SmolStr,
     /// Summed production SLOC of the symbols currently in the file.
     production_sloc: u32,
+    /// The file's folder/domain/package name keys, read from the laminar
+    /// container tree so naming honors the manifest package roots and
+    /// transparent source roots (`src`/`spec`) that tree already resolved,
+    /// rather than re-electing from raw leading path segments.
+    home: LaminarHome,
+}
+
+/// The laminar container tree's already-resolved folder, domain, and package
+/// name keys for one file — full-prefix keys (`ai/adapters`, `ai`) with any
+/// transparent source-root segment stripped and the package resolved to its
+/// nearest manifest root.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct LaminarHome {
+    /// The file's folder-level container name key.
+    folder: SmolStr,
+    /// The file's domain-level container name key.
+    domain: SmolStr,
+    /// The file's package-level container name key.
+    package: SmolStr,
+    /// True when the folder-level container is the synthetic `workspace` bucket
+    /// (a root-level file with no real directory of its own). Functionally
+    /// determined by `folder`, so it never splits two otherwise-equal homes into
+    /// distinct clusters; it carries the current tree's collapse marker across to
+    /// the candidate folder so a greenfield render drops the bucket too.
+    synthetic: bool,
+}
+
+/// Reads the laminar folder/domain/package name keys for the file container
+/// `file_container` by walking its ancestor chain in `by_id`. The laminar tree
+/// (`build_laminar_tree`) already stripped a transparent leading source root and
+/// resolved the nearest package root, so reusing its names keeps candidate
+/// naming consistent with the current tree instead of re-deriving from raw paths
+/// (which would surface `src` as a package/folder). Folders and package roots
+/// nest, so the NEAREST ancestor at each level wins — deeper keys are the real
+/// place. A level missing from the chain inherits the nearest broader key (a
+/// file directly in its domain directory has that directory as its real
+/// folder), and only a chain with no package at all falls back to the laminar
+/// synthetic `workspace` bucket.
+fn laminar_home(by_id: &BTreeMap<u32, &Container>, file_container: u32) -> LaminarHome {
+    let (mut folder, mut domain, mut package) = (None, None, None);
+    let mut synthetic = false;
+    let mut current = by_id.get(&file_container).copied();
+    while let Some(container) = current {
+        match container.level {
+            ScopeLevel::Folder if folder.is_none() => {
+                folder = Some(container.name.clone());
+                synthetic = container.synthetic;
+            }
+            ScopeLevel::Domain if domain.is_none() => domain = Some(container.name.clone()),
+            ScopeLevel::Package if package.is_none() => package = Some(container.name.clone()),
+            _ => {}
+        }
+        current = container
+            .parent
+            .and_then(|parent| by_id.get(&parent.0).copied());
+    }
+    let package = package.unwrap_or_else(|| SmolStr::new("workspace"));
+    let domain = domain.unwrap_or_else(|| package.clone());
+    let folder = folder.unwrap_or_else(|| domain.clone());
+    LaminarHome {
+        folder,
+        domain,
+        package,
+        synthetic,
+    }
 }
 
 /// Bound on polish sweeps: two passes catch the follow-up moves the first pass
@@ -681,17 +769,16 @@ const POLISH_SWEEPS: usize = 2;
 /// Candidate destination folders examined per move unit during polish.
 const POLISH_TARGETS: usize = 4;
 
-/// The restartable solver that runs the cluster pipeline once per seed.
+/// The restartable solver that runs the candidate pipeline once per seed.
 ///
 /// All of the seed-independent work — the weighted file-dependency graph, its
-/// SCC condensation, the coarsening chain, and the per-level cohesion gain
-/// models — is computed once at construction; each [`Solver::solve`] call seeds
-/// the coarsest level deterministically from its seed, refines the partition
-/// down the whole chain, assembles the five-level layout, and polishes it under
-/// the full objective, so every seed yields a pure, reproducible candidate. In
-/// anchored mode the pool additionally carries the identity layout ("change
-/// nothing"), so a suggested restructuring can never silently score worse than
-/// the current tree.
+/// SCC condensation, and the real-directory folder partition — is computed once
+/// at construction; each [`Solver::solve`] call starts from that real partition
+/// (folders are reality, not a clustering product), polishes it under the full
+/// objective, and assembles the five-level layout, so every seed yields a pure,
+/// reproducible candidate. In anchored mode the pool additionally carries the
+/// identity layout ("change nothing"), so a suggested restructuring can never
+/// silently score worse than the current tree.
 struct PipelineSolver<'a> {
     /// The analyzed snapshot.
     snapshot: &'a Snapshot,
@@ -702,10 +789,6 @@ struct PipelineSolver<'a> {
     index_of: BTreeMap<u32, u32>,
     /// The SCC condensation of the weighted hard-edge file graph.
     condensation: Condensation,
-    /// The coarsening chain over the condensation DAG (base level first).
-    chain: Vec<CoarseGraph>,
-    /// One cohesion gain model per chain level, token sets folded upward.
-    gains: Vec<GainFn>,
     /// The condensation DAG with every edge reversed, for pull ranking.
     reverse_dag: Csr,
     /// The per-level member caps.
@@ -716,7 +799,17 @@ struct PipelineSolver<'a> {
     weights: KindWeights,
     /// The identity partition (anchored mode on a cap-clean tree), else `None`.
     identity: Option<Partition>,
-    /// The configured base seed; seed offsets 0 and 1 select identity entries.
+    /// The real-directory folder partition: every file SCC in the cluster of
+    /// its current parent folder. Folders are reality, so this is the one
+    /// folder-grain start every seed shares.
+    real_partition: Partition,
+    /// Each real folder cluster's directory name, indexed by cluster id.
+    real_folder_names: Vec<SmolStr>,
+    /// Whether each real folder cluster is the synthetic `workspace` bucket,
+    /// indexed by cluster id in lockstep with `real_folder_names`. Carries the
+    /// current tree's collapse marker onto the candidate folder it induces.
+    real_folder_synthetic: Vec<bool>,
+    /// The configured base seed; seed offset 0 selects the identity entry.
     base_seed: u64,
     /// The current root's name, reused for candidate package groups.
     root_name: SmolStr,
@@ -735,6 +828,14 @@ impl<'a> PipelineSolver<'a> {
         let ir = snapshot.ir();
         let weights = config.weights.kind_weights();
 
+        // index the laminar containers by id so each file can read its already-
+        // resolved folder/domain/package name keys off its ancestor chain.
+        let by_id: BTreeMap<u32, &Container> = ir
+            .containers
+            .containers()
+            .iter()
+            .map(|container| (container.id.0, container))
+            .collect();
         let mut files: Vec<FileInfo> = ir
             .containers
             .containers()
@@ -744,6 +845,7 @@ impl<'a> PipelineSolver<'a> {
                 container: container.id.0,
                 name: container.name.clone(),
                 production_sloc: 0,
+                home: laminar_home(&by_id, container.id.0),
             })
             .collect();
         files.sort_by_key(|file| file.container);
@@ -766,26 +868,15 @@ impl<'a> PipelineSolver<'a> {
 
         let file_graph = build_file_graph(&ir.edges, &ir.nodes, &index_of, files.len(), &weights);
         let condensation = condense(&file_graph);
-        let layers = layer(&condensation);
-        // an SCC's capacity weight is its file count, so clusters honour the
-        // folder cap in files at every level of the coarsening chain.
-        let scc_weights: Vec<u32> = condensation
-            .members
-            .iter()
-            .map(|members| u32::try_from(members.len()).unwrap_or(u32::MAX))
-            .collect();
         let caps = level_caps(config);
-        let chain = coarsen_chain(&condensation.dag, &layers, &scc_weights, caps.folder.max(1));
-        let gains = level_gains(&files, &condensation, &chain, &coefficients);
         let reverse_dag = reverse_csr(&condensation.dag);
 
-        let parent_of: BTreeMap<u32, Option<u32>> = ir
-            .containers
-            .containers()
-            .iter()
-            .map(|container| (container.id.0, container.parent.map(|parent| parent.0)))
-            .collect();
-        let identity = seed_identity.then(|| identity_partition(&files, &condensation, &parent_of));
+        // folders are reality: the identity layout and the search's folder
+        // partition are the same object — each file SCC in its real directory
+        // — so anchored seeding just clones it.
+        let (real_partition, real_folder_names, real_folder_synthetic) =
+            real_dir_partition(&files, &condensation);
+        let identity = seed_identity.then(|| real_partition.clone());
         let root_name = ir
             .containers
             .containers()
@@ -799,48 +890,18 @@ impl<'a> PipelineSolver<'a> {
             files,
             index_of,
             condensation,
-            chain,
-            gains,
             reverse_dag,
             caps,
             coefficients,
             weights,
             identity,
+            real_partition,
+            real_folder_names,
+            real_folder_synthetic,
             base_seed: config.analysis.seed,
             root_name,
             facts,
         }
-    }
-
-    /// Runs the full multilevel scheme for one seed: seed the coarsest level
-    /// under a seed-perturbed layer order, refine it there, then project the
-    /// partition one level finer and re-refine at every level of the chain (the
-    /// uncoarsening loop the spec's cluster pseudocode mandates).
-    fn multilevel(&self, seed_value: u64) -> Partition {
-        let Some(top) = self.chain.last() else {
-            return Partition::from_assignment(Vec::new(), 0);
-        };
-        let perturbed = perturb_layers(&top.layers, seed_value);
-        let mut parts = seed(top, &perturbed, &self.caps, SeedLevel::Folder);
-        if let Some(gain) = self.gains.last() {
-            refine(top, &mut parts, gain, &self.caps, SeedLevel::Folder);
-        }
-        // windows pair [fine, coarse]; walking them in reverse projects the
-        // coarse partition onto the finer graph and re-refines it there, with
-        // gains[i] being the fine graph's cohesion model.
-        for (window, gain) in self.chain.windows(2).zip(&self.gains).rev() {
-            let [fine, coarse] = window else {
-                continue;
-            };
-            parts = coarse.project(&parts);
-            refine(fine, &mut parts, gain, &self.caps, SeedLevel::Folder);
-        }
-        debug_assert_eq!(
-            parts.node_count(),
-            self.condensation.members.len(),
-            "the projected partition must cover every file scc"
-        );
-        parts
     }
 
     /// Scores the five-level layout `parts` induces under this mode's
@@ -856,11 +917,18 @@ impl<'a> PipelineSolver<'a> {
     /// The J(T)-polish pass: sweeps every file SCC in deterministic order and
     /// greedily relocates it to the strongest-pulling folder whenever the move
     /// strictly lowers the full five-level objective. Capacity (files per
-    /// folder) and quotient acyclicity stay hard vetoes, never penalties. At
-    /// most [`POLISH_SWEEPS`] passes, stopping early once a sweep applies no
-    /// move. Returns the final score so `solve` never re-evaluates.
+    /// folder) and quotient cyclicity stay hard vetoes, never penalties — but
+    /// the cyclicity veto is relative, not absolute: a move is barred when it
+    /// *grows* the number of folders caught in quotient cycles, never for
+    /// cyclicity the current layout already has. Misplaced files routinely
+    /// entangle real folder graphs in cycles no single move can dissolve; an
+    /// absolute veto would price every move at infinity on such a base and
+    /// freeze the pass wholesale. On an acyclic base the two vetoes agree.
+    /// At most [`POLISH_SWEEPS`] passes, stopping early once a sweep applies
+    /// no move. Returns the final score so `solve` never re-evaluates.
     fn polish(&self, parts: &mut Partition) -> f64 {
         let mut best = self.evaluate(parts);
+        let mut cyclic_base = cyclic_vertex_count(&parts.quotient(&self.condensation.dag));
         // live per-folder FILE counts: clusters size in SCCs, caps in files.
         let mut file_count: Vec<u32> = vec![0; parts.cluster_count()];
         for (scc, members) in self.condensation.members.iter().enumerate() {
@@ -892,13 +960,15 @@ impl<'a> PipelineSolver<'a> {
                     if !parts.move_node(scc32, target) {
                         continue;
                     }
-                    let total = if is_acyclic(&parts.quotient(&self.condensation.dag)) {
+                    let cyclic_now = cyclic_vertex_count(&parts.quotient(&self.condensation.dag));
+                    let total = if cyclic_now <= cyclic_base {
                         self.evaluate(parts)
                     } else {
                         f64::INFINITY
                     };
                     if total < best {
                         best = total;
+                        cyclic_base = cyclic_now;
                         if let Some(slot) = file_count.get_mut(source.0 as usize) {
                             *slot = slot.saturating_sub(unit_files);
                         }
@@ -1009,16 +1079,53 @@ impl<'a> PipelineSolver<'a> {
         members_of
     }
 
+    /// Dominant laminar home key (via `key`, weighted by production SLOC) per
+    /// base vertex of an upper clustering level.
+    ///
+    /// `cluster_of` maps a folder cluster to the base vertex it contributes to at
+    /// this level — the identity for the domain level (each folder is a vertex),
+    /// the domain partition for the package level (each domain is a vertex). An
+    /// absent (empty) vertex falls back to `workspace`. The result seeds and gains
+    /// [`cluster_level`] so containers group by home directory.
+    fn home_keys(
+        &self,
+        members_of: &BTreeMap<u32, Vec<u32>>,
+        vertex_count: usize,
+        cluster_of: impl Fn(u32) -> u32,
+        key: impl Fn(&FileInfo) -> &SmolStr,
+    ) -> Vec<SmolStr> {
+        let mut tally: NameTally = BTreeMap::new();
+        for (&folder, members) in members_of {
+            let cluster = cluster_of(folder);
+            for &vertex in members {
+                if let Some(file) = self.files.get(vertex as usize) {
+                    vote(&mut tally, cluster, key(file).clone(), file.production_sloc);
+                }
+            }
+        }
+        (0..vertex_count)
+            .map(|vertex| {
+                tally
+                    .get(&u32::try_from(vertex).unwrap_or(u32::MAX))
+                    .map_or_else(|| SmolStr::new("workspace"), plurality)
+            })
+            .collect()
+    }
+
     /// Assembles the five-level candidate tree a folder partition induces.
     ///
-    /// Folders are the partition's non-empty clusters. The upper levels come
-    /// from clustering each level's weighted quotient in turn (folders → domains
-    /// → packages → package groups). Containers are named from the files they
-    /// transitively hold — folders by the plurality parent directory (weighted
-    /// by production SLOC, then file count), domains and packages by two- and
-    /// one-segment path prefixes, the group by the current root's name — and
-    /// file leaves keep their full current paths so file identity stays stable
-    /// across trees.
+    /// Folders are the partition's non-empty clusters and keep their real
+    /// directory names ([`real_dir_partition`]) — folders are reality, so no
+    /// election happens at that level. The upper levels come from clustering
+    /// each level's weighted quotient in turn (folders → domains → packages →
+    /// package groups) and are named from the files they transitively hold —
+    /// each file votes its laminar domain and package name keys
+    /// (source-root-transparent, package-root-resolved), weighted by production
+    /// SLOC then file count, and [`elect`] names the cluster through its
+    /// never-mixed, never-numeric ladder — strict-majority home, shared home
+    /// prefix, top-two join, dominant token, then an anchored non-numeric last
+    /// resort; the group takes the current root's name — and file leaves keep
+    /// their full current paths so file identity stays stable across trees.
     fn assemble(&self, parts: &Partition) -> CandidateTree {
         if self.files.is_empty() {
             let root = Container {
@@ -1026,28 +1133,61 @@ impl<'a> PipelineSolver<'a> {
                 name: self.root_name.clone(),
                 level: ScopeLevel::PackageGroup,
                 parent: None,
+                synthetic: false,
             };
             return CandidateTree {
                 tree: ContainerTree::new(vec![root]),
                 placement: BTreeMap::new(),
+                key_by_id: BTreeMap::new(),
             };
         }
 
         let members_of = self.folder_members(parts);
 
         // one clustering pass per upper level, each over the previous level's
-        // weighted quotient graph.
+        // weighted quotient graph. Each pass carries a home-directory seed
+        // affinity keyed by the dominant laminar home of the containers below it,
+        // so folders group by home directory into named domains instead of pooling
+        // by index order into a cut-minimal grab-bag no single home could honestly
+        // name. The package-group level has no home key, so it keeps the neutral
+        // descending-layer order.
         let folder_quotient = parts.quotient(&self.condensation.dag);
-        let domain_parts = cluster_level(&folder_quotient, &self.caps, SeedLevel::Domain);
+        let domain_homes = self.home_keys(
+            &members_of,
+            folder_quotient.vertex_count(),
+            |folder| folder,
+            |file| &file.home.domain,
+        );
+        let domain_parts = cluster_level(
+            &folder_quotient,
+            &self.caps,
+            SeedLevel::Domain,
+            &home_affinity(&domain_homes),
+        );
         let domain_quotient = domain_parts.quotient(&folder_quotient);
-        let package_parts = cluster_level(&domain_quotient, &self.caps, SeedLevel::Package);
+        let package_homes = self.home_keys(
+            &members_of,
+            domain_quotient.vertex_count(),
+            |folder| {
+                domain_parts
+                    .cluster_of(folder)
+                    .map_or(0, |cluster| cluster.0)
+            },
+            |file| &file.home.package,
+        );
+        let package_parts = cluster_level(
+            &domain_quotient,
+            &self.caps,
+            SeedLevel::Package,
+            &home_affinity(&package_homes),
+        );
         let package_quotient = package_parts.quotient(&domain_quotient);
-        let group_parts = cluster_level(&package_quotient, &self.caps, SeedLevel::PackageGroup);
+        let group_parts =
+            cluster_level(&package_quotient, &self.caps, SeedLevel::PackageGroup, &[]);
 
         // ancestry of every non-empty folder cluster, plus the directory tallies
         // each level's containers are named from.
         let mut chain_of: BTreeMap<u32, (u32, u32, u32)> = BTreeMap::new();
-        let mut folder_tally: NameTally = BTreeMap::new();
         let mut domain_tally: NameTally = BTreeMap::new();
         let mut package_tally: NameTally = BTreeMap::new();
         for (&folder, members) in &members_of {
@@ -1065,21 +1205,16 @@ impl<'a> PipelineSolver<'a> {
                 let Some(file) = self.files.get(vertex as usize) else {
                     continue;
                 };
-                let dir = file.name.rsplit_once('/').map_or("", |(dir, _)| dir);
                 let sloc = file.production_sloc;
-                vote(&mut folder_tally, folder, dir_key(dir, usize::MAX), sloc);
-                vote(&mut domain_tally, domain, dir_key(dir, 2), sloc);
-                vote(&mut package_tally, package, dir_key(dir, 1), sloc);
+                // vote with the laminar tree's resolved name keys, not raw path
+                // prefixes, so source roots stay transparent and the package
+                // resolves to its manifest root (never a bare `src`).
+                vote(&mut domain_tally, domain, file.home.domain.clone(), sloc);
+                vote(&mut package_tally, package, file.home.package.clone(), sloc);
             }
         }
 
-        self.emit(
-            &members_of,
-            &chain_of,
-            &folder_tally,
-            &domain_tally,
-            &package_tally,
-        )
+        self.emit(&members_of, &chain_of, &domain_tally, &package_tally)
     }
 
     /// Interns the candidate containers parent-before-child — package groups,
@@ -1089,23 +1224,120 @@ impl<'a> PipelineSolver<'a> {
         &self,
         members_of: &BTreeMap<u32, Vec<u32>>,
         chain_of: &BTreeMap<u32, (u32, u32, u32)>,
-        folder_tally: &NameTally,
         domain_tally: &NameTally,
         package_tally: &NameTally,
     ) -> CandidateTree {
-        let mut containers: Vec<Container> = Vec::new();
-        let mut used: BTreeMap<(Option<u32>, ScopeLevel), BTreeSet<SmolStr>> = BTreeMap::new();
+        let mut arena = ContainerArena::default();
+        let mut key_by_id: BTreeMap<u32, SmolStr> = BTreeMap::new();
+        let domain_ids = self.intern_upper_levels(
+            &mut arena,
+            &mut key_by_id,
+            chain_of,
+            domain_tally,
+            package_tally,
+        );
+
+        let mut file_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
+        for (&folder, members) in members_of {
+            let Some(&(domain, _, _)) = chain_of.get(&folder) else {
+                continue;
+            };
+            // folders are reality: the cluster keeps its full real key — one
+            // container per distinct real location with an injective name
+            // (`qualify_folder_names`), so sibling folders never collide and no
+            // synthetic `-N` twin can arise. A key that doesn't path-extend its
+            // elected domain renders whole, which is the honest display of a
+            // foreign real directory folded into the suggested domain.
+            let key = self
+                .real_folder_names
+                .get(folder as usize)
+                .cloned()
+                .unwrap_or_else(|| SmolStr::new("workspace"));
+            let parent = domain_ids.get(&domain).copied();
+            let folder_id = arena.push(ContainerSpec {
+                name: &key,
+                level: ScopeLevel::Folder,
+                parent,
+                synthetic: self
+                    .real_folder_synthetic
+                    .get(folder as usize)
+                    .copied()
+                    .unwrap_or(false),
+            });
+            for &vertex in members {
+                let Some(file) = self.files.get(vertex as usize) else {
+                    continue;
+                };
+                let id = arena.push(ContainerSpec {
+                    name: &file.name,
+                    level: ScopeLevel::File,
+                    parent: Some(folder_id),
+                    synthetic: false,
+                });
+                file_ids.insert(vertex, id);
+            }
+        }
+
+        CandidateTree {
+            tree: ContainerTree::new(arena.containers),
+            placement: self.placements(&file_ids),
+            key_by_id,
+        }
+    }
+
+    /// Interns the upper naming ladder — package groups over packages over
+    /// domains — into `arena`, parent before child, and returns each domain
+    /// cluster's [`ContainerId`] so [`emit`](Self::emit) can hang folders and
+    /// files beneath it.
+    ///
+    /// Every level's sibling names are elected through the never-mixed,
+    /// never-numeric [`elect`] ladder and then made injective by
+    /// [`qualify_elected`], disambiguating a shared elected name with the
+    /// cluster's lexicographically smallest real folder — its *anchor* — the
+    /// same real-location qualifier folder twins use, so no reachable elected
+    /// path ever falls back to the arena's numeric backstop.
+    fn intern_upper_levels(
+        &self,
+        arena: &mut ContainerArena,
+        key_by_id: &mut BTreeMap<u32, SmolStr>,
+        chain_of: &BTreeMap<u32, (u32, u32, u32)>,
+        domain_tally: &NameTally,
+        package_tally: &NameTally,
+    ) -> BTreeMap<u32, ContainerId> {
+        // folders are reality: each upper cluster anchors on the smallest real
+        // directory name it holds, so two siblings that elect one name split
+        // apart by their true locations rather than a synthetic `-N` twin.
+        let mut group_anchor: BTreeMap<u32, SmolStr> = BTreeMap::new();
+        let mut package_anchor: BTreeMap<u32, SmolStr> = BTreeMap::new();
+        let mut domain_anchor: BTreeMap<u32, SmolStr> = BTreeMap::new();
+        for (&folder, &(domain, package, group)) in chain_of {
+            let name = self
+                .real_folder_names
+                .get(folder as usize)
+                .cloned()
+                .unwrap_or_else(|| SmolStr::new("workspace"));
+            anchor_min(&mut group_anchor, group, &name);
+            anchor_min(&mut package_anchor, package, &name);
+            anchor_min(&mut domain_anchor, domain, &name);
+        }
 
         let groups: BTreeSet<u32> = chain_of.values().map(|&(_, _, group)| group).collect();
+        let group_raw: BTreeMap<u32, (u32, SmolStr)> = groups
+            .iter()
+            .map(|&group| (group, (0, self.root_name.clone())))
+            .collect();
+        let group_names = qualify_elected(&group_raw, &group_anchor);
         let mut group_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
-        for &group in &groups {
-            let id = push_container(
-                &mut containers,
-                &mut used,
-                &self.root_name,
-                ScopeLevel::PackageGroup,
-                None,
-            );
+        for (&group, name) in &group_names {
+            let id = arena.push(ContainerSpec {
+                name,
+                level: ScopeLevel::PackageGroup,
+                parent: None,
+                synthetic: false,
+            });
+            if let Some((_, raw)) = group_raw.get(&group) {
+                record_undecorated_key(key_by_id, id, raw, name);
+            }
             group_ids.insert(group, id);
         }
 
@@ -1113,80 +1345,109 @@ impl<'a> PipelineSolver<'a> {
             .values()
             .map(|&(_, package, group)| (package, group))
             .collect();
+        let package_raw: BTreeMap<u32, (u32, SmolStr)> = packages
+            .iter()
+            .map(|(&package, &group)| {
+                // the fallback is unreachable: `packages` and `package_anchor`
+                // are both built from `chain_of`, so every key holds an anchor.
+                let anchor = package_anchor
+                    .get(&package)
+                    .cloned()
+                    .unwrap_or_else(|| SmolStr::new("workspace"));
+                let name = package_tally
+                    .get(&package)
+                    .map_or_else(|| SmolStr::new("workspace"), |tally| elect(tally, &anchor));
+                (package, (group, name))
+            })
+            .collect();
+        let package_names = qualify_elected(&package_raw, &package_anchor);
         let mut package_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
         for (&package, &group) in &packages {
-            let name = package_tally
+            let name = package_names
                 .get(&package)
-                .map_or_else(|| SmolStr::new("workspace"), plurality);
-            let id = push_container(
-                &mut containers,
-                &mut used,
-                &name,
-                ScopeLevel::Package,
-                group_ids.get(&group).copied(),
-            );
+                .cloned()
+                .unwrap_or_else(|| SmolStr::new("workspace"));
+            let id = arena.push(ContainerSpec {
+                name: &name,
+                level: ScopeLevel::Package,
+                parent: group_ids.get(&group).copied(),
+                synthetic: false,
+            });
+            if let Some((_, raw)) = package_raw.get(&package) {
+                record_undecorated_key(key_by_id, id, raw, &name);
+            }
             package_ids.insert(package, id);
         }
 
+        Self::intern_domains(
+            arena,
+            key_by_id,
+            chain_of,
+            domain_tally,
+            &domain_anchor,
+            &package_ids,
+        )
+    }
+
+    /// Interns the domain level beneath already-interned packages.
+    ///
+    /// Each domain elects its name through the [`elect`] ladder, disambiguates
+    /// with its cluster anchor via [`qualify_elected`], and hangs off its parent
+    /// package. The elected key lands verbatim — a name foreign to its parent
+    /// renders whole, the honest display of a suggested grouping that spans real
+    /// locations (folders set the precedent). Returns each cluster's domain id.
+    fn intern_domains(
+        arena: &mut ContainerArena,
+        key_by_id: &mut BTreeMap<u32, SmolStr>,
+        chain_of: &BTreeMap<u32, (u32, u32, u32)>,
+        domain_tally: &NameTally,
+        domain_anchor: &BTreeMap<u32, SmolStr>,
+        package_ids: &BTreeMap<u32, ContainerId>,
+    ) -> BTreeMap<u32, ContainerId> {
         let domains: BTreeMap<u32, u32> = chain_of
             .values()
             .map(|&(domain, package, _)| (domain, package))
             .collect();
+        let domain_raw: BTreeMap<u32, (u32, SmolStr)> = domains
+            .iter()
+            .map(|(&domain, &package)| {
+                // the fallback is unreachable: `domains` and `domain_anchor`
+                // are both built from `chain_of`, so every key holds an anchor.
+                let anchor = domain_anchor
+                    .get(&domain)
+                    .cloned()
+                    .unwrap_or_else(|| SmolStr::new("workspace"));
+                let name = domain_tally
+                    .get(&domain)
+                    .map_or_else(|| SmolStr::new("workspace"), |tally| elect(tally, &anchor));
+                (domain, (package, name))
+            })
+            .collect();
+        let domain_names = qualify_elected(&domain_raw, domain_anchor);
         let mut domain_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
         for (&domain, &package) in &domains {
-            let key = domain_tally
+            let name = domain_names
                 .get(&domain)
-                .map_or_else(|| SmolStr::new("workspace"), plurality);
-            // cumulative names must path-extend the parent's, or display
-            // folding would re-emit the parent's segments under it.
-            let name = extend_under(
-                &final_name(&containers, package_ids.get(&package).copied()),
-                &key,
-            );
-            let id = push_container(
-                &mut containers,
-                &mut used,
-                &name,
-                ScopeLevel::Domain,
-                package_ids.get(&package).copied(),
-            );
+                .cloned()
+                .unwrap_or_else(|| SmolStr::new("workspace"));
+            let id = arena.push(ContainerSpec {
+                name: &name,
+                level: ScopeLevel::Domain,
+                parent: package_ids.get(&package).copied(),
+                synthetic: false,
+            });
+            if let Some((_, raw)) = domain_raw.get(&domain) {
+                record_undecorated_key(key_by_id, id, raw, &name);
+            }
             domain_ids.insert(domain, id);
         }
 
-        let mut file_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
-        for (&folder, members) in members_of {
-            let Some(&(domain, _, _)) = chain_of.get(&folder) else {
-                continue;
-            };
-            let key = folder_tally
-                .get(&folder)
-                .map_or_else(|| SmolStr::new("workspace"), plurality);
-            let name = extend_under(
-                &final_name(&containers, domain_ids.get(&domain).copied()),
-                &key,
-            );
-            let folder_id = push_container(
-                &mut containers,
-                &mut used,
-                &name,
-                ScopeLevel::Folder,
-                domain_ids.get(&domain).copied(),
-            );
-            for &vertex in members {
-                let Some(file) = self.files.get(vertex as usize) else {
-                    continue;
-                };
-                let id = push_container(
-                    &mut containers,
-                    &mut used,
-                    &file.name,
-                    ScopeLevel::File,
-                    Some(folder_id),
-                );
-                file_ids.insert(vertex, id);
-            }
-        }
+        domain_ids
+    }
 
+    /// Maps every symbol node to the candidate file container holding it, by the
+    /// file vertex the node's current container indexes to.
+    fn placements(&self, file_ids: &BTreeMap<u32, ContainerId>) -> BTreeMap<u32, ContainerId> {
         let mut placement = BTreeMap::new();
         for node in &self.snapshot.ir().nodes {
             let Some(&vertex) = self.index_of.get(&node.container.0) else {
@@ -1196,11 +1457,7 @@ impl<'a> PipelineSolver<'a> {
                 placement.insert(node.id.0, file_id);
             }
         }
-
-        CandidateTree {
-            tree: ContainerTree::new(containers),
-            placement,
-        }
+        placement
     }
 
     /// Builds one DTO [`Candidate`] from a solved partition.
@@ -1224,7 +1481,12 @@ impl<'a> PipelineSolver<'a> {
         let nodes = &self.snapshot.ir().nodes;
         if self.identity.as_ref() == Some(&solved.partition) {
             let breakdown = score_current(self.snapshot, &self.coefficients, &self.weights);
-            let node = render_tree(current_tree, nodes, &|node: &Node| Some(node.container))?;
+            let node = render_tree(
+                current_tree,
+                nodes,
+                &|node: &Node| Some(node.container),
+                &BTreeMap::new(),
+            )?;
             return Ok(Candidate {
                 index,
                 score: breakdown.total,
@@ -1246,7 +1508,7 @@ impl<'a> PipelineSolver<'a> {
             &self.weights,
         );
         let placement_of = |node: &Node| assembled.placement.get(&node.id.0).copied();
-        let node = render_tree(&assembled.tree, nodes, &placement_of)?;
+        let node = render_tree(&assembled.tree, nodes, &placement_of, &assembled.key_by_id)?;
         let delta = narrate(current_tree, &assembled.tree, &self.facts);
 
         Ok(Candidate {
@@ -1265,52 +1527,22 @@ impl<'a> PipelineSolver<'a> {
 impl Solver for PipelineSolver<'_> {
     fn solve(&self, seed: u64) -> SolvedCandidate {
         let offset = seed.wrapping_sub(self.base_seed);
-        if let Some(identity) = &self.identity {
-            if offset == 0 {
-                return self.identity_entry(identity);
-            }
-            if offset == 1 {
-                // "current plus local improvements": refine and polish starting
-                // from the identity layout instead of a fresh seed.
-                let mut parts = identity.clone();
-                if let (Some(base), Some(gain)) = (self.chain.first(), self.gains.first()) {
-                    refine(base, &mut parts, gain, &self.caps, SeedLevel::Folder);
-                }
-                let total = self.polish(&mut parts);
-                return self.finish(parts, total);
-            }
+        if offset == 0
+            && let Some(identity) = &self.identity
+        {
+            return self.identity_entry(identity);
         }
-        let mut parts = self.multilevel(seed);
+        // lean: every non-identity seed converges on the same polished layout —
+        // folders are reality, so the folder-level seed perturbation that used
+        // to differentiate restarts is gone and the pool collapses toward
+        // identity plus one improvement candidate. Re-sourcing diversity at the
+        // domain grain (the level that is still a clustered suggestion) is the
+        // upgrade path; this slice deliberately does not paper over the
+        // collapse.
+        let mut parts = self.real_partition.clone();
         let total = self.polish(&mut parts);
         self.finish(parts, total)
     }
-}
-
-/// Applies a deterministic seed-driven jitter to the layering used for seeding.
-///
-/// The seeding order is descending layer, ties broken by index; nudging each
-/// vertex's layer by a small seed-derived amount reorders the ties differently per
-/// seed without changing the longest-path structure materially, so each restart
-/// grows a different initial clustering. Seed `0` returns the layers unchanged so
-/// the base seed reproduces the canonical clustering.
-fn perturb_layers(layers: &[u32], seed_value: u64) -> Vec<u32> {
-    if seed_value == 0 {
-        return layers.to_vec();
-    }
-    layers
-        .iter()
-        .enumerate()
-        .map(|(index, &base)| {
-            let mut state = seed_value
-                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                .wrapping_add(u64::try_from(index).unwrap_or(u64::MAX));
-            // a small splitmix step gives a reproducible per-(seed, index) jitter.
-            state ^= state >> 30;
-            state = state.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            let jitter = u32::try_from(state % 3).unwrap_or(0);
-            base.saturating_mul(3).saturating_add(jitter)
-        })
-        .collect()
 }
 
 /// A reconstructed candidate tree plus the placement of every symbol node.
@@ -1320,13 +1552,30 @@ struct CandidateTree {
     tree: ContainerTree,
     /// The file container each symbol node lands in, keyed by node id.
     placement: BTreeMap<u32, ContainerId>,
+    /// The undecorated elected key of each upper container whose display name
+    /// `qualify_elected` had to disambiguate, keyed by container id — empty when
+    /// no sibling name collided. The render boundary strips a folder's increment
+    /// against its domain's key from this map, never the decorated display
+    /// label, so a disambiguated domain never re-embeds a folder's key as a
+    /// fabricated directory chain.
+    key_by_id: BTreeMap<u32, SmolStr>,
 }
 
-/// Builds the weighted file-dependency graph: every hard symbol edge is mapped
-/// onto its endpoints' owning files, intra-file edges vanish (layout cannot cut
-/// them), parallel crossings are summed, and each crossing is priced by the
-/// config's kind-weight table — so heavy-edge matching and FM gains see the same
-/// prices the objective charges.
+/// Builds the weighted file-dependency graph: every symbol edge — at its
+/// configured price, not the hard edges alone — is mapped onto its endpoints'
+/// owning files, intra-file edges vanish (layout cannot cut them), parallel
+/// crossings are summed, and each crossing is priced by the config's kind-weight
+/// table — so heavy-edge matching and FM gains see the same prices the objective
+/// charges.
+///
+/// lean: admitting every edge is kept (not gated back to `Hardness::Hard`)
+/// because it aligns the search's cut with the cut the score reports (AD-6) and
+/// gives soft-only files a non-empty move-set. It does densify the folder
+/// quotient, which under the upper levels' current `cut_only` gain nudges toward
+/// one low-cut grab-bag domain; the fix is the directory-cohesion term Stage 2
+/// adds to those levels (which counterbalances the extra crossings), not a
+/// narrower graph here — re-gating would misalign search from score and hide the
+/// collapse rather than resolve it.
 fn build_file_graph(
     edges: &[Edge],
     nodes: &[Node],
@@ -1340,9 +1589,10 @@ fn build_file_graph(
         .collect();
     let mut crossings: Vec<(u32, u32, f32)> = Vec::new();
     for edge in edges {
-        if edge.hardness != Hardness::Hard {
-            continue;
-        }
+        // admit every edge at its configured price — not Hard edges alone — so
+        // the search optimizes the same cut the score reports and soft-only
+        // files (e.g. type-reference-only TS) get a non-empty move-set. A zero-
+        // priced kind still seeds mobility without shifting the cut.
         let (Some(source), Some(target)) = (
             container_of.get(&edge.source.0),
             container_of.get(&edge.target.0),
@@ -1433,97 +1683,65 @@ fn reverse_csr(graph: &Csr) -> Csr {
     Csr::from_weighted_edges(graph.vertex_count(), &edges)
 }
 
-/// Interns `token` into the dense id space, returning its id.
-fn intern_token(interner: &mut BTreeMap<String, u32>, token: &str) -> u32 {
-    if let Some(&id) = interner.get(token) {
-        return id;
+/// Lifts per-SCC folder keys onto the coarsest chain level, so the seed can pack
+/// same-folder files together. Each base SCC is followed up the chain through
+/// every level's `fine_to_coarse` map to the top vertex it folds into, and each
+/// top vertex takes the folder key held by the most SCCs beneath it (ties to the
+/// smaller key). Merged super-nodes are connected by construction, so their
+/// internal folder mixing matters little; the payoff is the edgeless singletons,
+/// which arrive at the top one-to-one with their true home folder.
+fn fold_affinity_to_top(chain: &[CoarseGraph], scc_keys: &[u32]) -> Vec<u32> {
+    let Some(top) = chain.last() else {
+        return Vec::new();
+    };
+    let mut tallies: Vec<BTreeMap<u32, u32>> = vec![BTreeMap::new(); top.graph.vertex_count()];
+    for (scc, &key) in scc_keys.iter().enumerate() {
+        let mut vertex = u32::try_from(scc).unwrap_or(u32::MAX);
+        for level in chain.iter().skip(1) {
+            vertex = level
+                .fine_to_coarse
+                .get(vertex as usize)
+                .copied()
+                .unwrap_or(vertex);
+        }
+        if let Some(tally) = tallies.get_mut(vertex as usize) {
+            *tally.entry(key).or_insert(0) += 1;
+        }
     }
-    let id = u32::try_from(interner.len()).unwrap_or(u32::MAX);
-    interner.insert(token.to_owned(), id);
-    id
+    tallies
+        .iter()
+        .map(|tally| {
+            tally
+                .iter()
+                .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)))
+                .map_or(u32::MAX, |(key, _)| *key)
+        })
+        .collect()
 }
 
-/// Builds one cohesion gain model per coarsening level.
-///
-/// Base-level vertices are file SCCs: naming tokens come from the member files'
-/// basenames (shared tokenizer with the α scoring term) and path tokens from
-/// their parent-directory segments, interned into dense ids. Every coarser
-/// level unions the token multisets of the finer vertices it contracted, so the
-/// α·naming + β·path bonus stays meaningful up the whole chain.
-fn level_gains(
+/// Builds the real-directory folder partition: each file SCC lands in the
+/// cluster of its dominant member's laminar home — the file with the largest
+/// production SLOC, ties to the lexicographically smaller path (an SCC
+/// spanning folders must co-cluster anyway, so it stays with its heaviest
+/// member). Folders come from reality, not from clustering, so this partition
+/// doubles as the identity layout. Clusters key on the full laminar location
+/// (folder, domain, package), never the folder name alone: real directories
+/// are already unique by their full-depth keys, and the full location keeps
+/// same-named fallback buckets (`workspace`) of different packages apart.
+/// Cluster ids are dense over the distinct locations in ascending order, and
+/// the returned names carry each cluster's real directory key so emission
+/// never re-elects folder names.
+fn real_dir_partition(
     files: &[FileInfo],
     condensation: &Condensation,
-    chain: &[CoarseGraph],
-    coefficients: &Coefficients,
-) -> Vec<GainFn> {
-    let mut interner: BTreeMap<String, u32> = BTreeMap::new();
-    let mut naming: Vec<Vec<u32>> = Vec::with_capacity(condensation.members.len());
-    let mut path: Vec<Vec<u32>> = Vec::with_capacity(condensation.members.len());
-    for members in &condensation.members {
-        let mut name_tokens = Vec::new();
-        let mut path_tokens = Vec::new();
-        for member in members {
-            let Some(file) = files.get(member.0 as usize) else {
-                continue;
-            };
-            for token in tokenize(&file.name) {
-                name_tokens.push(intern_token(&mut interner, &token));
-            }
-            let dir = file.name.rsplit_once('/').map_or("", |(dir, _)| dir);
-            for segment in dir.split('/').filter(|segment| !segment.is_empty()) {
-                path_tokens.push(intern_token(&mut interner, segment));
-            }
-        }
-        naming.push(name_tokens);
-        path.push(path_tokens);
-    }
-
-    // reason: α/β live in f64 config space but the FM gain arithmetic is f32 by design
-    #[allow(clippy::cast_possible_truncation)]
-    let (alpha, beta) = (coefficients.alpha as f32, coefficients.beta as f32);
-
-    let mut gains = Vec::with_capacity(chain.len());
-    gains.push(GainFn::new(naming.clone(), path.clone(), alpha, beta));
-    for level in chain.iter().skip(1) {
-        let count = level.graph.vertex_count();
-        let mut coarse_naming: Vec<Vec<u32>> = vec![Vec::new(); count];
-        let mut coarse_path: Vec<Vec<u32>> = vec![Vec::new(); count];
-        for (fine, &coarse) in level.fine_to_coarse.iter().enumerate() {
-            if let (Some(slot), Some(tokens)) =
-                (coarse_naming.get_mut(coarse as usize), naming.get(fine))
-            {
-                slot.extend_from_slice(tokens);
-            }
-            if let (Some(slot), Some(tokens)) =
-                (coarse_path.get_mut(coarse as usize), path.get(fine))
-            {
-                slot.extend_from_slice(tokens);
-            }
-        }
-        gains.push(GainFn::new(
-            coarse_naming.clone(),
-            coarse_path.clone(),
-            alpha,
-            beta,
-        ));
-        naming = coarse_naming;
-        path = coarse_path;
-    }
-    gains
-}
-
-/// Builds the identity partition: each file SCC lands in a cluster keyed by the
-/// current parent folder of its dominant member — the file with the largest
-/// production SLOC, ties to the lexicographically smaller path (it only differs
-/// from the literal current layout on cross-folder cycles, which must
-/// co-cluster anyway). Cluster ids are dense over the distinct parent keys in
-/// ascending container-id order; a rootless file keys to a shared sentinel.
-fn identity_partition(
-    files: &[FileInfo],
-    condensation: &Condensation,
-    parent_of: &BTreeMap<u32, Option<u32>>,
-) -> Partition {
-    let keys: Vec<u32> = condensation
+) -> (Partition, Vec<SmolStr>, Vec<bool>) {
+    let fallback = || LaminarHome {
+        folder: SmolStr::new("workspace"),
+        domain: SmolStr::new("workspace"),
+        package: SmolStr::new("workspace"),
+        synthetic: false,
+    };
+    let keys: Vec<LaminarHome> = condensation
         .members
         .iter()
         .map(|members| {
@@ -1540,30 +1758,96 @@ fn identity_partition(
                     dominant = Some(file);
                 }
             }
-            dominant
-                .and_then(|file| parent_of.get(&file.container).copied().flatten())
-                .unwrap_or(u32::MAX)
+            dominant.map_or_else(fallback, |file| file.home.clone())
         })
         .collect();
-    let distinct: BTreeSet<u32> = keys.iter().copied().collect();
-    let cluster_of_key: BTreeMap<u32, u32> = distinct
+    let distinct: BTreeSet<LaminarHome> = keys.iter().cloned().collect();
+    let cluster_of_key: BTreeMap<LaminarHome, u32> = distinct
         .iter()
         .enumerate()
-        .map(|(index, &key)| (key, u32::try_from(index).unwrap_or(u32::MAX)))
+        .map(|(index, key)| (key.clone(), u32::try_from(index).unwrap_or(u32::MAX)))
         .collect();
     let assignment = keys
         .iter()
         .map(|key| ClusterId(cluster_of_key.get(key).copied().unwrap_or(0)))
         .collect();
-    Partition::from_assignment(assignment, distinct.len())
+    let names = qualify_folder_names(&distinct);
+    // the synthetic marker rides in lockstep with `names`: both map the distinct
+    // homes in the same iteration order, so cluster `i` names and marks the same
+    // real location. It is folder-determined, so it never perturbs the clustering.
+    let synthetic: Vec<bool> = distinct.iter().map(|home| home.synthetic).collect();
+    (
+        Partition::from_assignment(assignment, names.len()),
+        names,
+        synthetic,
+    )
+}
+
+/// Names each distinct real location by its folder key, qualifying key ties by
+/// real location so distinct places never share a name: a folder key unique
+/// among the distinct locations stays bare; a key shared across packages
+/// qualifies as `{folder} ({package})`; a key shared within one package
+/// qualifies as `{folder} ({package} {domain})`. Qualifiers dot their path
+/// separators so display folding never splits a qualifier into path segments.
+/// Distinct locations always differ in some coordinate, so the tiered names
+/// are injective for every laminar-derived snapshot; only a hand-built folder
+/// name that textually embeds another location's qualifier can still collide,
+/// which the arena's numeric backstop absorbs.
+fn qualify_folder_names(distinct: &BTreeSet<LaminarHome>) -> Vec<SmolStr> {
+    let mut folder_count: BTreeMap<&SmolStr, u32> = BTreeMap::new();
+    let mut pair_count: BTreeMap<(&SmolStr, &SmolStr), u32> = BTreeMap::new();
+    for home in distinct {
+        *folder_count.entry(&home.folder).or_default() += 1;
+        *pair_count.entry((&home.folder, &home.package)).or_default() += 1;
+    }
+    let dotted = |key: &SmolStr| key.replace('/', ".");
+    distinct
+        .iter()
+        .map(|home| {
+            let folder_ties = folder_count.get(&home.folder).copied().unwrap_or(0);
+            let pair_ties = pair_count
+                .get(&(&home.folder, &home.package))
+                .copied()
+                .unwrap_or(0);
+            if folder_ties == 1 {
+                home.folder.clone()
+            } else if pair_ties == 1 {
+                SmolStr::new(format!("{} ({})", home.folder, dotted(&home.package)))
+            } else {
+                SmolStr::new(format!(
+                    "{} ({} {})",
+                    home.folder,
+                    dotted(&home.package),
+                    dotted(&home.domain)
+                ))
+            }
+        })
+        .collect()
 }
 
 /// Clusters a weighted quotient graph one level up (folders → domains, domains
 /// → packages, …) with the same multilevel scheme the base level uses, minus
-/// cohesion (upper levels carry no token sets) and seed perturbation (the level
-/// is fully determined by the partition below it, keeping assembly a pure
-/// function of the folder partition).
-fn cluster_level(graph: &Csr, caps: &LevelCaps, level: SeedLevel) -> Partition {
+/// seed perturbation (the level is fully determined by the partition below it,
+/// keeping assembly a pure function of the folder partition).
+///
+/// `affinity` keys each base vertex (a below-level container) by its dominant
+/// home directory: the seed keeps same-home containers contiguous, so cap
+/// boundaries fall *between* home directories and each domain/package comes out
+/// home-coherent (a named `adapters`, `agent`, …) instead of an index-order
+/// grab-bag that [`elect`] could name only through its lower rungs — a shared
+/// prefix or a top-two join rather than one honest home. An empty slice — as
+/// for the package-group level, which has no home key — restores the prior
+/// neutral descending-layer order.
+///
+/// lean: refinement stays [`GainFn::cut_only`]. A cohesion gain here would not be
+/// score-aligned — the objective's naming term scores only file/folder symbol
+/// groups (`score`'s `cohesion_groups`), never domains — so it would bias the
+/// search off the objective while, being far smaller than any integer cut gain,
+/// never actually holding a folder that pure cut wants to move. The seed affinity
+/// is the whole fix; a genuine cross-home coupling (a strictly-positive cut gain)
+/// is still honoured, and the cross-home composite [`elect`] then joins for it
+/// stays honest — named after its real origins, never a synthetic label.
+fn cluster_level(graph: &Csr, caps: &LevelCaps, level: SeedLevel, affinity: &[u32]) -> Partition {
     let layers = tight_layers(graph);
     // each quotient vertex is one container of the level below, so capacity
     // weights are all one: the cap counts members directly.
@@ -1578,7 +1862,11 @@ fn cluster_level(graph: &Csr, caps: &LevelCaps, level: SeedLevel) -> Partition {
     let Some(top) = chain.last() else {
         return Partition::from_assignment(Vec::new(), 0);
     };
-    let mut parts = seed(top, &top.layers, caps, level);
+    // lift the per-base-vertex home affinity onto the coarsest level so the seed
+    // keeps same-home containers contiguous (empty affinity folds to the neutral
+    // descending-layer order).
+    let top_affinity = fold_affinity_to_top(&chain, affinity);
+    let mut parts = seed(top, &top.layers, caps, level, &top_affinity);
     refine(
         top,
         &mut parts,
@@ -1602,44 +1890,54 @@ fn cluster_level(graph: &Csr, caps: &LevelCaps, level: SeedLevel) -> Partition {
     parts
 }
 
-/// Returns the first `take` segments of `dir` as a container name key, or
-/// `workspace` when the directory is the repository root.
-fn dir_key(dir: &str, take: usize) -> SmolStr {
-    let segments: Vec<&str> = dir
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    if segments.is_empty() {
-        return SmolStr::new("workspace");
-    }
-    let bounded = take.min(segments.len());
-    SmolStr::new(segments.get(..bounded).unwrap_or(&segments).join("/"))
+/// Interns candidate containers with dense ids, keeping the sibling names taken
+/// under each `(parent, level)` scope as a last-resort collision guard.
+#[derive(Default)]
+struct ContainerArena {
+    /// The containers interned so far, indexed by their dense id.
+    containers: Vec<Container>,
+    /// The sibling names already taken under each `(parent, level)` scope.
+    used: BTreeMap<(Option<u32>, ScopeLevel), BTreeSet<SmolStr>>,
 }
 
-/// Returns the final (dedup-suffixed) name of the container `id` interned in
-/// `containers`, or the empty string when the id is absent.
-fn final_name(containers: &[Container], id: Option<ContainerId>) -> SmolStr {
-    id.and_then(|id| containers.get(id.0 as usize))
-        .map_or_else(|| SmolStr::new(""), |container| container.name.clone())
-}
-
-/// Rewrites the elected directory `key` to nest under the parent's cumulative
-/// name: a key that already equals or path-extends the parent passes through,
-/// anything else keeps only its last segment appended to the parent. Mixed
-/// clusters elect directories from foreign subtrees (a folder dominated by
-/// `src/render` landing in a `src/core` domain), and without this rewrite the
-/// display fold would re-emit the foreign prefix (`src/core/src/render`).
-fn extend_under(parent: &str, key: &SmolStr) -> SmolStr {
-    if parent.is_empty()
-        || key.as_str() == parent
-        || key
-            .strip_prefix(parent)
-            .is_some_and(|rest| rest.starts_with('/'))
-    {
-        return key.clone();
+impl ContainerArena {
+    /// Interns `spec` under the next dense id and returns it.
+    ///
+    /// Every reachable naming path is injective by construction — folder names
+    /// through `qualify_folder_names`, elected group/package/domain names
+    /// through `qualify_elected` — so the numeric suffix below is a backstop
+    /// for names that textually embed another sibling's qualifier: a real
+    /// directory literally named like `http (ai)` colliding with a qualified
+    /// twin (non-adversarial), or a hand-built snapshot reusing a qualified
+    /// shape outright (adversarial). Neither arises from real elected paths.
+    fn push(&mut self, spec: ContainerSpec<'_>) -> ContainerId {
+        let ContainerSpec {
+            name,
+            level,
+            parent,
+            synthetic,
+        } = spec;
+        let siblings = self
+            .used
+            .entry((parent.map(|parent| parent.0), level))
+            .or_default();
+        let mut unique = name.clone();
+        let mut suffix = 2_u32;
+        while siblings.contains(&unique) {
+            unique = SmolStr::new(format!("{name}-{suffix}"));
+            suffix = suffix.saturating_add(1);
+        }
+        siblings.insert(unique.clone());
+        let id = ContainerId(u32::try_from(self.containers.len()).unwrap_or(u32::MAX));
+        self.containers.push(Container {
+            id,
+            name: unique,
+            level,
+            parent,
+            synthetic,
+        });
+        id
     }
-    let last = key.rsplit('/').next().unwrap_or(key);
-    SmolStr::new(format!("{parent}/{last}"))
 }
 
 /// Per-cluster directory election: each key holds its accumulated
@@ -1664,66 +1962,267 @@ fn plurality<V: Ord>(tally: &BTreeMap<SmolStr, V>) -> SmolStr {
         .map_or_else(|| SmolStr::new("workspace"), |(key, _)| key.clone())
 }
 
-/// Pushes a container with the next dense id, deduplicating sibling names with
-/// a numeric suffix so two clusters that elect the same directory stay distinct.
-fn push_container(
-    containers: &mut Vec<Container>,
-    used: &mut BTreeMap<(Option<u32>, ScopeLevel), BTreeSet<SmolStr>>,
-    name: &SmolStr,
-    level: ScopeLevel,
-    parent: Option<ContainerId>,
-) -> ContainerId {
-    let siblings = used
-        .entry((parent.map(|parent| parent.0), level))
-        .or_default();
-    let mut unique = name.clone();
-    let mut suffix = 2_u32;
-    while siblings.contains(&unique) {
-        unique = SmolStr::new(format!("{name}-{suffix}"));
-        suffix = suffix.saturating_add(1);
-    }
-    siblings.insert(unique.clone());
-    let id = ContainerId(u32::try_from(containers.len()).unwrap_or(u32::MAX));
-    containers.push(Container {
-        id,
-        name: unique,
-        level,
-        parent,
-    });
-    id
+/// True when a name is fit to serve as an elected identity: non-empty, not
+/// all-digit at every `/`-segment (`2024`, `2024/2025`), and not tailed by a
+/// `-<digits>` marker (`report-2`) — the shapes reserved for real directory
+/// names and the arena's collision backstop, which a *suggested* container
+/// name must never imitate.
+fn fit_for_election(name: &str) -> bool {
+    let numeric = name
+        .split('/')
+        .all(|segment| !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit()));
+    let suffixed = name
+        .rsplit_once('-')
+        .is_some_and(|(_, tail)| !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()));
+    !name.is_empty() && !numeric && !suffixed
 }
 
-/// Returns whether `graph` is a DAG (Kahn's algorithm visits every vertex).
-fn is_acyclic(graph: &Csr) -> bool {
-    let count = graph.vertex_count();
-    let mut indegree = vec![0_u32; count];
-    for vertex in 0..count {
-        let from = u32::try_from(vertex).unwrap_or(u32::MAX);
-        for &to in graph.neighbors(from) {
-            if let Some(slot) = indegree.get_mut(to as usize) {
-                *slot = slot.saturating_add(1);
+/// Returns the plurality home when it holds a *strict* majority of the
+/// cluster's weight and is fit to elect. Weight is production SLOC (as
+/// `plurality` ranks), degrading to file count only for an all-test,
+/// zero-SLOC cluster — a production home keeps its name despite companion
+/// specs. Cross-multiplication keeps the test integer-exact, and demanding
+/// `2 × win > total` sends a tied pair to the ladder's lower rungs instead
+/// of crowning one side.
+fn strict_majority(tally: &BTreeMap<SmolStr, (u64, u32)>) -> Option<SmolStr> {
+    let winner = plurality(tally);
+    let (win_sloc, win_count) = tally.get(&winner).copied()?;
+    let total_sloc = tally
+        .values()
+        .fold(0_u64, |total, &(sloc, _)| total.saturating_add(sloc));
+    let majority = if total_sloc > 0 {
+        win_sloc.saturating_mul(2) > total_sloc
+    } else {
+        let total_count = tally.values().fold(0_u64, |total, &(_, count)| {
+            total.saturating_add(u64::from(count))
+        });
+        u64::from(win_count).saturating_mul(2) > total_count
+    };
+    (majority && fit_for_election(&winner)).then_some(winner)
+}
+
+/// Returns the longest `/`-segment prefix shared by every key in `tally` —
+/// empty when the keys already diverge at their first segment.
+fn shared_prefix(tally: &BTreeMap<SmolStr, (u64, u32)>) -> SmolStr {
+    let mut keys = tally.keys();
+    let Some(first) = keys.next() else {
+        return SmolStr::new("");
+    };
+    let mut prefix: Vec<&str> = first.split('/').collect();
+    for key in keys {
+        let shared = prefix
+            .iter()
+            .zip(key.split('/'))
+            .take_while(|(held, segment)| **held == *segment)
+            .count();
+        prefix.truncate(shared);
+    }
+    SmolStr::new(prefix.join("/"))
+}
+
+/// Joins the cluster's two heaviest homes with `/` — ranked by production
+/// SLOC then file count, the same vote order every other rung uses, ties by
+/// key order — when at least two homes exist and the composite is fit to
+/// elect. A balanced grab-bag with no shared prefix is honestly named after
+/// both of its real origins, and a test-only spec dump outnumbering the
+/// production homes in files can never lead the joined name.
+///
+/// Package-qualified homes share their leading segments; the second home is
+/// relativized against the first before joining, so `ai/adapters` +
+/// `ai/model` composes `ai/adapters/model`. A joined name is synthetic by
+/// design — a proposed container not existing yet is the point — but it must
+/// stay coherent: `ai/adapters/ai/model` re-embeds the shared root mid-path,
+/// a nesting no human would ever write, and bakes in the very segment
+/// repetition the display fold exists to prevent. This rung fires only when a
+/// divergent third home has already emptied the all-member [`shared_prefix`]
+/// consensus, so the pair's common ancestor alone would misclaim the cluster;
+/// naming both heavy homes stays the more honest cover. When one home is the
+/// other's ancestor, though, that ancestor covers both and elects alone.
+fn join_top_two(tally: &BTreeMap<SmolStr, (u64, u32)>) -> Option<SmolStr> {
+    let mut ranked: Vec<(&SmolStr, (u64, u32))> =
+        tally.iter().map(|(key, &weight)| (key, weight)).collect();
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+    let [(first, _), (second, _), ..] = ranked.as_slice() else {
+        return None;
+    };
+    let shared = first
+        .split('/')
+        .zip(second.split('/'))
+        .take_while(|(left, right)| left == right)
+        .count();
+    let remainder = second.split('/').skip(shared).collect::<Vec<_>>().join("/");
+    let joined = if remainder.is_empty() {
+        // `second` is an ancestor of `first`: the ancestor covers both homes.
+        (*second).clone()
+    } else if shared == first.split('/').count() {
+        // `first` is an ancestor of `second`: same cover, other direction.
+        (*first).clone()
+    } else {
+        SmolStr::new(format!("{first}/{remainder}"))
+    };
+    fit_for_election(&joined).then_some(joined)
+}
+
+/// Returns the heaviest non-numeric path token across the cluster's home
+/// keys — weight accumulated as (production SLOC, file count), ties by the
+/// lexicographically smaller token — skipping tokens unfit to elect. Rescues
+/// a name when whole keys are numeric (`2024/2025`) but a real word survives
+/// inside them.
+fn dominant_token(tally: &BTreeMap<SmolStr, (u64, u32)>) -> Option<SmolStr> {
+    let mut tokens: BTreeMap<&str, (u64, u32)> = BTreeMap::new();
+    for (key, &(sloc, count)) in tally {
+        for segment in key.split('/') {
+            if segment.is_empty() || segment.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
             }
+            let (token_sloc, token_count) = tokens.entry(segment).or_default();
+            *token_sloc = token_sloc.saturating_add(sloc);
+            *token_count = token_count.saturating_add(count);
         }
     }
-    let mut ready: Vec<u32> = indegree
+    let mut ranked: Vec<(&str, (u64, u32))> = tokens.into_iter().collect();
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+    ranked
+        .into_iter()
+        .map(|(token, _)| token)
+        .find(|token| fit_for_election(token))
+        .map(SmolStr::new)
+}
+
+/// Elects a cluster's directory name through a deterministic ladder that is
+/// structurally incapable of yielding a synthetic label or a bare number —
+/// the first fit rung wins:
+///
+/// 1. the strict-majority home ([`strict_majority`]);
+/// 2. the longest home prefix every member shares ([`shared_prefix`]);
+/// 3. the two heaviest homes joined ([`join_top_two`]);
+/// 4. the dominant non-numeric path token ([`dominant_token`]);
+/// 5. the first home key — wrapped with the cluster's dot-encoded `anchor`
+///    folder when the key alone is unfit (`2024 (2024.x)`), so even an
+///    all-numeric grab-bag renders as a real, non-numeric identity.
+fn elect(tally: &BTreeMap<SmolStr, (u64, u32)>, anchor: &SmolStr) -> SmolStr {
+    if let Some(winner) = strict_majority(tally) {
+        return winner;
+    }
+    let prefix = shared_prefix(tally);
+    if !prefix.is_empty() && fit_for_election(&prefix) {
+        return prefix;
+    }
+    if let Some(joined) = join_top_two(tally) {
+        return joined;
+    }
+    if let Some(token) = dominant_token(tally) {
+        return token;
+    }
+    let first = tally
+        .keys()
+        .next()
+        .cloned()
+        .unwrap_or_else(|| SmolStr::new("workspace"));
+    if fit_for_election(&first) {
+        return first;
+    }
+    SmolStr::new(format!("{first} ({})", anchor.replace('/', ".")))
+}
+
+/// Keeps the lexicographically smallest anchor folder name seen per cluster.
+fn anchor_min(anchors: &mut BTreeMap<u32, SmolStr>, cluster: u32, name: &SmolStr) {
+    anchors
+        .entry(cluster)
+        .and_modify(|held| {
+            if *name < *held {
+                *held = name.clone();
+            }
+        })
+        .or_insert_with(|| name.clone());
+}
+
+/// Qualifies elected sibling names into injective ones: a raw name shared by
+/// two clusters under one parent gains each cluster's dot-encoded anchor
+/// folder — `app (pa.app.x)` — the same real-location style folder twins use,
+/// so no reachable elected path ever needs the arena's numeric backstop.
+/// Records `id`'s undecorated elected key when `qualify_elected` decorated its
+/// display `name`, so the render boundary can strip a folder's increment against
+/// the real key rather than the anchor-decorated label. An undecorated name (the
+/// common, no-collision case) already matches the folder-key prefix, so it is
+/// left out — keeping the map empty and the render byte-identical to before.
+fn record_undecorated_key(
+    key_by_id: &mut BTreeMap<u32, SmolStr>,
+    id: ContainerId,
+    raw: &SmolStr,
+    display: &SmolStr,
+) {
+    if raw != display {
+        key_by_id.insert(id.0, raw.clone());
+    }
+}
+
+fn qualify_elected(
+    raw: &BTreeMap<u32, (u32, SmolStr)>,
+    anchors: &BTreeMap<u32, SmolStr>,
+) -> BTreeMap<u32, SmolStr> {
+    let mut sibling_count: BTreeMap<(u32, &SmolStr), u32> = BTreeMap::new();
+    for (parent, name) in raw.values() {
+        *sibling_count.entry((*parent, name)).or_default() += 1;
+    }
+    raw.iter()
+        .map(|(&cluster, (parent, name))| {
+            let colliding = sibling_count.get(&(*parent, name)).copied().unwrap_or(0) > 1;
+            let name = if colliding {
+                let anchor = anchors
+                    .get(&cluster)
+                    .cloned()
+                    .unwrap_or_else(|| SmolStr::new("workspace"));
+                SmolStr::new(format!("{name} ({})", anchor.replace('/', ".")))
+            } else {
+                name.clone()
+            };
+            (cluster, name)
+        })
+        .collect()
+}
+
+/// Interns each base vertex's dominant home directory `homes[v]` into a seed
+/// affinity ordinal, so `seed` keeps same-home containers contiguous and cap
+/// boundaries fall between home directories. Equal keys share an ordinal; the
+/// order the distinct keys are numbered is irrelevant (affinity only groups).
+fn home_affinity(homes: &[SmolStr]) -> Vec<u32> {
+    let mut key_ids: BTreeMap<SmolStr, u32> = BTreeMap::new();
+    homes
         .iter()
-        .enumerate()
-        .filter(|&(_, &degree)| degree == 0)
-        .map(|(vertex, _)| u32::try_from(vertex).unwrap_or(u32::MAX))
-        .collect();
-    let mut visited = 0_usize;
-    while let Some(vertex) = ready.pop() {
-        visited = visited.saturating_add(1);
-        for &to in graph.neighbors(vertex) {
-            if let Some(slot) = indegree.get_mut(to as usize) {
-                *slot = slot.saturating_sub(1);
-                if *slot == 0 {
-                    ready.push(to);
-                }
-            }
-        }
-    }
-    visited == count
+        .map(|home| {
+            let next = u32::try_from(key_ids.len()).unwrap_or(u32::MAX);
+            *key_ids.entry(home.clone()).or_insert(next)
+        })
+        .collect()
+}
+
+/// The description of one container to intern: the name key it carries, the
+/// level it sits at, and its parent.
+#[derive(Clone, Copy)]
+struct ContainerSpec<'name> {
+    /// The name key the container's cluster carries.
+    name: &'name SmolStr,
+    /// The level the container sits at.
+    level: ScopeLevel,
+    /// The container's parent, or `None` at the root.
+    parent: Option<ContainerId>,
+    /// True for the synthetic `workspace` folder bucket the render collapses.
+    /// Only a root-file folder is ever synthetic; every upper level is false.
+    synthetic: bool,
+}
+
+/// Counts the vertices of `graph` sitting inside a cyclic strongly connected
+/// component — the quotient's cyclicity mass the polish veto compares before
+/// and after a move. Zero exactly when the graph is a DAG (the quotient
+/// carries no self-loops, so every singleton component is acyclic).
+fn cyclic_vertex_count(graph: &Csr) -> usize {
+    condense(graph)
+        .members
+        .iter()
+        .filter(|members| members.len() > 1)
+        .map(Vec::len)
+        .sum()
 }
 
 /// Builds the scorer's [`ScoreCandidate`] view from a node-placement function over
@@ -1783,9 +2282,10 @@ fn score_candidate(
 ///
 /// Every parent container that directly holds files forms one group carrying
 /// its production SLOC and the basename token set of each member file. Path
-/// cohesion is the production-SLOC-weighted fraction of files whose parent
-/// container is named exactly by the file's current directory path — an
-/// unchanged layout scores ~1.0 and every relocation dilutes it.
+/// cohesion is the production-SLOC-weighted fraction of files placed under the
+/// same folder key their own directory already resolves to in the snapshot's
+/// laminar tree — an unchanged layout scores 1.0 and every relocation dilutes
+/// it.
 fn cohesion_inputs(
     snapshot: &Snapshot,
     placement: &dyn Fn(u32) -> Option<ContainerId>,
@@ -1809,6 +2309,12 @@ fn cohesion_inputs(
         .iter()
         .map(|container| (container.id.0, &container.name))
         .collect();
+
+    // the real folder key each file currently lives under, read from the
+    // snapshot's own laminar tree; both trees key a file container by its raw
+    // repo path, so the path joins a placed file back to its real directory.
+    let real_folder_of = folder_key_of_files(&ir.containers);
+
     let mut groups: BTreeMap<u32, CohesionGroup> = BTreeMap::new();
     let mut matched = 0_u64;
     let mut total = 0_u64;
@@ -1827,10 +2333,13 @@ fn cohesion_inputs(
         group.production_sloc = group.production_sloc.saturating_add(sloc);
         group.members.push(tokenize(&container.name));
 
-        let dir = container.name.rsplit_once('/').map_or("", |(dir, _)| dir);
-        let parent_name = name_of.get(&parent.0).map_or("", |name| name.as_str());
+        let placed = name_of.get(&parent.0).map_or("", |name| name.as_str());
+        let real = real_folder_of
+            .get(container.name.as_str())
+            .copied()
+            .unwrap_or("");
         total = total.saturating_add(u64::from(sloc));
-        if parent_name == dir {
+        if !real.is_empty() && placed == real {
             matched = matched.saturating_add(u64::from(sloc));
         }
     }
@@ -1940,27 +2449,22 @@ fn container_sizes(
 }
 
 /// Computes the move distance of a candidate tree: the fraction of symbols whose
-/// owning file path differs from the current layout.
+/// owning file changes real folder.
+///
+/// A file's location is exactly its folder key — the path it would be moved to —
+/// so the comparison reads folder keys on both sides and never composes a
+/// root-to-leaf path. Labels above the folder are display, not location:
+/// renaming a domain relocates nothing and must not register here.
 fn move_distance(snapshot: &Snapshot, candidate: &ContainerTree) -> f64 {
     let ir = snapshot.ir();
-    let current_paths = container_path_strings(&ir.containers);
-    let candidate_paths = container_path_strings(candidate);
-    let candidate_file_name: BTreeMap<smol_str::SmolStr, Vec<String>> = candidate
-        .containers()
-        .iter()
-        .filter(|container| container.level == ScopeLevel::File)
-        .filter_map(|container| {
-            candidate_paths
-                .get(&container.id.0)
-                .map(|path| (container.name.clone(), path.clone()))
-        })
-        .collect();
-
     let total = ir.nodes.len();
     if total == 0 {
         return 0.0;
     }
-    // match candidate files by the original file's name, which the assembly
+    let current_folder = folder_key_of_files(&ir.containers);
+    let candidate_folder = folder_key_of_files(candidate);
+
+    // match candidate files by the original file's path, which the assembly
     // preserves; the id → name map avoids a per-node linear scan.
     let current_name: BTreeMap<u32, &SmolStr> = ir
         .containers
@@ -1972,15 +2476,16 @@ fn move_distance(snapshot: &Snapshot, candidate: &ContainerTree) -> f64 {
         .nodes
         .iter()
         .filter(|node| {
-            let Some(current) = current_paths.get(&node.container.0) else {
-                return false;
-            };
             let Some(name) = current_name.get(&node.container.0) else {
                 return false;
             };
-            candidate_file_name
+            let Some(current) = current_folder.get(name.as_str()) else {
+                return false;
+            };
+            // a file the candidate drops entirely has left its folder.
+            candidate_folder
                 .get(name.as_str())
-                .is_none_or(|candidate_path| candidate_path != current)
+                .is_none_or(|placed| placed != current)
         })
         .count();
 
@@ -1988,28 +2493,28 @@ fn move_distance(snapshot: &Snapshot, candidate: &ContainerTree) -> f64 {
         / f64::from(u32::try_from(total).unwrap_or(u32::MAX))
 }
 
-/// Returns each container's root-to-node name path, keyed by container id.
-fn container_path_strings(tree: &ContainerTree) -> BTreeMap<u32, Vec<String>> {
-    let by_id: BTreeMap<u32, &Container> = tree
+/// Maps each file container's path key to the folder key holding it directly.
+///
+/// This is the one primitive both location-sensitive terms read: a file's real
+/// place is the folder key it sits under, so β (does the file still sit where it
+/// already lives?) and μ (did the file leave?) ask the same question of the same
+/// key space. Comparing keys rather than a raw-path prefix is what keeps
+/// source-root transparency intact — one folder legitimately merges `src/x` with
+/// `spec/x`, so it has no single raw directory to compare against.
+fn folder_key_of_files(tree: &ContainerTree) -> BTreeMap<&str, &str> {
+    let name_of: BTreeMap<u32, &SmolStr> = tree
         .containers()
         .iter()
-        .map(|container| (container.id.0, container))
+        .map(|container| (container.id.0, &container.name))
         .collect();
-    let mut paths = BTreeMap::new();
-    for container in tree.containers() {
-        let mut path = Vec::new();
-        let mut cursor = Some(container.id);
-        while let Some(id) = cursor {
-            let Some(node) = by_id.get(&id.0) else {
-                break;
-            };
-            path.push(node.name.to_string());
-            cursor = node.parent;
-        }
-        path.reverse();
-        paths.insert(container.id.0, path);
-    }
-    paths
+    tree.containers()
+        .iter()
+        .filter(|container| container.level == ScopeLevel::File)
+        .filter_map(|container| {
+            let folder = name_of.get(&container.parent?.0)?;
+            Some((container.name.as_str(), folder.as_str()))
+        })
+        .collect()
 }
 
 /// Extracts the per-level member caps from the engine config.
@@ -2032,6 +2537,7 @@ fn render_tree(
     tree: &ContainerTree,
     nodes: &[Node],
     placement: &dyn Fn(&Node) -> Option<ContainerId>,
+    key_by_id: &BTreeMap<u32, SmolStr>,
 ) -> Result<ContainerNode, StrataError> {
     let containers = tree.containers();
     let mut children_by_parent: BTreeMap<u32, Vec<&Container>> = BTreeMap::new();
@@ -2056,13 +2562,22 @@ fn render_tree(
                 reason: "container tree has no root".to_owned(),
             },
         }),
-        [root] => Ok(render_node(root, &children_by_parent, &contents, "")),
+        [root] => Ok(render_node(
+            root,
+            &children_by_parent,
+            &contents,
+            "",
+            "",
+            key_by_id,
+        )),
         many => Ok(ContainerNode {
             name: "workspace".to_owned(),
             level: Level::PackageGroup,
             children: Some(
                 many.iter()
-                    .map(|root| render_node(root, &children_by_parent, &contents, ""))
+                    .map(|root| {
+                        render_node(root, &children_by_parent, &contents, "", "", key_by_id)
+                    })
                     .collect(),
             ),
             symbols: None,
@@ -2071,17 +2586,77 @@ fn render_tree(
     }
 }
 
+/// Renders the container nodes `container` contributes to its parent's child
+/// list, collapsing the synthetic `workspace` bucket at the render boundary.
+///
+/// A synthetic bucket names no real directory — it exists only so the internal
+/// tree stays strictly level-ascending over a root-level file — so it
+/// contributes no node of its own: its children rise to sit directly under the
+/// nearest real ancestor (a package's root files become siblings of its real
+/// folders). The internal tree keeps the bucket; only the DTO drops it. Every
+/// other container contributes itself.
+fn render_contributions(
+    container: &Container,
+    children_by_parent: &BTreeMap<u32, Vec<&Container>>,
+    contents: &BTreeMap<u32, FileContents>,
+    parent_name: &str,
+    parent_key: &str,
+    key_by_id: &BTreeMap<u32, SmolStr>,
+) -> Vec<ContainerNode> {
+    if container.synthetic {
+        return children_by_parent
+            .get(&container.id.0)
+            .map(|children| {
+                children
+                    .iter()
+                    .flat_map(|child| {
+                        render_contributions(
+                            child,
+                            children_by_parent,
+                            contents,
+                            parent_name,
+                            parent_key,
+                            key_by_id,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+    vec![render_node(
+        container,
+        children_by_parent,
+        contents,
+        parent_name,
+        parent_key,
+        key_by_id,
+    )]
+}
+
 /// Recursively renders one container and its descendants.
 ///
 /// Interior container names are *cumulative* path prefixes internally; the DTO
 /// carries only each node's increment over its parent so a rendered tree never
 /// repeats segments. Files keep their full path (their stable identity) and a
-/// root keeps its own name.
+/// root keeps its own name. A folder's multi-segment increment is a real
+/// relative directory path, so it expands into one nested folder node per
+/// segment ([`nest_folder_segments`]); slash-named domains, packages, and
+/// groups are elected labels and render whole.
+///
+/// A folder's increment strips its parent's *key* (`parent_key`), not the
+/// parent's rendered display name: a domain whose display label
+/// `qualify_elected` decorated (`core (constellation-ts.core)`) is no longer a
+/// prefix of the folder key, so stripping the label would leave the whole key to
+/// re-embed as a fabricated directory chain. `key_by_id` supplies the
+/// undecorated key of any decorated ancestor; every other container keys on its
+/// own name, so the two coincide and the render is unchanged.
 fn render_node(
     container: &Container,
     children_by_parent: &BTreeMap<u32, Vec<&Container>>,
     contents: &BTreeMap<u32, FileContents>,
     parent_name: &str,
+    parent_key: &str,
+    key_by_id: &BTreeMap<u32, SmolStr>,
 ) -> ContainerNode {
     if container.level == ScopeLevel::File {
         let file = contents.get(&container.id.0);
@@ -2096,18 +2671,43 @@ fn render_node(
         };
     }
 
+    let own_key = key_by_id
+        .get(&container.id.0)
+        .map_or(container.name.as_str(), SmolStr::as_str);
     let children = children_by_parent
         .get(&container.id.0)
         .map(|children| {
-            children
+            let rendered = children
                 .iter()
-                .map(|child| render_node(child, children_by_parent, contents, &container.name))
-                .collect()
+                .flat_map(|child| {
+                    render_contributions(
+                        child,
+                        children_by_parent,
+                        contents,
+                        &container.name,
+                        own_key,
+                        key_by_id,
+                    )
+                })
+                .collect();
+            merge_sibling_folders(rendered)
         })
         .unwrap_or_default();
 
+    let increment = increment_name(
+        &container.name,
+        if container.level == ScopeLevel::Folder {
+            parent_key
+        } else {
+            parent_name
+        },
+    );
+    if container.level == ScopeLevel::Folder {
+        return nest_folder_segments(&increment, children);
+    }
+
     ContainerNode {
-        name: increment_name(&container.name, parent_name),
+        name: increment,
         level: Level::from(container.level),
         children: Some(children),
         symbols: None,
@@ -2128,6 +2728,64 @@ fn increment_name(name: &str, parent_name: &str) -> String {
     name.strip_prefix(parent_name)
         .and_then(|rest| rest.strip_prefix('/'))
         .map_or_else(|| name.to_owned(), str::to_owned)
+}
+
+/// Expands a folder's parent-relative directory path into a nested chain of
+/// folder nodes, one per path segment, with `children` under the deepest.
+///
+/// Folders are reality: a multi-segment folder increment such as `a/b/c`
+/// denotes real nested directories, so the DTO renders the chain
+/// `a` → `b` → `c` rather than one slash-named node. Only the rendered
+/// boundary nests folders under folders — the internal tree keeps one
+/// slash-keyed folder per real directory as its stable identity.
+fn nest_folder_segments(increment: &str, children: Vec<ContainerNode>) -> ContainerNode {
+    let mut segments = increment
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .rev();
+    let mut node = ContainerNode {
+        name: segments.next().unwrap_or(increment).to_owned(),
+        level: Level::Folder,
+        children: Some(children),
+        symbols: None,
+        production_sloc: None,
+    };
+    for segment in segments {
+        node = ContainerNode {
+            name: segment.to_owned(),
+            level: Level::Folder,
+            children: Some(vec![node]),
+            symbols: None,
+            production_sloc: None,
+        };
+    }
+    node
+}
+
+/// Merges sibling folder nodes sharing a name into one directory trie.
+///
+/// Trie expansion can surface the same real parent directory from several
+/// internal folder keys (`deep/x` and `deep/y` both render a `deep` node);
+/// duplicate siblings would misstate the directory tree, so equal-named folder
+/// siblings merge recursively, keeping first-seen order. Non-folder siblings
+/// pass through untouched.
+fn merge_sibling_folders(children: Vec<ContainerNode>) -> Vec<ContainerNode> {
+    let mut merged: Vec<ContainerNode> = Vec::new();
+    for child in children {
+        if child.level == Level::Folder
+            && let Some(existing) = merged
+                .iter_mut()
+                .find(|node| node.level == Level::Folder && node.name == child.name)
+        {
+            let mut combined: Vec<ContainerNode> =
+                existing.children.take().into_iter().flatten().collect();
+            combined.extend(child.children.into_iter().flatten());
+            existing.children = Some(merge_sibling_folders(combined));
+            continue;
+        }
+        merged.push(child);
+    }
+    merged
 }
 
 /// A file container's rendered contents: the symbols placed in it and the sum of
@@ -2275,7 +2933,8 @@ fn solve_cycles(
 mod tests {
     use smol_str::SmolStr;
     use strata_ir::{
-        ContainerId, Edge, EdgeKind, Hardness, IntermediateRepresentation, NodeId, NodeKind,
+        ContainerId, Edge, EdgeKind, Hardness, IntermediateRepresentation, Layout, NodeId,
+        NodeKind, build_laminar_tree,
     };
 
     use super::*;
@@ -2311,6 +2970,21 @@ mod tests {
             name: SmolStr::new(name),
             level,
             parent: parent.map(ContainerId),
+            synthetic: false,
+        }
+    }
+
+    /// Builds a synthetic `workspace`-bucket container (domain or folder) — the
+    /// empty-scope node the render collapses.
+    fn synthetic_container(
+        id: u32,
+        name: &str,
+        level: ScopeLevel,
+        parent: Option<u32>,
+    ) -> Container {
+        Container {
+            synthetic: true,
+            ..container(id, name, level, parent)
         }
     }
 
@@ -2369,13 +3043,90 @@ mod tests {
 
     /// Builds a folder node holding `children`.
     fn folder(name: &str, children: Vec<ContainerNode>) -> ContainerNode {
+        interior(name, Level::Folder, children)
+    }
+
+    /// Builds an interior node at `level` holding `children`.
+    fn interior(name: &str, level: Level, children: Vec<ContainerNode>) -> ContainerNode {
         ContainerNode {
             name: name.to_owned(),
-            level: Level::Folder,
+            level,
             children: Some(children),
             symbols: None,
             production_sloc: None,
         }
+    }
+
+    /// Returns the node's only child, or `None` when it has zero or several.
+    fn only_child(node: ContainerNode) -> Option<ContainerNode> {
+        node.children.and_then(|children| {
+            if children.len() == 1 {
+                children.into_iter().next()
+            } else {
+                None
+            }
+        })
+    }
+
+    #[test]
+    fn should_collapse_the_synthetic_workspace_bucket_under_the_package() {
+        // a root-level file hangs off a synthetic `workspace` domain+folder
+        // bucket so the internal tree stays strictly level-ascending. The bucket
+        // names no real directory, so the DTO collapses it: the file renders
+        // directly under its package, with no `workspace` domain or folder node.
+        let tree = ContainerTree::new(vec![
+            container(0, "ws", ScopeLevel::PackageGroup, None),
+            container(1, "crates/app", ScopeLevel::Package, Some(0)),
+            synthetic_container(2, "crates/app/workspace", ScopeLevel::Domain, Some(1)),
+            synthetic_container(3, "crates/app/workspace", ScopeLevel::Folder, Some(2)),
+            container(4, "crates/app/src/lib.rs", ScopeLevel::File, Some(3)),
+        ]);
+
+        let rendered = render_tree(&tree, &[], &|_| None, &BTreeMap::new()).ok();
+
+        let package = rendered.and_then(only_child);
+        let children = package.and_then(|node| node.children).unwrap_or_default();
+        let shape: Vec<(&str, Level)> = children
+            .iter()
+            .map(|node| (node.name.as_str(), node.level))
+            .collect();
+        assert_eq!(shape, vec![("crates/app/src/lib.rs", Level::File)]);
+    }
+
+    #[test]
+    fn should_render_root_files_beside_real_folders_when_a_package_has_both() {
+        // a package holding both root-level files and a real sub-folder renders
+        // the root files as siblings of the real folder directly under the
+        // package -- the collapsed synthetic bucket never wraps them in a
+        // phantom `workspace` level.
+        let tree = ContainerTree::new(vec![
+            container(0, "ws", ScopeLevel::PackageGroup, None),
+            container(1, "crates/app", ScopeLevel::Package, Some(0)),
+            synthetic_container(2, "crates/app/workspace", ScopeLevel::Domain, Some(1)),
+            synthetic_container(3, "crates/app/workspace", ScopeLevel::Folder, Some(2)),
+            container(4, "crates/app/src/lib.rs", ScopeLevel::File, Some(3)),
+            container(5, "crates/app/io", ScopeLevel::Domain, Some(1)),
+            container(6, "crates/app/io", ScopeLevel::Folder, Some(5)),
+            container(7, "crates/app/src/io/read.rs", ScopeLevel::File, Some(6)),
+        ]);
+
+        let rendered = render_tree(&tree, &[], &|_| None, &BTreeMap::new()).ok();
+
+        let package = rendered.and_then(only_child);
+        let children = package.and_then(|node| node.children).unwrap_or_default();
+        let names: Vec<&str> = children.iter().map(|node| node.name.as_str()).collect();
+        assert!(
+            names.contains(&"crates/app/src/lib.rs"),
+            "the root file must sit directly under the package, got {names:?}"
+        );
+        assert!(
+            children.iter().any(|node| node.level == Level::Domain),
+            "the real folder's domain must remain, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"workspace"),
+            "no synthetic workspace node may survive, got {names:?}"
+        );
     }
 
     /// Builds a config with the file cap set to `cap`.
@@ -2494,6 +3245,330 @@ mod tests {
             .map(|f| f.location.clone())
             .unwrap_or_default();
         assert_eq!(location, vec!["over-capacity", "workspace", "huge.py"]);
+    }
+
+    #[test]
+    fn should_nest_a_multi_segment_folder_into_a_directory_chain() {
+        // folders are reality: a real directory foreign to its domain renders
+        // as one nested folder node per path segment, deepest holding the
+        // files, never as a single slash-named node.
+        let tree = ContainerTree::new(vec![
+            container(0, "ws", ScopeLevel::PackageGroup, None),
+            container(1, "ws", ScopeLevel::Package, Some(0)),
+            container(2, "shared", ScopeLevel::Domain, Some(1)),
+            container(3, "google/capabilities", ScopeLevel::Folder, Some(2)),
+            container(4, "src/google/capabilities/a.ts", ScopeLevel::File, Some(3)),
+        ]);
+
+        let rendered = render_tree(&tree, &[], &|_| None, &BTreeMap::new()).ok();
+
+        let google = rendered
+            .and_then(only_child)
+            .and_then(only_child)
+            .and_then(only_child);
+        assert_eq!(
+            google.as_ref().map(|node| (node.name.as_str(), node.level)),
+            Some(("google", Level::Folder))
+        );
+        let capabilities = google.and_then(only_child);
+        assert_eq!(
+            capabilities
+                .as_ref()
+                .map(|node| (node.name.as_str(), node.level)),
+            Some(("capabilities", Level::Folder))
+        );
+        let files: Vec<String> = capabilities
+            .and_then(|node| node.children)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|child| child.name)
+            .collect();
+        assert_eq!(files, vec!["src/google/capabilities/a.ts".to_owned()]);
+    }
+
+    #[test]
+    fn should_render_a_slash_named_domain_as_a_single_node() {
+        // domains are the suggestion: an elected join like `d1/d2` is a label,
+        // not a directory, so it renders whole and never trie-splits.
+        let tree = ContainerTree::new(vec![
+            container(0, "ws", ScopeLevel::PackageGroup, None),
+            container(1, "ws", ScopeLevel::Package, Some(0)),
+            container(2, "d1/d2", ScopeLevel::Domain, Some(1)),
+            container(3, "d1/d2/x", ScopeLevel::Folder, Some(2)),
+            container(4, "src/d1/x/a.ts", ScopeLevel::File, Some(3)),
+        ]);
+
+        let rendered = render_tree(&tree, &[], &|_| None, &BTreeMap::new()).ok();
+
+        let domain = rendered.and_then(only_child).and_then(only_child);
+        assert_eq!(
+            domain.as_ref().map(|node| (node.name.as_str(), node.level)),
+            Some(("d1/d2", Level::Domain))
+        );
+        let folder_names: Vec<String> = domain
+            .and_then(|node| node.children)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|child| child.name)
+            .collect();
+        assert_eq!(folder_names, vec!["x".to_owned()]);
+    }
+
+    #[test]
+    fn should_not_fabricate_folders_under_a_disambiguated_domain() {
+        // two merged domains both elect the bare package prefix `cts`, so
+        // `qualify_elected` disambiguates their display as `cts (cts.core)` /
+        // `cts (cts.io)`. The decorated label is not a prefix of the folder key
+        // `cts/core`, so stripping it would leave the whole key to re-embed as a
+        // fabricated `cts` → `core` chain. Stripping the domain's real key `cts`
+        // (from `key_by_id`) renders the one real directory `core`.
+        let tree = ContainerTree::new(vec![
+            container(0, "cts", ScopeLevel::PackageGroup, None),
+            container(1, "cts", ScopeLevel::Package, Some(0)),
+            container(2, "cts (cts.core)", ScopeLevel::Domain, Some(1)),
+            container(3, "cts/core", ScopeLevel::Folder, Some(2)),
+            container(4, "src/core/a.ts", ScopeLevel::File, Some(3)),
+        ]);
+        let key_by_id: BTreeMap<u32, SmolStr> = [(2, SmolStr::new("cts"))].into_iter().collect();
+
+        let rendered = render_tree(&tree, &[], &|_| None, &key_by_id).ok();
+
+        let domain = rendered.and_then(only_child).and_then(only_child);
+        assert_eq!(
+            domain.as_ref().map(|node| (node.name.as_str(), node.level)),
+            Some(("cts (cts.core)", Level::Domain))
+        );
+        let folder_names: Vec<String> = domain
+            .and_then(|node| node.children)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|child| child.name)
+            .collect();
+        assert_eq!(folder_names, vec!["core".to_owned()]);
+    }
+
+    #[test]
+    fn should_merge_sibling_folders_sharing_a_parent_directory() {
+        // two real directories under one parent (`deep/x`, `deep/y`) render
+        // as a single `deep` trie holding two subdirectories, never as
+        // duplicate `deep` siblings.
+        let tree = ContainerTree::new(vec![
+            container(0, "ws", ScopeLevel::PackageGroup, None),
+            container(1, "ws", ScopeLevel::Package, Some(0)),
+            container(2, "shared", ScopeLevel::Domain, Some(1)),
+            container(3, "deep/x", ScopeLevel::Folder, Some(2)),
+            container(4, "src/deep/x/a.ts", ScopeLevel::File, Some(3)),
+            container(5, "deep/y", ScopeLevel::Folder, Some(2)),
+            container(6, "src/deep/y/b.ts", ScopeLevel::File, Some(5)),
+        ]);
+
+        let rendered = render_tree(&tree, &[], &|_| None, &BTreeMap::new()).ok();
+
+        let deep = rendered
+            .and_then(only_child)
+            .and_then(only_child)
+            .and_then(only_child);
+        assert_eq!(deep.as_ref().map(|node| node.name.as_str()), Some("deep"));
+        let subdirs: Vec<(String, Vec<String>)> = deep
+            .and_then(|node| node.children)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|child| {
+                let files = child
+                    .children
+                    .iter()
+                    .flatten()
+                    .map(|file| file.name.clone())
+                    .collect();
+                (child.name, files)
+            })
+            .collect();
+        assert_eq!(
+            subdirs,
+            vec![
+                ("x".to_owned(), vec!["src/deep/x/a.ts".to_owned()]),
+                ("y".to_owned(), vec!["src/deep/y/b.ts".to_owned()]),
+            ]
+        );
+    }
+
+    /// Builds a production symbol of `sloc` owning `container`.
+    fn sloc_node(id: u32, name: &str, container: ContainerId, sloc: u32) -> Node {
+        Node {
+            id: NodeId(id),
+            name: SmolStr::new(name),
+            kind: NodeKind::Symbol,
+            polarity: Polarity::Production,
+            container,
+            visibility: ScopeLevel::File,
+            effective_size: sloc,
+        }
+    }
+
+    #[test]
+    fn should_measure_full_path_cohesion_for_the_unchanged_laminar_layout() {
+        // `cohesion_inputs` documents the unchanged layout as scoring ~1.0: every
+        // file still sits in the folder its own directory names, so nothing is
+        // relocated and nothing dilutes the fraction. Build the tree the way the
+        // real analysis does -- via `build_laminar_tree`, over a nested directory
+        // -- and score the identity placement, where each symbol stays in the file
+        // container the tree already put it in.
+        let paths: Vec<SmolStr> = vec![
+            SmolStr::new("src/core/engine/a.ts"),
+            SmolStr::new("src/core/engine/b.ts"),
+        ];
+        let layout = Layout {
+            package_roots: vec![],
+            source_roots: vec![SmolStr::new("src")],
+        };
+        let built = build_laminar_tree(&paths, "workspace", &layout);
+
+        let nodes: Vec<Node> = paths
+            .iter()
+            .enumerate()
+            .filter_map(|(index, path)| {
+                let container = *built.files.get(path)?;
+                // reason: two fixture files index well inside u32.
+                #[allow(clippy::cast_possible_truncation)]
+                let id = index as u32;
+                Some(sloc_node(id, path.as_str(), container, 10))
+            })
+            .collect();
+        let container_of: BTreeMap<u32, ContainerId> = nodes
+            .iter()
+            .map(|node| (node.id.0, node.container))
+            .collect();
+        let snapshot = snapshot(nodes, vec![], built.tree.containers().to_vec());
+        let tree = snapshot.ir().containers.clone();
+
+        let (_, path_cohesion) =
+            cohesion_inputs(&snapshot, &|id| container_of.get(&id).copied(), &tree);
+
+        assert!(
+            (path_cohesion - 1.0).abs() < f64::EPSILON,
+            "the unchanged layout must be fully path-cohesive, measured {path_cohesion}"
+        );
+    }
+
+    #[test]
+    fn should_not_count_a_file_as_moved_when_only_a_display_name_above_its_folder_changes() {
+        // a file's real location is its folder key: `src/core/engine/a.ts` lives
+        // in `workspace/core/engine` no matter what label the domain above it
+        // wears. Naming a domain is a display act, never a path component, so a
+        // relabelled ancestor must not register as a relocation.
+        let paths: Vec<SmolStr> = vec![SmolStr::new("src/core/engine/a.ts")];
+        let layout = Layout {
+            package_roots: vec![],
+            source_roots: vec![SmolStr::new("src")],
+        };
+        let built = build_laminar_tree(&paths, "workspace", &layout);
+        // `build_laminar_tree` interns every input path, so the lookup always
+        // hits; the fallback is unreachable and only keeps the strict lint clean.
+        let file_id = built
+            .files
+            .get(&SmolStr::new("src/core/engine/a.ts"))
+            .copied()
+            .unwrap_or(ContainerId(0));
+        let containers = built.tree.containers().to_vec();
+        let snapshot = snapshot(
+            vec![sloc_node(0, "src/core/engine/a.ts", file_id, 10)],
+            vec![],
+            containers.clone(),
+        );
+
+        // the same tree, with only the domain container's display label decorated.
+        let relabelled: Vec<Container> = containers
+            .iter()
+            .cloned()
+            .map(|mut container| {
+                if container.level == ScopeLevel::Domain {
+                    container.name = SmolStr::new(format!("{} (workspace.core)", container.name));
+                }
+                container
+            })
+            .collect();
+
+        let distance = move_distance(&snapshot, &ContainerTree::new(relabelled));
+
+        assert!(
+            distance.abs() < f64::EPSILON,
+            "relabelling a domain moves no file, measured {distance}"
+        );
+    }
+
+    #[test]
+    fn should_measure_folder_capacity_by_direct_file_membership() {
+        // synthetic interior directories hold only subdirectories and stay
+        // silent; each directory is measured by the files it holds directly.
+        let tree = interior(
+            "shared",
+            Level::Domain,
+            vec![
+                folder(
+                    "a",
+                    vec![folder(
+                        "b",
+                        vec![folder("c", vec![file("f1", 10), file("f2", 10)])],
+                    )],
+                ),
+                folder("x", vec![folder("y", vec![file("g1", 10)])]),
+            ],
+        );
+        let mut config = AnalyzeConfig::default();
+        config.capacity.folder = 1;
+
+        let findings = walk_all_capacity(&tree, &config);
+
+        let folder_findings: Vec<(Vec<String>, Severity)> = findings
+            .iter()
+            .filter(|(level, _)| *level == Level::Folder)
+            .map(|(_, violation)| (violation.location.clone(), violation.severity))
+            .collect();
+        assert_eq!(
+            folder_findings,
+            vec![
+                (
+                    vec![
+                        "shared".to_owned(),
+                        "a".to_owned(),
+                        "b".to_owned(),
+                        "c".to_owned(),
+                    ],
+                    Severity::Violation
+                ),
+                (
+                    vec!["shared".to_owned(), "x".to_owned(), "y".to_owned()],
+                    Severity::Borderline
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn should_count_domain_capacity_by_top_level_directory_subtrees() {
+        // a domain holding the single real directory `a/b/c` measures one
+        // child subtree, not one per nested segment.
+        let tree = ContainerTree::new(vec![
+            container(0, "ws", ScopeLevel::PackageGroup, None),
+            container(1, "ws", ScopeLevel::Package, Some(0)),
+            container(2, "shared", ScopeLevel::Domain, Some(1)),
+            container(3, "a/b/c", ScopeLevel::Folder, Some(2)),
+            container(4, "src/a/b/c/f.ts", ScopeLevel::File, Some(3)),
+        ]);
+        let mut config = AnalyzeConfig::default();
+        config.capacity.domain = 1;
+
+        let rendered = render_tree(&tree, &[], &|_| None, &BTreeMap::new()).ok();
+        let findings = rendered
+            .map(|dto| walk_all_capacity(&dto, &config))
+            .unwrap_or_default();
+
+        let domain_findings: Vec<Severity> = findings
+            .iter()
+            .filter(|(level, _)| *level == Level::Domain)
+            .map(|(_, violation)| violation.severity)
+            .collect();
+        assert_eq!(domain_findings, vec![Severity::Borderline]);
     }
 
     #[test]
@@ -2804,6 +3879,193 @@ mod tests {
     }
 
     #[test]
+    fn should_elect_real_home_names_never_a_neutral_label() {
+        let anchor = SmolStr::new("src/core");
+
+        // a coherent cluster: one origin holds the SLOC majority, so it names.
+        let mut coherent: NameTally = BTreeMap::new();
+        vote(&mut coherent, 0, SmolStr::new("src/core"), 200);
+        vote(&mut coherent, 0, SmolStr::new("src/io"), 30);
+        vote(&mut coherent, 0, SmolStr::new("src/net"), 20);
+        assert_eq!(
+            coherent
+                .get(&0)
+                .map(|tally| elect(tally, &anchor))
+                .unwrap_or_default(),
+            "src/core"
+        );
+
+        // a grab-bag: no origin reaches half the weight, so the ladder falls
+        // to the homes' shared prefix — a real place, never a neutral label.
+        let mut grabbag: NameTally = BTreeMap::new();
+        vote(&mut grabbag, 0, SmolStr::new("src/openai"), 40);
+        vote(&mut grabbag, 0, SmolStr::new("src/google"), 35);
+        vote(&mut grabbag, 0, SmolStr::new("src/anthropic"), 33);
+        assert_eq!(
+            grabbag
+                .get(&0)
+                .map(|tally| elect(tally, &anchor))
+                .unwrap_or_default(),
+            "src"
+        );
+
+        // a production home keeps its name despite many companion spec files,
+        // because SLOC — not file count — decides the majority.
+        let mut with_specs: NameTally = BTreeMap::new();
+        vote(&mut with_specs, 0, SmolStr::new("src/adapters"), 120);
+        for _ in 0..5 {
+            vote(&mut with_specs, 0, SmolStr::new("spec/adapters"), 0);
+        }
+        assert_eq!(
+            with_specs
+                .get(&0)
+                .map(|tally| elect(tally, &anchor))
+                .unwrap_or_default(),
+            "src/adapters"
+        );
+    }
+
+    #[test]
+    fn should_join_top_two_homes_by_production_sloc_not_file_count() {
+        // three divergent production homes plus a spec dump that wins on file
+        // count alone: no home holds a strict SLOC majority and the keys share
+        // no prefix, so the join fires — and the two production-SLOC-heaviest
+        // homes must lead the composite. A zero-SLOC spec dump outnumbering
+        // them in files can never lead the joined name.
+        let mut votes: NameTally = BTreeMap::new();
+        vote(&mut votes, 0, SmolStr::new("lib/core"), 300);
+        vote(&mut votes, 0, SmolStr::new("vendor/util"), 250);
+        vote(&mut votes, 0, SmolStr::new("tools/gen"), 200);
+        for _ in 0..20 {
+            vote(&mut votes, 0, SmolStr::new("spec/everything"), 0);
+        }
+        let anchor = SmolStr::new("lib/core");
+
+        assert_eq!(
+            votes
+                .get(&0)
+                .map(|tally| elect(tally, &anchor))
+                .unwrap_or_default(),
+            "lib/core/vendor/util"
+        );
+    }
+
+    #[test]
+    fn should_relativize_the_shared_prefix_when_joining_top_two_homes() {
+        // package-qualified homes share their package root; the join must
+        // relativize the second home against the first instead of re-embedding
+        // the root — `ai/adapters/ai/model` repeats the root mid-path, an
+        // incoherent nesting no human would ever propose.
+        let anchor = SmolStr::new("ai/adapters");
+        let mut votes: NameTally = BTreeMap::new();
+        vote(&mut votes, 0, SmolStr::new("ai/adapters"), 300);
+        vote(&mut votes, 0, SmolStr::new("ai/model"), 250);
+        vote(&mut votes, 0, SmolStr::new("workspace"), 200);
+
+        assert_eq!(
+            votes
+                .get(&0)
+                .map(|tally| elect(tally, &anchor))
+                .unwrap_or_default(),
+            "ai/adapters/model"
+        );
+
+        // when one home is the other's ancestor, the ancestor already covers
+        // both and elects alone instead of a self-embedding composite.
+        let mut nested: NameTally = BTreeMap::new();
+        vote(&mut nested, 0, SmolStr::new("ai/adapters"), 300);
+        vote(&mut nested, 0, SmolStr::new("ai"), 250);
+        vote(&mut nested, 0, SmolStr::new("workspace"), 200);
+
+        assert_eq!(
+            nested
+                .get(&0)
+                .map(|tally| elect(tally, &anchor))
+                .unwrap_or_default(),
+            "ai"
+        );
+    }
+
+    #[test]
+    fn should_relocate_a_misplaced_file_despite_a_cyclic_folder_base() {
+        // folders `a` and `b` cycle through each other on two disjoint file
+        // pairs per direction (a1→b1, a2→b2 against b3→a3, b4→a4), so no
+        // single relocation can dissolve the cycle — as tangles between
+        // deliberately misplaced files behave on real repositories. A
+        // whole-state acyclicity veto then prices every move at infinity and
+        // freezes the polish pass wholesale; the veto must only bar moves that
+        // grow the cyclicity, keeping the strictly-improving relocation of
+        // `m.ts` (every edge pointing into `c`, far from the cycle) available.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "a1", 6, 10),
+                homed(1, "a2", 7, 10),
+                homed(2, "a3", 8, 10),
+                homed(3, "a4", 9, 10),
+                homed(4, "m", 10, 10),
+                homed(5, "b1", 11, 10),
+                homed(6, "b2", 12, 10),
+                homed(7, "b3", 13, 10),
+                homed(8, "b4", 14, 10),
+                homed(9, "c1", 15, 10),
+                homed(10, "c2", 16, 10),
+            ],
+            vec![
+                edge(0, 5),
+                edge(1, 6),
+                edge(7, 2),
+                edge(8, 3),
+                edge(4, 9),
+                edge(4, 10),
+                edge(9, 10),
+            ],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "app", ScopeLevel::Package, Some(0)),
+                container(2, "app/core", ScopeLevel::Domain, Some(1)),
+                container(3, "app/core/a", ScopeLevel::Folder, Some(2)),
+                container(4, "app/core/b", ScopeLevel::Folder, Some(2)),
+                container(5, "app/core/c", ScopeLevel::Folder, Some(2)),
+                container(6, "src/core/a/a1.ts", ScopeLevel::File, Some(3)),
+                container(7, "src/core/a/a2.ts", ScopeLevel::File, Some(3)),
+                container(8, "src/core/a/a3.ts", ScopeLevel::File, Some(3)),
+                container(9, "src/core/a/a4.ts", ScopeLevel::File, Some(3)),
+                container(10, "src/core/a/m.ts", ScopeLevel::File, Some(3)),
+                container(11, "src/core/b/b1.ts", ScopeLevel::File, Some(4)),
+                container(12, "src/core/b/b2.ts", ScopeLevel::File, Some(4)),
+                container(13, "src/core/b/b3.ts", ScopeLevel::File, Some(4)),
+                container(14, "src/core/b/b4.ts", ScopeLevel::File, Some(4)),
+                container(15, "src/core/c/c1.ts", ScopeLevel::File, Some(5)),
+                container(16, "src/core/c/c2.ts", ScopeLevel::File, Some(5)),
+            ],
+        );
+
+        let moves = analyze(&snapshot, &config_with_k(1))
+            .ok()
+            .and_then(|result| result.modes.greenfield)
+            .and_then(|mode| mode.candidates.into_iter().next())
+            .map(|candidate| candidate.delta_narration)
+            .unwrap_or_default();
+
+        let destination = moves
+            .iter()
+            .find(|entry| {
+                entry
+                    .files
+                    .iter()
+                    .any(|file| file.path == "src/core/a/m.ts")
+            })
+            .map(|entry| entry.to.clone());
+
+        assert!(
+            destination
+                .as_deref()
+                .is_some_and(|to| to.split('/').next_back() == Some("c")),
+            "expected m.ts to land in folder c, got {destination:?} among {moves:?}"
+        );
+    }
+
+    #[test]
     fn should_build_candidates_with_real_names_and_five_levels() {
         // two files under a real directory path, each holding a multi-line
         // production symbol, plus a hard edge so clustering has a pair to group.
@@ -2877,6 +4139,816 @@ mod tests {
         assert!(
             sloc.contains(&10) && sloc.contains(&7),
             "expected summed effective_size, got {sloc:?}"
+        );
+    }
+
+    /// A production symbol node with an explicit size, for the clustering tests.
+    fn homed(id: u32, name: &str, container: u32, size: u32) -> Node {
+        Node {
+            id: NodeId(id),
+            name: SmolStr::new(name),
+            kind: NodeKind::Symbol,
+            polarity: Polarity::Production,
+            container: ContainerId(container),
+            visibility: ScopeLevel::File,
+            effective_size: size,
+        }
+    }
+
+    /// Collects the `(level, name)` pairs of a mode's first candidate tree.
+    fn candidate_containers(snapshot: &Snapshot, config: &AnalyzeConfig) -> Vec<(Level, String)> {
+        let candidate = analyze(snapshot, config)
+            .ok()
+            .and_then(|result| result.modes.greenfield)
+            .and_then(|mode| mode.candidates.into_iter().next());
+        let (mut names, mut sloc, mut levels) = (Vec::new(), Vec::new(), Vec::new());
+        if let Some(candidate) = &candidate {
+            collect_tree(&candidate.tree, &mut names, &mut sloc, &mut levels);
+        }
+        levels.into_iter().zip(names).collect()
+    }
+
+    #[test]
+    fn should_separate_domains_by_home_directory() {
+        // two home directories (`adapters` with openai+google folders, `agent`
+        // with loop+plan) with a weak cross edge: before the seed carried a home
+        // affinity the upper level pooled all four folders by index order into one
+        // cut-minimal cluster that `elect` could only call `mixed`; now each
+        // domain packs its own home and elects a real name.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "a", 5, 10),
+                homed(1, "b", 6, 10),
+                homed(2, "c", 7, 10),
+                homed(3, "d", 8, 10),
+                homed(4, "e", 12, 10),
+                homed(5, "f", 13, 10),
+                homed(6, "g", 14, 10),
+                homed(7, "h", 15, 10),
+            ],
+            vec![edge(0, 1), edge(2, 3), edge(4, 5), edge(6, 7), edge(0, 4)],
+            vec![
+                container(0, "ai", ScopeLevel::PackageGroup, None),
+                container(1, "ai", ScopeLevel::Package, Some(0)),
+                container(2, "ai/adapters", ScopeLevel::Domain, Some(1)),
+                container(3, "ai/adapters/openai", ScopeLevel::Folder, Some(2)),
+                container(4, "ai/adapters/google", ScopeLevel::Folder, Some(2)),
+                container(9, "ai/agent", ScopeLevel::Domain, Some(1)),
+                container(10, "ai/agent/loop", ScopeLevel::Folder, Some(9)),
+                container(11, "ai/agent/plan", ScopeLevel::Folder, Some(9)),
+                container(5, "src/adapters/openai/a.ts", ScopeLevel::File, Some(3)),
+                container(6, "src/adapters/openai/b.ts", ScopeLevel::File, Some(3)),
+                container(7, "src/adapters/google/c.ts", ScopeLevel::File, Some(4)),
+                container(8, "src/adapters/google/d.ts", ScopeLevel::File, Some(4)),
+                container(12, "src/agent/loop/e.ts", ScopeLevel::File, Some(10)),
+                container(13, "src/agent/loop/f.ts", ScopeLevel::File, Some(10)),
+                container(14, "src/agent/plan/g.ts", ScopeLevel::File, Some(11)),
+                container(15, "src/agent/plan/h.ts", ScopeLevel::File, Some(11)),
+            ],
+        );
+        let mut config = config_with_k(1);
+        config.capacity.folder = 2;
+        config.capacity.domain = 2;
+        config.capacity.package = 4;
+
+        let containers = candidate_containers(&snapshot, &config);
+        let domains: Vec<&String> = containers
+            .iter()
+            .filter(|(level, _)| *level == Level::Domain)
+            .map(|(_, name)| name)
+            .collect();
+
+        assert!(
+            domains.iter().all(|name| name.as_str() != "mixed"),
+            "domains collapsed into a mixed grab-bag: {domains:?}"
+        );
+        assert!(
+            domains.iter().any(|name| name.as_str() == "adapters")
+                && domains.iter().any(|name| name.as_str() == "agent"),
+            "expected the two home directories to elect distinct domains, got {domains:?}"
+        );
+    }
+
+    #[test]
+    fn should_keep_an_over_cap_real_directory_whole_under_its_real_name() {
+        // one real directory (`openai`) holds more files than the folder cap and
+        // no sibling directory exists to relieve into. Folders are reality: the
+        // directory stays one whole folder under its real name — never a
+        // synthetic `openai-gpt` or `openai-2` split — and the breach surfaces
+        // downstream as an honest capacity violation instead.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "gpt", 4, 10),
+                homed(1, "gpt", 5, 10),
+                homed(2, "dalle", 6, 10),
+                homed(3, "dalle", 7, 10),
+            ],
+            vec![edge(0, 1), edge(2, 3)],
+            vec![
+                container(0, "ai", ScopeLevel::PackageGroup, None),
+                container(1, "ai", ScopeLevel::Package, Some(0)),
+                container(2, "ai/adapters", ScopeLevel::Domain, Some(1)),
+                container(3, "ai/adapters/openai", ScopeLevel::Folder, Some(2)),
+                container(
+                    4,
+                    "src/adapters/openai/gpt_one.ts",
+                    ScopeLevel::File,
+                    Some(3),
+                ),
+                container(
+                    5,
+                    "src/adapters/openai/gpt_two.ts",
+                    ScopeLevel::File,
+                    Some(3),
+                ),
+                container(
+                    6,
+                    "src/adapters/openai/dalle_one.ts",
+                    ScopeLevel::File,
+                    Some(3),
+                ),
+                container(
+                    7,
+                    "src/adapters/openai/dalle_two.ts",
+                    ScopeLevel::File,
+                    Some(3),
+                ),
+            ],
+        );
+        let mut config = config_with_k(1);
+        config.capacity.folder = 2;
+
+        let containers = candidate_containers(&snapshot, &config);
+        let folders: Vec<&String> = containers
+            .iter()
+            .filter(|(level, _)| *level == Level::Folder)
+            .map(|(_, name)| name)
+            .collect();
+
+        assert_eq!(
+            folders.len(),
+            1,
+            "the real directory must stay one whole folder, got {folders:?}"
+        );
+        assert!(
+            folders.iter().all(|name| name.as_str() == "openai"),
+            "the folder must keep its real directory name, got {folders:?}"
+        );
+    }
+
+    /// Collects each file-holding directory's folder-chain path and the file
+    /// names directly under it over a candidate tree, in pre-order.
+    ///
+    /// Folder nodes render one path segment each, so a directory's identity is
+    /// the slash-joined chain of folder segments below its domain; interior
+    /// chain nodes holding no files directly are not directories of interest
+    /// and are skipped.
+    fn folder_files(node: &ContainerNode, folders: &mut Vec<(String, Vec<String>)>) {
+        folder_files_under(node, "", folders);
+    }
+
+    /// Walks below [`folder_files`], threading the folder-chain `prefix`.
+    fn folder_files_under(
+        node: &ContainerNode,
+        prefix: &str,
+        folders: &mut Vec<(String, Vec<String>)>,
+    ) {
+        let path = if node.level != Level::Folder {
+            String::new()
+        } else if prefix.is_empty() {
+            node.name.clone()
+        } else {
+            format!("{prefix}/{}", node.name)
+        };
+        if node.level == Level::Folder {
+            let files: Vec<String> = node
+                .children
+                .iter()
+                .flatten()
+                .filter(|child| child.level == Level::File)
+                .map(|child| child.name.clone())
+                .collect();
+            if !files.is_empty() {
+                folders.push((path.clone(), files));
+            }
+        }
+        for child in node.children.iter().flatten() {
+            folder_files_under(child, &path, folders);
+        }
+    }
+
+    /// An over-cap real directory beside an under-cap one: `one` holds three
+    /// files against a folder cap of two, and its file `c` couples hard
+    /// (three priced edges) to `d` in `two`. The old folder clustering split
+    /// `one` into a suffixed synthetic sibling holding files from both real
+    /// directories; the real-directory partition must not.
+    fn over_cap_real_dir_snapshot() -> Snapshot {
+        snapshot(
+            vec![
+                homed(0, "alpha", 5, 10),
+                homed(1, "beta", 6, 10),
+                homed(2, "c_zero", 7, 10),
+                homed(3, "c_one", 7, 10),
+                homed(4, "c_two", 7, 10),
+                homed(5, "delta", 8, 10),
+            ],
+            vec![edge(2, 5), edge(3, 5), edge(4, 5)],
+            vec![
+                container(0, "ai", ScopeLevel::PackageGroup, None),
+                container(1, "ai", ScopeLevel::Package, Some(0)),
+                container(2, "ai/svc", ScopeLevel::Domain, Some(1)),
+                container(3, "ai/svc/one", ScopeLevel::Folder, Some(2)),
+                container(4, "ai/svc/two", ScopeLevel::Folder, Some(2)),
+                container(5, "src/svc/one/a.ts", ScopeLevel::File, Some(3)),
+                container(6, "src/svc/one/b.ts", ScopeLevel::File, Some(3)),
+                container(7, "src/svc/one/c.ts", ScopeLevel::File, Some(3)),
+                container(8, "src/svc/two/d.ts", ScopeLevel::File, Some(4)),
+            ],
+        )
+    }
+
+    /// The parent folder name of `file` in a candidate tree's folder listing.
+    fn folder_of<'a>(folders: &'a [(String, Vec<String>)], file: &str) -> Option<&'a str> {
+        folders
+            .iter()
+            .find(|(_, files)| files.iter().any(|name| name == file))
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// True when a name carries a synthetic numeric dedup suffix like `-2`.
+    fn numeric_suffixed(name: &str) -> bool {
+        name.rsplit_once('-')
+            .is_some_and(|(_, tail)| !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()))
+    }
+
+    /// Collects every container name rendered in a candidate tree, pre-order.
+    fn tree_names(node: &ContainerNode) -> Vec<String> {
+        let (mut names, mut sloc, mut levels) = (Vec::new(), Vec::new(), Vec::new());
+        collect_tree(node, &mut names, &mut sloc, &mut levels);
+        names
+    }
+
+    #[test]
+    fn should_keep_fallback_folders_of_different_packages_apart() {
+        // reality is the location, not the name: `a.ts` and `b.ts` both sit
+        // directly in their domain directories (inheriting them as folder
+        // keys), but they live in different real packages, so no candidate may
+        // pool them into one folder cluster (which would drag them into one
+        // shared domain and package).
+        let snapshot = snapshot(
+            vec![homed(0, "alpha", 3, 10), homed(1, "beta", 6, 10)],
+            vec![],
+            vec![
+                container(0, "ws", ScopeLevel::PackageGroup, None),
+                container(1, "ai", ScopeLevel::Package, Some(0)),
+                container(2, "ai/app", ScopeLevel::Domain, Some(1)),
+                container(3, "src/a.ts", ScopeLevel::File, Some(2)),
+                container(4, "bi", ScopeLevel::Package, Some(0)),
+                container(5, "bi/app", ScopeLevel::Domain, Some(4)),
+                container(6, "src/b.ts", ScopeLevel::File, Some(5)),
+            ],
+        );
+        let config = config_with_k(1);
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut seen = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                seen += 1;
+                let mut folders = Vec::new();
+                folder_files(&candidate.tree, &mut folders);
+                assert!(
+                    folders.iter().all(|(_, files)| files.len() == 1),
+                    "files of different packages must not pool into one \
+                     fallback folder, got {folders:?}"
+                );
+            }
+        }
+        assert!(seen > 0, "expected at least one candidate across the modes");
+    }
+
+    #[test]
+    fn should_never_suffix_same_basename_folders_merged_into_one_domain() {
+        // `ai/adapters/http` and `ai/core/http` share a basename but are
+        // different real places; hard coupling merges their domains into one
+        // suggestion, and each folder must still surface its own real key —
+        // never a truncated twin deduped into a synthetic `http-2`.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "alpha", 4, 40),
+                homed(1, "beta", 5, 20),
+                homed(2, "gamma", 8, 20),
+                homed(3, "delta", 9, 10),
+            ],
+            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                container(0, "ws", ScopeLevel::PackageGroup, None),
+                container(1, "ai", ScopeLevel::Package, Some(0)),
+                container(2, "ai/adapters", ScopeLevel::Domain, Some(1)),
+                container(3, "ai/adapters/http", ScopeLevel::Folder, Some(2)),
+                container(4, "src/adapters/http/client.ts", ScopeLevel::File, Some(3)),
+                container(5, "src/adapters/http/codec.ts", ScopeLevel::File, Some(3)),
+                container(6, "ai/core", ScopeLevel::Domain, Some(1)),
+                container(7, "ai/core/http", ScopeLevel::Folder, Some(6)),
+                container(8, "src/core/http/util.ts", ScopeLevel::File, Some(7)),
+                container(9, "src/core/http/parse.ts", ScopeLevel::File, Some(7)),
+            ],
+        );
+        let mut config = config_with_k(2);
+        // both folders sit at the cap, so polish cannot cross-pull members and
+        // every candidate keeps both real directories intact.
+        config.capacity.folder = 2;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut merged_seen = false;
+        let mut seen = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                seen += 1;
+                let names = tree_names(&candidate.tree);
+                let suffixed: Vec<&String> = names
+                    .iter()
+                    .filter(|name| numeric_suffixed(name.as_str()))
+                    .collect();
+                assert!(
+                    suffixed.is_empty(),
+                    "no container may carry a synthetic numeric suffix, got {suffixed:?}"
+                );
+                let mut folders = Vec::new();
+                folder_files(&candidate.tree, &mut folders);
+                assert_eq!(
+                    folder_of(&folders, "src/adapters/http/client.ts"),
+                    Some("http"),
+                    "the majority folder keeps its real basename, got {folders:?}"
+                );
+                let foreign = folder_of(&folders, "src/core/http/util.ts");
+                assert!(
+                    foreign == Some("http") || foreign == Some("ai/core/http"),
+                    "the minority folder must render its real key, got {foreign:?} in {folders:?}"
+                );
+                merged_seen |= foreign == Some("ai/core/http");
+            }
+        }
+        assert!(seen > 0, "expected at least one candidate across the modes");
+        assert!(
+            merged_seen,
+            "expected a merged-domain candidate rendering the foreign folder \
+             by its full real key `ai/core/http`"
+        );
+    }
+
+    #[test]
+    fn should_inherit_real_domain_keys_for_domain_rooted_files() {
+        // these files sit directly in two packages' domain directories, so
+        // there is no deeper folder: each file's real folder IS its domain
+        // directory. When coupling merges the two domains into one suggestion
+        // the folders must keep those inherited real keys — never collapse
+        // into `workspace` fallback twins deduped as `workspace-2`.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "alpha", 3, 10),
+                homed(1, "beta", 4, 10),
+                homed(2, "gamma", 7, 10),
+                homed(3, "delta", 8, 10),
+            ],
+            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                container(0, "ws", ScopeLevel::PackageGroup, None),
+                container(1, "ai", ScopeLevel::Package, Some(0)),
+                container(2, "ai/app", ScopeLevel::Domain, Some(1)),
+                container(3, "src/a1.ts", ScopeLevel::File, Some(2)),
+                container(4, "src/a2.ts", ScopeLevel::File, Some(2)),
+                container(5, "bi", ScopeLevel::Package, Some(0)),
+                container(6, "bi/app", ScopeLevel::Domain, Some(5)),
+                container(7, "src/b1.ts", ScopeLevel::File, Some(6)),
+                container(8, "src/b2.ts", ScopeLevel::File, Some(6)),
+            ],
+        );
+        let mut config = config_with_k(2);
+        // both inherited folders sit at the cap: polish cannot pool the files.
+        config.capacity.folder = 2;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut merged_seen = false;
+        let mut seen = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                seen += 1;
+                let names = tree_names(&candidate.tree);
+                let suffixed: Vec<&String> = names
+                    .iter()
+                    .filter(|name| numeric_suffixed(name.as_str()))
+                    .collect();
+                assert!(
+                    suffixed.is_empty(),
+                    "no container may carry a synthetic numeric suffix, got {suffixed:?}"
+                );
+                let mut folders = Vec::new();
+                folder_files(&candidate.tree, &mut folders);
+                assert!(
+                    folders
+                        .iter()
+                        .all(|(name, _)| ["app", "ai/app", "bi/app"].contains(&name.as_str())),
+                    "every folder must carry a real inherited key, got {folders:?}"
+                );
+                assert!(
+                    folders.iter().all(|(_, files)| files.len() == 2),
+                    "files of different packages must not pool, got {folders:?}"
+                );
+                let a = folder_of(&folders, "src/a1.ts");
+                let b = folder_of(&folders, "src/b1.ts");
+                merged_seen |= a == Some("ai/app") && b == Some("bi/app");
+            }
+        }
+        assert!(seen > 0, "expected at least one candidate across the modes");
+        assert!(
+            merged_seen,
+            "expected a merged-domain candidate keeping both inherited real \
+             keys `ai/app` and `bi/app` whole"
+        );
+    }
+
+    #[test]
+    fn should_qualify_folder_keys_that_collide_across_nested_packages() {
+        // source-root stripping can normalize two different real directories
+        // to one folder key: `a/src/b/c` in package `a` and `a/b/src/c` in
+        // nested package `a/b` both key as `a/b/c`. The twins must qualify by
+        // their real package — never dedupe into a synthetic `c-2`.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "alpha", 4, 10),
+                homed(1, "beta", 5, 10),
+                homed(2, "gamma", 9, 10),
+                homed(3, "delta", 10, 10),
+            ],
+            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                container(0, "ws", ScopeLevel::PackageGroup, None),
+                container(1, "a", ScopeLevel::Package, Some(0)),
+                container(2, "a/b", ScopeLevel::Domain, Some(1)),
+                container(3, "a/b/c", ScopeLevel::Folder, Some(2)),
+                container(4, "src/b/c/f1.ts", ScopeLevel::File, Some(3)),
+                container(5, "src/b/c/f2.ts", ScopeLevel::File, Some(3)),
+                container(6, "a/b", ScopeLevel::Package, Some(0)),
+                container(7, "a/b/c", ScopeLevel::Domain, Some(6)),
+                container(8, "a/b/c", ScopeLevel::Folder, Some(7)),
+                container(9, "src/c/g1.ts", ScopeLevel::File, Some(8)),
+                container(10, "src/c/g2.ts", ScopeLevel::File, Some(8)),
+            ],
+        );
+        let mut config = config_with_k(2);
+        config.capacity.folder = 2;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut merged_seen = false;
+        let mut seen = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                seen += 1;
+                let names = tree_names(&candidate.tree);
+                let suffixed: Vec<&String> = names
+                    .iter()
+                    .filter(|name| numeric_suffixed(name.as_str()))
+                    .collect();
+                assert!(
+                    suffixed.is_empty(),
+                    "no container may carry a synthetic numeric suffix, got {suffixed:?}"
+                );
+                let mut folders = Vec::new();
+                folder_files(&candidate.tree, &mut folders);
+                assert!(
+                    folders.iter().all(|(name, _)| {
+                        ["c", "c (a)", "c (a.b)", "a/b/c (a)", "a/b/c (a.b)"]
+                            .contains(&name.as_str())
+                    }),
+                    "every folder must carry its real or qualified key, got {folders:?}"
+                );
+                assert!(
+                    folders.iter().all(|(_, files)| files.len() == 2),
+                    "files of different packages must not pool, got {folders:?}"
+                );
+                let first = folder_of(&folders, "src/b/c/f1.ts");
+                let second = folder_of(&folders, "src/c/g1.ts");
+                merged_seen |= first == Some("c (a)") && second == Some("c (a.b)");
+            }
+        }
+        assert!(seen > 0, "expected at least one candidate across the modes");
+        assert!(
+            merged_seen,
+            "expected a merged-domain candidate qualifying the twins as \
+             `c (a)` and `c (a.b)`"
+        );
+    }
+
+    #[test]
+    fn should_qualify_folder_keys_that_collide_within_one_package() {
+        // hand-built snapshots may reuse one bare folder key under two domains
+        // of the same package; the twins must qualify by their real location —
+        // never dedupe into a synthetic `shared-2`.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "alpha", 4, 10),
+                homed(1, "beta", 5, 10),
+                homed(2, "gamma", 8, 10),
+                homed(3, "delta", 9, 10),
+            ],
+            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                container(0, "ws", ScopeLevel::PackageGroup, None),
+                container(1, "pa", ScopeLevel::Package, Some(0)),
+                container(2, "pa/d1", ScopeLevel::Domain, Some(1)),
+                container(3, "shared", ScopeLevel::Folder, Some(2)),
+                container(4, "src/d1/f1.ts", ScopeLevel::File, Some(3)),
+                container(5, "src/d1/f2.ts", ScopeLevel::File, Some(3)),
+                container(6, "pa/d2", ScopeLevel::Domain, Some(1)),
+                container(7, "shared", ScopeLevel::Folder, Some(6)),
+                container(8, "src/d2/g1.ts", ScopeLevel::File, Some(7)),
+                container(9, "src/d2/g2.ts", ScopeLevel::File, Some(7)),
+            ],
+        );
+        let mut config = config_with_k(2);
+        config.capacity.folder = 2;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut merged_seen = false;
+        let mut seen = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                seen += 1;
+                let names = tree_names(&candidate.tree);
+                let suffixed: Vec<&String> = names
+                    .iter()
+                    .filter(|name| numeric_suffixed(name.as_str()))
+                    .collect();
+                assert!(
+                    suffixed.is_empty(),
+                    "no container may carry a synthetic numeric suffix, got {suffixed:?}"
+                );
+                let mut folders = Vec::new();
+                folder_files(&candidate.tree, &mut folders);
+                assert!(
+                    folders.iter().all(|(name, _)| {
+                        ["shared", "shared (pa pa.d1)", "shared (pa pa.d2)"]
+                            .contains(&name.as_str())
+                    }),
+                    "every folder must carry its real or qualified key, got {folders:?}"
+                );
+                let first = folder_of(&folders, "src/d1/f1.ts");
+                let second = folder_of(&folders, "src/d2/g1.ts");
+                merged_seen |=
+                    first == Some("shared (pa pa.d1)") && second == Some("shared (pa pa.d2)");
+            }
+        }
+        assert!(seen > 0, "expected at least one candidate across the modes");
+        assert!(
+            merged_seen,
+            "expected a merged-domain candidate qualifying the twins as \
+             `shared (pa pa.d1)` and `shared (pa pa.d2)`"
+        );
+    }
+
+    #[test]
+    fn should_keep_files_in_their_real_directories_as_folders() {
+        // folders are reality: `b.ts` lives in the real `one` and `d.ts` in
+        // the real `two`, so no candidate may pool them into one clustered
+        // folder or invent a suffixed synthetic sibling for the overflow.
+        let snapshot = over_cap_real_dir_snapshot();
+        let mut config = config_with_k(3);
+        config.capacity.folder = 2;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut seen = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                seen += 1;
+                let mut folders = Vec::new();
+                folder_files(&candidate.tree, &mut folders);
+                assert_eq!(
+                    folder_of(&folders, "src/svc/one/b.ts"),
+                    Some("one"),
+                    "b.ts must stay a member of its real directory, got {folders:?}"
+                );
+                assert_eq!(
+                    folder_of(&folders, "src/svc/two/d.ts"),
+                    Some("two"),
+                    "d.ts must stay a member of its real directory, got {folders:?}"
+                );
+                assert!(
+                    folders
+                        .iter()
+                        .all(|(name, _)| ["one", "two"].contains(&name.as_str())),
+                    "every folder must be one of the real directories, got {folders:?}"
+                );
+            }
+        }
+        assert!(seen > 0, "expected at least one candidate across the modes");
+    }
+
+    #[test]
+    fn should_relieve_an_over_cap_real_directory_through_polish() {
+        // the real directory `one` holds three files against a cap of two; its
+        // file `c` couples hard to `d` in under-cap `two`, so the polish pass
+        // must relieve `one` by moving `c` into the real `two` — never by
+        // splitting `one` into a suffixed synthetic sibling.
+        let snapshot = over_cap_real_dir_snapshot();
+        let mut config = config_with_k(2);
+        config.capacity.folder = 2;
+
+        let candidate = analyze(&snapshot, &config)
+            .ok()
+            .and_then(|result| result.modes.greenfield)
+            .and_then(|mode| mode.candidates.into_iter().next());
+
+        let mut folders = Vec::new();
+        if let Some(candidate) = &candidate {
+            folder_files(&candidate.tree, &mut folders);
+        }
+        let names: Vec<&str> = folders.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["one", "two"],
+            "expected the two real directories as the only folders, got {folders:?}"
+        );
+        let by_name: BTreeMap<&str, &Vec<String>> = folders
+            .iter()
+            .map(|(name, files)| (name.as_str(), files))
+            .collect();
+        assert_eq!(
+            by_name.get("one").map(|files| files.as_slice()),
+            Some(&["src/svc/one/a.ts".to_owned(), "src/svc/one/b.ts".to_owned()][..]),
+            "polish should relieve `one` down to its cap"
+        );
+        assert_eq!(
+            by_name.get("two").map(|files| files.as_slice()),
+            Some(&["src/svc/one/c.ts".to_owned(), "src/svc/two/d.ts".to_owned()][..]),
+            "the relieving move must land `c` in the real `two`"
+        );
+        // the relieved layout clears every capacity breach.
+        assert_eq!(
+            candidate.as_ref().and_then(|candidate| {
+                candidate
+                    .capacity_remainder
+                    .as_ref()
+                    .map(|remainder| remainder.remaining)
+            }),
+            Some(0),
+            "the best greenfield candidate must fix the folder breach"
+        );
+    }
+
+    #[test]
+    fn should_read_laminar_home_keys_from_the_container_chain() {
+        // the laminar tree keeps source-root-stripped, package-root-resolved
+        // name keys; a file under `src/` still keys to the `ai` package and the
+        // `ai/adapters` domain/folder, never to a bare `src`.
+        let containers = [
+            container(0, "ai", ScopeLevel::PackageGroup, None),
+            container(1, "ai", ScopeLevel::Package, Some(0)),
+            container(2, "ai/adapters", ScopeLevel::Domain, Some(1)),
+            container(3, "ai/adapters", ScopeLevel::Folder, Some(2)),
+            container(4, "src/adapters/openai.ts", ScopeLevel::File, Some(3)),
+        ];
+        let by_id: BTreeMap<u32, &Container> = containers.iter().map(|c| (c.id.0, c)).collect();
+
+        let home = laminar_home(&by_id, 4);
+        assert_eq!(home.package, "ai");
+        assert_eq!(home.domain, "ai/adapters");
+        assert_eq!(home.folder, "ai/adapters");
+    }
+
+    #[test]
+    fn should_key_the_home_to_the_nearest_folder_and_package() {
+        // laminar folders and package roots nest; a file's real place is the
+        // NEAREST ancestor at each level (folder `…/deeper`, package `a/b`),
+        // never the outermost one.
+        let containers = [
+            container(0, "g", ScopeLevel::PackageGroup, None),
+            container(1, "a", ScopeLevel::Package, Some(0)),
+            container(2, "a/b", ScopeLevel::Package, Some(1)),
+            container(3, "a/b/x", ScopeLevel::Domain, Some(2)),
+            container(4, "a/b/x/deep", ScopeLevel::Folder, Some(3)),
+            container(5, "a/b/x/deep/deeper", ScopeLevel::Folder, Some(4)),
+            container(6, "src/x/deep/deeper/f.ts", ScopeLevel::File, Some(5)),
+        ];
+        let by_id: BTreeMap<u32, &Container> = containers.iter().map(|c| (c.id.0, c)).collect();
+
+        let home = laminar_home(&by_id, 6);
+        assert_eq!(home.package, "a/b", "the nearest package root wins");
+        assert_eq!(home.domain, "a/b/x");
+        assert_eq!(home.folder, "a/b/x/deep/deeper", "the nearest folder wins");
+    }
+
+    #[test]
+    fn should_inherit_missing_levels_from_the_nearest_broader_key() {
+        // a file directly in its domain directory has no deeper folder: its
+        // real folder IS that directory, so the folder key inherits the domain
+        // key instead of collapsing to a synthetic `workspace` twin.
+        let containers = [
+            container(0, "g", ScopeLevel::PackageGroup, None),
+            container(1, "p", ScopeLevel::Package, Some(0)),
+            container(2, "p/d", ScopeLevel::Domain, Some(1)),
+            container(3, "src/f.ts", ScopeLevel::File, Some(2)),
+        ];
+        let by_id: BTreeMap<u32, &Container> = containers.iter().map(|c| (c.id.0, c)).collect();
+
+        let home = laminar_home(&by_id, 3);
+        assert_eq!(home.package, "p");
+        assert_eq!(home.domain, "p/d");
+        assert_eq!(home.folder, "p/d", "the folder inherits the domain key");
+    }
+
+    #[test]
+    fn should_not_over_strip_a_user_named_src_module() {
+        // a `src` that is a real module name (not a transparent source root) is
+        // preserved by the laminar tree as `ai/src`; the engine honors it rather
+        // than blindly dropping every `src` segment.
+        let containers = [
+            container(0, "ai", ScopeLevel::PackageGroup, None),
+            container(1, "ai", ScopeLevel::Package, Some(0)),
+            container(2, "ai/src", ScopeLevel::Domain, Some(1)),
+            container(3, "ai/src", ScopeLevel::Folder, Some(2)),
+            container(4, "src/src/deep.ts", ScopeLevel::File, Some(3)),
+        ];
+        let by_id: BTreeMap<u32, &Container> = containers.iter().map(|c| (c.id.0, c)).collect();
+
+        let home = laminar_home(&by_id, 4);
+        assert_eq!(home.package, "ai");
+        assert_eq!(home.domain, "ai/src");
+        assert_eq!(home.folder, "ai/src");
+    }
+
+    #[test]
+    fn should_name_the_package_from_the_manifest_root_not_the_source_root() {
+        // sources live under `src/`, but the laminar tree already resolved the
+        // package to the manifest root `ai`; candidate naming must reuse that,
+        // so `ai` names the package and `src` never surfaces as a container.
+        let sized = |id: u32, name: &str, container: u32, size: u32| Node {
+            id: NodeId(id),
+            name: SmolStr::new(name),
+            kind: NodeKind::Symbol,
+            polarity: Polarity::Production,
+            container: ContainerId(container),
+            visibility: ScopeLevel::File,
+            effective_size: size,
+        };
+        let snapshot = snapshot(
+            vec![sized(0, "openai", 4, 10), sized(1, "anthropic", 5, 7)],
+            vec![edge(0, 1)],
+            vec![
+                container(0, "ai", ScopeLevel::PackageGroup, None),
+                container(1, "ai", ScopeLevel::Package, Some(0)),
+                container(2, "ai/adapters", ScopeLevel::Domain, Some(1)),
+                container(3, "ai/adapters", ScopeLevel::Folder, Some(2)),
+                container(4, "src/adapters/openai.ts", ScopeLevel::File, Some(3)),
+                container(5, "src/adapters/anthropic.ts", ScopeLevel::File, Some(3)),
+            ],
+        );
+
+        let candidate = analyze(&snapshot, &config_with_k(1))
+            .ok()
+            .and_then(|result| result.modes.anchored)
+            .and_then(|mode| mode.candidates.into_iter().next());
+
+        let mut names = Vec::new();
+        let mut sloc = Vec::new();
+        let mut levels = Vec::new();
+        if let Some(candidate) = &candidate {
+            collect_tree(&candidate.tree, &mut names, &mut sloc, &mut levels);
+        }
+        assert!(!names.is_empty(), "expected an anchored candidate");
+
+        let named: Vec<(&Level, &String)> = levels.iter().zip(names.iter()).collect();
+        // the package elects the manifest root, not the transparent source root.
+        assert!(
+            named
+                .iter()
+                .any(|(level, name)| **level == Level::Package && name.as_str() == "ai"),
+            "expected an `ai` package, got {names:?}"
+        );
+        // `src` leaks nowhere as an interior container (files keep their paths).
+        assert!(
+            named
+                .iter()
+                .all(|(level, name)| **level == Level::File || name.as_str() != "src"),
+            "src leaked as an interior container: {names:?}"
         );
     }
 
@@ -3105,5 +5177,490 @@ mod tests {
 
         assert!(clusters.iter().all(Option::is_some));
         assert_eq!(clusters.first(), clusters.get(1));
+    }
+
+    /// True when a rendered name is a bare number — every byte a digit.
+    fn bare_numeric(name: &str) -> bool {
+        !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit())
+    }
+
+    /// Collects every `(level, rendered name)` pair of a candidate tree,
+    /// pre-order.
+    fn level_names(tree: &ContainerNode) -> Vec<(Level, String)> {
+        let (mut names, mut sloc, mut levels) = (Vec::new(), Vec::new(), Vec::new());
+        collect_tree(tree, &mut names, &mut sloc, &mut levels);
+        levels.into_iter().zip(names).collect()
+    }
+
+    /// Returns the rendered Domain-level names of a candidate tree.
+    fn domain_names(tree: &ContainerNode) -> Vec<String> {
+        level_names(tree)
+            .into_iter()
+            .filter(|(level, _)| *level == Level::Domain)
+            .map(|(_, name)| name)
+            .collect()
+    }
+
+    #[test]
+    fn should_never_elect_the_mixed_label() {
+        // three homes at 40/35/33 SLOC: no strict majority, no shared prefix.
+        // The election must produce a real composite name — never the
+        // synthetic `mixed` grab-bag label.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "a", 2, 20),
+                homed(1, "b", 3, 20),
+                homed(2, "c", 5, 18),
+                homed(3, "d", 6, 17),
+                homed(4, "e", 8, 17),
+                homed(5, "f", 9, 16),
+            ],
+            vec![edge(0, 2), edge(3, 4), edge(5, 1)],
+            vec![
+                container(0, "ws", ScopeLevel::PackageGroup, None),
+                container(1, "d1", ScopeLevel::Domain, Some(0)),
+                container(2, "src/d1/a.ts", ScopeLevel::File, Some(1)),
+                container(3, "src/d1/b.ts", ScopeLevel::File, Some(1)),
+                container(4, "d2", ScopeLevel::Domain, Some(0)),
+                container(5, "src/d2/c.ts", ScopeLevel::File, Some(4)),
+                container(6, "src/d2/d.ts", ScopeLevel::File, Some(4)),
+                container(7, "d3", ScopeLevel::Domain, Some(0)),
+                container(8, "src/d3/e.ts", ScopeLevel::File, Some(7)),
+                container(9, "src/d3/f.ts", ScopeLevel::File, Some(7)),
+            ],
+        );
+        let mut config = config_with_k(2);
+        // folders sit at the cap so polish cannot cross-pull members, and the
+        // domain cap admits all three coupled folders into one cluster.
+        config.capacity.folder = 2;
+        config.capacity.domain = 3;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut merged_seen = false;
+        let mut seen = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                seen += 1;
+                let names = tree_names(&candidate.tree);
+                assert!(
+                    names
+                        .iter()
+                        .all(|name| name != "mixed" && !name.ends_with("/mixed")),
+                    "no container may carry the synthetic mixed label, got {names:?}"
+                );
+                let domains = domain_names(&candidate.tree);
+                merged_seen |= domains == ["d1/d2"];
+            }
+        }
+        assert!(seen > 0, "expected at least one candidate across the modes");
+        assert!(
+            merged_seen,
+            "expected the merged grab-bag domain to elect the top-two join \
+             `d1/d2`"
+        );
+    }
+
+    /// Builds the all-numeric fixture: real package `2024` holding real
+    /// directories `2024/x` and `2024/y`, two cross-coupled files each.
+    fn numeric_home_snapshot() -> Snapshot {
+        snapshot(
+            vec![
+                homed(0, "a", 3, 20),
+                homed(1, "b", 4, 20),
+                homed(2, "c", 6, 20),
+                homed(3, "d", 7, 20),
+            ],
+            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                container(0, "ws", ScopeLevel::PackageGroup, None),
+                container(1, "2024", ScopeLevel::Package, Some(0)),
+                container(2, "2024/x", ScopeLevel::Folder, Some(1)),
+                container(3, "src/x/a.ts", ScopeLevel::File, Some(2)),
+                container(4, "src/x/b.ts", ScopeLevel::File, Some(2)),
+                container(5, "2024/y", ScopeLevel::Folder, Some(1)),
+                container(6, "src/y/c.ts", ScopeLevel::File, Some(5)),
+                container(7, "src/y/d.ts", ScopeLevel::File, Some(5)),
+            ],
+        )
+    }
+
+    #[test]
+    fn should_never_elect_a_bare_numeric_name() {
+        // a real package directory named `2024` holds every vote: the elected
+        // package and domain names of every emitted candidate must still never
+        // surface as a bare number. Identity clones are exempt — they carry
+        // the real tree verbatim, and folders always keep their real names.
+        let snapshot = numeric_home_snapshot();
+        let mut config = config_with_k(2);
+        // headroom of one over the two-file directories, so a moved-file
+        // partition exists and at least one candidate is emitted (elected)
+        // rather than cloned.
+        config.capacity.folder = 3;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut emitted = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                if candidate.delta_narration.is_empty() {
+                    continue;
+                }
+                emitted += 1;
+                let elected: Vec<(Level, String)> = level_names(&candidate.tree)
+                    .into_iter()
+                    .filter(|(level, _)| {
+                        matches!(level, Level::Domain | Level::Package | Level::PackageGroup)
+                    })
+                    .collect();
+                assert!(
+                    elected
+                        .iter()
+                        .all(|(_, name)| !bare_numeric(name) && !numeric_suffixed(name)),
+                    "no elected container may render as a bare number or a \
+                     numeric-suffixed twin, got {elected:?}"
+                );
+            }
+        }
+        assert!(
+            emitted > 0,
+            "expected at least one emitted (elected) candidate"
+        );
+    }
+
+    #[test]
+    fn should_elect_the_strict_majority_home_verbatim() {
+        // rung R1: `apps/d1` holds 40 of 50 SLOC — a strict majority — so the
+        // merged domain takes that home key whole. The old cumulative rewrite
+        // truncated a key foreign to its package to `workspace/d1`, rendering
+        // `d1` and hiding the real `apps` prefix.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "a", 2, 20),
+                homed(1, "b", 3, 20),
+                homed(2, "c", 5, 5),
+                homed(3, "d", 6, 5),
+            ],
+            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                container(0, "ws", ScopeLevel::PackageGroup, None),
+                container(1, "apps/d1", ScopeLevel::Domain, Some(0)),
+                container(2, "src/d1/a.ts", ScopeLevel::File, Some(1)),
+                container(3, "src/d1/b.ts", ScopeLevel::File, Some(1)),
+                container(4, "beta/d2", ScopeLevel::Domain, Some(0)),
+                container(5, "src/d2/c.ts", ScopeLevel::File, Some(4)),
+                container(6, "src/d2/d.ts", ScopeLevel::File, Some(4)),
+            ],
+        );
+        let mut config = config_with_k(2);
+        config.capacity.folder = 2;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut majority_seen = false;
+        let mut seen = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                seen += 1;
+                let domains = domain_names(&candidate.tree);
+                assert!(
+                    domains.iter().all(|name| name != "d1"),
+                    "a majority home must render whole, not truncated to its \
+                     last segment, got {domains:?}"
+                );
+                majority_seen |= domains.iter().any(|name| name == "apps/d1");
+            }
+        }
+        assert!(seen > 0, "expected at least one candidate across the modes");
+        assert!(
+            majority_seen,
+            "expected the strict-majority home to render by its full real \
+             key `apps/d1`"
+        );
+    }
+
+    #[test]
+    fn should_name_a_balanced_cluster_by_the_shared_home_prefix() {
+        // rung R2: `ai/app` and `ai/core` tie at 40 SLOC each — no strict
+        // majority — but share the `ai` prefix, so the merged domain is named
+        // `ai` rather than misnaming the whole after one tied side.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "a", 3, 20),
+                homed(1, "b", 4, 20),
+                homed(2, "c", 6, 20),
+                homed(3, "d", 7, 20),
+            ],
+            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                container(0, "ws", ScopeLevel::PackageGroup, None),
+                container(1, "ai", ScopeLevel::Package, Some(0)),
+                container(2, "ai/app", ScopeLevel::Domain, Some(1)),
+                container(3, "src/app/a.ts", ScopeLevel::File, Some(2)),
+                container(4, "src/app/b.ts", ScopeLevel::File, Some(2)),
+                container(5, "ai/core", ScopeLevel::Domain, Some(1)),
+                container(6, "src/core/c.ts", ScopeLevel::File, Some(5)),
+                container(7, "src/core/d.ts", ScopeLevel::File, Some(5)),
+            ],
+        );
+        let mut config = config_with_k(2);
+        config.capacity.folder = 2;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut prefix_seen = false;
+        let mut seen = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                seen += 1;
+                let domains = domain_names(&candidate.tree);
+                prefix_seen |= domains == ["ai"];
+            }
+        }
+        assert!(seen > 0, "expected at least one candidate across the modes");
+        assert!(
+            prefix_seen,
+            "expected the balanced merged domain to elect the shared home \
+             prefix `ai`"
+        );
+    }
+
+    #[test]
+    fn should_join_the_top_two_homes_when_no_prefix_is_shared() {
+        // rung R3: `ai/app` (30 SLOC, two files) and `bi/app` (30 SLOC, three
+        // files) tie with no shared prefix, so the merged domain joins the two
+        // homes — ranked by production SLOC then file count, so the exact SLOC
+        // tie falls to file count and `bi/app` leads despite `ai/app` sorting
+        // first. The folder cap pins every folder at or over capacity, so the
+        // only feasible co-location of the coupled pairs is the domain merge
+        // itself.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "a", 3, 15),
+                homed(1, "b", 4, 15),
+                homed(2, "c", 7, 10),
+                homed(3, "d", 8, 10),
+                homed(4, "e", 9, 10),
+            ],
+            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                container(0, "ws", ScopeLevel::PackageGroup, None),
+                container(1, "ai", ScopeLevel::Package, Some(0)),
+                container(2, "ai/app", ScopeLevel::Domain, Some(1)),
+                container(3, "src/a.ts", ScopeLevel::File, Some(2)),
+                container(4, "src/b.ts", ScopeLevel::File, Some(2)),
+                container(5, "bi", ScopeLevel::Package, Some(0)),
+                container(6, "bi/app", ScopeLevel::Domain, Some(5)),
+                container(7, "src/c.ts", ScopeLevel::File, Some(6)),
+                container(8, "src/d.ts", ScopeLevel::File, Some(6)),
+                container(9, "src/e.ts", ScopeLevel::File, Some(6)),
+            ],
+        );
+        let mut config = config_with_k(2);
+        config.capacity.folder = 2;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut joined_seen = false;
+        let mut seen = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                seen += 1;
+                let containers = level_names(&candidate.tree);
+                let joined_domain = containers
+                    .iter()
+                    .any(|(level, name)| *level == Level::Domain && name == "bi/app/ai/app");
+                let joined_package = containers
+                    .iter()
+                    .any(|(level, name)| *level == Level::Package && name == "bi/ai");
+                joined_seen |= joined_domain && joined_package;
+            }
+        }
+        assert!(seen > 0, "expected at least one candidate across the modes");
+        assert!(
+            joined_seen,
+            "expected the merged levels to join their top-two homes as \
+             `bi/app/ai/app` under `bi/ai`"
+        );
+    }
+
+    #[test]
+    fn should_fall_to_the_dominant_token_when_the_join_is_numeric() {
+        // rung R4: year directories `2024/2025` and `2024/2026` outweigh
+        // `2024/shared`, but their top-two join is all-digit segments — unfit
+        // — so the election falls to the dominant non-numeric token `shared`
+        // rather than a bare-number composite or the old `mixed` label.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "a", 3, 20),
+                homed(1, "b", 4, 20),
+                homed(2, "c", 6, 20),
+                homed(3, "d", 7, 20),
+                homed(4, "e", 9, 10),
+                homed(5, "f", 10, 10),
+            ],
+            vec![edge(0, 2), edge(3, 4), edge(5, 1)],
+            vec![
+                container(0, "ws", ScopeLevel::PackageGroup, None),
+                container(1, "2024", ScopeLevel::Package, Some(0)),
+                container(2, "2024/2025", ScopeLevel::Domain, Some(1)),
+                container(3, "src/2025/a.ts", ScopeLevel::File, Some(2)),
+                container(4, "src/2025/b.ts", ScopeLevel::File, Some(2)),
+                container(5, "2024/2026", ScopeLevel::Domain, Some(1)),
+                container(6, "src/2026/c.ts", ScopeLevel::File, Some(5)),
+                container(7, "src/2026/d.ts", ScopeLevel::File, Some(5)),
+                container(8, "2024/shared", ScopeLevel::Domain, Some(1)),
+                container(9, "src/shared/e.ts", ScopeLevel::File, Some(8)),
+                container(10, "src/shared/f.ts", ScopeLevel::File, Some(8)),
+            ],
+        );
+        let mut config = config_with_k(2);
+        config.capacity.folder = 2;
+        config.capacity.domain = 3;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut token_seen = false;
+        let mut seen = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                seen += 1;
+                let names = tree_names(&candidate.tree);
+                assert!(
+                    names
+                        .iter()
+                        .all(|name| name != "mixed" && !name.ends_with("/mixed")),
+                    "no container may carry the synthetic mixed label, got {names:?}"
+                );
+                token_seen |= domain_names(&candidate.tree) == ["shared"];
+            }
+        }
+        assert!(seen > 0, "expected at least one candidate across the modes");
+        assert!(
+            token_seen,
+            "expected the numeric grab-bag domain to elect the dominant \
+             non-numeric token `shared`"
+        );
+    }
+
+    #[test]
+    fn should_wrap_a_bare_numeric_last_resort_with_its_anchor() {
+        // rung R5: every home key is the all-digit `2024`, so no rung can
+        // yield a fit name and the last resort wraps the key with its anchor
+        // folder — `2024 (2024.x)` — never a bare number. The real `2024/x`
+        // and `2024/y` folders keep their real keys.
+        let snapshot = numeric_home_snapshot();
+        let mut config = config_with_k(2);
+        // headroom of one so a moved-file partition exists and at least one
+        // candidate is emitted (elected) rather than cloned.
+        config.capacity.folder = 3;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut wrapped_seen = false;
+        let mut emitted = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                if candidate.delta_narration.is_empty() {
+                    continue;
+                }
+                emitted += 1;
+                let containers = level_names(&candidate.tree);
+                let package_wrapped = containers
+                    .iter()
+                    .any(|(level, name)| *level == Level::Package && name == "2024 (2024.x)");
+                let domain_wrapped = containers
+                    .iter()
+                    .any(|(level, name)| *level == Level::Domain && name == "2024 (2024.x)");
+                let mut folders = Vec::new();
+                folder_files(&candidate.tree, &mut folders);
+                let folder_real = folders.iter().any(|(name, _)| name.starts_with("2024/"));
+                wrapped_seen |= package_wrapped && domain_wrapped && folder_real;
+            }
+        }
+        assert!(
+            emitted > 0,
+            "expected at least one emitted (elected) candidate"
+        );
+        assert!(
+            wrapped_seen,
+            "expected the all-numeric home to elect the anchored wrap \
+             `2024 (2024.x)` at package and domain, keeping the real folders"
+        );
+    }
+
+    #[test]
+    fn should_disambiguate_name_collisions_with_a_home_qualifier_not_an_integer() {
+        // a domain cap of one splits the real `pa/app` home into two sibling
+        // domain clusters that elect the same name; the twins must qualify by
+        // their anchor folders — never dedupe into a synthetic `app-2`.
+        let snapshot = snapshot(
+            vec![
+                homed(0, "a", 3, 10),
+                homed(1, "b", 4, 10),
+                homed(2, "c", 6, 10),
+                homed(3, "d", 7, 10),
+            ],
+            vec![edge(0, 1), edge(2, 3)],
+            vec![
+                container(0, "ws", ScopeLevel::PackageGroup, None),
+                container(1, "pa", ScopeLevel::Package, Some(0)),
+                container(2, "pa/app", ScopeLevel::Domain, Some(1)),
+                container(3, "pa/app/x", ScopeLevel::Folder, Some(2)),
+                container(4, "src/app/x/a.ts", ScopeLevel::File, Some(3)),
+                container(5, "src/app/x/b.ts", ScopeLevel::File, Some(3)),
+                container(6, "pa/app/y", ScopeLevel::Folder, Some(2)),
+                container(7, "src/app/y/c.ts", ScopeLevel::File, Some(6)),
+                container(8, "src/app/y/d.ts", ScopeLevel::File, Some(6)),
+            ],
+        );
+        let mut config = config_with_k(1);
+        config.capacity.folder = 2;
+        config.capacity.domain = 1;
+
+        let modes = analyze(&snapshot, &config)
+            .map(|result| result.modes)
+            .unwrap_or_default();
+
+        let mut qualified_seen = false;
+        let mut seen = 0;
+        for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
+            for candidate in &mode.candidates {
+                seen += 1;
+                let names = tree_names(&candidate.tree);
+                let suffixed: Vec<&String> = names
+                    .iter()
+                    .filter(|name| numeric_suffixed(name.as_str()))
+                    .collect();
+                assert!(
+                    suffixed.is_empty(),
+                    "colliding elected names must qualify by their homes, \
+                     never a numeric twin, got {suffixed:?}"
+                );
+                let domains = domain_names(&candidate.tree);
+                qualified_seen |=
+                    domains == ["app (pa.app.x)".to_owned(), "app (pa.app.y)".to_owned()];
+            }
+        }
+        assert!(seen > 0, "expected at least one candidate across the modes");
+        assert!(
+            qualified_seen,
+            "expected the tied sibling domains to qualify by their anchor \
+             folders `app (pa.app.x)` and `app (pa.app.y)`"
+        );
     }
 }

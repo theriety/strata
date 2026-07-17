@@ -873,6 +873,74 @@ mod tests {
     }
 
     #[test]
+    fn should_hold_a_same_dir_group_against_a_weak_cut_lure() {
+        // Planted partition: dir A = {4,5} (path token 100), dir B = {0,1,2,3}
+        // (path token 200). Node 5 (in A) has a weak two-edge pull into B plus
+        // one intra-A edge — a net cut gain of +1 from tearing into B. Strong
+        // path cohesion (β = 2) must out-vote that weak lure and keep 5 with 4.
+        let graph = coarse(Csr::from_weighted_edges(
+            6,
+            &[(5, 0, 1.0), (5, 1, 1.0), (5, 4, 1.0)],
+        ));
+        let mut parts = partition(&[0, 0, 0, 0, 1, 1], 2);
+        let path = vec![
+            vec![200],
+            vec![200],
+            vec![200],
+            vec![200],
+            vec![100],
+            vec![100],
+        ];
+        let naming = vec![Vec::new(); 6];
+        let gain = GainFn::new(naming, path, 0.5, 2.0);
+
+        refine(
+            &graph,
+            &mut parts,
+            &gain,
+            &LevelCaps::defaults(),
+            SeedLevel::Folder,
+        );
+
+        // node 5 stays in dir A alongside node 4 — the grab-bag tear is refused.
+        assert_eq!(parts.cluster_of(5), parts.cluster_of(4));
+    }
+
+    #[test]
+    fn should_yield_a_same_dir_node_to_a_strong_dependency() {
+        // Same planted partition, but node 5 now depends on four B members: the
+        // cut gain of tearing into B is +4, which out-votes the same β = 2 path
+        // cohesion. The penalty is soft, not a hard veto, so a genuinely strong
+        // dependency still pulls the node across.
+        let graph = coarse(Csr::from_weighted_edges(
+            6,
+            &[(5, 0, 1.0), (5, 1, 1.0), (5, 2, 1.0), (5, 3, 1.0)],
+        ));
+        let mut parts = partition(&[0, 0, 0, 0, 1, 1], 2);
+        let path = vec![
+            vec![200],
+            vec![200],
+            vec![200],
+            vec![200],
+            vec![100],
+            vec![100],
+        ];
+        let naming = vec![Vec::new(); 6];
+        let gain = GainFn::new(naming, path, 0.5, 2.0);
+
+        refine(
+            &graph,
+            &mut parts,
+            &gain,
+            &LevelCaps::defaults(),
+            SeedLevel::Folder,
+        );
+
+        // node 5 follows its strong dependency into dir B.
+        assert_eq!(parts.cluster_of(5), parts.cluster_of(0));
+    }
+
+    #[test]
     fn should_keep_the_quotient_acyclic_after_refinement() {
         // A small DAG: 0 -> 1 -> 2, every node in its own cluster.
         let graph = coarse(csr(3, vec![(0, 1), (1, 2)]));
@@ -1072,6 +1140,7 @@ mod tests {
                 &layers,
                 &caps,
                 crate::cluster::seed::SeedLevel::Folder,
+                &[],
             );
             // Cohesion-free gain keeps the move set structural; invariants must
             // hold regardless of which moves apply.

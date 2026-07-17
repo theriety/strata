@@ -489,15 +489,17 @@ fn should_truncate_a_candidate_tree_at_the_requested_depth() {
         "1",
         "--symbols",
         "--depth",
-        "2",
+        "1",
     ]);
 
     let _ = std::fs::remove_file(&result);
     assert_eq!(outcome.code, 0, "a candidate tree renders and exits 0");
     // depth truncation is exercised exhaustively by parity's workspace-tree test;
-    // here we keep only the structural invariant that --depth 2 truncates above the
+    // here we keep only the structural invariant that the depth truncates above the
     // symbol leaves: the root container is present, but no per-symbol leaf line
-    // (rendered as `  - <name>`) survives at depth 2.
+    // (rendered as `  - <name>`) survives. `rust` is a single crate of root-level
+    // files, whose synthetic `workspace` bucket collapses at render, so `lib.rs`
+    // sits at depth 2 and depth 1 is what cuts above its symbols.
     assert!(
         outcome.stdout.contains("rust [packageGroup]"),
         "the truncated tree is still rooted at the package group: {}",
@@ -505,7 +507,7 @@ fn should_truncate_a_candidate_tree_at_the_requested_depth() {
     );
     assert!(
         !outcome.stdout.contains("- Shape"),
-        "depth 2 truncates above the file's symbol leaves: {}",
+        "depth 1 truncates above the file's symbol leaves: {}",
         outcome.stdout
     );
 }
@@ -585,7 +587,7 @@ fn should_deliver_the_greenfield_diff_for_the_nested_python_fixture() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("-> nested-python/geometry"),
+        outcome.stdout.contains("→ nested-python/geometry]"),
         "the regrouped files land in the geometry chain: {}",
         outcome.stdout
     );
@@ -1197,8 +1199,9 @@ fn should_render_a_greenfield_candidate_tree_for_the_workspace_fixture() {
 #[test]
 fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
     // the greenfield delta of workspace-rust merges the cross-crate files into
-    // the single cohesive folder, so the diff narrates at least one group under
-    // the count header.
+    // the folder of the crate whose lib.rs pulls them hardest — a real home
+    // with a dependency-pull reason. Synthetic grab-bag labels like `mixed`
+    // are dead: every destination is a real directory-derived name.
     let result = analyze_to_file("workspace-rust");
     let result_str = result.to_str().unwrap_or_default();
 
@@ -1212,8 +1215,20 @@ fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("-> workspace-rust/crates/core/src"),
-        "the cross-crate files converge on the folder that dominates by production SLOC: {}",
+        outcome.stdout.contains("→ crates/app]"),
+        "the cross-crate files merge into the pulling crate itself: a root-level \
+         file's synthetic `workspace` bucket collapses at render, so the move \
+         target is the package, not an invented `crates/app/workspace` path: {}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("merge — pulled by "),
+        "the merge carries a dependency-pull reason, not a clustering fallback: {}",
+        outcome.stdout
+    );
+    assert!(
+        !outcome.stdout.contains("mixed"),
+        "no synthetic `mixed` label survives anywhere in the narration: {}",
         outcome.stdout
     );
 }
@@ -1903,7 +1918,7 @@ fn should_reject_a_result_with_an_unsupported_schema_version() {
 
     for version in ["999", "1"] {
         let stamped = contents.replace(
-            "\"schemaVersion\":2",
+            "\"schemaVersion\":3",
             &format!("\"schemaVersion\":{version}"),
         );
         assert_ne!(contents, stamped, "the version stamp was found and bumped");
@@ -2019,7 +2034,7 @@ fn should_default_to_json_when_stdout_is_piped() {
         parsed
             .pointer("/schemaVersion")
             .and_then(serde_json::Value::as_u64),
-        Some(2),
+        Some(3),
         "piped output is json with the schema stamp: {}",
         outcome.stdout
     );
@@ -2566,8 +2581,8 @@ fn should_warn_on_stderr_when_an_explicit_config_is_missing() {
 
 #[test]
 fn should_render_incremental_container_names_in_the_tree_face() {
-    // interior containers print only their increment over the parent (`src`,
-    // `geometry`), never the full cumulative chain; files keep their full path.
+    // interior containers print only their increment over the parent
+    // (`geometry`), never the full cumulative chain; files keep their full path.
     let result = analyze_to_file("nested-ts");
     let result_str = result.to_str().unwrap_or_default();
 
@@ -2584,12 +2599,12 @@ fn should_render_incremental_container_names_in_the_tree_face() {
     let _ = std::fs::remove_file(&result);
     assert_eq!(outcome.code, 0, "the candidate tree renders");
     assert!(
-        outcome.stdout.contains("src [package]"),
+        outcome.stdout.contains("geometry [domain]"),
         "an interior container shows its bare increment: {}",
         outcome.stdout
     );
     assert!(
-        !outcome.stdout.contains("nested-ts/src ["),
+        !outcome.stdout.contains("nested-ts/geometry ["),
         "no interior container leaks its cumulative chain: {}",
         outcome.stdout
     );
@@ -2602,11 +2617,15 @@ fn should_render_incremental_container_names_in_the_tree_face() {
 
 #[test]
 fn should_vary_narration_reasons_and_mark_followed_subjects() {
-    // reasons are computed, not canned: the nested-ts delta carries at least
-    // two distinct reason kinds, and its spec moves carry a `follows` reason
-    // whose subject is echoed as a `follows` line in the face. (the retired
-    // `cohesion gain` stub needs no assert — the MoveReason enum forbids it.)
-    let result = analyze_to_file("nested-ts");
+    // reasons are computed, not canned: the nested-python delta carries at least
+    // two distinct reason kinds, and a test file that genuinely changes folder
+    // (`tests/test_app.py`, workspace -> geometry) carries a `follows` reason
+    // whose subject is echoed in the face. nested-ts no longer serves here: its
+    // specs sit in a distinct `__tests__` folder whose key is unchanged by domain
+    // regrouping, so under the key-composed model they are no-ops, not moves.
+    // (the retired `cohesion gain` stub needs no assert — the MoveReason enum
+    // forbids it.)
+    let result = analyze_to_file("nested-python");
     let result_str = result.to_str().unwrap_or_default();
     let contents = std::fs::read_to_string(&result).unwrap_or_default();
     let parsed: serde_json::Value =

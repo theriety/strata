@@ -345,7 +345,7 @@ fn contract(graph: &Csr, matching: &Matching, fine_weights: &[u32]) -> CoarseGra
 ///
 /// Inheriting a coarse vertex's layer from its members leaves gaps (a merged
 /// pair keeps the max member layer, so adjacent coarse vertices can sit two
-/// layers apart), and a gapped layering blinds the [`is_safe_to_merge`] screen —
+/// layers apart), and a gapped layering blinds the `is_safe_to_merge` screen —
 /// a direct one-edge hop then looks like a two-hop detour and every further
 /// merge is rejected, stalling the chain. Each level therefore recomputes its
 /// own layering from scratch. The result is order-independent (each layer is a

@@ -1,8 +1,6 @@
 polarity-leak [packageGroup]
-  workspace [package]
-    workspace [domain]
-      workspace [folder]
-        conftest.py [file] 0 sloc
-          - sample_fixture (file)
-        service.py [file] 1 sloc
-          - serve (file)
+  polarity-leak [package]
+    conftest.py [file] 0 sloc
+      - sample_fixture (file)
+    service.py [file] 1 sloc
+      - serve (file)

@@ -728,6 +728,7 @@ fn intern(
         name: key.clone(),
         level,
         parent,
+        synthetic: false,
     });
     by_key.insert((level, key), id);
     id

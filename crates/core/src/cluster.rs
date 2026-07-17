@@ -34,7 +34,8 @@ pub struct ClusterId(pub u32);
 ///
 /// A cap bounds how many child members a single container at that level may
 /// hold; refinement vetoes any move that would push a target cluster over its
-/// cap. The defaults mirror FR-1 / the `[caps]` config block (15 / 12 / 10 / 12).
+/// cap. Engine callers build caps from their own configuration; `defaults` is
+/// core's standalone baseline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LevelCaps {
     /// Maximum members per folder.
@@ -48,8 +49,10 @@ pub struct LevelCaps {
 }
 
 impl LevelCaps {
-    /// The default caps (15 folder / 12 domain / 10 package / 12 package group),
-    /// matching a config-less run.
+    /// Core's standalone default caps (15 folder / 12 domain / 10 package / 12
+    /// package group), used directly by core clustering and its tests. They are
+    /// deliberately independent of the engine's `CapacityConfig::default()`,
+    /// which owns the caps of a config-less run.
     #[must_use]
     pub const fn defaults() -> Self {
         Self {

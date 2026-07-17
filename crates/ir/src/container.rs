@@ -21,6 +21,14 @@ pub struct Container {
     pub level: ScopeLevel,
     /// Parent container; `None` only for roots (package groups).
     pub parent: Option<ContainerId>,
+    /// True for the empty-scope `workspace` domain/folder bucket that hangs a
+    /// package's root-level files off an intervening level so the tree stays
+    /// strictly ascending. The bucket names no real directory, so the DTO
+    /// collapses it at render; this flag is the structural signal for that
+    /// collapse. It is a transient render hint, never serialized: the public
+    /// result carries the collapsed [`crate::ContainerNode`], not this tree.
+    #[serde(skip)]
+    pub synthetic: bool,
 }
 
 /// A laminar (forest-shaped) tree over [`Container`]s.
@@ -165,6 +173,7 @@ mod tests {
             name: SmolStr::new(format!("c{id}")),
             level,
             parent: parent.map(ContainerId),
+            synthetic: false,
         }
     }
 

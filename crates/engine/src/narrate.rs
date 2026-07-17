@@ -11,15 +11,16 @@
 //! pulled by a dependency partner, naming cohesion with the destination, or the
 //! clustering fallback.
 //!
-//! Container names in a tree are *cumulative* path prefixes (`src`,
-//! `src/__tests__`, …); [`fold_segments`] collapses a root-to-node chain of them
-//! into clean display segments so no rendered path ever repeats a segment.
+//! A file's destination is the key of its folder container — a package-qualified
+//! real directory path — read straight from the tree. The domain, package, and
+//! group labels above the folder are display groupings, never path components, so
+//! a move target only ever names a real, `mv`-able directory.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use strata_ir::{ContainerTree, ScopeLevel};
 
-use crate::result::{Move, MoveKind, MoveReason};
+use crate::result::{FileMove, Move, MoveKind, MoveReason};
 
 /// Per-file facts narration consults when explaining a move.
 ///
@@ -33,38 +34,6 @@ pub(crate) struct FileFacts {
     pub(crate) test_case_files: BTreeSet<String>,
     /// The folder member cap, for the cap-relief reason.
     pub(crate) folder_cap: u32,
-}
-
-/// Folds a root-to-node chain of cumulative container names into clean display
-/// segments.
-///
-/// Interned container names accumulate their path (`nested-ts`, `src`,
-/// `src/__tests__`), and adjacent levels can share one name outright. Each
-/// chain entry therefore contributes only what it adds over its predecessor:
-/// an exact repeat contributes nothing, a chain entry extending the previous
-/// one contributes its new suffix segments, and an unrelated entry contributes
-/// all of its own segments.
-pub(crate) fn fold_segments(chain: &[String]) -> Vec<String> {
-    let mut folded: Vec<String> = Vec::new();
-    let mut previous = "";
-    for name in chain {
-        if name == previous {
-            continue;
-        }
-        let addition = name
-            .strip_prefix(previous)
-            .and_then(|rest| rest.strip_prefix('/'))
-            .filter(|_| !previous.is_empty())
-            .unwrap_or(name);
-        folded.extend(
-            addition
-                .split('/')
-                .filter(|segment| !segment.is_empty())
-                .map(str::to_owned),
-        );
-        previous = name;
-    }
-    folded
 }
 
 /// Splits a path's basename into lowercase naming tokens.
@@ -109,8 +78,8 @@ pub(crate) fn tokenize(name: &str) -> BTreeSet<String> {
 /// set. Groups key on `(destination folder, followed subject)` so specs
 /// trailing different subjects into one folder narrate separately; groups (and
 /// the files inside them) come out in deterministic lexicographic order.
-/// `Move.symbols` carries the moved *file paths* — symbol granularity arrives
-/// with the pack phase.
+/// Each `FileMove` carries a moved *file path* and its source folder — symbol
+/// granularity arrives with the pack phase.
 pub(crate) fn narrate(
     current: &ContainerTree,
     candidate: &ContainerTree,
@@ -142,16 +111,17 @@ pub(crate) fn narrate(
     for &(file, origin, destination) in &moved {
         let follows = followed_subject(file, destination, &after, facts);
         let group = groups.entry((destination, follows)).or_default();
-        group.files.push(file);
+        group.files.push((file, origin));
         group.origins.insert(origin);
     }
 
     groups
         .into_iter()
         .map(|((destination, follows), group)| {
+            let file_refs: Vec<&String> = group.files.iter().map(|&(file, _)| file).collect();
             let kind = group_kind(&group.origins, &dests_of);
             let reason = group_reason(&GroupContext {
-                files: &group.files,
+                files: &file_refs,
                 origins: &group.origins,
                 destination,
                 follows: follows.as_deref(),
@@ -159,17 +129,19 @@ pub(crate) fn narrate(
                 after: &after,
                 facts,
             });
-            let mut symbols: Vec<String> = group.files.iter().map(|file| (*file).clone()).collect();
-            symbols.sort();
+            let mut files: Vec<FileMove> = group
+                .files
+                .iter()
+                .map(|&(file, origin)| FileMove {
+                    path: file.clone(),
+                    from: origin.join("/"),
+                })
+                .collect();
+            files.sort_by(|left, right| left.path.cmp(&right.path));
             Move {
                 kind,
-                symbols,
-                from: group
-                    .origins
-                    .iter()
-                    .map(|origin| origin.join("/"))
-                    .collect(),
-                to: vec![destination.join("/")],
+                files,
+                to: destination.join("/"),
                 reason,
             }
         })
@@ -179,8 +151,8 @@ pub(crate) fn narrate(
 /// The moved files and source folders accumulated for one narration group.
 #[derive(Default)]
 struct GroupAccumulator<'a> {
-    /// The moved file paths in this group.
-    files: Vec<&'a String>,
+    /// The moved (file path, folded source folder) pairs in this group.
+    files: Vec<(&'a String, &'a Vec<String>)>,
     /// The distinct folded source folders the files left.
     origins: BTreeSet<&'a Vec<String>>,
 }
@@ -193,7 +165,15 @@ struct FilePlacements {
     members_of: BTreeMap<Vec<String>, Vec<String>>,
 }
 
-/// Indexes a tree's file containers by their folded parent paths.
+/// Indexes a tree's file containers by their real folder key.
+///
+/// A file's destination is the key of the folder container holding it — the real
+/// directory the file lands in, and the path a move would target. Folder keys are
+/// package-qualified real paths (`cts/core`, `nested-ts/geometry`), so they mv
+/// cleanly. The domain/package/group above the folder are display groupings, not
+/// path components: a suggested domain that merges several real directories has
+/// no directory of its own to name, so it never contributes a destination
+/// segment (and its injective display label never leaks into a move target).
 fn index_files(tree: &ContainerTree) -> FilePlacements {
     let containers = tree.containers();
     let by_id: BTreeMap<u32, &strata_ir::Container> = containers
@@ -207,22 +187,22 @@ fn index_files(tree: &ContainerTree) -> FilePlacements {
         if container.level != ScopeLevel::File {
             continue;
         }
-        // ancestor cumulative-name chain, root first; the strict level ascent
-        // the tree validates guarantees the walk terminates.
-        let mut chain: Vec<String> = Vec::new();
-        let mut cursor = container.parent;
-        while let Some(id) = cursor {
-            let Some(node) = by_id.get(&id.0) else {
-                break;
-            };
-            chain.push(node.name.to_string());
-            cursor = node.parent;
+        let folder = container.parent.and_then(|parent| by_id.get(&parent.0));
+        let folder_key = folder.map_or("", |folder| folder.name.as_str());
+        let mut segments: Vec<String> = folder_key
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_owned)
+            .collect();
+        // the synthetic `workspace` bucket names no real directory, so a
+        // root-level file's move target is its package, not an invented
+        // `.../workspace` path: drop the trailing synthetic segment.
+        if folder.is_some_and(|folder| folder.synthetic) {
+            segments.pop();
         }
-        chain.reverse();
-        let folded = fold_segments(&chain);
-        parent_of.insert(container.name.to_string(), folded.clone());
+        parent_of.insert(container.name.to_string(), segments.clone());
         members_of
-            .entry(folded)
+            .entry(segments)
             .or_default()
             .push(container.name.to_string());
     }
@@ -239,8 +219,11 @@ fn index_files(tree: &ContainerTree) -> FilePlacements {
 ///
 /// A spec file's subject is the production file receiving its largest summed
 /// outgoing edge weight (ties to the lexicographically smaller path, which the
-/// ascending map order yields for free). The move "follows" the subject only
-/// when both land in the same candidate folder.
+/// ascending map order yields for free). The move "follows" the subject when
+/// both land in the same candidate folder, or when the spec's destination
+/// folder hangs directly inside the container holding the subject — the
+/// candidate regrouped the spec's real folder to sit beside its subject, which
+/// is the same intent one level up.
 fn followed_subject(
     file: &str,
     destination: &[String],
@@ -263,7 +246,12 @@ fn followed_subject(
         }
     }
     let (subject, _) = best?;
-    (after.parent_of.get(subject).map(Vec::as_slice) == Some(destination)).then(|| subject.clone())
+    let home = after.parent_of.get(subject).map(Vec::as_slice)?;
+    let same_folder = home == destination;
+    let beside_subject = destination
+        .split_last()
+        .is_some_and(|(_, container)| home == container);
+    (same_folder || beside_subject).then(|| subject.clone())
 }
 
 /// Classifies a group at folder granularity: two or more sources converging on
@@ -319,16 +307,35 @@ fn group_reason(ctx: &GroupContext<'_>) -> MoveReason {
         };
     }
 
-    // cap relief: the first (lexicographically smallest) over-cap source folder.
+    // cap relief: among the over-cap source folders, attribute to the one that
+    // contributes the most files to *this* group — the dominant contributor —
+    // not the lexicographically-first origin, which may barely feature in the
+    // move. Ties keep the first (lexicographic) origin, since `origins` iterates
+    // in sorted order.
+    let mut dominant: Option<(&Vec<String>, usize, u32)> = None;
     for origin in ctx.origins {
-        let count = ctx.before.members_of.get(*origin).map_or(0, Vec::len);
-        if u32::try_from(count).unwrap_or(u32::MAX) > ctx.facts.folder_cap {
-            return MoveReason::RelievesOverCap {
-                container: origin.join("/"),
-                count: u32::try_from(count).unwrap_or(u32::MAX),
-                cap: ctx.facts.folder_cap,
-            };
+        let Some(members) = ctx.before.members_of.get(*origin) else {
+            continue;
+        };
+        let size = u32::try_from(members.len()).unwrap_or(u32::MAX);
+        if size <= ctx.facts.folder_cap {
+            continue;
         }
+        let contributed = ctx
+            .files
+            .iter()
+            .filter(|&&file| members.contains(file))
+            .count();
+        if dominant.is_none_or(|(_, top, _)| contributed > top) {
+            dominant = Some((*origin, contributed, size));
+        }
+    }
+    if let Some((origin, _, size)) = dominant {
+        return MoveReason::RelievesOverCap {
+            container: origin.join("/"),
+            count: size,
+            cap: ctx.facts.folder_cap,
+        };
     }
 
     // residents: destination files that are not part of this group.
@@ -430,6 +437,7 @@ mod tests {
             name: SmolStr::new(name),
             level,
             parent: parent.map(ContainerId),
+            synthetic: false,
         }
     }
 
@@ -467,31 +475,6 @@ mod tests {
     }
 
     #[test]
-    fn should_fold_cumulative_chains_into_clean_segments() {
-        let cases: Vec<(Vec<String>, Vec<String>)> = vec![
-            (
-                strings(&["nested-ts", "src", "src/__tests__", "src/__tests__"]),
-                strings(&["nested-ts", "src", "__tests__"]),
-            ),
-            (strings(&["a"]), strings(&["a"])),
-            (Vec::new(), Vec::new()),
-            (strings(&["src", "src"]), strings(&["src"])),
-            (
-                strings(&["repo", "lib/util"]),
-                strings(&["repo", "lib", "util"]),
-            ),
-            (
-                strings(&["src", "src/a", "src/a/b"]),
-                strings(&["src", "a", "b"]),
-            ),
-        ];
-
-        for (chain, expected) in cases {
-            assert_eq!(fold_segments(&chain), expected, "chain {chain:?}");
-        }
-    }
-
-    #[test]
     fn should_tokenize_basenames_on_separators_and_camel_case() {
         let kebab = tokenize("src/core/user-service.ts");
         let camel = tokenize("UserService.spec.ts");
@@ -500,6 +483,40 @@ mod tests {
         assert_eq!(
             camel,
             strings(&["user", "service", "spec"]).into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn should_compose_a_destination_from_the_folder_key_not_a_decorated_domain_label() {
+        // when clustering merges several real domains into one suggested domain,
+        // the elected domain label decorates to `cts (cts.core)` to stay
+        // injective. That label is a display overlay, never a path component:
+        // the move destination is the folder's own key, the real directory the
+        // file lands in. The old fold treated the decorated label as a path
+        // ancestor and re-embedded the whole folder key beneath it.
+        let current = ContainerTree::new(vec![
+            container(0, "cts", ScopeLevel::PackageGroup, None),
+            container(1, "cts", ScopeLevel::Package, Some(0)),
+            container(2, "cts/util", ScopeLevel::Domain, Some(1)),
+            container(3, "cts/util", ScopeLevel::Folder, Some(2)),
+            container(4, "src/util/clamp.ts", ScopeLevel::File, Some(3)),
+        ]);
+        let candidate = ContainerTree::new(vec![
+            container(0, "cts", ScopeLevel::PackageGroup, None),
+            container(1, "cts", ScopeLevel::Package, Some(0)),
+            container(2, "cts (cts.core)", ScopeLevel::Domain, Some(1)),
+            container(3, "cts/core", ScopeLevel::Folder, Some(2)),
+            container(4, "src/util/clamp.ts", ScopeLevel::File, Some(3)),
+        ]);
+
+        let moves = narrate(&current, &candidate, &plain_facts());
+
+        assert_eq!(moves.len(), 1);
+        let entry = moves.first();
+        assert_eq!(entry.map(|m| m.to.clone()), Some("cts/core".to_owned()));
+        assert_eq!(
+            entry.map(|m| m.files.iter().map(|f| f.from.clone()).collect::<Vec<_>>()),
+            Some(strings(&["cts/util"]))
         );
     }
 
@@ -513,14 +530,14 @@ mod tests {
         assert_eq!(moves.len(), 1);
         let entry = moves.first();
         assert_eq!(
-            entry.map(|m| m.symbols.clone()),
+            entry.map(|m| m.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>()),
             Some(strings(&["src/core/a.ts", "src/core/b.ts"]))
         );
         assert_eq!(
-            entry.map(|m| m.from.clone()),
-            Some(strings(&["app/src/core"]))
+            entry.map(|m| m.files.iter().map(|f| f.from.clone()).collect::<Vec<_>>()),
+            Some(strings(&["src/core", "src/core"]))
         );
-        assert_eq!(entry.map(|m| m.to.clone()), Some(strings(&["app/src/io"])));
+        assert_eq!(entry.map(|m| m.to.clone()), Some("src/io".to_owned()));
         assert_eq!(entry.map(|m| m.kind), Some(MoveKind::Move));
     }
 
@@ -549,10 +566,12 @@ mod tests {
         assert_eq!(moves.len(), 1);
         let entry = moves.first();
         assert_eq!(entry.map(|m| m.kind), Some(MoveKind::Merge));
-        assert_eq!(
-            entry.map(|m| m.from.clone()),
-            Some(strings(&["app/src/core", "app/src/io"]))
-        );
+        // per-file sources are retained: a.ts leaves core, b.ts leaves io.
+        let mut origins = entry
+            .map(|m| m.files.iter().map(|f| f.from.clone()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        origins.sort();
+        assert_eq!(origins, strings(&["src/core", "src/io"]));
     }
 
     #[test]
@@ -618,6 +637,40 @@ mod tests {
     }
 
     #[test]
+    fn should_not_move_a_spec_when_only_its_domain_label_is_regrouped() {
+        // the spec's real folder (`nested-ts/__tests__`) is unchanged; only the
+        // domain node above it is relabelled as the clusterer regroups the folder
+        // to display beside its subject's domain. A domain label is a display
+        // overlay, never a path component, so the spec does not move on disk —
+        // the regrouping shows as a heading, it is not narrated as a file move.
+        let current = ContainerTree::new(vec![
+            container(0, "nested-ts", ScopeLevel::Domain, None),
+            container(1, "nested-ts/geometry", ScopeLevel::Folder, Some(0)),
+            container(2, "nested-ts/__tests__", ScopeLevel::Folder, Some(0)),
+            container(3, "app.ts", ScopeLevel::File, Some(1)),
+            container(4, "app.spec.ts", ScopeLevel::File, Some(2)),
+        ]);
+        let candidate = ContainerTree::new(vec![
+            container(0, "nested-ts/geometry", ScopeLevel::Domain, None),
+            container(1, "nested-ts/geometry", ScopeLevel::Folder, Some(0)),
+            container(2, "nested-ts/__tests__", ScopeLevel::Folder, Some(0)),
+            container(3, "app.ts", ScopeLevel::File, Some(1)),
+            container(4, "app.spec.ts", ScopeLevel::File, Some(2)),
+        ]);
+        let facts = FileFacts {
+            edge_weights: [(("app.spec.ts".to_owned(), "app.ts".to_owned()), 2.0)]
+                .into_iter()
+                .collect(),
+            test_case_files: ["app.spec.ts".to_owned()].into_iter().collect(),
+            folder_cap: 15,
+        };
+
+        let moves = narrate(&current, &candidate, &facts);
+
+        assert!(moves.is_empty());
+    }
+
+    #[test]
     fn should_explain_a_move_out_of_an_over_cap_folder() {
         let core_files: Vec<String> = (0..4).map(|i| format!("src/core/f{i}.ts")).collect();
         let core_refs: Vec<&str> = core_files.iter().map(String::as_str).collect();
@@ -637,14 +690,65 @@ mod tests {
         assert_eq!(
             moves.first().map(|m| m.reason.clone()),
             Some(MoveReason::RelievesOverCap {
-                container: "app/src/core".to_owned(),
+                container: "src/core".to_owned(),
                 count: 4,
                 cap: 3,
             })
         );
         assert_eq!(
             moves.first().map(|m| m.reason.to_string()),
-            Some("relieves over-cap folder app/src/core (4/3 files)".to_owned())
+            Some("relieves over-cap folder src/core (4/3 files)".to_owned())
+        );
+    }
+
+    #[test]
+    fn should_attribute_cap_relief_to_the_dominant_over_cap_origin() {
+        // two over-cap folders merge into a third; `src/zebra` sheds three files
+        // while `src/alpha` sheds one. Attribution must name zebra — the dominant
+        // contributor — not alpha, which sorts first but barely features.
+        let current = ContainerTree::new(vec![
+            container(0, "app", ScopeLevel::Domain, None),
+            container(1, "src/alpha", ScopeLevel::Folder, Some(0)),
+            container(2, "src/zebra", ScopeLevel::Folder, Some(0)),
+            container(3, "src/dest", ScopeLevel::Folder, Some(0)),
+            container(4, "src/alpha/a0.ts", ScopeLevel::File, Some(1)),
+            container(5, "src/alpha/a1.ts", ScopeLevel::File, Some(1)),
+            container(6, "src/alpha/a2.ts", ScopeLevel::File, Some(1)),
+            container(7, "src/alpha/a3.ts", ScopeLevel::File, Some(1)),
+            container(8, "src/zebra/z0.ts", ScopeLevel::File, Some(2)),
+            container(9, "src/zebra/z1.ts", ScopeLevel::File, Some(2)),
+            container(10, "src/zebra/z2.ts", ScopeLevel::File, Some(2)),
+            container(11, "src/zebra/z3.ts", ScopeLevel::File, Some(2)),
+        ]);
+        let candidate = ContainerTree::new(vec![
+            container(0, "app", ScopeLevel::Domain, None),
+            container(1, "src/alpha", ScopeLevel::Folder, Some(0)),
+            container(2, "src/zebra", ScopeLevel::Folder, Some(0)),
+            container(3, "src/dest", ScopeLevel::Folder, Some(0)),
+            container(4, "src/alpha/a0.ts", ScopeLevel::File, Some(3)),
+            container(5, "src/alpha/a1.ts", ScopeLevel::File, Some(1)),
+            container(6, "src/alpha/a2.ts", ScopeLevel::File, Some(1)),
+            container(7, "src/alpha/a3.ts", ScopeLevel::File, Some(1)),
+            container(8, "src/zebra/z0.ts", ScopeLevel::File, Some(3)),
+            container(9, "src/zebra/z1.ts", ScopeLevel::File, Some(3)),
+            container(10, "src/zebra/z2.ts", ScopeLevel::File, Some(3)),
+            container(11, "src/zebra/z3.ts", ScopeLevel::File, Some(2)),
+        ]);
+        let facts = FileFacts {
+            edge_weights: BTreeMap::new(),
+            test_case_files: BTreeSet::new(),
+            folder_cap: 3,
+        };
+
+        let moves = narrate(&current, &candidate, &facts);
+
+        assert_eq!(
+            moves.first().map(|m| m.reason.clone()),
+            Some(MoveReason::RelievesOverCap {
+                container: "src/zebra".to_owned(),
+                count: 4,
+                cap: 3,
+            })
         );
     }
 

@@ -1,13 +1,13 @@
-snapshot 6f6eff93efab8376097bc1ddc50dc68dc39b4e1092ef209226d1b1190ab25233
+snapshot 8795580f9da7539c0f81cfff9a5a94ff00821c1c6231cd0d0a6934cff6e2e7ac
 summary: 14 symbols, 13 edges, 3 files
-current score: 79.1054
+current score: 157.5054
 visibility [violation] ReMeasure :: `ReMeasure` is exported at Package but needed only at File
 visibility [violation] Report :: `Report` is exported at Package but needed only at File
 visibility [violation] combined_total :: `combined_total` is exported at Package but needed only at File
 visibility [violation] describe :: `describe` is exported at Package but needed only at File
 mode anchored: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 improvement +58.4865 (score 20.6189; 1 move group(s))
+  candidate 1 improvement +136.8865 (score 20.6189; 1 move group(s))
 mode greenfield: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 improvement +59.1000 (score 20.2054; 1 move group(s))
+  candidate 1 improvement +137.5000 (score 20.2054; 1 move group(s))

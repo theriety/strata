@@ -1,10 +1,8 @@
 cyclic-oversized [packageGroup]
-  workspace [package]
-    workspace [domain]
-      workspace [folder]
-        alpha.ts [file] 139 sloc
-          - stepAlpha (file)
-        beta.ts [file] 139 sloc
-          - stepBeta (file)
-        gamma.ts [file] 139 sloc
-          - stepGamma (file)
+  cyclic-oversized [package]
+    alpha.ts [file] 139 sloc
+      - stepAlpha (file)
+    beta.ts [file] 139 sloc
+      - stepBeta (file)
+    gamma.ts [file] 139 sloc
+      - stepGamma (file)

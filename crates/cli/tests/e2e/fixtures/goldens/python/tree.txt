@@ -1,5 +1,5 @@
 python [packageGroup]
-  pkg [package]
+  python [package]
     pkg [domain]
       pkg [folder]
         pkg/rectangle.py [file] 6 sloc

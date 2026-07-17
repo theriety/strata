@@ -1,6 +1,3 @@
-moves (3 group(s), 3 file(s); improvement +23.6269):
-move src/app.ts :: nested-ts/src -> nested-ts/src/geometry (pulled by rectangle.ts (w 2.0))
-move src/__tests__/app.spec.ts :: nested-ts/src/__tests__ -> nested-ts/src/geometry (follows app.ts)
-    follows src/app.ts
-move src/__tests__/support.ts :: nested-ts/src/__tests__ -> nested-ts/src/geometry (follows rectangle.ts)
-    follows src/geometry/rectangle.ts
+moves (1 group(s), 1 file(s); improvement +19.7510):
+move — pulled by rectangle.ts (w 2.0)
+  1. src/app.ts [nested-ts → nested-ts/geometry]

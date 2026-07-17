@@ -1,5 +1,5 @@
 test-heavy-ts [packageGroup]
-  spec [package]
+  test-heavy-ts [package]
     adapters [domain]
       anthropic [folder]
         spec/adapters/anthropic/client.spec.ts [file] 0 sloc
@@ -10,9 +10,6 @@ test-heavy-ts [packageGroup]
           - shouldRetryTheClient (file)
         spec/adapters/anthropic/stream.spec.ts [file] 0 sloc
           - shouldStreamMessages (file)
-  src [package]
-    adapters [domain]
-      anthropic [folder]
         src/adapters/anthropic/client.ts [file] 9 sloc
           - createClient (file)
           - sendMessage (file)

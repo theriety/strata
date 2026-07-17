@@ -7,7 +7,8 @@
 //! per-adapter node and container ids are re-interned to a single dense range so
 //! cross-fragment edges resolve. Re-export edges are flattened to their original
 //! definitions under a depth guard, and the merged IR is handed to
-//! [`Snapshot::assemble`] for validation and content hashing.
+//! [`Snapshot::assemble`](strata_ir::Snapshot::assemble) for validation and
+//! content hashing.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -18,8 +19,8 @@ use strata_adapter_python::PythonAdapter;
 use strata_adapter_rust::RustAdapter;
 use strata_adapter_typescript::TypeScriptAdapter;
 use strata_ir::{
-    Adapter, ContainerId, EdgeKind, IntermediateRepresentation, IrFragment, Node, NodeId,
-    SourceFile,
+    Adapter, ContainerId, EdgeKind, IntermediateRepresentation, IrFragment, Layout, Node, NodeId,
+    ScopeLevel, SourceFile, build_laminar_tree,
 };
 
 use crate::config::AnalyzeConfig;
@@ -111,15 +112,30 @@ pub fn snapshot_from_root(
 ) -> Result<strata_ir::Snapshot, StrataError> {
     let root = root.as_ref();
     let languages = enabled_languages(config);
-    let files = discover_sources(root, config, &languages)?;
+    let discovery = discover_sources(root, config, &languages)?;
 
-    let grouped = group_by_language(&files, &languages);
+    let grouped = group_by_language(&discovery.sources, &languages);
     let fragments = grouped
         .into_par_iter()
         .map(|(language, sources)| run_adapter(language, &sources, root))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let merged = merge_fragments(fragments);
+    // the package group is named after the repository directory; package and
+    // source-root boundaries come from the discovered manifests and config.
+    let root_name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let layout = Layout {
+        package_roots: discovery.package_roots,
+        source_roots: config
+            .adapters
+            .source_roots
+            .iter()
+            .map(SmolStr::new)
+            .collect(),
+    };
+    let merged = merge_fragments(fragments, root_name, &layout);
     let flattened = flatten_re_exports(merged)?;
 
     strata_ir::Snapshot::assemble(flattened).map_err(StrataError::from)
@@ -155,11 +171,12 @@ fn discover_sources(
     root: &Path,
     config: &AnalyzeConfig,
     languages: &[Language],
-) -> Result<Vec<SourceFile>, StrataError> {
+) -> Result<Discovery, StrataError> {
     let includes = compile_globs(&config.adapters.include)?;
     let excludes = compile_globs(&config.adapters.exclude)?;
 
     let mut sources = Vec::new();
+    let mut package_roots: Vec<SmolStr> = Vec::new();
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
@@ -185,6 +202,15 @@ fn discover_sources(
         let Some(relative) = relative_path(root, path) else {
             continue;
         };
+        // a build manifest marks its directory as a package root, independent of
+        // the source include/exclude globs (a manifest is never a source file).
+        // lean: package boundaries follow manifest *presence* — the ecosystem
+        // norm (Nx/Turbo/Cargo). Upgrade path: parse each root's workspace
+        // declaration (package.json `workspaces`, Cargo `[workspace].members`,
+        // pnpm-workspace `packages:`) to scope members authoritatively.
+        if let Some(package_root) = manifest_dir(&relative) {
+            package_roots.push(package_root);
+        }
         if !includes.iter().any(|glob| glob.matches(&relative)) {
             continue;
         }
@@ -211,7 +237,37 @@ fn discover_sources(
     }
     // sort so discovery order — and therefore every downstream id — is stable.
     sources.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(sources)
+    package_roots.sort();
+    package_roots.dedup();
+    Ok(Discovery {
+        sources,
+        package_roots,
+    })
+}
+
+/// The output of source discovery: the language sources plus the repo-relative
+/// directories that own a build manifest (the package roots).
+struct Discovery {
+    /// Every discovered source file, sorted by repo-relative path.
+    sources: Vec<SourceFile>,
+    /// Directories containing a build manifest, sorted and deduped. Empty (the
+    /// repository root) entries denote a single-package repo.
+    package_roots: Vec<SmolStr>,
+}
+
+/// The manifest filenames whose presence marks a directory as a package root.
+const PACKAGE_MANIFESTS: [&str; 4] = ["package.json", "Cargo.toml", "pyproject.toml", "setup.py"];
+
+/// Returns the repo-relative directory of `relative` when its filename is a
+/// build manifest, or `None` otherwise. A manifest at the repository root yields
+/// the empty string.
+fn manifest_dir(relative: &str) -> Option<SmolStr> {
+    let filename = relative.rsplit('/').next().unwrap_or(relative);
+    if !PACKAGE_MANIFESTS.contains(&filename) {
+        return None;
+    }
+    let dir = relative.rsplit_once('/').map_or("", |(parent, _)| parent);
+    Some(SmolStr::new(dir))
 }
 
 /// Compiles each glob pattern, attributing a config error on a bad pattern.
@@ -276,44 +332,64 @@ fn run_adapter(
 }
 
 /// Merges per-adapter fragments into one [`IntermediateRepresentation`],
-/// re-interning every fragment's node and container ids into a single dense
-/// namespace so cross-fragment references resolve.
-fn merge_fragments(fragments: Vec<IrFragment>) -> IntermediateRepresentation {
-    let mut nodes = Vec::new();
+/// re-interning every fragment's node ids into a single dense namespace and
+/// rebuilding the container tree from every file path so package, domain, and
+/// folder boundaries follow the manifest-derived `layout` — not the per-adapter
+/// positional path slices the fragments arrive with.
+///
+/// Each fragment's own file-level containers name the repo-relative path of the
+/// file every node lives in; those paths seed [`build_laminar_tree`], and each
+/// node is reattached to its file's container in the rebuilt tree.
+fn merge_fragments(
+    fragments: Vec<IrFragment>,
+    root_name: &str,
+    layout: &Layout,
+) -> IntermediateRepresentation {
+    let mut nodes: Vec<Node> = Vec::new();
     let mut edges = Vec::new();
-    let mut containers = Vec::new();
+    // the file path each merged node belongs to, parallel to `nodes`.
+    let mut node_paths: Vec<SmolStr> = Vec::new();
+    let mut all_paths: Vec<SmolStr> = Vec::new();
 
     let mut node_offset = 0_u32;
-    let mut container_offset = 0_u32;
     for fragment in fragments {
-        // each fragment's ids span 0..=max; advancing the base by one past its own
-        // maximum guarantees the next fragment's re-interned ids never collide.
-        let node_span = id_span(fragment.nodes.iter().map(|node| node.id.0));
-        let container_span = id_span(fragment.containers.iter().map(|container| container.id.0));
+        // file-level containers are keyed by full repo-relative path; map each
+        // fragment-local container id to that path so nodes can be re-homed.
+        let file_path: HashMap<u32, SmolStr> = fragment
+            .containers
+            .iter()
+            .filter(|container| container.level == ScopeLevel::File)
+            .map(|container| (container.id.0, container.name.clone()))
+            .collect();
+        all_paths.extend(file_path.values().cloned());
 
+        // each fragment's ids span 0..=max; advancing the base by one past its
+        // own maximum guarantees the next fragment's re-interned ids never
+        // collide.
+        let node_span = id_span(fragment.nodes.iter().map(|node| node.id.0));
         for mut node in fragment.nodes {
+            let path = file_path
+                .get(&node.container.0)
+                .cloned()
+                .unwrap_or_default();
             node.id = NodeId(node.id.0 + node_offset);
-            node.container = ContainerId(node.container.0 + container_offset);
             nodes.push(node);
+            node_paths.push(path);
         }
         for mut edge in fragment.edges {
             edge.source = NodeId(edge.source.0 + node_offset);
             edge.target = NodeId(edge.target.0 + node_offset);
             edges.push(edge);
         }
-        for mut container in fragment.containers {
-            container.id = ContainerId(container.id.0 + container_offset);
-            container.parent = container
-                .parent
-                .map(|parent| ContainerId(parent.0 + container_offset));
-            containers.push(container);
-        }
-
         node_offset += node_span;
-        container_offset += container_span;
     }
 
-    IntermediateRepresentation::new(nodes, edges, strata_ir::ContainerTree::new(containers))
+    let built = build_laminar_tree(&all_paths, root_name, layout);
+    for (node, path) in nodes.iter_mut().zip(&node_paths) {
+        node.container = built.files.get(path).copied().unwrap_or(ContainerId(0));
+    }
+
+    IntermediateRepresentation::new(nodes, edges, built.tree)
 }
 
 /// Returns one past the maximum id in `ids`, i.e. the id range width a fragment
@@ -420,13 +496,14 @@ mod tests {
         }
     }
 
-    /// Builds a file-level container.
-    fn container(id: u32) -> Container {
+    /// Builds a file-level container named by its repo-relative path.
+    fn container(id: u32, path: &str) -> Container {
         Container {
             id: ContainerId(id),
-            name: SmolStr::new(format!("c{id}")),
+            name: SmolStr::new(path),
             level: ScopeLevel::File,
             parent: None,
+            synthetic: false,
         }
     }
 
@@ -488,7 +565,9 @@ mod tests {
         let result = discover_sources(root, &config, &languages);
 
         // discovery succeeds despite the binary `.git/index`, reading only `a.ts`.
-        let sources = result.unwrap_or_else(|_| Vec::new());
+        let sources = result
+            .map(|discovery| discovery.sources)
+            .unwrap_or_default();
         assert_eq!(sources.len(), 1);
         assert_eq!(sources.first().map(|file| file.path.as_str()), Some("a.ts"));
     }
@@ -512,7 +591,9 @@ mod tests {
 
         let result = discover_sources(root, &config, &languages);
 
-        let sources = result.unwrap_or_else(|_| Vec::new());
+        let sources = result
+            .map(|discovery| discovery.sources)
+            .unwrap_or_default();
         assert_eq!(sources.len(), 1);
         assert_eq!(
             sources.first().map(|file| file.path.as_str()),
@@ -542,7 +623,9 @@ mod tests {
 
         let result = discover_sources(root, &config, &languages);
 
-        let sources = result.unwrap_or_else(|_| Vec::new());
+        let sources = result
+            .map(|discovery| discovery.sources)
+            .unwrap_or_default();
         assert_eq!(sources.len(), 1);
         assert_eq!(
             sources.first().map(|file| file.path.as_str()),
@@ -560,27 +643,74 @@ mod tests {
 
     #[test]
     fn should_reintern_ids_across_fragments_into_one_namespace() {
+        // each fragment's node lives in its own file; both fragments number their
+        // ids from zero, so the second must be shifted past the first.
         let first = IrFragment {
             nodes: vec![node(0, "a", 0)],
             edges: vec![edge(0, 0, EdgeKind::Call)],
-            containers: vec![container(0)],
+            containers: vec![container(0, "src/a.ts")],
         };
         let second = IrFragment {
             nodes: vec![node(0, "b", 0)],
             edges: vec![edge(0, 0, EdgeKind::Call)],
-            containers: vec![container(0)],
+            containers: vec![container(0, "src/b.ts")],
         };
 
-        let merged = merge_fragments(vec![first, second]);
+        let merged = merge_fragments(vec![first, second], "pkg", &Layout::default());
 
-        // the second fragment's ids are shifted past the first's.
+        // node and edge ids are shifted into one dense namespace...
         assert_eq!(merged.nodes.len(), 2);
         assert_eq!(merged.nodes.get(1).map(|n| n.id), Some(NodeId(1)));
-        assert_eq!(
-            merged.nodes.get(1).map(|n| n.container),
-            Some(ContainerId(1))
-        );
         assert_eq!(merged.edges.get(1).map(|e| e.source), Some(NodeId(1)));
+
+        // ...and each node is re-homed to its own file container in the rebuilt
+        // tree, so the two distinct files never collapse together.
+        let first_home = merged.nodes.first().map(|n| n.container);
+        let second_home = merged.nodes.get(1).map(|n| n.container);
+        assert!(first_home.is_some() && first_home != second_home);
+        assert!(merged.containers.validate().is_ok());
+    }
+
+    #[test]
+    fn should_rehome_a_file_and_its_test_into_one_package() {
+        // a source file and its sibling test under transparent source roots must
+        // land under a single package named after the repository — the W0 fix for
+        // `src` and `spec` being read as two projects.
+        let source = IrFragment {
+            nodes: vec![node(0, "widget", 0)],
+            edges: Vec::new(),
+            containers: vec![container(0, "src/ui/widget.ts")],
+        };
+        let test = IrFragment {
+            nodes: vec![node(0, "widget_test", 0)],
+            edges: Vec::new(),
+            containers: vec![container(0, "spec/ui/widget.spec.ts")],
+        };
+        let layout = Layout {
+            package_roots: Vec::new(),
+            source_roots: vec![SmolStr::new("src"), SmolStr::new("spec")],
+        };
+
+        let merged = merge_fragments(vec![source, test], "ai", &layout);
+
+        let packages: Vec<_> = merged
+            .containers
+            .containers()
+            .iter()
+            .filter(|container| container.level == ScopeLevel::Package)
+            .map(|container| container.name.to_string())
+            .collect();
+        assert_eq!(packages, vec!["ai".to_string()]);
+    }
+
+    #[test]
+    fn should_treat_a_manifest_directory_as_a_package_root() {
+        assert_eq!(manifest_dir("package.json"), Some(SmolStr::new("")));
+        assert_eq!(
+            manifest_dir("packages/foo/Cargo.toml"),
+            Some(SmolStr::new("packages/foo"))
+        );
+        assert_eq!(manifest_dir("src/app.ts"), None);
     }
 
     #[test]
@@ -599,7 +729,7 @@ mod tests {
                 edge(1, 2, EdgeKind::ReExport),
                 edge(3, 0, EdgeKind::Call),
             ],
-            strata_ir::ContainerTree::new(vec![container(0)]),
+            strata_ir::ContainerTree::new(vec![container(0, "src/a.ts")]),
         );
 
         let flattened = flatten_re_exports(ir).unwrap_or_else(|_| {
@@ -623,7 +753,7 @@ mod tests {
                 edge(1, 0, EdgeKind::ReExport),
                 edge(2, 0, EdgeKind::Call),
             ],
-            strata_ir::ContainerTree::new(vec![container(0)]),
+            strata_ir::ContainerTree::new(vec![container(0, "src/a.ts")]),
         );
 
         let result = flatten_re_exports(ir);

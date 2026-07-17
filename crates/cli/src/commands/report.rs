@@ -170,38 +170,14 @@ fn write_candidate(markdown: &mut String, candidate: &Candidate) {
         let _ = writeln!(markdown, "No moves versus the current layout.\n");
         return;
     }
+    // the same numbered per-file steps the `diff` face prints, fenced so the
+    // Markdown renders them monospaced without re-wrapping the arrows.
     let _ = writeln!(markdown, "**Moves**\n");
-    for entry in &candidate.delta_narration {
-        // from/to hold one complete folded folder path per element (a merge
-        // lists several sources), so they join with a comma, never a separator.
-        // groups beyond the inline limit nest their files as list items so a
-        // 14-file merge does not become one unreadable line.
-        if entry.symbols.len() > crate::render::MOVE_INLINE_LIMIT {
-            let _ = writeln!(
-                markdown,
-                "- {:?} {} file(s): {} -> {} ({})",
-                entry.kind,
-                entry.symbols.len(),
-                entry.from.join(", "),
-                entry.to.join(", "),
-                entry.reason
-            );
-            for symbol in &entry.symbols {
-                let _ = writeln!(markdown, "  - `{symbol}`");
-            }
-        } else {
-            let _ = writeln!(
-                markdown,
-                "- {:?} `{}`: {} -> {} ({})",
-                entry.kind,
-                entry.symbols.join(", "),
-                entry.from.join(", "),
-                entry.to.join(", "),
-                entry.reason
-            );
-        }
+    let _ = writeln!(markdown, "```");
+    for line in crate::render::move_step_lines(&candidate.delta_narration) {
+        let _ = writeln!(markdown, "{line}");
     }
-    let _ = writeln!(markdown);
+    let _ = writeln!(markdown, "```\n");
 }
 
 /// Writes a per-term score breakdown bullet list.
@@ -218,8 +194,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use strata_engine::{
-        ConditionalSplit, ContainerNode, CurrentTree, EdgeBreak, Level, Modes, Move, MoveKind,
-        MoveReason, Severity, Summary, ViolationKind,
+        ConditionalSplit, ContainerNode, CurrentTree, EdgeBreak, FileMove, Level, Modes, Move,
+        MoveKind, MoveReason, Severity, Summary, ViolationKind,
     };
 
     use super::*;
@@ -284,9 +260,11 @@ mod tests {
             }],
             delta_narration: vec![Move {
                 kind: MoveKind::Move,
-                symbols: vec!["x".to_owned()],
-                from: vec!["old".to_owned()],
-                to: vec!["new".to_owned()],
+                files: vec![FileMove {
+                    path: "x".to_owned(),
+                    from: "old".to_owned(),
+                }],
+                to: "new".to_owned(),
                 reason: MoveReason::Clustering,
             }],
             capacity_remainder: None,
@@ -329,34 +307,36 @@ mod tests {
     }
 
     #[test]
-    fn should_nest_files_of_a_large_move_group_as_list_items() {
+    fn should_number_each_file_of_a_large_move_group_as_a_step() {
         let mut result = sample();
         if let Some(mode) = result.modes.anchored.as_mut()
             && let Some(subject) = mode.candidates.first_mut()
         {
             subject.delta_narration = vec![Move {
                 kind: MoveKind::Merge,
-                symbols: vec![
-                    "a.ts".to_owned(),
-                    "b.ts".to_owned(),
-                    "c.ts".to_owned(),
-                    "d.ts".to_owned(),
-                ],
-                from: vec!["old".to_owned()],
-                to: vec!["new".to_owned()],
+                files: ["a.ts", "b.ts", "c.ts", "d.ts"]
+                    .into_iter()
+                    .map(|path| FileMove {
+                        path: path.to_owned(),
+                        from: "old".to_owned(),
+                    })
+                    .collect(),
+                to: "new".to_owned(),
                 reason: MoveReason::Clustering,
             }];
         }
 
         let markdown = render_markdown(&result);
 
+        // the moves render as a fenced block of numbered per-file steps, the
+        // same voice the `diff` face speaks.
         assert!(
-            markdown.contains("- Merge 4 file(s): old -> new (regrouped by clustering)\n"),
-            "the bullet counts instead of joining: {markdown}"
+            markdown.contains("merge — regrouped by clustering\n"),
+            "the group header names its reason: {markdown}"
         );
-        for file in ["a.ts", "b.ts", "c.ts", "d.ts"] {
+        for (step, file) in ["a.ts", "b.ts", "c.ts", "d.ts"].into_iter().enumerate() {
             assert!(
-                markdown.contains(&format!("\n  - `{file}`\n")),
+                markdown.contains(&format!("  {}. {file} [old → new]\n", step + 1)),
                 "{file}: {markdown}"
             );
         }

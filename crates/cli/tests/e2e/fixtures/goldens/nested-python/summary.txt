@@ -1,10 +1,10 @@
-snapshot d457f29c49216c281f5428f015fdde4f6ce39458a35db12e2648235f9ab91601
+snapshot ab5b95b6dc6b91696bee1eae790bb4716f06c01d368d3a1d5a9a9801858c0d64
 summary: 12 symbols, 15 edges, 6 files
-current score: 90.9896
+current score: 42.6675
 no violations
 mode anchored: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 improvement +73.9107 (score 17.0790; 2 move group(s))
+  candidate 1 improvement +25.5885 (score 17.0790; 2 move group(s))
 mode greenfield: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 improvement +74.2440 (score 16.8995; 2 move group(s))
+  candidate 1 improvement +25.9680 (score 16.8995; 2 move group(s))

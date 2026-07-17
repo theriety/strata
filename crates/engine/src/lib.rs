@@ -7,12 +7,12 @@
 //! - [`load_config`] parses and validates a `strata.toml` into an [`AnalyzeConfig`];
 //! - [`snapshot_from_root`] discovers sources, runs adapters, merges fragments,
 //!   flattens re-exports, and assembles a validated, hashed [`Snapshot`];
-//! - [`analyze`] is a pure, deterministic function of a snapshot and config that
+//! - [`analyze`](fn@analyze) is a pure, deterministic function of a snapshot and config that
 //!   returns an owned [`AnalyzeResult`] — no I/O, no global state.
 //!
 //! All seven failure modes collapse into the single [`StrataError`] enum. The
 //! crate re-exports the `ir` contract so consumers can assemble snapshots from a
-//! custom adapter and call [`analyze`] directly.
+//! custom adapter and call [`analyze`](fn@analyze) directly.
 //!
 //! [`Snapshot`]: strata_ir::Snapshot
 
@@ -34,8 +34,8 @@ pub use crate::config::{
 pub use crate::error::StrataError;
 pub use crate::result::{
     AnalyzeResult, Candidate, CapacityBreach, CapacityRemainder, ConditionalSplit, ContainerNode,
-    CurrentStanding, CurrentTree, EdgeBreak, Level, ModeResult, Modes, Move, MoveKind, MoveReason,
-    RESULT_SCHEMA_VERSION, ScoreBreakdown, Severity, Summary, SymbolPlacement, Violation,
-    ViolationKind,
+    CurrentStanding, CurrentTree, EdgeBreak, FileMove, Level, ModeResult, Modes, Move, MoveKind,
+    MoveReason, RESULT_SCHEMA_VERSION, ScoreBreakdown, Severity, Summary, SymbolPlacement,
+    Violation, ViolationKind,
 };
 pub use crate::snapshot::snapshot_from_root;

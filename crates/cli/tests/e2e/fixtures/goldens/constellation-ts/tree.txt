@@ -1,5 +1,5 @@
 constellation-ts [packageGroup]
-  src [package]
+  constellation-ts [package]
     core [domain]
       core [folder]
         src/core/alpha.ts [file] 3 sloc

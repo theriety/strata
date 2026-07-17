@@ -3,7 +3,7 @@
 # Usage: ./demo.sh [target-repo] [out-dir]
 set -euo pipefail
 
-TARGET="${1:-$HOME/Repositories/notion-sync}"
+TARGET="${1:-$HOME/Repositories/ai}"
 OUT="${2:-/tmp/strata-demo}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BIN="$HERE/target/release/strata"

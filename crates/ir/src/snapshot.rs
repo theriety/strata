@@ -177,6 +177,7 @@ mod tests {
             name: SmolStr::new("root"),
             level: ScopeLevel::File,
             parent: None,
+            synthetic: false,
         }
     }
 
@@ -276,6 +277,7 @@ mod tests {
             name: SmolStr::new("orphan"),
             level: ScopeLevel::File,
             parent: Some(ContainerId(9)),
+            synthetic: false,
         }]);
         let ir = IntermediateRepresentation::new(vec![node(0, "a")], vec![], bad_tree);
 

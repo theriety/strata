@@ -1,16 +1,14 @@
 nested-ts [packageGroup]
-  src [package]
+  nested-ts [package]
     __tests__ [domain]
       __tests__ [folder]
         src/__tests__/app.spec.ts [file] 0 sloc
           - shouldRun (file)
         src/__tests__/support.ts [file] 0 sloc
           - makeRect (file)
-    src [domain]
-      src [folder]
-        src/app.ts [file] 8 sloc
-          - run (file)
-          - lazy (file)
+    src/app.ts [file] 8 sloc
+      - run (file)
+      - lazy (file)
     geometry [domain]
       geometry [folder]
         src/geometry/index.ts [file] 0 sloc

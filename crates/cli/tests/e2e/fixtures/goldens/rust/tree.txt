@@ -1,11 +1,9 @@
 rust [packageGroup]
-  src [package]
-    src [domain]
-      src [folder]
-        src/lib.rs [file] 16 sloc
-          - Shape (package)
-          - describe_shape (package)
-          - Rectangle (package)
-          - Rectangle (file)
-          - area (file)
-          - summarize (package)
+  rust [package]
+    src/lib.rs [file] 16 sloc
+      - Shape (package)
+      - describe_shape (package)
+      - Rectangle (package)
+      - Rectangle (file)
+      - area (file)
+      - summarize (package)

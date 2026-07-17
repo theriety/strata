@@ -1,7 +1,7 @@
 //! `strata analyze`: the full decomposition pipeline.
 //!
 //! The command loads the effective config, discovers and snapshots the sources
-//! under the root, runs the pure [`analyze`] pass, and renders the result. It is
+//! under the root, runs the pure [`analyze`](fn@analyze) pass, and renders the result. It is
 //! the canonical producer of the `AnalyzeResult` JSON the other commands consume.
 
 use std::io::Write;

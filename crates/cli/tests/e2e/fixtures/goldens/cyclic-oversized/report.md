@@ -1,14 +1,14 @@
 # Strata report
 
-Snapshot `3eef2be5e6cc865b82d2181f54078f580a8d0d0f2cbd0ae378a59a9cb9db9147`.
+Snapshot `dc36392064c994c8bf8d3875ca3a8dd8e62d742a299f07cccdfdc89ee2f60d98`.
 
 - 3 symbols, 3 edges, 3 files
 
 ## Current layout
 
-Score `6.0000`.
+Score `5.8000`.
 
-- cut `6.0000`, imbalance `0.0000`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+- cut `6.0000`, imbalance `0.0000`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
 
 ### Violations
 
@@ -20,9 +20,9 @@ _Fewer than the requested candidates survived; the solution space converged._
 
 _Current layout is already optimal; candidate 1 is the current tree._
 
-### Candidate 1 (improvement `+0.0000`, score `6.0000`)
+### Candidate 1 (improvement `+0.0000`, score `5.8000`)
 
-- cut `6.0000`, imbalance `0.0000`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+- cut `6.0000`, imbalance `0.0000`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
 
 **Conditional splits**
 

@@ -1,11 +1,11 @@
-snapshot 40f3eec930029eaff4234078e30369343942e02a4c3f89e060a70b717358bd05
+snapshot 84f436a6abe243e83d27001cc8172d1b58b8c906829566083426f2a55d56cf64
 summary: 2 symbols, 1 edges, 2 files
-current score: 2.1000
+current score: 1.9000
 polarity [violation] serve, sample_fixture :: production symbol `serve` depends on test code `sample_fixture`
 mode anchored: 1 candidate(s)
   (fewer than k candidates; solution space converged)
   current layout is already optimal; candidate 1 is the current tree
-  candidate 1 improvement +0.0000 (score 2.1000; 0 move group(s))
+  candidate 1 improvement +0.0000 (score 1.9000; 0 move group(s))
 mode greenfield: 1 candidate(s)
   (fewer than k candidates; solution space converged)
   candidate 1 improvement +0.0000 (score 2.1000; 0 move group(s))

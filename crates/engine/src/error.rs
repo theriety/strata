@@ -69,7 +69,7 @@ pub enum StrataError {
     /// A snapshot handed to [`analyze`] failed validation — dangling edges, a
     /// malformed container tree, or a schema mismatch.
     ///
-    /// [`analyze`]: crate::analyze
+    /// [`analyze`]: fn@crate::analyze
     #[error("snapshot failed validation")]
     SnapshotInvalid {
         /// The underlying snapshot validation error.

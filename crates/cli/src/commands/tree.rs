@@ -1,6 +1,7 @@
 //! `strata tree`: print a candidate's (or the current) file tree.
 //!
-//! The command reads a saved [`AnalyzeResult`], selects the requested view — the
+//! The command reads a saved [`AnalyzeResult`](strata_engine::AnalyzeResult),
+//! selects the requested view — the
 //! current layout, a named candidate, or the list of available candidates — and
 //! renders it with optional per-file symbol listings and a depth cut.
 

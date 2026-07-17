@@ -1,8 +1,6 @@
 cyclic [packageGroup]
-  workspace [package]
-    workspace [domain]
-      workspace [folder]
-        alpha.py [file] 3 sloc
-          - alpha_step (file)
-        beta.py [file] 3 sloc
-          - beta_step (file)
+  cyclic [package]
+    alpha.py [file] 3 sloc
+      - alpha_step (file)
+    beta.py [file] 3 sloc
+      - beta_step (file)

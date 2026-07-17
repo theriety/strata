@@ -15,7 +15,7 @@ use strata_ir::ScopeLevel;
 ///
 /// Readers of a saved result reject any other version rather than misreading a
 /// future shape.
-pub const RESULT_SCHEMA_VERSION: u32 = 2;
+pub const RESULT_SCHEMA_VERSION: u32 = 3;
 
 /// The top-level analysis result: the snapshot hash, the current tree with its
 /// violations, and the per-mode candidate sets.
@@ -252,21 +252,33 @@ pub enum MoveKind {
     Merge,
 }
 
+/// One file's relocation within a narrated change: its path and the folded
+/// source folder it leaves. The shared destination and reason live on the
+/// parent [`Move`], so a merge's several sources are recorded per file here
+/// rather than collapsed to a set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMove {
+    /// The moved file's full repo-relative path — its identity across trees.
+    pub path: String,
+    /// The folded source folder the file leaves.
+    pub from: String,
+}
+
 /// One narrated change between the current tree and a candidate.
 ///
-/// `symbols` are the affected names; `from` and `to` are the source and
-/// destination container paths; `reason` is the dominant driver of the move.
+/// `files` are the per-file relocations (each carrying its own source folder);
+/// `to` is the single destination folder they all land in; `reason` is the
+/// dominant driver of the move.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Move {
     /// Whether this is a move, split, or merge.
     pub kind: MoveKind,
-    /// The affected symbol names.
-    pub symbols: Vec<String>,
-    /// The source container path(s).
-    pub from: Vec<String>,
-    /// The destination container path(s).
-    pub to: Vec<String>,
+    /// The per-file relocations, ordered by path.
+    pub files: Vec<FileMove>,
+    /// The destination folder path all the files land in.
+    pub to: String,
     /// The dominant reason the change was proposed.
     pub reason: MoveReason,
 }

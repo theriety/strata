@@ -1,11 +1,12 @@
 nested-python [packageGroup]
-  workspace [package]
-    workspace [domain]
-      workspace [folder]
-        app.py [file] 3 sloc
-          - run (file)
-          - load (file)
-  geometry [package]
+  nested-python [package]
+    app.py [file] 3 sloc
+      - run (file)
+      - load (file)
+    tests/conftest.py [file] 0 sloc
+      - make_dimensions (file)
+    tests/test_app.py [file] 0 sloc
+      - test_run_describes_a_rectangle (file)
     geometry [domain]
       geometry [folder]
         geometry/__init__.py [file] 0 sloc
@@ -19,10 +20,3 @@ nested-python [packageGroup]
         geometry/shape.py [file] 5 sloc
           - Dimensions (file)
           - Shape (file)
-  tests [package]
-    tests [domain]
-      tests [folder]
-        tests/conftest.py [file] 0 sloc
-          - make_dimensions (file)
-        tests/test_app.py [file] 0 sloc
-          - test_run_describes_a_rectangle (file)

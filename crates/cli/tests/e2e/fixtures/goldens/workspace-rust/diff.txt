@@ -1,2 +1,4 @@
-moves (1 group(s), 2 file(s); improvement +58.4865):
-merge crates/app/src/lib.rs, crates/util/src/lib.rs :: workspace-rust/crates/app/src, workspace-rust/crates/util/src -> workspace-rust/crates/core/src (pulled by lib.rs (w 7.8))
+moves (1 group(s), 2 file(s); improvement +136.8865):
+merge — pulled by lib.rs (w 7.8)
+  1. crates/app/src/lib.rs [crates/app → crates/core]
+  2. crates/util/src/lib.rs [crates/util → crates/core]

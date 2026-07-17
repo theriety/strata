@@ -1,4 +1,6 @@
-moves (2 group(s), 3 file(s); improvement +73.9107):
-merge app.py, tests/conftest.py :: nested-python/tests, nested-python/workspace -> nested-python/geometry (pulled by shape.py (w 2.3))
-move tests/test_app.py :: nested-python/tests -> nested-python/geometry (follows app.py)
-    follows app.py
+moves (2 group(s), 3 file(s); improvement +25.5885):
+move — pulled by shape.py (w 2.3)
+  1. app.py [nested-python → nested-python/geometry]
+  2. tests/conftest.py [nested-python → nested-python/geometry]
+move — follows app.py
+  3. tests/test_app.py [nested-python → nested-python/geometry]

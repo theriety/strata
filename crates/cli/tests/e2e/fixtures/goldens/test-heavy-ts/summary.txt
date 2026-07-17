@@ -1,10 +1,11 @@
-snapshot 12a8ff519bd8ba87a2f354ac21434ed546dda22b56611c7caed920f4a5caf2c7
+snapshot f5def3e6878de1e26b1c1416d79034af6f915942467bfa9b72bfd6e7bc87ef0f
 summary: 9 symbols, 9 edges, 6 files
-current score: 129.9040
+current score: 17.9520
 no violations
 mode anchored: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 improvement +111.5076 (score 18.3964; 2 move group(s))
+  current layout is already optimal; candidate 1 is the current tree
+  candidate 1 improvement +0.0000 (score 17.9520; 0 move group(s))
 mode greenfield: 1 candidate(s)
   (fewer than k candidates; solution space converged)
-  candidate 1 improvement +111.9520 (score 18.1520; 2 move group(s))
+  candidate 1 improvement +0.0000 (score 18.1520; 0 move group(s))

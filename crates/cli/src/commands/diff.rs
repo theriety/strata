@@ -146,8 +146,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use strata_engine::{
-        Candidate, ContainerNode, CurrentStanding, CurrentTree, Level, ModeResult, Modes, Move,
-        MoveKind, MoveReason, ScoreBreakdown, Summary, SymbolPlacement,
+        Candidate, ContainerNode, CurrentStanding, CurrentTree, FileMove, Level, ModeResult, Modes,
+        Move, MoveKind, MoveReason, ScoreBreakdown, Summary, SymbolPlacement,
     };
 
     use super::*;
@@ -194,9 +194,11 @@ mod tests {
             conditional_splits: Vec::new(),
             delta_narration: vec![Move {
                 kind: MoveKind::Move,
-                symbols: vec!["sym".to_owned()],
-                from: vec!["old".to_owned()],
-                to: vec!["new".to_owned()],
+                files: vec![FileMove {
+                    path: "sym".to_owned(),
+                    from: "old".to_owned(),
+                }],
+                to: "new".to_owned(),
                 reason: MoveReason::Clustering,
             }],
             capacity_remainder: None,
@@ -281,7 +283,7 @@ mod tests {
 
         let _ = std::fs::remove_file(&input);
         assert!(outcome.is_ok());
-        assert!(String::from_utf8_lossy(&buffer).contains("old -> new"));
+        assert!(String::from_utf8_lossy(&buffer).contains("[old → new]"));
     }
 
     #[test]
