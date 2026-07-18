@@ -1246,7 +1246,8 @@ impl<'a> PipelineSolver<'a> {
             // container per distinct real location with an injective name
             // (`qualify_folder_names`), so sibling folders never collide and no
             // synthetic `-N` twin can arise. A key that doesn't path-extend its
-            // elected domain renders whole, which is the honest display of a
+            // elected domain displays relative to its enclosing package at the
+            // render boundary (`folder_increment`), the honest display of a
             // foreign real directory folded into the suggested domain.
             let key = self
                 .real_folder_names
@@ -2566,8 +2567,7 @@ fn render_tree(
             root,
             &children_by_parent,
             &contents,
-            "",
-            "",
+            RenderScope::default(),
             key_by_id,
         )),
         many => Ok(ContainerNode {
@@ -2576,7 +2576,13 @@ fn render_tree(
             children: Some(
                 many.iter()
                     .map(|root| {
-                        render_node(root, &children_by_parent, &contents, "", "", key_by_id)
+                        render_node(
+                            root,
+                            &children_by_parent,
+                            &contents,
+                            RenderScope::default(),
+                            key_by_id,
+                        )
                     })
                     .collect(),
             ),
@@ -2586,38 +2592,54 @@ fn render_tree(
     }
 }
 
+/// The naming context a render walk threads from a parent to its children: the
+/// parent's cumulative display name, the parent's undecorated *key*, and the
+/// undecorated key of the nearest enclosing package (empty above the package
+/// level). The package key backs the folder-increment fallback — a real
+/// directory foreign to its elected domain still displays relative to its own
+/// package rather than re-embedding the package segment as a fabricated folder.
+#[derive(Clone, Copy, Default)]
+struct RenderScope<'tree> {
+    /// The parent's cumulative display name (empty at the root).
+    parent_name: &'tree str,
+    /// The parent's undecorated key (empty at the root).
+    parent_key: &'tree str,
+    /// The undecorated key of the nearest enclosing package, or empty when no
+    /// package has been descended yet.
+    package_key: &'tree str,
+}
+
 /// Renders the container nodes `container` contributes to its parent's child
-/// list, collapsing the synthetic `workspace` bucket at the render boundary.
+/// list, collapsing two kinds of redundant levels at the render boundary.
 ///
 /// A synthetic bucket names no real directory — it exists only so the internal
 /// tree stays strictly level-ascending over a root-level file — so it
 /// contributes no node of its own: its children rise to sit directly under the
 /// nearest real ancestor (a package's root files become siblings of its real
-/// folders). The internal tree keeps the bucket; only the DTO drops it. Every
-/// other container contributes itself.
+/// folders). A domain whose undecorated key repeats its package's key carries
+/// no naming information of its own either — the elected label merely echoes
+/// the level above — so it is suppressed the same way: its folders and files
+/// hang directly under the package. The internal tree keeps both containers;
+/// only the DTO drops them. Every other container contributes itself.
 fn render_contributions(
     container: &Container,
     children_by_parent: &BTreeMap<u32, Vec<&Container>>,
     contents: &BTreeMap<u32, FileContents>,
-    parent_name: &str,
-    parent_key: &str,
+    scope: RenderScope<'_>,
     key_by_id: &BTreeMap<u32, SmolStr>,
 ) -> Vec<ContainerNode> {
-    if container.synthetic {
+    let own_key = key_by_id
+        .get(&container.id.0)
+        .map_or(container.name.as_str(), SmolStr::as_str);
+    let echoes_package = container.level == ScopeLevel::Domain && own_key == scope.package_key;
+    if container.synthetic || echoes_package {
         return children_by_parent
             .get(&container.id.0)
             .map(|children| {
                 children
                     .iter()
                     .flat_map(|child| {
-                        render_contributions(
-                            child,
-                            children_by_parent,
-                            contents,
-                            parent_name,
-                            parent_key,
-                            key_by_id,
-                        )
+                        render_contributions(child, children_by_parent, contents, scope, key_by_id)
                     })
                     .collect()
             })
@@ -2627,8 +2649,7 @@ fn render_contributions(
         container,
         children_by_parent,
         contents,
-        parent_name,
-        parent_key,
+        scope,
         key_by_id,
     )]
 }
@@ -2643,19 +2664,22 @@ fn render_contributions(
 /// segment ([`nest_folder_segments`]); slash-named domains, packages, and
 /// groups are elected labels and render whole.
 ///
-/// A folder's increment strips its parent's *key* (`parent_key`), not the
+/// A folder's increment strips its parent's *key* (`scope.parent_key`), not the
 /// parent's rendered display name: a domain whose display label
 /// `qualify_elected` decorated (`core (constellation-ts.core)`) is no longer a
 /// prefix of the folder key, so stripping the label would leave the whole key to
 /// re-embed as a fabricated directory chain. `key_by_id` supplies the
 /// undecorated key of any decorated ancestor; every other container keys on its
-/// own name, so the two coincide and the render is unchanged.
+/// own name, so the two coincide and the render is unchanged. A folder key
+/// foreign to its domain falls back to stripping the enclosing *package* key
+/// ([`folder_increment`]), so a cross-domain real directory displays relative
+/// to its own package instead of re-embedding the package segment as a
+/// fabricated directory.
 fn render_node(
     container: &Container,
     children_by_parent: &BTreeMap<u32, Vec<&Container>>,
     contents: &BTreeMap<u32, FileContents>,
-    parent_name: &str,
-    parent_key: &str,
+    scope: RenderScope<'_>,
     key_by_id: &BTreeMap<u32, SmolStr>,
 ) -> ContainerNode {
     if container.level == ScopeLevel::File {
@@ -2674,6 +2698,17 @@ fn render_node(
     let own_key = key_by_id
         .get(&container.id.0)
         .map_or(container.name.as_str(), SmolStr::as_str);
+    let child_scope = RenderScope {
+        parent_name: &container.name,
+        parent_key: own_key,
+        // descending a package establishes the fallback key its folders strip
+        // against; every other level threads the enclosing package unchanged.
+        package_key: if container.level == ScopeLevel::Package {
+            own_key
+        } else {
+            scope.package_key
+        },
+    };
     let children = children_by_parent
         .get(&container.id.0)
         .map(|children| {
@@ -2684,8 +2719,7 @@ fn render_node(
                         child,
                         children_by_parent,
                         contents,
-                        &container.name,
-                        own_key,
+                        child_scope,
                         key_by_id,
                     )
                 })
@@ -2694,14 +2728,11 @@ fn render_node(
         })
         .unwrap_or_default();
 
-    let increment = increment_name(
-        &container.name,
-        if container.level == ScopeLevel::Folder {
-            parent_key
-        } else {
-            parent_name
-        },
-    );
+    let increment = if container.level == ScopeLevel::Folder {
+        folder_increment(&container.name, scope.parent_key, scope.package_key)
+    } else {
+        increment_name(&container.name, scope.parent_name)
+    };
     if container.level == ScopeLevel::Folder {
         return nest_folder_segments(&increment, children);
     }
@@ -2728,6 +2759,25 @@ fn increment_name(name: &str, parent_name: &str) -> String {
     name.strip_prefix(parent_name)
         .and_then(|rest| rest.strip_prefix('/'))
         .map_or_else(|| name.to_owned(), str::to_owned)
+}
+
+/// Returns a folder's display increment: its increment over the parent domain's
+/// key when the two relate, else its increment over the enclosing package's key.
+///
+/// A folder key that path-extends neither ancestor renders whole — the honest
+/// display of a directory foreign to the whole package. The domain strip stays
+/// first so the clean case (a folder under a same-key domain) is untouched; the
+/// package fallback only replaces the old whole-key fallback, which re-embedded
+/// the package segment as a fabricated directory chain (`atlas/agent` under the
+/// domain keyed `atlas/core` rendered `atlas` → `agent`, but no `atlas`
+/// subdirectory exists under any real `core`). Stripping the package key
+/// displays the folder relative to its own package: `agent`.
+fn folder_increment(name: &str, parent_key: &str, package_key: &str) -> String {
+    let against_parent = increment_name(name, parent_key);
+    if against_parent != name {
+        return against_parent;
+    }
+    increment_name(name, package_key)
 }
 
 /// Expands a folder's parent-relative directory path into a nested chain of
@@ -3316,15 +3366,15 @@ mod tests {
 
     #[test]
     fn should_not_fabricate_folders_under_a_disambiguated_domain() {
-        // two merged domains both elect the bare package prefix `cts`, so
-        // `qualify_elected` disambiguates their display as `cts (cts.core)` /
-        // `cts (cts.io)`. The decorated label is not a prefix of the folder key
-        // `cts/core`, so stripping it would leave the whole key to re-embed as a
-        // fabricated `cts` → `core` chain. Stripping the domain's real key `cts`
-        // (from `key_by_id`) renders the one real directory `core`.
+        // a merged domain elects the foreign prefix `cts` under package `pkg`,
+        // and `qualify_elected` decorated its display as `cts (cts.core)`. The
+        // decorated label is not a prefix of the folder key `cts/core`, so
+        // stripping it would leave the whole key to re-embed as a fabricated
+        // `cts` → `core` chain. Stripping the domain's real key `cts` (from
+        // `key_by_id`) renders the one real directory `core`.
         let tree = ContainerTree::new(vec![
-            container(0, "cts", ScopeLevel::PackageGroup, None),
-            container(1, "cts", ScopeLevel::Package, Some(0)),
+            container(0, "pkg", ScopeLevel::PackageGroup, None),
+            container(1, "pkg", ScopeLevel::Package, Some(0)),
             container(2, "cts (cts.core)", ScopeLevel::Domain, Some(1)),
             container(3, "cts/core", ScopeLevel::Folder, Some(2)),
             container(4, "src/core/a.ts", ScopeLevel::File, Some(3)),
@@ -3345,6 +3395,82 @@ mod tests {
             .map(|child| child.name)
             .collect();
         assert_eq!(folder_names, vec!["core".to_owned()]);
+    }
+
+    #[test]
+    fn should_suppress_a_domain_whose_key_repeats_its_package_key() {
+        // two merged domains both elect the bare package name `cts`; the
+        // decorated displays differ (`cts (cts.core)`) but the undecorated key
+        // behind each (from `key_by_id`) repeats the package's key, so the
+        // level carries no naming information — it is suppressed at the render
+        // boundary and the real folders hang directly under the package.
+        let tree = ContainerTree::new(vec![
+            container(0, "cts", ScopeLevel::PackageGroup, None),
+            container(1, "cts", ScopeLevel::Package, Some(0)),
+            container(2, "cts (cts.core)", ScopeLevel::Domain, Some(1)),
+            container(3, "cts/core", ScopeLevel::Folder, Some(2)),
+            container(4, "src/core/a.ts", ScopeLevel::File, Some(3)),
+            container(5, "cts (cts.io)", ScopeLevel::Domain, Some(1)),
+            container(6, "cts/io", ScopeLevel::Folder, Some(5)),
+            container(7, "src/io/b.ts", ScopeLevel::File, Some(6)),
+        ]);
+        let key_by_id: BTreeMap<u32, SmolStr> =
+            [(2, SmolStr::new("cts")), (5, SmolStr::new("cts"))]
+                .into_iter()
+                .collect();
+
+        let rendered = render_tree(&tree, &[], &|_| None, &key_by_id).ok();
+
+        let package = rendered.and_then(only_child);
+        assert_eq!(
+            package
+                .as_ref()
+                .map(|node| (node.name.as_str(), node.level)),
+            Some(("cts", Level::Package))
+        );
+        let children: Vec<(String, Level)> = package
+            .and_then(|node| node.children)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|child| (child.name, child.level))
+            .collect();
+        assert_eq!(
+            children,
+            vec![
+                ("core".to_owned(), Level::Folder),
+                ("io".to_owned(), Level::Folder),
+            ]
+        );
+    }
+
+    #[test]
+    fn should_render_a_cross_domain_folder_relative_to_its_package() {
+        // `atlas/agent` is a real directory clustered into the sibling domain
+        // keyed `atlas/core`: its key extends neither the domain key nor the
+        // decorated display, so the old whole-key fallback re-embedded the
+        // package segment as a fabricated `atlas` → `agent` chain (no `atlas`
+        // subdirectory exists under any real `core`). The folder must display
+        // relative to its own package: `agent`, directly under the domain.
+        let tree = ContainerTree::new(vec![
+            container(0, "ws", ScopeLevel::PackageGroup, None),
+            container(1, "atlas", ScopeLevel::Package, Some(0)),
+            container(2, "atlas/core", ScopeLevel::Domain, Some(1)),
+            container(3, "atlas/agent", ScopeLevel::Folder, Some(2)),
+            container(4, "atlas/src/agent/loop.ts", ScopeLevel::File, Some(3)),
+        ]);
+
+        let rendered = render_tree(&tree, &[], &|_| None, &BTreeMap::new()).ok();
+
+        let domain = rendered.and_then(only_child).and_then(only_child);
+        assert_eq!(
+            domain.as_ref().map(|node| (node.name.as_str(), node.level)),
+            Some(("core", Level::Domain))
+        );
+        let folder = domain.and_then(only_child);
+        assert_eq!(
+            folder.as_ref().map(|node| (node.name.as_str(), node.level)),
+            Some(("agent", Level::Folder))
+        );
     }
 
     #[test]
@@ -4489,17 +4615,19 @@ mod tests {
                 );
                 let foreign = folder_of(&folders, "src/core/http/util.ts");
                 assert!(
-                    foreign == Some("http") || foreign == Some("ai/core/http"),
-                    "the minority folder must render its real key, got {foreign:?} in {folders:?}"
+                    foreign == Some("http") || foreign == Some("core/http"),
+                    "the minority folder must render its package-relative key, \
+                     got {foreign:?} in {folders:?}"
                 );
-                merged_seen |= foreign == Some("ai/core/http");
+                merged_seen |= foreign == Some("core/http");
             }
         }
         assert!(seen > 0, "expected at least one candidate across the modes");
         assert!(
             merged_seen,
             "expected a merged-domain candidate rendering the foreign folder \
-             by its full real key `ai/core/http`"
+             by its package-relative key `core/http`, never re-embedding the \
+             package segment as a fabricated `ai` directory"
         );
     }
 
@@ -5388,8 +5516,12 @@ mod tests {
     #[test]
     fn should_name_a_balanced_cluster_by_the_shared_home_prefix() {
         // rung R2: `ai/app` and `ai/core` tie at 40 SLOC each — no strict
-        // majority — but share the `ai` prefix, so the merged domain is named
-        // `ai` rather than misnaming the whole after one tied side.
+        // majority — but share the `ai` prefix, so the merged domain elects
+        // `ai` rather than misnaming the whole after one tied side. The
+        // elected name repeats the package's key, so the redundant domain
+        // level is suppressed at the render boundary: the merged candidate
+        // shows no domain node at all, its folders hanging directly under the
+        // `ai` package.
         let snapshot = snapshot(
             vec![
                 homed(0, "a", 3, 20),
@@ -5422,14 +5554,14 @@ mod tests {
             for candidate in &mode.candidates {
                 seen += 1;
                 let domains = domain_names(&candidate.tree);
-                prefix_seen |= domains == ["ai"];
+                prefix_seen |= domains.is_empty();
             }
         }
         assert!(seen > 0, "expected at least one candidate across the modes");
         assert!(
             prefix_seen,
             "expected the balanced merged domain to elect the shared home \
-             prefix `ai`"
+             prefix `ai` and be suppressed as a redundant echo of the package"
         );
     }
 
@@ -5560,7 +5692,9 @@ mod tests {
         // rung R5: every home key is the all-digit `2024`, so no rung can
         // yield a fit name and the last resort wraps the key with its anchor
         // folder — `2024 (2024.x)` — never a bare number. The real `2024/x`
-        // and `2024/y` folders keep their real keys.
+        // and `2024/y` folders keep their real keys. The domain elects the
+        // same wrap as its package, so the redundant domain level is
+        // suppressed at the render boundary; the wrap survives at the package.
         let snapshot = numeric_home_snapshot();
         let mut config = config_with_k(2);
         // headroom of one so a moved-file partition exists and at least one
@@ -5583,13 +5717,12 @@ mod tests {
                 let package_wrapped = containers
                     .iter()
                     .any(|(level, name)| *level == Level::Package && name == "2024 (2024.x)");
-                let domain_wrapped = containers
-                    .iter()
-                    .any(|(level, name)| *level == Level::Domain && name == "2024 (2024.x)");
+                let domain_suppressed =
+                    !containers.iter().any(|(level, _)| *level == Level::Domain);
                 let mut folders = Vec::new();
                 folder_files(&candidate.tree, &mut folders);
                 let folder_real = folders.iter().any(|(name, _)| name.starts_with("2024/"));
-                wrapped_seen |= package_wrapped && domain_wrapped && folder_real;
+                wrapped_seen |= package_wrapped && domain_suppressed && folder_real;
             }
         }
         assert!(
@@ -5599,7 +5732,8 @@ mod tests {
         assert!(
             wrapped_seen,
             "expected the all-numeric home to elect the anchored wrap \
-             `2024 (2024.x)` at package and domain, keeping the real folders"
+             `2024 (2024.x)` at the package, suppress the echoing domain, and \
+             keep the real folders"
         );
     }
 

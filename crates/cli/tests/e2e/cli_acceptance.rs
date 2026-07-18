@@ -538,6 +538,89 @@ fn should_truncate_a_candidate_tree_at_the_requested_depth() {
 }
 
 #[test]
+fn should_not_fabricate_a_package_segment_folder_for_a_cross_domain_real_directory() {
+    // `workspace-ts-leak` has two packages; `atlas` has a `core` directory
+    // (a dense mutual cluster) and a sibling `agent` directory whose files
+    // import so heavily from `core` that greenfield clusters them into the
+    // `core` domain. `agent` is a real directory, but it is foreign to the
+    // `core` domain: its key `atlas/agent` does not extend the domain's key
+    // `atlas/core`, so `increment_name` falls back to the whole key and
+    // `nest_folder_segments` explodes it into a fabricated `atlas [folder]`
+    // wrapper around the real `agent [folder]` -- `atlas` is the package
+    // root, not a subdirectory that exists on disk under `core`.
+    let result = analyze_to_file("workspace-ts-leak");
+    let result_str = result.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "tree",
+        "--input",
+        result_str,
+        "--mode",
+        "greenfield",
+        "--candidate",
+        "1",
+    ]);
+
+    let _ = std::fs::remove_file(&result);
+    assert_eq!(outcome.code, 0, "a candidate tree renders and exits 0");
+    assert!(
+        !outcome.stdout.contains("atlas [folder]"),
+        "the package name must never render as a fabricated folder node: {}",
+        outcome.stdout
+    );
+    // the adjacency is line-anchored on both sides: a bare 6-space
+    // `contains` would also match the buggy 8-space line as a substring
+    // (under the fabricated wrapper), so the check pins `agent [folder]`
+    // to the exact folder depth AND directly below its domain line.
+    assert!(
+        outcome
+            .stdout
+            .contains("\n    core [domain]\n      agent [folder]\n"),
+        "the real `agent` directory must nest directly under its domain \
+         (two levels under the package group), not under a fabricated \
+         package-segment wrapper: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
+fn should_suppress_a_domain_level_that_repeats_its_package_name() {
+    // `constellation-ts` is a single package whose greenfield clusters all
+    // elect the bare package prefix as their domain name; `qualify_elected`
+    // then decorates the colliding siblings as `constellation-ts
+    // (constellation-ts.core)` / `... (constellation-ts.io)`. A domain that
+    // merely echoes its package carries no naming information, so the level
+    // is suppressed at the render boundary: no domain node renders at all and
+    // the real folders hang directly under the package (two-space indent
+    // steps: group, package, folder).
+    let result = analyze_to_file("constellation-ts");
+    let result_str = result.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "tree",
+        "--input",
+        result_str,
+        "--mode",
+        "greenfield",
+        "--candidate",
+        "1",
+    ]);
+
+    let _ = std::fs::remove_file(&result);
+    assert_eq!(outcome.code, 0, "a candidate tree renders and exits 0");
+    assert!(
+        !outcome.stdout.contains("[domain]"),
+        "a domain echoing its package name must not render as a node: {}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("    core [folder]"),
+        "the real folders must hang directly under the package: {}",
+        outcome.stdout
+    );
+}
+
+#[test]
 fn should_deliver_a_well_formed_report_for_the_rust_fixture() {
     let result = analyze_to_file("rust");
     let result_str = result.to_str().unwrap_or_default();
