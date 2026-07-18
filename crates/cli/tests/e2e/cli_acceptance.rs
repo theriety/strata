@@ -81,6 +81,31 @@ fn run(args: &[&str]) -> Run {
     }
 }
 
+/// Runs the built `strata` binary with `args` from `dir` as the working
+/// directory, so a relative `--root` (e.g. `.`) resolves against `dir`.
+///
+/// The default [`run`] inherits the harness's working directory, which is
+/// unspecified; setting it explicitly is what lets a test exercise the
+/// user-typed relative-root forms that Bug B degraded.
+fn run_in(dir: &Path, args: &[&str]) -> Run {
+    let spawned = match Command::cargo_bin("strata") {
+        Ok(mut command) => command.current_dir(dir).args(args).output().ok(),
+        Err(_) => None,
+    };
+    match spawned {
+        Some(output) => Run {
+            code: output.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        },
+        None => Run {
+            code: -1,
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+    }
+}
+
 /// Runs `strata analyze --format json` over a fixture with pure defaults, writes
 /// the result to a unique temp file, and returns that path.
 ///
@@ -2881,4 +2906,148 @@ fn max_files_per_folder(tree: &serde_json::Value) -> usize {
         .iter()
         .map(max_files_per_folder)
         .fold(own, usize::max)
+}
+
+#[test]
+fn should_yield_byte_identical_output_across_root_path_forms() {
+    // Bug B: rust-analyzer canonicalizes its VFS to an absolute path, but strata
+    // once forwarded the raw --root string, so a non-canonical form (`.`, or an
+    // absolute path containing `..`) failed every semantic-edge lookup and
+    // silently degraded the rust dependency graph from 13 hard cross-crate edges
+    // to 4 name-guessed ones — different, worse advice for the very same repo.
+    // Canonicalizing the root once makes every spelling converge on one snapshot,
+    // including its content hash.
+    let canonical = std::fs::canonicalize(fixture("workspace-rust"))
+        .unwrap_or_else(|_| fixture("workspace-rust"));
+    let canonical_str = canonical.to_str().unwrap_or_default();
+    // a `..`-containing absolute path to the SAME directory. Lexical absolutization
+    // (`path::absolute`) would leave the `..` in place and still mismatch the VFS;
+    // only `fs::canonicalize` resolves it, so this form guards the fix's mechanism.
+    let dotdot = canonical.join("crates").join("..");
+    let dotdot_str = dotdot.to_str().unwrap_or_default();
+
+    let abs = run(&[
+        "analyze",
+        "--root",
+        canonical_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+    let dots = run(&[
+        "analyze",
+        "--root",
+        dotdot_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+    let dot = run_in(
+        &canonical,
+        &[
+            "analyze",
+            "--root",
+            ".",
+            "--config",
+            PURE_DEFAULTS,
+            "--format",
+            "json",
+        ],
+    );
+
+    assert_eq!(abs.code, 0, "the canonical-absolute form exits 0");
+    assert_eq!(dots.code, 0, "the ..-containing absolute form exits 0");
+    assert_eq!(dot.code, 0, "the . form exits 0");
+    assert_eq!(
+        abs.stdout, dots.stdout,
+        "a ..-containing root yields the same snapshot as canonical (needs fs::canonicalize, not path::absolute)"
+    );
+    assert_eq!(
+        abs.stdout, dot.stdout,
+        "a . root yields the same snapshot as canonical, snapshotHash included"
+    );
+    // the invariance is meaningful, not a shared-degradation coincidence: the
+    // converged snapshot carries the full 13-edge graph the degraded forms lost.
+    assert!(
+        abs.stdout.contains("\"edges\":13,") || abs.stdout.contains("\"edges\":13}"),
+        "the converged snapshot carries all 13 semantic edges: {}",
+        abs.stdout
+    );
+}
+
+#[test]
+fn should_resolve_a_relative_root_to_real_names_and_full_rust_edges() {
+    // the `.`-form is the default a user gets running strata from inside their
+    // repo; `.` has no `file_name()`, so Bug B dropped it to 4 edges and the
+    // empty-name fallback group `root`, flipping the greenfield merge target.
+    // Canonicalization restores the real directory name as the package group and
+    // the full edge graph, so the greenfield merge lands in crates/app exactly as
+    // the absolute form does.
+    let canonical = std::fs::canonicalize(fixture("workspace-rust"))
+        .unwrap_or_else(|_| fixture("workspace-rust"));
+    let result = std::env::temp_dir().join(format!("strata-accept-dotroot-{}.json", nanos()));
+    let result_str = result.to_str().unwrap_or_default();
+
+    let saved = run_in(
+        &canonical,
+        &[
+            "analyze",
+            "--root",
+            ".",
+            "--config",
+            PURE_DEFAULTS,
+            "--format",
+            "json",
+            "--output",
+            result_str,
+        ],
+    );
+    let tree = run(&["tree", "--input", result_str, "--current"]);
+    let diff = run(&["diff", "--input", result_str, "current", "greenfield/1"]);
+
+    let _ = std::fs::remove_file(&result);
+    assert_eq!(saved.code, 0, "the .-form analyze exits 0");
+    assert_eq!(tree.code, 0, "the current tree renders");
+    assert_eq!(diff.code, 0, "the greenfield diff renders");
+    assert!(
+        tree.stdout.contains("workspace-rust [packageGroup]"),
+        "the package group is named for the real directory, not the fallback `root`: {}",
+        tree.stdout
+    );
+    assert!(
+        diff.stdout.contains("→ crates/app]"),
+        "the full 13-edge graph lands the greenfield merge in crates/app, as the absolute form does: {}",
+        diff.stdout
+    );
+}
+
+#[test]
+fn should_reject_a_missing_analysis_root_with_input_unreadable() {
+    // fs::canonicalize makes analyze the guard for "does --root exist?": a
+    // nonexistent root is a clean exit-1 INPUT_UNREADABLE, never the gating 2 and
+    // never a silently degraded snapshot.
+    let missing = std::env::temp_dir().join(format!("strata-absent-{}", nanos()));
+    let missing_str = missing.to_str().unwrap_or_default();
+
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        missing_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
+
+    assert_eq!(
+        outcome.code, 1,
+        "a nonexistent root is exit 1, never the gating 2"
+    );
+    assert!(
+        outcome.stderr.contains("error[INPUT_UNREADABLE]"),
+        "the missing-root error carries its stable code: {}",
+        outcome.stderr
+    );
 }

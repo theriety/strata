@@ -111,6 +111,18 @@ pub fn snapshot_from_root(
     config: &AnalyzeConfig,
 ) -> Result<strata_ir::Snapshot, StrataError> {
     let root = root.as_ref();
+    // rust-analyzer canonicalizes its VFS to an absolute path, so canonicalize the
+    // root once here — the engine's only filesystem entry point — and every
+    // downstream consumer (discovery, the group-naming path below, and the
+    // adapter VFS bind) sees the same canonical path. Fail loud on failure: a root
+    // that cannot be canonicalized (missing, unreadable, a broken symlink) is
+    // exactly when the VFS would not match, so falling back to the raw path would
+    // silently degrade semantic-edge resolution instead of surfacing the bad root.
+    let root = std::fs::canonicalize(root).map_err(|error| StrataError::InputUnreadable {
+        path: root.to_path_buf(),
+        reason: error.to_string(),
+    })?;
+    let root = root.as_path();
     let languages = enabled_languages(config);
     let discovery = discover_sources(root, config, &languages)?;
 
@@ -768,5 +780,94 @@ mod tests {
     fn should_compute_an_id_span_as_one_past_the_max() {
         assert_eq!(id_span([0, 1, 2].into_iter()), 3);
         assert_eq!(id_span(std::iter::empty()), 0);
+    }
+
+    #[test]
+    fn should_name_the_package_group_for_a_dotdot_roots_real_directory() {
+        // Bug B: a non-canonical root (here an absolute path ending in `..`) must
+        // be canonicalized so the package group is named for the real directory,
+        // not the empty-name fallback `root`. The same canonicalization is what
+        // lets rust-analyzer's absolute VFS match, restoring the full edge graph;
+        // this seam pins the observable name (the edge restoration is pinned
+        // end-to-end in the cli acceptance suite). `..` — not just a relative
+        // form — proves `fs::canonicalize`, not lexical `path::absolute`, is used.
+        let dir = TempDir::new();
+        let root = &dir.path;
+        let wrote = std::fs::write(root.join("a.ts"), "export const a = 1;\n").is_ok();
+        let made_sub = std::fs::create_dir_all(root.join("sub")).is_ok();
+        assert!(wrote && made_sub, "fixture setup failed");
+        // `<root>/sub/..` is a non-canonical absolute path to `<root>` itself.
+        // `Path::file_name()` returns `None` for a path ending in `..`, so an
+        // un-canonicalized root falls back to the empty name and the group naming
+        // yields `root`; canonicalizing resolves `..` back to the real directory.
+        let dotdot = root.join("sub").join("..");
+        let config = AnalyzeConfig::default();
+
+        let group_name = snapshot_from_root(&dotdot, &config)
+            .ok()
+            .and_then(|snapshot| {
+                snapshot
+                    .ir()
+                    .containers
+                    .containers()
+                    .iter()
+                    .find(|container| container.level == ScopeLevel::PackageGroup)
+                    .map(|container| container.name.to_string())
+            });
+
+        let expected = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned);
+        assert!(expected.is_some(), "the temp dir has a real file name");
+        assert_eq!(
+            group_name, expected,
+            "a ..-containing root is canonicalized, so the package group is named \
+             for the real directory rather than the fallback `root`"
+        );
+    }
+
+    #[test]
+    fn should_fail_loud_from_the_canonicalize_guard_when_the_root_does_not_exist() {
+        // `fs::canonicalize` requires the path to exist, making this strata's
+        // de-facto "does --root exist?" guard: a root that cannot be canonicalized
+        // is exactly when rust-analyzer's absolute VFS would not match, so a
+        // fallback-to-raw would silently reproduce the degraded 4-edge snapshot.
+        // Fail loud with the stable InputUnreadable code instead.
+        //
+        // This test pins the failure to the *guard*, not just to some
+        // InputUnreadable. No input distinguishes the two by outcome: every root
+        // that fails canonicalization also fails the downstream discovery walker
+        // (the walker follows the root symlink too, so a dangling link, a missing
+        // path, and a symlink loop all error in both places). What differs is
+        // provenance — the guard surfaces canonicalize's own bare io error, whereas
+        // the walker (`ignore`) wraps it ("IO error for operation on <path>: ...").
+        // Comparing the reason against canonicalize's live output makes a revert to
+        // a raw-path fallback fail here, since it would surface the wrapped error.
+        let dir = TempDir::new();
+        let missing = dir.path.join("does-not-exist");
+        let config = AnalyzeConfig::default();
+        let canonicalize_error = std::fs::canonicalize(&missing).err().map(|e| e.to_string());
+        assert!(
+            canonicalize_error.is_some(),
+            "a nonexistent path cannot be canonicalized"
+        );
+
+        let result = snapshot_from_root(&missing, &config);
+
+        let (path, reason) = match result {
+            Err(StrataError::InputUnreadable { path, reason }) => (Some(path), Some(reason)),
+            _ => (None, None),
+        };
+        assert_eq!(
+            path.as_ref(),
+            Some(&missing),
+            "the error names the offending root, un-canonicalized"
+        );
+        assert_eq!(
+            reason, canonicalize_error,
+            "the failure originates from the canonicalize guard (canonicalize's own \
+             io error), not the discovery walker (which wraps the io error)"
+        );
     }
 }
