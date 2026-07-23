@@ -156,4 +156,4 @@ The checked-in [`strata.toml`](strata.toml) documents every key alongside its de
 
 ## How it works
 
-`strata` assembles a language-agnostic IR snapshot from per-language adapters, then runs a pure, deterministic decomposition pipeline (condense cycles, layer, cluster, score, diversify) over it — the engine never sees source code, only the snapshot. See [ARCHITECTURE.md](ARCHITECTURE.md) for the crate layout, the eleven-phase pipeline, the IR snapshot contract, and how the anchored and greenfield modes differ.
+`strata` assembles a language-agnostic IR snapshot from per-language adapters, then runs a pure, deterministic decomposition pipeline (condense cycles, layer, cluster, score, diversify) over it — the engine never sees source code, only the snapshot. See [docs/architecture/overview.md](docs/architecture/overview.md) for the crate layout, the eleven-phase pipeline, the IR snapshot contract, and how the anchored and greenfield modes differ.

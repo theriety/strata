@@ -1,6 +1,6 @@
 # Contributing to strata
 
-This guide covers how to build the workspace, run the full test suite, regenerate the committed goldens, and pass the formatting and lint gates. It assumes you have read [README.md](README.md) for what `strata` does and [ARCHITECTURE.md](ARCHITECTURE.md) for how the crates fit together.
+This guide covers how to build the workspace, run the full test suite, regenerate the committed goldens, and pass the formatting and lint gates. It assumes you have read [README.md](README.md) for what `strata` does and [docs/architecture/overview.md](docs/architecture/overview.md) for how the crates fit together.
 
 ## Toolchain
 
