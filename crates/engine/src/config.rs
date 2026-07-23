@@ -357,11 +357,17 @@ impl AnalyzeConfig {
     /// Caps must be positive (a zero cap admits nothing), and the folder, domain,
     /// and package caps must not exceed the built-in `CAP_CEILING` (256) — beyond
     /// it a cap never fires, so an untrusted `strata.toml` could silently disable
-    /// capacity enforcement while inflating cap-driven working sets. The seed
-    /// multiplier and
-    /// candidate count are bounded so the restart pool stays finite; coefficients,
-    /// weights, tolerances, and distances must be finite and non-negative. The
-    /// first violation found is returned.
+    /// capacity enforcement while inflating cap-driven working sets.
+    ///
+    /// The knobs that size the search carry ceilings for the same reason: the
+    /// parallelism hint reaches the thread-pool builder directly, and the seed
+    /// multiplier, candidate count, and their product bound the restart pool,
+    /// which has no fallback path once it is running. The solver's exact-ILP
+    /// cutover is bounded because its worst case is exponential. Together these
+    /// keep a `strata.toml` committed by an untrusted contributor from turning a
+    /// routine analysis into a denial of service against the machine running it.
+    /// Coefficients, weights, tolerances, and distances must be finite and
+    /// non-negative. The first violation found is returned.
     ///
     /// # Errors
     ///
@@ -378,6 +384,22 @@ impl AnalyzeConfig {
         within_ceiling("capacity.package", self.capacity.package)?;
         positive("tests.helper-cap", self.tests.helper_cap)?;
         positive("solver.ilp-threshold", self.solver.ilp_threshold)?;
+        at_most(
+            "solver.ilp-threshold",
+            self.solver.ilp_threshold,
+            ILP_THRESHOLD_CEILING,
+        )?;
+
+        // `jobs` takes no floor: zero is the documented "use every logical core"
+        // sentinel. It still takes a ceiling, because the value is handed
+        // straight to the thread-pool builder.
+        at_most("analysis.jobs", self.analysis.jobs, JOBS_CEILING)?;
+        positive("analysis.candidates", self.analysis.candidates)?;
+        at_most(
+            "analysis.candidates",
+            self.analysis.candidates,
+            CANDIDATES_CEILING,
+        )?;
 
         non_negative_finite("objective.imbalance", self.objective.imbalance)?;
         non_negative_finite("objective.naming", self.objective.naming)?;
@@ -395,6 +417,20 @@ impl AnalyzeConfig {
         positive(
             "diversity.seeds-per-candidate",
             self.diversity.seeds_per_candidate,
+        )?;
+        at_most(
+            "diversity.seeds-per-candidate",
+            self.diversity.seeds_per_candidate,
+            SEEDS_PER_CANDIDATE_CEILING,
+        )?;
+        // Both factors can be individually legal and still multiply into an
+        // unbounded restart pool, so the product carries its own bound.
+        at_most(
+            "analysis.candidates * diversity.seeds-per-candidate",
+            self.analysis
+                .candidates
+                .saturating_mul(self.diversity.seeds_per_candidate),
+            RESTART_POOL_CEILING,
         )?;
 
         if self.adapters.languages.is_empty() {
@@ -453,17 +489,54 @@ pub fn load_config(path: impl AsRef<Path>) -> Result<AnalyzeConfig, StrataError>
 /// and hand an untrusted `strata.toml` a lever over cap-driven working sets.
 const CAP_CEILING: u32 = 256;
 
-/// Returns `Ok` when `value` is at most [`CAP_CEILING`], else a `ConfigInvalid`
-/// naming `key`, the ceiling, and the offending value.
-fn within_ceiling(key: &str, value: u32) -> Result<(), StrataError> {
-    if value <= CAP_CEILING {
+/// The inclusive ceiling for `analysis.jobs`, the Rayon pool size.
+///
+/// `jobs` flows into `ThreadPoolBuilder::num_threads`, which tries to spawn that
+/// many OS threads before it can fail. At roughly 8 MiB of stack apiece an
+/// unbounded value exhausts memory long before the graceful fallback is reached,
+/// so the ceiling keeps a hostile `strata.toml` from turning one `analyze` run
+/// into a fork bomb. It sits far above any real machine's core count, so no
+/// legitimate parallelism hint is refused.
+const JOBS_CEILING: u32 = 1_024;
+
+/// The inclusive ceiling for `analysis.candidates` (`k`).
+const CANDIDATES_CEILING: u32 = 64;
+
+/// The inclusive ceiling for `diversity.seeds-per-candidate`.
+const SEEDS_PER_CANDIDATE_CEILING: u32 = 64;
+
+/// The inclusive ceiling on the whole restart pool, `candidates *
+/// seeds-per-candidate`.
+///
+/// Each pooled seed runs the full assemble, score, and narrate pipeline with no
+/// fallback path, so the product — not either factor alone — is what bounds the
+/// work. Two individually legal values can still multiply into an effectively
+/// unbounded search, which is why this is checked separately.
+const RESTART_POOL_CEILING: u32 = 512;
+
+/// The inclusive ceiling for `solver.ilp-threshold`.
+///
+/// The threshold sizes the exact MFAS solver's branch-and-bound cutover, whose
+/// worst case is exponential in the size of the cyclic component handed to it.
+const ILP_THRESHOLD_CEILING: u32 = 4_096;
+
+/// Returns `Ok` when `value` is at most `ceiling`, else a `ConfigInvalid` naming
+/// `key`, the ceiling, and the offending value.
+fn at_most(key: &str, value: u32, ceiling: u32) -> Result<(), StrataError> {
+    if value <= ceiling {
         Ok(())
     } else {
         Err(StrataError::ConfigInvalid {
             key: Some(key.to_owned()),
-            reason: format!("must be at most {CAP_CEILING}, got {value}"),
+            reason: format!("must be at most {ceiling}, got {value}"),
         })
     }
+}
+
+/// Returns `Ok` when `value` is at most [`CAP_CEILING`], else a `ConfigInvalid`
+/// naming `key`, the ceiling, and the offending value.
+fn within_ceiling(key: &str, value: u32) -> Result<(), StrataError> {
+    at_most(key, value, CAP_CEILING)
 }
 
 /// Returns `Ok` when `value` is at least one, else a `ConfigInvalid` naming `key`.
@@ -734,5 +807,127 @@ mod tests {
         assert!((table.call - 4.0).abs() < f64::EPSILON);
         assert!((table.type_reference - 5.0).abs() < f64::EPSILON);
         assert!((table.re_export - 6.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn should_reject_a_job_count_above_the_ceiling() {
+        let config = AnalyzeConfig {
+            analysis: AnalysisConfig {
+                jobs: JOBS_CEILING + 1,
+                ..AnalysisConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "analysis.jobs"
+        ));
+    }
+
+    #[test]
+    fn should_accept_zero_jobs_as_the_use_every_core_sentinel() {
+        let config = AnalyzeConfig {
+            analysis: AnalysisConfig {
+                jobs: 0,
+                ..AnalysisConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn should_reject_a_candidate_count_above_the_ceiling() {
+        let config = AnalyzeConfig {
+            analysis: AnalysisConfig {
+                candidates: CANDIDATES_CEILING + 1,
+                ..AnalysisConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "analysis.candidates"
+        ));
+    }
+
+    #[test]
+    fn should_reject_a_zero_candidate_count() {
+        let config = AnalyzeConfig {
+            analysis: AnalysisConfig {
+                candidates: 0,
+                ..AnalysisConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "analysis.candidates"
+        ));
+    }
+
+    #[test]
+    fn should_reject_a_seed_multiplier_above_the_ceiling() {
+        let config = AnalyzeConfig {
+            diversity: DiversityConfig {
+                seeds_per_candidate: SEEDS_PER_CANDIDATE_CEILING + 1,
+                ..DiversityConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(StrataError::ConfigInvalid { key: Some(key), .. })
+                if key == "diversity.seeds-per-candidate"
+        ));
+    }
+
+    #[test]
+    fn should_reject_a_restart_pool_whose_factors_are_each_legal() {
+        // 32 and 32 both pass their own ceilings; their product does not.
+        let config = AnalyzeConfig {
+            analysis: AnalysisConfig {
+                candidates: 32,
+                ..AnalysisConfig::default()
+            },
+            diversity: DiversityConfig {
+                seeds_per_candidate: 32,
+                ..DiversityConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(StrataError::ConfigInvalid { key: Some(key), .. })
+                if key == "analysis.candidates * diversity.seeds-per-candidate"
+        ));
+    }
+
+    #[test]
+    fn should_reject_an_ilp_threshold_above_the_ceiling() {
+        let config = AnalyzeConfig {
+            solver: SolverConfig {
+                ilp_threshold: ILP_THRESHOLD_CEILING + 1,
+                ..SolverConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(StrataError::ConfigInvalid { key: Some(key), .. })
+                if key == "solver.ilp-threshold"
+        ));
+    }
+
+    #[test]
+    fn should_accept_the_shipped_defaults_within_every_search_ceiling() {
+        assert!(AnalyzeConfig::default().validate().is_ok());
     }
 }
