@@ -1,0 +1,82 @@
+# Constraint target for the `tearing` fixture — see CONTRACT.md for the schema.
+#
+# Failure mode: directory-tearing. `billing/` is a cohesive three-file feature
+# (invoice -> ledger -> pricing, every internal edge priced) whose only bridge
+# to the rest of the repo is pipeline.py — one bridging file carrying one
+# import into each feature; telemetry is a second,
+# unrelated two-file feature. The question is whether a proposal keeps billing
+# in one piece instead of tearing its members across containers.
+
+schema = 1
+fixture = "tearing"
+
+[meta]
+failure_mode = "directory-tearing"
+language = "python"
+question = "Does a proposal keep a cohesive directory in one piece?"
+
+[run]
+mode = "both"        # both modes must respect the feature boundary
+candidates = 3       # engine default k
+seed = 42            # engine default seed
+config = "defaults"  # pure built-in defaults; no fixture strata.toml
+
+[[precondition]]
+kind = "file_count"
+min = 6
+max = 6
+because = "the fixture ships exactly six files; any other count means source discovery broke"
+
+[[assert]]
+modes = ["anchored", "greenfield"]
+candidate = 1
+
+[[assert.preserve_dir]]
+path = "billing"
+because = "billing is a real directory whose three files form a closed dependency triangle (invoice->ledger->pricing); dissolving it trades author intent for cluster noise"
+
+[[assert.preserve_dir]]
+path = "telemetry"
+because = "telemetry is a second real feature; relief from welding pipeline may not be purchased by dissolving the innocent party"
+
+[[assert.keep_together]]
+paths = ["billing/invoice.py", "billing/pricing.py", "billing/ledger.py"]
+because = "every billing file reaches every other through priced value-import edges while nothing outside pipeline.py touches them; splitting them severs those edges at container height"
+
+[[assert.separate]]
+paths = ["billing/invoice.py", "telemetry/sink.py"]
+because = "the only billing-telemetry edge is pipeline.py's orchestration import; co-locating invoice with the sink would weld two unrelated features into one container"
+
+[[assert.separate]]
+paths = ["billing/pricing.py", "telemetry/sampling.py"]
+because = "pricing shares no edge of any kind with sampling; this is the second, weaker weld to catch if clustering bridges via pipeline.py"
+
+# Added AFTER hand-validation (2026-08-22): both modes fold pipeline.py into
+# billing (anchored reason pulledBy, greenfield pulledBy). The invoice pair
+# FAILS today by construction of that fold; the sink pair passes today (sink
+# stays in telemetry) and guards the fold from the other endpoint. These are
+# the measured distance this fixture exists to expose, not a tuning regression.
+[[assert.separate]]
+paths = ["pipeline.py", "billing/invoice.py"]
+because = "pipeline.py is the shared orchestrator bridging billing and telemetry; absorbing it into one feature makes the bridge a member of the thing it bridges and forces every future telemetry change to cross the billing container"
+
+[[assert.separate]]
+paths = ["pipeline.py", "telemetry/sink.py"]
+because = "the bridge must not dissolve into either endpoint feature; symmetric guard on the telemetry side of the fold"
+
+[[assert.size_band]]
+scope = "any_container"
+max_files = 5
+because = "with six files total, any folder or domain holding all six collapsed the whole repo into one bucket; no best-state folder/domain should exceed five members"
+
+[[reference.container]]
+path = "billing"
+files = ["billing/invoice.py", "billing/pricing.py", "billing/ledger.py"]
+
+[[reference.container]]
+path = "telemetry"
+files = ["telemetry/sink.py", "telemetry/sampling.py"]
+
+[[reference.container]]
+path = "pipeline"
+files = ["pipeline.py"]

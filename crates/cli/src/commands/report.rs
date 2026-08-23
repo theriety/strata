@@ -67,7 +67,7 @@ fn render_markdown(result: &AnalyzeResult) -> String {
     write_breakdown(&mut markdown, &result.current.score_breakdown);
     write_violations(&mut markdown, &result.current.violations);
 
-    let current_capacity = crate::render::hard_capacity_count(&result.current.violations);
+    let current_capacity = result.current.capacity_breaks;
     if let Some(mode) = &result.modes.anchored {
         write_mode(&mut markdown, "Anchored", mode, current_capacity);
     }
@@ -215,6 +215,7 @@ mod tests {
                 tree: file("lib"),
                 score: 2.0,
                 score_breakdown: zero(),
+                capacity_breaks: 0,
                 violations: vec![Violation {
                     kind: ViolationKind::Cycle,
                     severity: Severity::Violation,
@@ -290,6 +291,7 @@ mod tests {
             naming: 0.0,
             path: 0.0,
             anchor: 0.0,
+            capacity: 0.0,
         }
     }
 

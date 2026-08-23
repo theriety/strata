@@ -5,7 +5,7 @@
 //! the canonical producer of the `AnalyzeResult` JSON the other commands consume.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use strata_engine::{StrataError, analyze, snapshot_from_root};
 
@@ -27,11 +27,12 @@ pub struct AnalyzeArgs {
     pub overrides: ConfigOverrides,
     /// The resolved output format.
     pub format: Format,
-    /// Whether the summary face prints the best candidate's structure per mode.
-    pub show_suggestions: bool,
 }
 
 /// Runs `analyze`, writing the rendered or serialized result to `out`.
+///
+/// The printed-report face names its project after the analyzed root's final
+/// path component; an unresolvable root keeps the given form verbatim.
 ///
 /// # Errors
 ///
@@ -42,12 +43,22 @@ pub fn run(args: &AnalyzeArgs, out: &mut impl Write) -> Result<(), StrataError> 
     let config = resolve_config(&args.config, args.overrides)?;
     let snapshot = snapshot_from_root(&args.root, &config)?;
     let result = analyze(&snapshot, &config)?;
-    render(&result, args.format, args.show_suggestions, out).map_err(|error| {
+    render(&result, args.format, &project_name(&args.root), out).map_err(|error| {
         StrataError::InputUnreadable {
             path: args.root.clone(),
             reason: error.to_string(),
         }
     })
+}
+
+/// Derives the report banner's project name from the analyzed root: the final
+/// path component of the canonicalized root, falling back to the literal input.
+fn project_name(root: &Path) -> String {
+    let resolved = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    resolved.file_name().map_or_else(
+        || "project".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 #[cfg(test)]
@@ -85,7 +96,6 @@ mod tests {
             config: root.join("strata.toml"),
             overrides: ConfigOverrides::default(),
             format: Format::Json,
-            show_suggestions: false,
         };
         let mut buffer = Vec::new();
 
@@ -95,5 +105,22 @@ mod tests {
         assert!(outcome.is_ok());
         let text = String::from_utf8(buffer).unwrap_or_default();
         assert!(text.contains("snapshotHash"));
+    }
+
+    #[test]
+    fn should_derive_the_project_name_from_the_root_basename() {
+        let root = fixture(&[("a.py", "def alpha():\n    return 1\n")]);
+
+        let name = project_name(&root);
+
+        let _ = fs::remove_dir_all(&root);
+        assert!(!name.is_empty());
+        assert!(!name.contains('/'), "the name is a bare basename: {name}");
+    }
+
+    #[test]
+    fn should_keep_the_literal_form_when_the_root_is_unresolvable() {
+        assert_eq!(project_name(Path::new("/nonexistent/repo/acme")), "acme");
+        assert_eq!(project_name(Path::new("/")), "project");
     }
 }

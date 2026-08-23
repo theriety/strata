@@ -1,0 +1,71 @@
+# Constraint target for the `welding` fixture — see CONTRACT.md for the schema.
+#
+# Failure mode: cross-dir-welding. `auth` and `render` share no priced edge of
+# any kind; the only file touching both is src/index.ts, and every one of its
+# edges is a zero-priced re-export. The question is whether clustering reads
+# that free bridge as license to merge two unrelated domains into one container.
+
+schema = 1
+fixture = "welding"
+
+[meta]
+failure_mode = "cross-dir-welding"
+language = "typescript"
+question = "Do zero-priced re-export barrels weld unrelated domains?"
+
+[run]
+mode = "both"        # a weld in either mode's best candidate is a defect
+candidates = 3       # engine default k
+seed = 42            # engine default seed
+config = "defaults"  # pure built-in defaults; no fixture strata.toml
+
+[[precondition]]
+kind = "file_count"
+min = 5
+max = 5
+because = "the fixture ships exactly five files; any other count means source discovery broke"
+
+[[assert]]
+modes = ["anchored", "greenfield"]
+candidate = 1
+
+[[assert.separate]]
+paths = ["src/auth/login.ts", "src/render/canvas.ts"]
+because = "the only auth-render connection is the zero-priced barrel; co-locating the domain cores means the free bridge welded two unrelated domains"
+
+[[assert.separate]]
+paths = ["src/auth/session.ts", "src/render/palette.ts"]
+because = "second-order weld across the same phantom bridge; session and palette share no edge at any price"
+
+[[assert.separate]]
+paths = ["src/index.ts", "src/auth/login.ts"]
+because = "the barrel bridges both domains and belongs to neither; absorbing it into auth makes the bridge a member of one of the things it bridges"
+
+[[assert.separate]]
+paths = ["src/index.ts", "src/render/canvas.ts"]
+because = "symmetric guard: the barrel must not dissolve into the render endpoint either"
+
+[[assert.preserve_dir]]
+path = "auth"
+because = "auth is a real directory whose two files share a priced import; tearing it apart is not the cure for welding it to render"
+
+[[assert.preserve_dir]]
+path = "render"
+because = "symmetric to auth: the directory survives as a named container rather than dissolving or merging"
+
+[[assert.size_band]]
+scope = "any_container"
+max_files = 3
+because = "four or more files under one folder means a whole domain was absorbed into another"
+
+[[reference.container]]
+path = "auth"
+files = ["src/auth/login.ts", "src/auth/session.ts"]
+
+[[reference.container]]
+path = "render"
+files = ["src/render/canvas.ts", "src/render/palette.ts"]
+
+[[reference.container]]
+path = "index"
+files = ["src/index.ts"]

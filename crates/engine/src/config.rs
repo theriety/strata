@@ -167,6 +167,11 @@ pub struct ObjectiveConfig {
     pub path: f64,
     /// `mu`: the move-distance anchoring penalty weight (anchored only).
     pub anchor: f64,
+    /// `gamma`: the scoped over-capacity binding penalty weight (FIX03). Both
+    /// modes price it: a layout binding more files than the folder budget at
+    /// any folder or domain pays `gamma` per over-cap share, so relief can win
+    /// on J instead of relying on selection alone.
+    pub capacity: f64,
 }
 
 impl Default for ObjectiveConfig {
@@ -176,6 +181,7 @@ impl Default for ObjectiveConfig {
             naming: 0.3,
             path: 0.2,
             anchor: 1.0,
+            capacity: 4.0,
         }
     }
 }
@@ -189,13 +195,16 @@ impl ObjectiveConfig {
             alpha: self.naming,
             beta: self.path,
             mu: self.anchor,
+            gamma: self.capacity,
         }
     }
 
     /// Converts the config into the greenfield-mode [`Coefficients`].
     ///
     /// Greenfield is layout-blind (AD-2): the current-path bonus and anchoring
-    /// penalty are forced to zero regardless of what the config says.
+    /// penalty are forced to zero regardless of what the config says. Capacity
+    /// binds in both modes — relief is owed no matter how far it sits from
+    /// today's layout.
     #[must_use]
     pub const fn greenfield(&self) -> Coefficients {
         Coefficients {
@@ -203,6 +212,7 @@ impl ObjectiveConfig {
             alpha: self.naming,
             beta: 0.0,
             mu: 0.0,
+            gamma: self.capacity,
         }
     }
 }
@@ -405,6 +415,7 @@ impl AnalyzeConfig {
         non_negative_finite("objective.naming", self.objective.naming)?;
         non_negative_finite("objective.path", self.objective.path)?;
         non_negative_finite("objective.anchor", self.objective.anchor)?;
+        non_negative_finite("objective.capacity", self.objective.capacity)?;
 
         non_negative_finite("weights.value-import", self.weights.value_import)?;
         non_negative_finite("weights.inheritance", self.weights.inheritance)?;
@@ -761,6 +772,7 @@ mod tests {
             naming: 0.5,
             path: 0.6,
             anchor: 0.7,
+            capacity: 4.0,
         };
 
         let coefficients = objective.anchored();
@@ -780,6 +792,7 @@ mod tests {
             naming: 0.5,
             path: 0.6,
             anchor: 0.7,
+            capacity: 4.0,
         };
 
         let coefficients = objective.greenfield();

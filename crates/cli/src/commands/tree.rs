@@ -102,6 +102,7 @@ mod tests {
                 tree: file("current_lib"),
                 score: 1.0,
                 score_breakdown: zero(),
+                capacity_breaks: 0,
                 violations: Vec::new(),
             },
             modes: Modes {
@@ -149,6 +150,7 @@ mod tests {
             naming: 0.0,
             path: 0.0,
             anchor: 0.0,
+            capacity: 0.0,
         }
     }
 

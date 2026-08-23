@@ -1,0 +1,137 @@
+# Constraint target for the `large-app` fixture — see CONTRACT.md for the schema.
+#
+# Failure mode: scale. 108 files (6 domains x 3 modules x 6 files), dense
+# intra-module edges, one cross-module edge per domain, zero cross-domain
+# edges. This is the corpus's first three-figure repo: proposal quality must
+# hold here, and the run doubles as the QUAL-P3-3 perf measurement point
+# (`topological_order` O(V^2) in seed.rs). Emitted by a deterministic
+# generator; see the fixture provenance note in fixtures/README.md.
+
+schema = 1
+fixture = "large-app"
+
+[meta]
+failure_mode = "scale"
+language = "typescript"
+question = "Does proposal quality hold at three figures of file count?"
+
+[run]
+mode = "both"        # greenfield face is asserted below; anchored is timed too
+candidates = 3       # engine default k
+seed = 42            # engine default seed
+config = "defaults"  # pure built-in defaults; no fixture strata.toml
+
+[[precondition]]
+kind = "file_count"
+min = 108
+max = 108
+because = "the generator emits exactly 108 files; drift means regeneration broke"
+
+[[assert]]
+modes = ["greenfield"]
+candidate = 1
+
+[[assert.preserve_dir]]
+path = "billing"
+because = "each domain is a real, internally dense directory; a three-figure repo that shreds domains is worse than useless"
+
+[[assert.preserve_dir]]
+path = "catalog"
+because = "symmetric domain-survival floor"
+
+[[assert.preserve_dir]]
+path = "identity"
+because = "symmetric domain-survival floor"
+
+[[assert.preserve_dir]]
+path = "notify"
+because = "symmetric domain-survival floor"
+
+[[assert.preserve_dir]]
+path = "orders"
+because = "symmetric domain-survival floor"
+
+[[assert.preserve_dir]]
+path = "search"
+because = "symmetric domain-survival floor"
+
+[[assert.size_band]]
+scope = "any_container"
+max_files = 20
+because = "folders above the default folder cap at scale mean the relief machinery failed wholesale"
+
+[[assert.no_synthetic_bucket]]
+name = "workspace"
+because = "invented buckets hide real structure precisely when there is enough structure to hide"
+
+[[reference.container]]
+path = "billing-api"
+files = ["src/billing/api/types.ts", "src/billing/api/core.ts", "src/billing/api/helper.ts", "src/billing/api/format.ts", "src/billing/api/guard.ts", "src/billing/api/index.ts"]
+
+[[reference.container]]
+path = "billing-ledger"
+files = ["src/billing/ledger/types.ts", "src/billing/ledger/core.ts", "src/billing/ledger/helper.ts", "src/billing/ledger/format.ts", "src/billing/ledger/guard.ts", "src/billing/ledger/index.ts"]
+
+[[reference.container]]
+path = "billing-model"
+files = ["src/billing/model/types.ts", "src/billing/model/core.ts", "src/billing/model/helper.ts", "src/billing/model/format.ts", "src/billing/model/guard.ts", "src/billing/model/index.ts"]
+
+[[reference.container]]
+path = "catalog-api"
+files = ["src/catalog/api/types.ts", "src/catalog/api/core.ts", "src/catalog/api/helper.ts", "src/catalog/api/format.ts", "src/catalog/api/guard.ts", "src/catalog/api/index.ts"]
+
+[[reference.container]]
+path = "catalog-ledger"
+files = ["src/catalog/ledger/types.ts", "src/catalog/ledger/core.ts", "src/catalog/ledger/helper.ts", "src/catalog/ledger/format.ts", "src/catalog/ledger/guard.ts", "src/catalog/ledger/index.ts"]
+
+[[reference.container]]
+path = "catalog-model"
+files = ["src/catalog/model/types.ts", "src/catalog/model/core.ts", "src/catalog/model/helper.ts", "src/catalog/model/format.ts", "src/catalog/model/guard.ts", "src/catalog/model/index.ts"]
+
+[[reference.container]]
+path = "identity-api"
+files = ["src/identity/api/types.ts", "src/identity/api/core.ts", "src/identity/api/helper.ts", "src/identity/api/format.ts", "src/identity/api/guard.ts", "src/identity/api/index.ts"]
+
+[[reference.container]]
+path = "identity-ledger"
+files = ["src/identity/ledger/types.ts", "src/identity/ledger/core.ts", "src/identity/ledger/helper.ts", "src/identity/ledger/format.ts", "src/identity/ledger/guard.ts", "src/identity/ledger/index.ts"]
+
+[[reference.container]]
+path = "identity-model"
+files = ["src/identity/model/types.ts", "src/identity/model/core.ts", "src/identity/model/helper.ts", "src/identity/model/format.ts", "src/identity/model/guard.ts", "src/identity/model/index.ts"]
+
+[[reference.container]]
+path = "notify-api"
+files = ["src/notify/api/types.ts", "src/notify/api/core.ts", "src/notify/api/helper.ts", "src/notify/api/format.ts", "src/notify/api/guard.ts", "src/notify/api/index.ts"]
+
+[[reference.container]]
+path = "notify-ledger"
+files = ["src/notify/ledger/types.ts", "src/notify/ledger/core.ts", "src/notify/ledger/helper.ts", "src/notify/ledger/format.ts", "src/notify/ledger/guard.ts", "src/notify/ledger/index.ts"]
+
+[[reference.container]]
+path = "notify-model"
+files = ["src/notify/model/types.ts", "src/notify/model/core.ts", "src/notify/model/helper.ts", "src/notify/model/format.ts", "src/notify/model/guard.ts", "src/notify/model/index.ts"]
+
+[[reference.container]]
+path = "orders-api"
+files = ["src/orders/api/types.ts", "src/orders/api/core.ts", "src/orders/api/helper.ts", "src/orders/api/format.ts", "src/orders/api/guard.ts", "src/orders/api/index.ts"]
+
+[[reference.container]]
+path = "orders-ledger"
+files = ["src/orders/ledger/types.ts", "src/orders/ledger/core.ts", "src/orders/ledger/helper.ts", "src/orders/ledger/format.ts", "src/orders/ledger/guard.ts", "src/orders/ledger/index.ts"]
+
+[[reference.container]]
+path = "orders-model"
+files = ["src/orders/model/types.ts", "src/orders/model/core.ts", "src/orders/model/helper.ts", "src/orders/model/format.ts", "src/orders/model/guard.ts", "src/orders/model/index.ts"]
+
+[[reference.container]]
+path = "search-api"
+files = ["src/search/api/types.ts", "src/search/api/core.ts", "src/search/api/helper.ts", "src/search/api/format.ts", "src/search/api/guard.ts", "src/search/api/index.ts"]
+
+[[reference.container]]
+path = "search-ledger"
+files = ["src/search/ledger/types.ts", "src/search/ledger/core.ts", "src/search/ledger/helper.ts", "src/search/ledger/format.ts", "src/search/ledger/guard.ts", "src/search/ledger/index.ts"]
+
+[[reference.container]]
+path = "search-model"
+files = ["src/search/model/types.ts", "src/search/model/core.ts", "src/search/model/helper.ts", "src/search/model/format.ts", "src/search/model/guard.ts", "src/search/model/index.ts"]

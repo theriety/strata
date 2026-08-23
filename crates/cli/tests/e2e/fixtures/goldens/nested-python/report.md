@@ -6,9 +6,9 @@ Snapshot `ab5b95b6dc6b91696bee1eae790bb4716f06c01d368d3a1d5a9a9801858c0d64`.
 
 ## Current layout
 
-Score `42.6675`.
+Score `0.3844`.
 
-- cut `42.6000`, imbalance `0.2790`, naming `-0.0115`, path `-0.2000`, anchor `0.0000`
+- cut `0.3170`, imbalance `0.2790`, naming `-0.0115`, path `-0.2000`, anchor `0.0000`
 
 ### Violations
 
@@ -18,35 +18,26 @@ None.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+25.5885`, score `17.0790`)
+_Current layout is already optimal; candidate 1 is the current tree._
 
-- cut `16.8000`, imbalance `0.1095`, naming `-0.0100`, path `-0.1538`, anchor `0.3333`
+### Candidate 1 (improvement `+0.0000`, score `0.3844`)
 
-**Moves**
+- cut `0.3170`, imbalance `0.2790`, naming `-0.0115`, path `-0.2000`, anchor `0.0000`
 
-```
-move — pulled by shape.py (w 2.3)
-  1. app.py [nested-python → nested-python/geometry]
-  2. tests/conftest.py [nested-python → nested-python/geometry]
-move — follows app.py
-  3. tests/test_app.py [nested-python → nested-python/geometry]
-```
+No moves versus the current layout.
 
 ## Greenfield candidates
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+25.9680`, score `16.8995`)
+### Candidate 1 (improvement `+0.2855`, score `0.2989`)
 
-- cut `16.8000`, imbalance `0.1095`, naming `-0.0100`, path `-0.0000`, anchor `0.0000`
+- cut `0.1592`, imbalance `0.1396`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
 **Moves**
 
 ```
-move — pulled by shape.py (w 2.3)
+move — pulled by rectangle.py (w 2.0)
   1. app.py [nested-python → nested-python/geometry]
-  2. tests/conftest.py [nested-python → nested-python/geometry]
-move — follows app.py
-  3. tests/test_app.py [nested-python → nested-python/geometry]
 ```
 

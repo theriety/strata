@@ -135,21 +135,21 @@ fn analyze_to_file(name: &str) -> PathBuf {
     path
 }
 
-/// Extracts the candidate-1 score from a summary face by parsing the float that
-/// follows the first `score ` token.
+/// Extracts the candidate-1 score from a summary face: the float after
+/// `score  ` on the first candidate row.
 ///
-/// The summary renders each candidate as `candidate 1 improvement <i> (score
-/// <f>; ...)`, so the first `score ` occurrence is candidate 1's (the `current
-/// score:` line has a colon, not a space). The token carries a trailing `;` or
-/// `)` which is trimmed before parsing. A malformed or absent score yields
-/// `f64::NAN` so a comparison against it fails loudly rather than passing by
-/// accident — the workspace forbids `unwrap`/`expect`, so no parse panics here.
+/// The report renders each candidate as `candidate 1   mode/i   score  <f> ...`,
+/// so anchoring on that row prefix skips the reading-rules prose (whose gain
+/// line also contains "score"). A malformed or absent score yields `f64::NAN`
+/// so a comparison against it fails loudly rather than passing by accident —
+/// the workspace forbids `unwrap`/`expect`, so no parse panics here.
 fn candidate_one_score(summary: &str) -> f64 {
     summary
-        .split_once("score ")
+        .lines()
+        .find(|line| line.starts_with(" candidate ") && line.contains("score  "))
+        .and_then(|line| line.split_once("score  "))
         .map(|(_, rest)| rest)
         .and_then(|rest| rest.split_whitespace().next())
-        .map(|token| token.trim_end_matches([';', ')']))
         .and_then(|token| token.parse::<f64>().ok())
         .unwrap_or(f64::NAN)
 }
@@ -183,30 +183,36 @@ fn should_deliver_the_analyze_summary_for_the_rust_fixture() {
         outcome.code, 0,
         "analyze is a finding, not a failure: it exits 0"
     );
-    // the census and per-mode candidate counts are the contracted summary surface.
+    // the census and the claimed-vs-listed candidate counts are the contracted surface.
     assert!(
         outcome
             .stdout
-            .contains("summary: 6 symbols, 4 edges, 1 files"),
+            .contains("census    : 6 symbols · 4 edges · 1 files"),
         "the expected node/edge census is delivered"
     );
     assert!(
-        outcome.stdout.contains("mode anchored: 1 candidate(s)"),
-        "anchored candidates are reported"
+        outcome.stdout.contains("candidate count : 2"),
+        "the printed claim names every candidate both modes returned"
     );
     assert!(
-        outcome.stdout.contains("mode greenfield: 1 candidate(s)"),
-        "greenfield candidates are reported"
+        outcome.stdout.contains("anchored mode returned 1")
+            && outcome.stdout.contains("greenfield mode returned 1"),
+        "each mode's contribution to the claim is stated"
+    );
+    assert!(
+        outcome.stdout.contains("anchored/1") && outcome.stdout.contains("greenfield/1"),
+        "every claimed candidate is listed with its score"
     );
 }
 
 #[test]
-fn should_print_the_recommended_structure_only_when_show_suggestions_is_set() {
-    // --show-suggestions is opt-in: it renders the best candidate's proposed tree
-    // below the headlines; the plain run prints only the candidate headlines.
+fn should_itemize_suggestions_in_the_report_without_a_flag() {
+    // the printed report always itemizes §2; a candidate matching today's layout
+    // says so instead of shipping empty tables.
     let root = fixture("rust");
     let root_str = root.to_str().unwrap_or_default();
-    let base = [
+
+    let outcome = run(&[
         "analyze",
         "--root",
         root_str,
@@ -216,26 +222,21 @@ fn should_print_the_recommended_structure_only_when_show_suggestions_is_set() {
         "anchored",
         "--format",
         "summary",
-    ];
+    ]);
 
-    let mut with_flag = base.to_vec();
-    with_flag.push("--show-suggestions");
-    let shown = run(&with_flag);
-    let plain = run(&base);
-
-    assert_eq!(shown.code, 0, "the suggestion run exits 0");
-    assert_eq!(plain.code, 0, "the plain run exits 0");
+    assert_eq!(outcome.code, 0, "the report run exits 0");
     assert!(
-        shown.stdout.contains("suggested structure (candidate 1"),
-        "the suggestion header leads the rendered tree"
+        outcome
+            .stdout
+            .contains("What would change — candidate 1 (anchored)"),
+        "the itemization section names its candidate: {}",
+        outcome.stdout
     );
     assert!(
-        shown.stdout.contains("rust [packageGroup]") && shown.stdout.contains("src/lib.rs [file]"),
-        "the rendered candidate tree carries its real directory-derived names"
-    );
-    assert!(
-        !plain.stdout.contains("suggested structure"),
-        "the plain run omits the suggested structure entirely"
+        outcome
+            .stdout
+            .contains("no change suggested — candidate 1 matches today's layout"),
+        "a zero-move plan is declared honestly"
     );
 }
 
@@ -263,7 +264,7 @@ fn should_deliver_the_analyze_summary_for_the_python_fixture() {
     assert!(
         outcome
             .stdout
-            .contains("summary: 4 symbols, 4 edges, 2 files"),
+            .contains("census    : 4 symbols · 4 edges · 2 files"),
         "the two-file census is delivered"
     );
 }
@@ -678,10 +679,14 @@ fn should_deliver_the_anchored_diff_for_the_rust_fixture() {
 
 #[test]
 fn should_deliver_the_greenfield_diff_for_the_nested_python_fixture() {
-    // the greenfield (mu = 0) delta regroups the scattered files with the
-    // cohesive geometry files under the geometry chain; the relocated files are
-    // narrated as grouped moves under the count header, and the spec file
-    // trails its subject with an explicit follows line.
+    // the greenfield (mu = beta = 0) delta performs exactly the repair the
+    // normalized objective can justify: app.py — whose edges pay package-height
+    // crossings while loose — joins the geometry chain it depends on, narrated
+    // as one grouped move under the count header with an explicit pull reason.
+    // Under the D-37 rescale the spec files' relocation no longer pays for
+    // itself, so they stay put; the `follows` narration they used to exercise
+    // lives on in the constellation-ts greenfield delta (see the varied-reasons
+    // test).
     let result = analyze_to_file("nested-python");
     let result_str = result.to_str().unwrap_or_default();
 
@@ -700,8 +705,8 @@ fn should_deliver_the_greenfield_diff_for_the_nested_python_fixture() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("follows app.py"),
-        "the spec file trails its subject: {}",
+        outcome.stdout.contains("pulled by rectangle.py"),
+        "the move names the geometry file that pulled it: {}",
         outcome.stdout
     );
 }
@@ -1323,7 +1328,7 @@ fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("→ crates/app]"),
+        outcome.stdout.contains("→ crates/core]"),
         "the cross-crate files merge into the pulling crate itself: a root-level \
          file's synthetic `workspace` bucket collapses at render, so the move \
          target is the package, not an invented `crates/app/workspace` path: {}",
@@ -1630,8 +1635,8 @@ fn should_produce_identical_output_regardless_of_the_jobs_count() {
 #[test]
 fn should_omit_the_anchored_section_for_a_greenfield_only_run() {
     // --mode greenfield emits only the greenfield section: workspace-rust produces a
-    // real greenfield candidate, and the summary names `mode greenfield` while
-    // carrying no anchored section at all (no `mode anchored`, no `Anchored`).
+    // real greenfield candidate, and the report claims it via `greenfield mode
+    // returned` while carrying no anchored rows at all.
     let root = fixture("workspace-rust");
     let root_str = root.to_str().unwrap_or_default();
 
@@ -1649,17 +1654,13 @@ fn should_omit_the_anchored_section_for_a_greenfield_only_run() {
 
     assert_eq!(outcome.code, 0, "a greenfield-only run exits 0");
     assert!(
-        outcome.stdout.contains("mode greenfield:"),
-        "the greenfield section is present: {}",
+        outcome.stdout.contains("greenfield mode returned"),
+        "the greenfield claim is present: {}",
         outcome.stdout
     );
     assert!(
-        !outcome.stdout.contains("mode anchored"),
-        "a greenfield-only run omits the anchored section"
-    );
-    assert!(
-        !outcome.stdout.contains("Anchored"),
-        "a greenfield-only run carries no anchored heading"
+        !outcome.stdout.contains("anchored mode returned") && !outcome.stdout.contains("anchored/"),
+        "a greenfield-only run omits the anchored candidates"
     );
 }
 
@@ -1699,10 +1700,9 @@ fn should_error_on_an_empty_repository_with_a_stable_code() {
 }
 
 #[test]
-fn should_produce_byte_identical_json_with_and_without_show_suggestions() {
-    // --show-suggestions only enriches the summary face; the json face already
-    // serializes every candidate's tree, so the flag is a documented no-op there: the
-    // json output is byte-identical with and without it.
+fn should_produce_byte_identical_json_across_repeated_runs() {
+    // the json face is the parity face: two runs over the same root and config
+    // serialize the same result byte-for-byte.
     let root = fixture("rust");
     let root_str = root.to_str().unwrap_or_default();
     let base = [
@@ -1715,16 +1715,14 @@ fn should_produce_byte_identical_json_with_and_without_show_suggestions() {
         "json",
     ];
 
-    let plain = run(&base);
-    let mut with_flag = base.to_vec();
-    with_flag.push("--show-suggestions");
-    let shown = run(&with_flag);
+    let first = run(&base);
+    let second = run(&base);
 
-    assert_eq!(plain.code, 0, "the plain json run exits 0");
-    assert_eq!(shown.code, 0, "the suggestion json run exits 0");
+    assert_eq!(first.code, 0, "the first json run exits 0");
+    assert_eq!(second.code, 0, "the second json run exits 0");
     assert_eq!(
-        plain.stdout, shown.stdout,
-        "--show-suggestions is a no-op on the json face"
+        first.stdout, second.stdout,
+        "the json face is byte-stable across runs"
     );
 }
 
@@ -1931,7 +1929,8 @@ fn should_score_greenfield_candidates_identically_across_renames() {
         "greenfield scores are rename-invariant: {score_a} vs {score_b}"
     );
     assert!(
-        a.stdout.contains("; 0 move group(s))") && b.stdout.contains("; 0 move group(s))"),
+        a.stdout.contains("no change suggested — candidate 1 matches today's layout")
+            && b.stdout.contains("no change suggested — candidate 1 matches today's layout"),
         "both propose the same empty move set: {} / {}",
         a.stdout,
         b.stdout
@@ -2232,7 +2231,7 @@ fn should_honor_config_precedence_flags_over_toml_over_defaults() {
     ]);
 
     let _ = std::fs::remove_file(&toml);
-    let notice = "(fewer than k candidates; solution space converged)";
+    let notice = "the solution space converged";
     assert!(written, "the precedence toml was written");
     assert_eq!(defaults.code, 0, "the defaults run exits 0");
     assert_eq!(from_toml.code, 0, "the toml run exits 0");
@@ -2396,8 +2395,13 @@ fn should_emit_the_identity_candidate_when_the_current_layout_is_optimal() {
     assert!(
         summary
             .stdout
-            .contains("current layout is already optimal; candidate 1 is the current tree"),
-        "the summary face announces optimality: {}",
+            .contains("no change suggested — candidate 1 matches today's layout"),
+        "the report face announces the identity plan honestly: {}",
+        summary.stdout
+    );
+    assert!(
+        summary.stdout.contains("keep the current layout — the run's best candidate is today's tree unchanged."),
+        "the recommendation keeps the optimal layout: {}",
         summary.stdout
     );
 }
@@ -2446,13 +2450,13 @@ fn should_mark_a_cap_violating_layout_infeasible_with_the_resolution_notice() {
     assert!(
         summary
             .stdout
-            .contains("current layout violates capacity caps; best candidate resolves "),
-        "the summary face reports the resolved findings: {}",
+            .contains("today's layout as infeasible — it breaks"),
+        "the report face names the infeasibility and its finding count: {}",
         summary.stdout
     );
     assert!(
-        summary.stdout.contains(" capacity finding(s)"),
-        "the resolution is counted in capacity findings: {}",
+        summary.stdout.contains(" capacity finding"),
+        "the infeasibility is counted in capacity findings: {}",
         summary.stdout
     );
 }
@@ -2725,25 +2729,37 @@ fn should_render_incremental_container_names_in_the_tree_face() {
 
 #[test]
 fn should_vary_narration_reasons_and_mark_followed_subjects() {
-    // reasons are computed, not canned: the nested-python delta carries at least
-    // two distinct reason kinds, and a test file that genuinely changes folder
-    // (`tests/test_app.py`, workspace -> geometry) carries a `follows` reason
-    // whose subject is echoed in the face. nested-ts no longer serves here: its
-    // specs sit in a distinct `__tests__` folder whose key is unchanged by domain
-    // regrouping, so under the key-composed model they are no-ops, not moves.
-    // (the retired `cohesion gain` stub needs no assert — the MoveReason enum
-    // forbids it.)
-    let result = analyze_to_file("nested-python");
+    // reasons are computed, not canned: every narrated move carries a reason
+    // kind from the MoveReason enum, and the diff face echoes each computed
+    // partner rather than a canned string. The anchored faces no longer serve
+    // here: under the D-37 normalized objective anchored is uniformly
+    // conservative (zero narrated moves on every e2e fixture), so narration
+    // coverage lives on the layout-blind face that still repairs.
+    //
+    // Historical note: this test once demanded at least two distinct kinds
+    // including `follows` (a spec file following its subject). After the FIX03
+    // capacity-term work re-based the objective, no e2e fixture emits `follows`
+    // any more — every narrated move is `pulledBy`. The kind-set breadth now
+    // lives with the engine; the enum-wide Follows caption stays covered by the
+    // renderer unit tests (`should_print_reason_specific_captions`).
+    const COMPUTED_KINDS: [&str; 5] = [
+        "pulledBy",
+        "follows",
+        "relievesOverCap",
+        "namingCohesion",
+        "clustering",
+    ];
+    let result = analyze_to_file("constellation-ts");
     let result_str = result.to_str().unwrap_or_default();
     let contents = std::fs::read_to_string(&result).unwrap_or_default();
     let parsed: serde_json::Value =
         serde_json::from_str(&contents).unwrap_or(serde_json::Value::Null);
 
-    let face = run(&["diff", "--input", result_str, "current", "anchored/1"]);
+    let face = run(&["diff", "--input", result_str, "current", "greenfield/1"]);
 
     let _ = std::fs::remove_file(&result);
     let narration = parsed
-        .pointer("/modes/anchored/candidates/0/deltaNarration")
+        .pointer("/modes/greenfield/candidates/0/deltaNarration")
         .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -2751,26 +2767,20 @@ fn should_vary_narration_reasons_and_mark_followed_subjects() {
         !narration.is_empty(),
         "the delta narrates moves: {contents}"
     );
-    let kinds: std::collections::BTreeSet<&str> = narration
-        .iter()
-        .filter_map(|entry| {
-            entry
-                .pointer("/reason/kind")
-                .and_then(serde_json::Value::as_str)
-        })
-        .collect();
-    assert!(
-        kinds.len() >= 2,
-        "at least two distinct computed reason kinds: {kinds:?}"
-    );
-    assert!(
-        kinds.contains("follows"),
-        "a spec move names the subject it follows: {narration:?}"
-    );
+    for entry in &narration {
+        let kind = entry
+            .pointer("/reason/kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            COMPUTED_KINDS.contains(&kind),
+            "every narrated reason is a computed MoveReason kind, got {kind:?}: {entry}"
+        );
+    }
     assert_eq!(face.code, 0, "the diff face renders");
     assert!(
-        face.stdout.contains("follows "),
-        "the face echoes the followed subject: {}",
+        face.stdout.contains("pulled by "),
+        "the face echoes the pull partner each move satisfies: {}",
         face.stdout
     );
 }
@@ -2941,14 +2951,22 @@ fn should_outscore_the_current_layout_on_the_constellation_fixture() {
 
     assert_eq!(outcome.code, 0, "analyze exits 0");
     let parsed: serde_json::Value = serde_json::from_str(&outcome.stdout).unwrap_or_default();
+    // D-37 rescale: the normalized cut term no longer lets raw cut savings
+    // swamp the anchored churn price, so the misplacement repairs (clamp/lerp,
+    // epsilon, reader/writer) cost more in path cohesion than they save and
+    // anchored honestly reports `optimal` while greenfield — which carries no
+    // anchor or path terms — still outscores and names every repair. The
+    // reliability invariant that matters is unchanged: every candidate of every
+    // mode improves on current, and greenfield keeps marking the layout
+    // outscored.
+    assert_eq!(
+        parsed
+            .pointer("/modes/greenfield/currentStanding")
+            .and_then(serde_json::Value::as_str),
+        Some("outscored"),
+        "greenfield marks the misplaced layout outscored"
+    );
     for mode in ["anchored", "greenfield"] {
-        assert_eq!(
-            parsed
-                .pointer(&format!("/modes/{mode}/currentStanding"))
-                .and_then(serde_json::Value::as_str),
-            Some("outscored"),
-            "{mode} marks the misplaced layout outscored"
-        );
         let candidates = parsed
             .pointer(&format!("/modes/{mode}/candidates"))
             .and_then(serde_json::Value::as_array)
@@ -3066,8 +3084,8 @@ fn should_resolve_a_relative_root_to_real_names_and_full_rust_edges() {
     // repo; `.` has no `file_name()`, so Bug B dropped it to 4 edges and the
     // empty-name fallback group `root`, flipping the greenfield merge target.
     // Canonicalization restores the real directory name as the package group and
-    // the full edge graph, so the greenfield merge lands in crates/app exactly as
-    // the absolute form does.
+    // the full edge graph, so the greenfield merge lands in the pulling crate
+    // exactly as the absolute form does.
     let canonical = std::fs::canonicalize(fixture("workspace-rust"))
         .unwrap_or_else(|_| fixture("workspace-rust"));
     let result = std::env::temp_dir().join(format!("strata-accept-dotroot-{}.json", nanos()));
@@ -3100,8 +3118,10 @@ fn should_resolve_a_relative_root_to_real_names_and_full_rust_edges() {
         tree.stdout
     );
     assert!(
-        diff.stdout.contains("→ crates/app]"),
-        "the full 13-edge graph lands the greenfield merge in crates/app, as the absolute form does: {}",
+        diff.stdout.contains("→ crates/core]"),
+        "the full 13-edge graph lands the greenfield merge in crates/core — \
+         whichever crate pulls hardest under the D-37 normalized objective — \
+         exactly as the absolute form does: {}",
         diff.stdout
     );
 }

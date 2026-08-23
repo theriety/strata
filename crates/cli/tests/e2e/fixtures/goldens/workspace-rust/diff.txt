@@ -1,4 +1,1 @@
-moves (1 group(s), 2 file(s); improvement +136.8865):
-merge — pulled by lib.rs (w 7.8)
-  1. crates/app/src/lib.rs [crates/app → crates/core]
-  2. crates/util/src/lib.rs [crates/util → crates/core]
+no moves

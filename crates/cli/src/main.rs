@@ -109,9 +109,6 @@ struct AnalyzeCli {
     /// Parallelism for parsing and shattering.
     #[arg(long)]
     jobs: Option<u32>,
-    /// Print the best candidate's proposed structure per mode (summary face only).
-    #[arg(long)]
-    show_suggestions: bool,
 }
 
 /// `strata tree` flags.
@@ -309,7 +306,6 @@ fn run_analyze(
         config,
         overrides,
         format,
-        show_suggestions: cli.show_suggestions,
     };
 
     if let Some(path) = cli.output {

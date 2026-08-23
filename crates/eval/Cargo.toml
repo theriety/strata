@@ -1,0 +1,15 @@
+[package]
+name = "strata-eval"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+strata-engine = { path = "../engine" }
+thiserror = { workspace = true }
+toml = "1"
+
+[lints]
+workspace = true

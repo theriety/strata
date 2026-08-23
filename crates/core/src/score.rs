@@ -5,24 +5,40 @@
 //! objective is the single scalar
 //!
 //! ```text
-//! J(T) = sum_e w(e) c(e) h(lca_T(e))   // cut, weighted by crossing height
-//!        + lambda * imbalance(T)        // sibling size imbalance
-//!        - alpha  * naming(T)           // symbol-token cohesion
-//!        - beta   * path(T)             // current-path cohesion (anchored)
-//!        + mu     * d(T, T0)            // move distance from the current tree
+//! J(T) = meancross(T)                  // normalized cut, in 0..1 (`cut_cost`)
+//!      + lambda * imbalance(T)         // sibling size imbalance
+//!      - alpha  * naming(T)            // symbol-token cohesion
+//!      - beta   * path(T)              // current-path cohesion (anchored)
+//!      + mu     * d(T, T0)             // move distance from the current tree
+//!      + gamma  * cap(T)               // scoped over-capacity binding
 //! ```
 //!
-//! minimised over candidate trees. The two modes differ only in coefficients:
-//! greenfield zeroes `mu` and `beta` so the current layout cannot leak back in
-//! through path similarity, while anchored keeps both positive so candidates stay
-//! reachable from today's structure. There is no mode-specific code path — a mode
-//! is purely a [`Coefficients`] preset.
+//! minimised over candidate trees. Every term is a dimensionless ratio on a
+//! comparable scale — cut is a weighted mean crossing height over its own
+//! edge-weight mass, imbalance sums squared CVs, naming/path/anchor are shares
+//! of the token/layout populations, and capacity sums over-cap shares against
+//! the folder budget — so the coefficients act as relative weights rather than
+//! unit conversions between incommensurable units. Without that normalization
+//! the raw cut sum grows with repository size while every other term stays
+//! bounded, and the bounded terms drown (D-37).
+//!
+//! The two modes differ only in coefficients: greenfield zeroes `mu` and `beta`
+//! so the current layout cannot leak back in through path similarity, while
+//! anchored keeps both positive so candidates stay reachable from today's
+//! structure. There is no mode-specific code path — a mode is purely a
+//! [`Coefficients`] preset.
 //!
 //! Cohesion terms (`naming`, `path`) enter with a minus sign because more
 //! cohesion is *better*, i.e. lowers the objective. Every term is surfaced
 //! separately in the [`ScoreBreakdown`] so a reader sees *why* a tree ranks where
-//! it does. Hard constraints — acyclicity, polarity, capacity — never appear
-//! here: they are vetoes enforced upstream, never penalties traded against score.
+//! it does. Acyclicity and polarity stay hard vetoes enforced upstream, never
+//! penalties. Capacity is priced here (FIX03): a layout that binds more files
+//! than the folder budget at any scoped container pays `gamma` per over-cap
+//! share, so a relieving proposal can outsore the current tree on J itself and
+//! the "improvement ≥ 0" invariant survives exposing relief that moves far. The
+//! move-level veto (a folder never accepts more than the cap) still holds in the
+//! solver; the term prices whole-layout binding, it does not trade against the
+//! veto.
 
 use std::collections::BTreeSet;
 
@@ -31,9 +47,10 @@ use strata_ir::{EdgeKind, ScopeLevel};
 /// The coefficients of the objective, fixed per mode.
 ///
 /// `lambda`, `alpha`, and `beta` weight the imbalance, naming, and path terms;
-/// `mu` weights the anchoring (move-distance) term. A greenfield preset sets
-/// `mu` and `beta` to zero; an anchored preset keeps them positive. The values
-/// are not configurable in v1 — only the mode chooses between presets.
+/// `mu` weights the anchoring (move-distance) term; `gamma` weights the scoped
+/// over-capacity binding term (FIX03). A greenfield preset sets `mu` and `beta`
+/// to zero; an anchored preset keeps them positive. Capacity binds in both
+/// modes: relief is owed regardless of how far from today's layout it sits.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Coefficients {
     /// Weight of the sibling size-imbalance penalty.
@@ -44,6 +61,8 @@ pub struct Coefficients {
     pub beta: f64,
     /// Weight of the move-distance anchoring penalty (anchored mode only).
     pub mu: f64,
+    /// Weight of the scoped over-capacity binding penalty (both modes).
+    pub gamma: f64,
 }
 
 impl Coefficients {
@@ -57,12 +76,14 @@ impl Coefficients {
             alpha: 1.0,
             beta: 1.0,
             mu: 1.0,
+            gamma: 4.0,
         }
     }
 
     /// The greenfield preset: an unbiased ideal. `mu = 0` and `beta = 0` so the
     /// current layout cannot leak back in through anchoring or path similarity;
-    /// symbol-token cohesion (`alpha`) and imbalance (`lambda`) remain.
+    /// symbol-token cohesion (`alpha`), imbalance (`lambda`), and capacity
+    /// (`gamma`) remain.
     #[must_use]
     pub const fn greenfield() -> Self {
         Self {
@@ -70,6 +91,7 @@ impl Coefficients {
             alpha: 1.0,
             beta: 0.0,
             mu: 0.0,
+            gamma: 4.0,
         }
     }
 }
@@ -193,17 +215,24 @@ pub struct Candidate {
     /// Fraction of symbols whose container path differs from T0, in `0.0..=1.0`;
     /// the normalised move distance `d(T, T0)`.
     pub move_distance: f64,
+    /// Sum over the candidate's scoped containers (folders and domains) of the
+    /// share their transitively-bound file count exceeds the folder budget —
+    /// `Σ max(0, bound − budget) / budget`. Zero when every scoped container
+    /// binds within the budget; one full breach unit per container at twice the
+    /// budget.
+    pub capacity_pressure: f64,
 }
 
 /// Per-candidate score decomposition, reported in the DTO so users see *why* a
 /// tree ranks where it does.
 ///
-/// `total` is the sum of all five terms — the value of J(T) being minimised.
+/// `total` is the sum of all six terms — the value of J(T) being minimised.
 /// `naming` and `path` are already negated (their minus sign folded in), so the
 /// breakdown sums to `total` directly.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScoreBreakdown {
-    /// `sum_e w(e) c(e) h(lca_T(e))` — the height-weighted cut cost.
+    /// The normalized cut term in `0.0..=1.0`: the edge-weight-share-weighted
+    /// mean crossing height over the candidate's edges (`cut_cost`).
     pub cut: f64,
     /// `lambda * imbalance(T)` — the sibling size-imbalance penalty.
     pub imbalance: f64,
@@ -213,7 +242,9 @@ pub struct ScoreBreakdown {
     pub path: f64,
     /// `mu * d(T, T0)` — the move-distance anchoring penalty.
     pub anchor: f64,
-    /// The full objective `J(T)`, the sum of the five terms above.
+    /// `gamma * cap(T)` — the scoped over-capacity binding penalty (FIX03).
+    pub capacity: f64,
+    /// The full objective `J(T)`, the sum of the six terms above.
     pub total: f64,
 }
 
@@ -221,11 +252,12 @@ pub struct ScoreBreakdown {
 /// weights, returning the full breakdown of J(T).
 ///
 /// Each term is computed independently from the candidate's pre-extracted views:
-/// the cut cost sums `w(e) c(e) h(level)` over edges priced by the `[weights]`
-/// table, imbalance sums the squared coefficient of variation of every
+/// cut is the edge-weight-share-weighted mean crossing height normalized into
+/// `0.0..=1.0`, imbalance sums the squared coefficient of variation of every
 /// container's child sizes, naming and path are the (negated) cohesion bonuses,
-/// and anchor is `mu` times the move distance. Hard constraints are not scored
-/// here.
+/// anchor is `mu` times the move distance, and capacity is `gamma` times the
+/// pre-extracted scoped binding pressure. Acyclicity and polarity stay hard
+/// vetoes enforced upstream.
 #[must_use]
 pub fn score(
     candidate: &Candidate,
@@ -237,6 +269,7 @@ pub fn score(
     let naming = -coefficients.alpha * naming(&candidate.cohesion_groups);
     let path = -coefficients.beta * candidate.path_cohesion;
     let anchor = coefficients.mu * candidate.move_distance;
+    let capacity = coefficients.gamma * candidate.capacity_pressure;
 
     ScoreBreakdown {
         cut,
@@ -244,7 +277,8 @@ pub fn score(
         naming,
         path,
         anchor,
-        total: cut + imbalance + naming + path + anchor,
+        capacity,
+        total: cut + imbalance + naming + path + anchor + capacity,
     }
 }
 
@@ -258,19 +292,39 @@ fn height_penalty(level: ScopeLevel) -> f64 {
         ScopeLevel::Folder => 2.0,
         ScopeLevel::Domain => 4.0,
         ScopeLevel::Package => 8.0,
-        ScopeLevel::PackageGroup => 16.0,
+        ScopeLevel::PackageGroup => MAX_CROSSING_HEIGHT,
     }
 }
 
-/// Sums the height-weighted cut cost `sum_e w(e) c(e) h(lca_T(e))` over the
-/// candidate's edges, pricing `w(e)` from the configured `[weights]` table.
+/// The tallest crossing a laminar tree can price — `height_penalty` of the
+/// package-group scope, and the denominator ceiling that keeps the normalized
+/// cut term in `0.0..=1.0`.
+const MAX_CROSSING_HEIGHT: f64 = 16.0;
+
+/// Returns the normalized cut term: the edge-weight-share-weighted mean
+/// crossing height of the candidate's edges, scaled by the maximum height
+/// penalty into `0.0..=1.0`.
+///
+/// `sum_e w(e) c(e) h(lca_T(e)) / (MAX_CROSSING_HEIGHT * sum_e w(e) c(e))`,
+/// pricing `w(e)` from the configured `[weights]` table. Dividing by the
+/// candidate's own edge-weight mass is what makes the term dimensionless and
+/// repository-size independent: the mass is invariant across the candidates of
+/// one repository (the same edges change only where they cross), so intra-repo
+/// ranking by cut alone is preserved while the term stops drowning every
+/// bounded reality term as repositories grow (D-37). An edge-free candidate
+/// has nothing to cross and scores zero.
 fn cut_cost(edges: &[ScoredEdge], weights: &KindWeights) -> f64 {
-    edges
-        .iter()
-        .map(|edge| {
-            weights.edge_weight(edge.kind, edge.confidence) * height_penalty(edge.lca_level)
-        })
-        .sum()
+    let mut weighted_height = 0.0;
+    let mut total_weight = 0.0;
+    for edge in edges {
+        let weight = weights.edge_weight(edge.kind, edge.confidence);
+        weighted_height += weight * height_penalty(edge.lca_level);
+        total_weight += weight;
+    }
+    if total_weight == 0.0 {
+        return 0.0;
+    }
+    weighted_height / (MAX_CROSSING_HEIGHT * total_weight)
 }
 
 /// Sums the squared coefficient of variation of each container's child subtree
@@ -389,6 +443,7 @@ mod tests {
             cohesion_groups: Vec::new(),
             path_cohesion: 0.0,
             move_distance: 0.0,
+            capacity_pressure: 0.0,
         }
     }
 
@@ -410,9 +465,52 @@ mod tests {
             &KindWeights::default(),
         );
 
-        // 1.5 * 0.5 * 8 = 6.0
-        assert!(close(breakdown.cut, 6.0));
-        assert!(close(breakdown.total, 6.0));
+        // With one edge the weighted mean crossing height is just its own:
+        // 1.5 * 0.5 * 8 / (16 * 1.5 * 0.5) = 0.5.
+        assert!(close(breakdown.cut, 0.5));
+        assert!(close(breakdown.total, 0.5));
+    }
+
+    #[test]
+    fn should_keep_the_cut_term_scale_free_under_edge_mass() {
+        // D-37 regression guard: the normalized cut term is a mean over the
+        // candidate's own edge-weight mass, so growing the repository — more
+        // files, more edges at the same crossing profile — must not inflate it.
+        let single = Candidate {
+            edges: vec![ScoredEdge {
+                kind: EdgeKind::Call,
+                confidence: 1.0,
+                lca_level: ScopeLevel::Domain,
+            }],
+            ..empty_candidate()
+        };
+        let mut grown = single.clone();
+        for _ in 0..99 {
+            grown.edges.push(ScoredEdge {
+                kind: EdgeKind::Call,
+                confidence: 1.0,
+                lca_level: ScopeLevel::Domain,
+            });
+        }
+
+        let small = score(
+            &single,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
+        let large = score(&grown, &Coefficients::greenfield(), &KindWeights::default());
+
+        assert!(
+            close(small.cut, large.cut),
+            "cut must be mass-invariant: single {} vs hundred-fold {}",
+            small.cut,
+            large.cut
+        );
+        assert!(
+            (0.0..=1.0).contains(&large.cut),
+            "normalized cut must stay in 0..1, got {}",
+            large.cut
+        );
     }
 
     #[test]
@@ -605,6 +703,47 @@ mod tests {
     }
 
     #[test]
+    fn should_price_capacity_binding_in_both_modes() {
+        // FIX03: a container binding twice the folder budget pays one full
+        // pressure unit; `gamma` prices it identically in either mode.
+        let candidate = Candidate {
+            capacity_pressure: 1.0,
+            ..empty_candidate()
+        };
+
+        let greenfield = score(
+            &candidate,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
+        let anchored = score(
+            &candidate,
+            &Coefficients::anchored(),
+            &KindWeights::default(),
+        );
+
+        assert!(close(greenfield.capacity, 4.0));
+        assert!(close(anchored.capacity, 4.0));
+        assert!(close(greenfield.total, 4.0));
+    }
+
+    #[test]
+    fn should_charge_nothing_for_within_budget_binding() {
+        let candidate = Candidate {
+            capacity_pressure: 0.0,
+            ..empty_candidate()
+        };
+
+        let breakdown = score(
+            &candidate,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
+
+        assert!(close(breakdown.capacity, 0.0));
+    }
+
+    #[test]
     fn should_sum_every_term_into_the_total() {
         let candidate = Candidate {
             edges: vec![ScoredEdge {
@@ -621,6 +760,7 @@ mod tests {
             }],
             path_cohesion: 0.5,
             move_distance: 0.2,
+            capacity_pressure: 0.3,
         };
         let breakdown = score(
             &candidate,
@@ -632,7 +772,8 @@ mod tests {
             + breakdown.imbalance
             + breakdown.naming
             + breakdown.path
-            + breakdown.anchor;
+            + breakdown.anchor
+            + breakdown.capacity;
         assert!(close(breakdown.total, expected));
     }
 

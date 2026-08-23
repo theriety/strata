@@ -92,14 +92,20 @@ fn analyze_inner(
     let weights = config.weights.kind_weights();
     let cycles = solve_cycles(snapshot, config, &weights);
     let violations = collect_violations(snapshot, config, &current_node, &cycles);
-    let current_breakdown = score_current(snapshot, &config.objective.anchored(), &weights);
+    let current_breakdown = score_current(
+        snapshot,
+        &config.objective.anchored(),
+        &weights,
+        config.capacity.folder,
+    );
 
     // identity seeding is anchored-only (AD-2) and requires a cap-clean current
     // tree: a layout that already breaches a capacity cap is not a legal
-    // candidate, so it may only serve as the delta baseline.
-    let capacity_clean = !violations.iter().any(|violation| {
-        violation.kind == ViolationKind::Capacity && violation.severity == Severity::Violation
-    });
+    // candidate, so it may only serve as the delta baseline. Borderline
+    // observations are within tolerance and never gate — the same predicate
+    // the DTO reports as `capacity_breaks`.
+    let capacity_breaks = hard_capacity_breaks(&violations);
+    let capacity_clean = capacity_breaks == 0;
 
     // conditional splits are layout-invariant (an SCC co-clusters everywhere),
     // so they are computed once and shared verbatim by every candidate.
@@ -141,6 +147,7 @@ fn analyze_inner(
             tree: current_node,
             score: current_breakdown.total,
             score_breakdown: current_breakdown.into(),
+            capacity_breaks,
             violations,
         },
         modes: Modes {
@@ -148,6 +155,19 @@ fn analyze_inner(
             greenfield,
         },
     })
+}
+
+/// Counts the capacity findings that hard-breach their caps: `Severity::Violation`
+/// only. Borderline observations sit within the tolerance band, never gate a
+/// standing, and never count as breaks; they remain listed in `violations`.
+fn hard_capacity_breaks(violations: &[Violation]) -> u32 {
+    let count = violations
+        .iter()
+        .filter(|violation| {
+            violation.kind == ViolationKind::Capacity && violation.severity == Severity::Violation
+        })
+        .count();
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 /// Builds the coarse census of the snapshot.
@@ -427,9 +447,26 @@ fn walk_capacity(
     let (measure, cap) = match node.level {
         Level::File => (node.production_sloc.unwrap_or(0), config.capacity.file),
         Level::Folder => (file_child_count(node), config.capacity.folder),
-        Level::Domain => (child_count(node), config.capacity.domain),
-        Level::Package => (child_count(node), config.capacity.package),
-        Level::PackageGroup => (child_count(node), config.capacity.package_group),
+        // QUAL-P3-2: upper levels count their real structural members deeply —
+        // a domain every file-binding folder beneath it, a package every
+        // binding domain, a package group every binding package — so nesting
+        // through an intermediate level cannot launder binding out of the
+        // finding. Only members that actually bind a file count: an interior
+        // directory chain (`a/b/c`) is one real place, never three. The folder
+        // arm stays a direct file count (files bind exactly once at their own
+        // folder).
+        Level::Domain => (
+            count_bound_members(node, Level::Folder).0,
+            config.capacity.domain,
+        ),
+        Level::Package => (
+            count_bound_members(node, Level::Domain).0,
+            config.capacity.package,
+        ),
+        Level::PackageGroup => (
+            count_bound_members(node, Level::Package).0,
+            config.capacity.package_group,
+        ),
     };
 
     if let Some(finding) = capacity_finding(node, path, measure, cap) {
@@ -464,11 +501,39 @@ fn append_display_segments(path: &mut Vec<String>, node: &ContainerNode) {
     }
 }
 
-/// Returns the child count of an interior container.
-fn child_count(node: &ContainerNode) -> u32 {
-    node.children.as_ref().map_or(0, |children| {
-        u32::try_from(children.len()).unwrap_or(u32::MAX)
-    })
+/// Counts, in one pass, the descendants of `node` at `member_level` whose
+/// subtree binds at least one file — the real places beneath it — plus
+/// whether `node` itself binds one (QUAL-P3-2). An intermediate level can no
+/// longer launder binding out of the finding. A rendered directory chain
+/// interleaves one Folder node per path segment, so a folder counts as a real
+/// place only when it *directly* holds a file — otherwise every ancestor
+/// segment of `a/b/c` would price the single directory three times. Upper
+/// member levels (domain, package) have no such chaining, so their transitive
+/// binding stands.
+fn count_bound_members(node: &ContainerNode, member_level: Level) -> (u32, bool) {
+    if node.level == Level::File {
+        return (0, true);
+    }
+    let mut members = 0_u32;
+    let mut holds = false;
+    for child in node.children.iter().flatten() {
+        let (child_members, child_holds) = count_bound_members(child, member_level);
+        members = members.saturating_add(child_members);
+        holds |= child_holds;
+    }
+    if node.level == member_level {
+        let binds = if member_level == Level::Folder {
+            node.children
+                .as_ref()
+                .is_some_and(|children| children.iter().any(|child| child.level == Level::File))
+        } else {
+            holds
+        };
+        if binds {
+            members = members.saturating_add(1);
+        }
+    }
+    (members, holds)
 }
 
 /// Returns the number of file children a folder holds directly.
@@ -551,6 +616,7 @@ fn score_current(
     snapshot: &Snapshot,
     coefficients: &Coefficients,
     weights: &KindWeights,
+    folder_budget: u32,
 ) -> CoreBreakdown {
     let ir = snapshot.ir();
     let container_of: BTreeMap<u32, ContainerId> = ir
@@ -563,6 +629,7 @@ fn score_current(
         &|id| container_of.get(&id).copied(),
         &ir.containers,
         0.0,
+        folder_budget,
     );
     score(&candidate, coefficients, weights)
 }
@@ -600,7 +667,12 @@ fn build_mode_result(
         solution_space_converged,
     } = diversify(&solver, &mode_config);
 
-    let current_breakdown = score_current(snapshot, coefficients, &config.weights.kind_weights());
+    let current_breakdown = score_current(
+        snapshot,
+        coefficients,
+        &config.weights.kind_weights(),
+        config.capacity.folder,
+    );
     let current_tree = &snapshot.ir().containers;
     let mut built = Vec::with_capacity(candidates.len());
     for (index, solved) in candidates.iter().enumerate() {
@@ -798,16 +870,22 @@ struct PipelineSolver<'a> {
     /// The configured edge-kind weights pricing the cut term.
     weights: KindWeights,
     /// The identity partition (anchored mode on a cap-clean tree), else `None`.
+    /// Cloned before relief, so it always mirrors the current tree exactly.
     identity: Option<Partition>,
-    /// The real-directory folder partition: every file SCC in the cluster of
-    /// its current parent folder. Folders are reality, so this is the one
-    /// folder-grain start every seed shares.
+    /// The relieved real-directory folder partition: each file SCC starts in
+    /// the cluster of its current parent folder, except that an over-capacity
+    /// real folder's SCCs are pre-split along priced connectivity into
+    /// cap-respecting halves ([`relieve_over_capacity`]). Folders stay reality,
+    /// so this is still the one folder-grain start every non-identity seed
+    /// shares; only the identity entry bypasses it.
     real_partition: Partition,
-    /// Each real folder cluster's directory name, indexed by cluster id.
+    /// Each relieved folder cluster's directory name, indexed by cluster id;
+    /// split halves extend the table with `{folder}-{token}` labels.
     real_folder_names: Vec<SmolStr>,
-    /// Whether each real folder cluster is the synthetic `workspace` bucket,
-    /// indexed by cluster id in lockstep with `real_folder_names`. Carries the
-    /// current tree's collapse marker onto the candidate folder it induces.
+    /// Whether each relieved folder cluster is the synthetic `workspace`
+    /// bucket, indexed by cluster id in lockstep with `real_folder_names`.
+    /// Carries the current tree's collapse marker onto the candidate folder it
+    /// induces; split halves are always real places, so they carry `false`.
     real_folder_synthetic: Vec<bool>,
     /// The configured base seed; seed offset 0 selects the identity entry.
     base_seed: u64,
@@ -872,11 +950,29 @@ impl<'a> PipelineSolver<'a> {
         let reverse_dag = reverse_csr(&condensation.dag);
 
         // folders are reality: the identity layout and the search's folder
-        // partition are the same object — each file SCC in its real directory
-        // — so anchored seeding just clones it.
-        let (real_partition, real_folder_names, real_folder_synthetic) =
+        // partition start as the same object — each file SCC in its real
+        // directory — so anchored seeding just clones it.
+        let (identity_partition, identity_names, identity_synthetic) =
             real_dir_partition(&files, &condensation);
-        let identity = seed_identity.then(|| real_partition.clone());
+        let identity = seed_identity.then(|| identity_partition.clone());
+
+        // FIX03 relieves over-capacity binding in the search grain itself: a
+        // real folder holding more files than its budget is pre-split along
+        // priced connectivity into cap-respecting halves, and each half's files
+        // carry an overridden domain home key so coarsening treats them as
+        // separate places. The objective prices what this creates, so every
+        // non-identity seed starts from a layout the split can win from instead
+        // of only being able to shed files out of the over-cap folder.
+        let (relieved_files, search_partition, folder_names, folder_synthetic) =
+            relieve_over_capacity(
+                files,
+                &condensation,
+                &file_graph,
+                &identity_partition,
+                &identity_names,
+                &identity_synthetic,
+                caps.folder,
+            );
         let root_name = ir
             .containers
             .containers()
@@ -887,7 +983,7 @@ impl<'a> PipelineSolver<'a> {
 
         Self {
             snapshot,
-            files,
+            files: relieved_files,
             index_of,
             condensation,
             reverse_dag,
@@ -895,9 +991,9 @@ impl<'a> PipelineSolver<'a> {
             coefficients,
             weights,
             identity,
-            real_partition,
-            real_folder_names,
-            real_folder_synthetic,
+            real_partition: search_partition,
+            real_folder_names: folder_names,
+            real_folder_synthetic: folder_synthetic,
             base_seed: config.analysis.seed,
             root_name,
             facts,
@@ -910,13 +1006,19 @@ impl<'a> PipelineSolver<'a> {
         let assembled = self.assemble(parts);
         let placement = |id: u32| assembled.placement.get(&id).copied();
         let distance = move_distance(self.snapshot, &assembled.tree);
-        let candidate = score_candidate(self.snapshot, &placement, &assembled.tree, distance);
+        let candidate = score_candidate(
+            self.snapshot,
+            &placement,
+            &assembled.tree,
+            distance,
+            self.caps.folder,
+        );
         score(&candidate, &self.coefficients, &self.weights).total
     }
 
     /// The J(T)-polish pass: sweeps every file SCC in deterministic order and
     /// greedily relocates it to the strongest-pulling folder whenever the move
-    /// strictly lowers the full five-level objective. Capacity (files per
+    /// strictly lowers the full objective. Capacity (files per
     /// folder) and quotient cyclicity stay hard vetoes, never penalties — but
     /// the cyclicity veto is relative, not absolute: a move is barred when it
     /// *grows* the number of folders caught in quotient cycles, never for
@@ -1042,7 +1144,13 @@ impl<'a> PipelineSolver<'a> {
     fn identity_entry(&self, identity: &Partition) -> SolvedCandidate {
         SolvedCandidate {
             partition: identity.clone(),
-            score: score_current(self.snapshot, &self.coefficients, &self.weights).total,
+            score: score_current(
+                self.snapshot,
+                &self.coefficients,
+                &self.weights,
+                self.caps.folder,
+            )
+            .total,
         }
     }
 
@@ -1481,7 +1589,12 @@ impl<'a> PipelineSolver<'a> {
     ) -> Result<Candidate, StrataError> {
         let nodes = &self.snapshot.ir().nodes;
         if self.identity.as_ref() == Some(&solved.partition) {
-            let breakdown = score_current(self.snapshot, &self.coefficients, &self.weights);
+            let breakdown = score_current(
+                self.snapshot,
+                &self.coefficients,
+                &self.weights,
+                self.caps.folder,
+            );
             let node = render_tree(
                 current_tree,
                 nodes,
@@ -1504,7 +1617,13 @@ impl<'a> PipelineSolver<'a> {
         let placement = |id: u32| assembled.placement.get(&id).copied();
         let distance = move_distance(self.snapshot, &assembled.tree);
         let breakdown = score(
-            &score_candidate(self.snapshot, &placement, &assembled.tree, distance),
+            &score_candidate(
+                self.snapshot,
+                &placement,
+                &assembled.tree,
+                distance,
+                self.caps.folder,
+            ),
             &self.coefficients,
             &self.weights,
         );
@@ -1782,6 +1901,294 @@ fn real_dir_partition(
         names,
         synthetic,
     )
+}
+
+/// Splits every over-capacity real folder cluster into cap-respecting halves
+/// and overrides each split file's domain home key so the halves stay apart.
+///
+/// The split runs on priced connectivity between the folder's SCCs: two SCCs
+/// end up in the same pile only when a positively-priced file edge joins them
+/// ([`connected_piles`]), so each half stays internally connected and the
+/// quotient DAG never gains a cycle (whole SCCs always move together). Only
+/// evidence-backed halves split off: a pile qualifies when its members are
+/// actually joined (at least two SCCs or two files); unrelated singletons stay
+/// glued to the original cluster, because inventing halves for unconnected
+/// files would erase the merge pressure that cross-folder coupling otherwise
+/// exerts on the search. A connected pile that alone exceeds the budget is
+/// chunked contiguously along its own connectivity; a single oversized SCC
+/// cannot be split at all and is left whole — the objective still prices it,
+/// which is honest.
+///
+/// Pile 0 of each folder keeps the folder's original cluster id; every later
+/// pile gets a fresh cluster id, an extended `{folder}-{token}` name, and a
+/// `false` synthetic marker. Split files' `home.domain` is rewritten to their
+/// half's label so coarsening votes them into separate domains — without it,
+/// heavy-edge matching would weld the halves straight back together. Returns
+/// the mutated files plus the relieved partition and its extended tables; the
+/// identity entry must be cloned before this runs (the caller does).
+fn relieve_over_capacity(
+    mut files: Vec<FileInfo>,
+    condensation: &Condensation,
+    graph: &Csr,
+    base: &Partition,
+    base_names: &[SmolStr],
+    base_synthetic: &[bool],
+    cap: u32,
+) -> (Vec<FileInfo>, Partition, Vec<SmolStr>, Vec<bool>) {
+    let mut assignment = base.assignment().to_vec();
+    let mut names = base_names.to_vec();
+    let mut synthetic = base_synthetic.to_vec();
+    if cap == 0 {
+        // a disabled budget binds nothing, so there is nothing to relieve.
+        return (files, base.clone(), names, synthetic);
+    }
+    let base_count = base.cluster_count();
+    let mut next_cluster = u64::from(u32::try_from(base_count).unwrap_or(u32::MAX));
+    let mut used_labels: BTreeSet<SmolStr> = names.iter().cloned().collect();
+    for cluster_index in 0..base_count {
+        if next_cluster > u64::from(u32::MAX) {
+            break;
+        }
+        let cluster = ClusterId(u32::try_from(cluster_index).unwrap_or(u32::MAX));
+        let sccs: Vec<u32> = (0..u32::try_from(condensation.members.len()).unwrap_or(u32::MAX))
+            .filter(|scc| base.cluster_of(*scc) == Some(cluster))
+            .collect();
+        let bound: u32 = sccs
+            .iter()
+            .map(|&scc| scc_file_count(condensation, scc))
+            .sum();
+        if bound <= cap {
+            continue;
+        }
+        let piles: Vec<Vec<u32>> = connected_piles(&sccs, condensation, graph, cap)
+            .into_iter()
+            .filter(|pile| {
+                // evidence rule: only a joined pile earns its own half.
+                pile.len() >= 2
+                    || pile.first().is_some_and(|&scc| scc_file_count(condensation, scc) >= 2)
+            })
+            .collect();
+        if piles.is_empty() {
+            continue;
+        }
+        let base_name = base_names
+            .get(cluster_index)
+            .cloned()
+            .unwrap_or_else(|| SmolStr::new("workspace"));
+        for (ordinal, pile) in piles.iter().enumerate().skip(1) {
+            let token = elect_split_token(pile, condensation, &files);
+            // half names extend the real directory so they can never collide
+            // with it or a sibling; a repeated dominant token falls back to
+            // the numeric form.
+            let mut label = token.map_or_else(
+                || format!("{base_name}-{ordinal}"),
+                |stem| format!("{base_name}-{stem}"),
+            );
+            if used_labels.contains(label.as_str()) {
+                label = format!("{base_name}-{ordinal}");
+            }
+            used_labels.insert(SmolStr::from(label.clone()));
+            for &scc in pile {
+                if let Some(slot) = assignment.get_mut(scc as usize) {
+                    *slot = ClusterId(u32::try_from(next_cluster).unwrap_or(u32::MAX));
+                }
+                rewrite_split_homes(&mut files, condensation, scc, &label);
+            }
+            names.push(SmolStr::from(label));
+            synthetic.push(false);
+            next_cluster += 1;
+        }
+    }
+    (
+        files,
+        Partition::from_assignment(
+            assignment,
+            usize::try_from(next_cluster).unwrap_or(base_count),
+        ),
+        names,
+        synthetic,
+    )
+}
+
+/// Counts the files an SCC holds.
+fn scc_file_count(condensation: &Condensation, scc: u32) -> u32 {
+    condensation.members.get(scc as usize).map_or(0, |members| {
+        u32::try_from(members.len()).unwrap_or(u32::MAX)
+    })
+}
+
+/// Rewrites every file in `scc` to carry `label` as its domain home key, so
+/// the half this SCC belongs to votes and coarsens as its own place.
+fn rewrite_split_homes(files: &mut [FileInfo], condensation: &Condensation, scc: u32, label: &str) {
+    let Some(members) = condensation.members.get(scc as usize) else {
+        return;
+    };
+    for member in members {
+        if let Some(file) = files.get_mut(member.0 as usize) {
+            file.home.domain = SmolStr::from(label);
+        }
+    }
+}
+
+/// Follows `parent` links from `start` to its union-find root.
+fn union_root(parent: &BTreeMap<u32, u32>, start: u32) -> u32 {
+    let mut node = start;
+    while let Some(&up) = parent.get(&node) {
+        if up == node {
+            return node;
+        }
+        node = up;
+    }
+    start
+}
+
+/// Groups `sccs` into connectivity piles joined by positively-priced edges
+/// between their member files: every connected component becomes one pile,
+/// and a component that alone exceeds `cap` is chunked by breadth-first
+/// traversal from its smallest SCC, closing a chunk just before the next SCC
+/// would push it past the budget (a lone oversized SCC stays whole). No
+/// packing happens across components — unrelated files must not be invented
+/// into a shared half. Deterministic: CSR rows are ascending, union roots are
+/// the smaller id, and traversal order follows ascending neighbor ids.
+fn connected_piles(
+    sccs: &[u32],
+    condensation: &Condensation,
+    graph: &Csr,
+    cap: u32,
+) -> Vec<Vec<u32>> {    let wanted: BTreeSet<u32> = sccs.iter().copied().collect();
+    let mut parent: BTreeMap<u32, u32> = wanted.iter().map(|&scc| (scc, scc)).collect();
+    let mut adjacency: BTreeMap<u32, BTreeSet<u32>> =
+        wanted.iter().map(|&scc| (scc, BTreeSet::new())).collect();
+    for &scc in sccs {
+        let Some(members) = condensation.members.get(scc as usize) else {
+            continue;
+        };
+        for member in members {
+            let vertex = member.0;
+            for (&neighbor, weight) in graph.neighbors(vertex).iter().zip(graph.weights(vertex)) {
+                if *weight <= 0.0 {
+                    // zero-priced edges never bind placement (FIX04 doctrine).
+                    continue;
+                }
+                let Some(&other_scc) = condensation.membership.get(neighbor as usize) else {
+                    continue;
+                };
+                let other_scc = other_scc.0;
+                if !wanted.contains(&other_scc) || other_scc == scc {
+                    continue;
+                }
+                adjacency.entry(scc).or_default().insert(other_scc);
+                adjacency.entry(other_scc).or_default().insert(scc);
+                let (a, b) = (union_root(&parent, scc), union_root(&parent, other_scc));
+                if a != b {
+                    let (keep, move_) = if a <= b { (a, b) } else { (b, a) };
+                    parent.insert(move_, keep);
+                }
+            }
+        }
+    }
+
+    // gather connected components, each ordered ascending by SCC id.
+    let mut components: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for &scc in sccs {
+        components.entry(union_root(&parent, scc)).or_default().push(scc);
+    }
+
+    let mut piles: Vec<Vec<u32>> = Vec::new();
+    for members in components.values_mut() {
+        members.sort_unstable();
+        let total: u32 = members
+            .iter()
+            .map(|&scc| scc_file_count(condensation, scc))
+            .sum();
+        let chunks: Vec<Vec<u32>> = if total <= cap {
+            vec![members.clone()]
+        } else {
+            let mut visited: BTreeSet<u32> = BTreeSet::new();
+            let mut queue: std::collections::VecDeque<u32> =
+                members.first().copied().into_iter().collect();
+            let mut chunk: Vec<u32> = Vec::new();
+            let mut chunk_size = 0_u32;
+            let mut pieces: Vec<Vec<u32>> = Vec::new();
+            while let Some(scc) = queue.pop_front() {
+                if !visited.insert(scc) {
+                    continue;
+                }
+                let scc_size = scc_file_count(condensation, scc);
+                if !chunk.is_empty() && chunk_size + scc_size > cap {
+                    pieces.push(std::mem::take(&mut chunk));
+                    chunk_size = 0;
+                }
+                chunk.push(scc);
+                chunk_size += scc_size;
+                for neighbor in adjacency.get(&scc).into_iter().flatten() {
+                    if !visited.contains(neighbor) {
+                        queue.push_back(*neighbor);
+                    }
+                }
+            }
+            if !chunk.is_empty() {
+                pieces.push(chunk);
+            }
+            pieces
+        };
+        piles.extend(chunks);
+    }
+    piles
+}
+
+/// Elects a split-half suffix token from the dominant alphabetic basename stem
+/// among the pile's files, weighted by production SLOC then file count, with
+/// lexicographic order breaking exact ties. Returns `None` when no file has a
+/// usable stem, falling back to numeric labels.
+fn elect_split_token(
+    pile: &[u32],
+    condensation: &Condensation,
+    files: &[FileInfo],
+) -> Option<String> {
+    #[derive(Clone, Copy, Default)]
+    struct Tally {
+        sloc: u64,
+        count: u32,
+    }
+    let mut tally: BTreeMap<String, Tally> = BTreeMap::new();
+    for &scc in pile {
+        let Some(members) = condensation.members.get(scc as usize) else {
+            continue;
+        };
+        for member in members {
+            let Some(file) = files.get(member.0 as usize) else {
+                continue;
+            };
+            if let Some(token) = basename_stem(&file.name) {
+                let entry = tally.entry(token).or_default();
+                entry.sloc += u64::from(file.production_sloc);
+                entry.count += 1;
+            }
+        }
+    }
+    tally
+        .into_iter()
+        .max_by(|a, b| {
+            (a.1.sloc, a.1.count)
+                .cmp(&(b.1.sloc, b.1.count))
+                .then_with(|| b.0.cmp(&a.0))
+        })
+        .map(|(token, _)| token)
+}
+
+/// Extracts a file path's lowercase leading-alphabetic basename stem:
+/// `hub/ingest_00.py` elects `ingest`, `emit_00.ts` elects `emit`. Numeric or
+/// punctuation-only stems yield `None`.
+fn basename_stem(name: &str) -> Option<String> {
+    let basename = name.rsplit('/').next().unwrap_or(name);
+    let stem = basename.split_once('.').map_or(basename, |(stem, _)| stem);
+    let run: String = stem
+        .chars()
+        .take_while(char::is_ascii_alphabetic)
+        .collect::<String>()
+        .to_lowercase();
+    if run.is_empty() { None } else { Some(run) }
 }
 
 /// Names each distinct real location by its folder key, qualifying key ties by
@@ -2238,6 +2645,7 @@ fn score_candidate(
     placement: &dyn Fn(u32) -> Option<ContainerId>,
     tree: &ContainerTree,
     move_distance: f64,
+    folder_budget: u32,
 ) -> ScoreCandidate {
     let ir = snapshot.ir();
     let parent_of: BTreeMap<u32, Option<ContainerId>> = tree
@@ -2268,6 +2676,7 @@ fn score_candidate(
 
     let containers = container_sizes(snapshot, placement, tree);
     let (cohesion_groups, path_cohesion) = cohesion_inputs(snapshot, placement, tree);
+    let capacity_pressure = binding_pressure(tree, folder_budget);
 
     ScoreCandidate {
         edges,
@@ -2275,7 +2684,51 @@ fn score_candidate(
         cohesion_groups,
         path_cohesion,
         move_distance,
+        capacity_pressure,
     }
+}
+
+/// Sums the scoped over-capacity binding pressure of a rendered tree: over
+/// every folder and domain container, the share its transitively-bound file
+/// count exceeds `folder_budget` — `Σ max(0, bound − budget) / budget` (FIX03).
+///
+/// Ancestors bind, so nesting cannot dodge the budget: a domain whose folders
+/// together hold more than the budget pays for the whole binding even when
+/// each folder sits within it. The rendered tree is the flat IR form, so the
+/// count accumulates upward: each container folds its subtree total into its
+/// parent, charging folders and domains on the way. This is the priced
+/// counterpart of the eval's ancestor-binding rule; the configured per-level
+/// caps stay findings-only semantics (`walk_capacity`). A zero budget disables
+/// the term.
+fn binding_pressure(tree: &ContainerTree, folder_budget: u32) -> f64 {
+    if folder_budget == 0 {
+        return 0.0;
+    }
+    // Subtree file totals keyed by container id. Iterating in descending id
+    // order visits every child before its parent (ids are dense and parents
+    // precede children), so one pass settles every container exactly once.
+    let mut totals: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut pressure = 0.0_f64;
+    for container in tree.containers().iter().rev() {
+        match container.level {
+            ScopeLevel::File => {
+                if let Some(parent) = container.parent {
+                    *totals.entry(parent.0).or_insert(0) += 1;
+                }
+            }
+            level => {
+                let bound = totals.remove(&container.id.0).unwrap_or(0);
+                if matches!(level, ScopeLevel::Folder | ScopeLevel::Domain) {
+                    let over = bound.saturating_sub(folder_budget);
+                    pressure += f64::from(over) / f64::from(folder_budget);
+                }
+                if let Some(parent) = container.parent {
+                    *totals.entry(parent.0).or_insert(0) += bound;
+                }
+            }
+        }
+    }
+    pressure
 }
 
 /// Derives the naming-cohesion groups and the path-cohesion fraction of a
@@ -2346,7 +2799,12 @@ fn cohesion_inputs(
     }
 
     let path_cohesion = if total == 0 {
-        0.0
+        // No production SLOC exists under this placement (an all-test fixture,
+        // say), so no file could demonstrably have left its folder: the
+        // weighted fraction has an empty denominator, and the documented
+        // invariant credits such a layout in full instead of collapsing the
+        // empty ratio to a signed-zero term that reads as zero cohesion.
+        1.0
     } else {
         // reason: sloc totals fit u32 sums; the f64 mantissa loses nothing material
         #[allow(clippy::cast_precision_loss)]
@@ -2981,6 +3439,8 @@ fn solve_cycles(
 
 #[cfg(test)]
 mod tests {
+    use strata_core::condense::SccId;
+
     use smol_str::SmolStr;
     use strata_ir::{
         ContainerId, Edge, EdgeKind, Hardness, IntermediateRepresentation, Layout, NodeId,
@@ -3808,6 +4268,7 @@ mod tests {
                     naming: 0.0,
                     path: 0.0,
                     anchor: 0.0,
+                    capacity: 0.0,
                 },
                 current_standing: CurrentStanding::Outscored,
             });
@@ -3979,6 +4440,29 @@ mod tests {
                 (ViolationKind::Capacity, Severity::Borderline, "a"),
             ]
         );
+    }
+
+    #[test]
+    fn should_count_only_hard_capacity_findings_as_breaks() {
+        let finding = |kind, severity, location: &str| Violation {
+            kind,
+            severity,
+            location: vec![location.to_owned()],
+            detail: String::new(),
+            break_suggestions: None,
+            capacity: None,
+        };
+        let violations = vec![
+            finding(ViolationKind::Capacity, Severity::Borderline, "warm"),
+            finding(ViolationKind::Visibility, Severity::Violation, "b"),
+            finding(ViolationKind::Capacity, Severity::Violation, "big_folder"),
+            finding(ViolationKind::Capacity, Severity::Violation, "huge_file"),
+            finding(ViolationKind::Cycle, Severity::Violation, "y"),
+            finding(ViolationKind::Capacity, Severity::Borderline, "another_warm"),
+        ];
+
+        assert_eq!(hard_capacity_breaks(&violations), 2);
+        assert_eq!(hard_capacity_breaks(&[]), 0);
     }
 
     #[test]
@@ -4356,12 +4840,14 @@ mod tests {
     }
 
     #[test]
-    fn should_keep_an_over_cap_real_directory_whole_under_its_real_name() {
-        // one real directory (`openai`) holds more files than the folder cap and
-        // no sibling directory exists to relieve into. Folders are reality: the
-        // directory stays one whole folder under its real name — never a
-        // synthetic `openai-gpt` or `openai-2` split — and the breach surfaces
-        // downstream as an honest capacity violation instead.
+    fn should_split_an_over_cap_directory_into_named_halves_along_connectivity() {
+        // one real directory (`openai`) holds two priced file pairs — more
+        // than the folder cap of two — and no sibling directory exists to
+        // relieve into. FIX03 prices that binding in the objective, so the
+        // search grain itself relieves it: the directory splits along its
+        // priced connectivity into cap-respecting halves — the first keeps the
+        // real directory's name, later halves extend it with their dominant
+        // basename stem, keeping every name a real place.
         let snapshot = snapshot(
             vec![
                 homed(0, "gpt", 4, 10),
@@ -4413,12 +4899,20 @@ mod tests {
 
         assert_eq!(
             folders.len(),
-            1,
-            "the real directory must stay one whole folder, got {folders:?}"
+            2,
+            "the over-cap directory must relieve into two halves, got {folders:?}"
+        );
+        // the first pile keeps the real directory's own name — folders are
+        // reality, so the original place never renames; only a new pile earns
+        // an extended `{dir}-{stem}` label.
+        assert!(
+            folders.iter().any(|name| name.as_str() == "openai"),
+            "the original directory must keep its real name, got {folders:?}"
         );
         assert!(
-            folders.iter().all(|name| name.as_str() == "openai"),
-            "the folder must keep its real directory name, got {folders:?}"
+            folders.iter().any(|name| name.as_str() == "openai-dalle"),
+            "the second half must extend the real directory with its dominant \
+             stem, got {folders:?}"
         );
     }
 
@@ -5796,5 +6290,232 @@ mod tests {
             "expected the tied sibling domains to qualify by their anchor \
              folders `app (pa.app.x)` and `app (pa.app.y)`"
         );
+    }
+
+    /// Builds an over-capacity fixture file living in the synthetic `hub`
+    /// folder with a `{stem}_{index}.py` basename.
+    fn relief_file(index: usize, stem: &str) -> FileInfo {
+        FileInfo {
+            container: u32::try_from(index).unwrap_or(u32::MAX),
+            name: SmolStr::new(format!("{stem}_{index:02}.py")),
+            production_sloc: 10,
+            home: LaminarHome {
+                folder: SmolStr::new("hub"),
+                domain: SmolStr::new("hub"),
+                package: SmolStr::new("app"),
+                synthetic: false,
+            },
+        }
+    }
+
+    /// Builds an all-singleton condensation over `file_count` files.
+    fn singleton_condensation(file_count: usize) -> Condensation {
+        Condensation {
+            dag: Csr::from_sorted_edges(file_count, &[]),
+            membership: (0..file_count)
+                .map(|index| SccId(u32::try_from(index).unwrap_or(u32::MAX)))
+                .collect(),
+            members: (0..file_count)
+                .map(|index| vec![NodeId(u32::try_from(index).unwrap_or(u32::MAX))])
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn should_accumulate_transitive_binding_over_the_flat_candidate_tree() {
+        let tree = ContainerTree::new(vec![
+            container(0, "app", ScopeLevel::PackageGroup, None),
+            container(1, "hub", ScopeLevel::Domain, Some(0)),
+            container(2, "hub/ingest", ScopeLevel::Folder, Some(1)),
+            container(3, "hub/ingest/a.py", ScopeLevel::File, Some(2)),
+            container(4, "hub/ingest/b.py", ScopeLevel::File, Some(2)),
+            container(5, "hub/ingest/c.py", ScopeLevel::File, Some(2)),
+            container(6, "hub/emit", ScopeLevel::Folder, Some(1)),
+            container(7, "hub/emit/d.py", ScopeLevel::File, Some(6)),
+        ]);
+
+        // `ingest` binds 3 files → one over-budget share against budget 2;
+        // `emit` stays within budget; the domain binds all 4 → two shares.
+        // Ancestor binding is the point: nesting cannot dodge the budget.
+        assert!((binding_pressure(&tree, 2) - 1.5).abs() < 1e-9);
+        // everything within budget charges nothing.
+        assert!(binding_pressure(&tree, 4).abs() < 1e-9);
+        // a zero budget disables the term entirely.
+        assert!(binding_pressure(&tree, 0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn should_count_binding_folders_through_an_intermediate_domain() {
+        // QUAL-P3-2 witness: `dom` directly holds only one child (the nested
+        // `sub`), but three file-binding folders live beneath it. Direct-child
+        // counting stayed silent at cap 2; deep counting fires on both levels.
+        let tree = interior(
+            "root",
+            Level::PackageGroup,
+            vec![interior(
+                "pkg",
+                Level::Package,
+                vec![interior(
+                    "dom",
+                    Level::Domain,
+                    vec![interior(
+                        "sub",
+                        Level::Domain,
+                        vec![
+                            folder("x", vec![file("f1", 10)]),
+                            folder("y", vec![file("f2", 10)]),
+                            folder("z", vec![file("f3", 10)]),
+                        ],
+                    )],
+                )],
+            )],
+        );
+        let mut config = AnalyzeConfig::default();
+        config.capacity.domain = 2;
+
+        let findings = walk_all_capacity(&tree, &config);
+
+        let domains: Vec<Vec<String>> = findings
+            .iter()
+            .filter(|(level, _)| *level == Level::Domain)
+            .map(|(_, violation)| violation.location.clone())
+            .collect();
+        assert_eq!(
+            domains,
+            vec![
+                vec!["root".to_owned(), "pkg".to_owned(), "dom".to_owned()],
+                vec![
+                    "root".to_owned(),
+                    "pkg".to_owned(),
+                    "dom".to_owned(),
+                    "sub".to_owned()
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn should_split_an_over_capacity_folder_along_priced_connectivity() {
+        // 24 files in one real-folder cluster against budget 20: two priced
+        // 12-file chains (`ingest`, `emit`) with no cross-chain edges, so
+        // connectivity elects exactly the two halves a human would cut.
+        let file_count = 24;
+        let files: Vec<FileInfo> = (0..file_count)
+            .map(|index| {
+                if index < 12 {
+                    relief_file(index, "ingest")
+                } else {
+                    relief_file(index, "emit")
+                }
+            })
+            .collect();
+        let condensation = singleton_condensation(file_count);
+        let chain = |start: u32| {
+            (start..start + 11)
+                .map(|vertex| (vertex, vertex + 1, 1.0_f32))
+                .collect::<Vec<_>>()
+        };
+        let mut edges = chain(0);
+        edges.extend(chain(12));
+        let graph = Csr::from_weighted_edges(file_count, &edges);
+        let base = Partition::from_assignment(vec![ClusterId(0); file_count], 1);
+
+        let (relieved, partition, names, synthetic) = relieve_over_capacity(
+            files,
+            &condensation,
+            &graph,
+            &base,
+            &[SmolStr::new("hub")],
+            &[false],
+            20,
+        );
+
+        assert_eq!(partition.cluster_count(), 2);
+        for index in 0..12usize {
+            let scc = u32::try_from(index).unwrap_or(u32::MAX);
+            assert_eq!(
+                partition.cluster_of(scc),
+                Some(ClusterId(0)),
+                "pile 0 keeps the original cluster id"
+            );
+            let home = relieved.get(index).map(|file| file.home.domain.as_str());
+            assert_eq!(home, Some("hub"));
+        }
+        for index in 12..24usize {
+            let scc = u32::try_from(index).unwrap_or(u32::MAX);
+            assert_eq!(
+                partition.cluster_of(scc),
+                Some(ClusterId(1)),
+                "the later pile gets the fresh cluster id"
+            );
+            let home = relieved.get(index).map(|file| file.home.domain.as_str());
+            assert_eq!(home, Some("hub-emit"));
+        }
+        assert_eq!(names, vec![SmolStr::new("hub"), SmolStr::new("hub-emit")]);
+        assert_eq!(synthetic, vec![false, false]);
+    }
+
+    #[test]
+    fn should_chunk_an_oversized_component_and_fall_back_to_numeric_labels() {
+        // one 22-file priced chain against budget 20 is a single oversized
+        // component: BFS chunks it into 20 + 2, and the numeric-only basenames
+        // yield no alphabetic stem, so the overflow chunk qualifies numerically.
+        let file_count = 22;
+        let files: Vec<FileInfo> = (0..file_count)
+            .map(|index| relief_file(index, "123"))
+            .collect();
+        let condensation = singleton_condensation(file_count);
+        let edges: Vec<(u32, u32, f32)> = (0..21).map(|v| (v, v + 1, 1.0_f32)).collect();
+        let graph = Csr::from_weighted_edges(file_count, &edges);
+        let base = Partition::from_assignment(vec![ClusterId(0); file_count], 1);
+
+        let (relieved, partition, names, _) = relieve_over_capacity(
+            files,
+            &condensation,
+            &graph,
+            &base,
+            &[SmolStr::new("hub")],
+            &[false],
+            20,
+        );
+
+        assert_eq!(partition.cluster_count(), 2);
+        let moved: Vec<usize> = relieved
+            .iter()
+            .enumerate()
+            .filter(|(_, file)| file.home.domain == "hub-1")
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(moved, vec![20, 21], "only the overflow chunk moves");
+        assert_eq!(names.get(1), Some(&SmolStr::new("hub-1")));
+    }
+
+    #[test]
+    fn should_not_invent_halves_for_unconnected_members() {
+        // 22 mutually unconnected files against budget 20: no pile is joined
+        // by priced evidence, so the folder stays whole — the objective prices
+        // the binding and the search may still relieve it by moving files into
+        // folders that actually pull them.
+        let file_count = 22;
+        let files: Vec<FileInfo> = (0..file_count)
+            .map(|index| relief_file(index, "solo"))
+            .collect();
+        let condensation = singleton_condensation(file_count);
+        let graph = Csr::from_weighted_edges(file_count, &[]);
+        let base = Partition::from_assignment(vec![ClusterId(0); file_count], 1);
+
+        let (relieved, partition, names, _) = relieve_over_capacity(
+            files,
+            &condensation,
+            &graph,
+            &base,
+            &[SmolStr::new("hub")],
+            &[false],
+            20,
+        );
+
+        assert_eq!(partition.cluster_count(), 1);
+        assert!(relieved.iter().all(|file| file.home.domain == "hub"));
+        assert_eq!(names, vec![SmolStr::new("hub")]);
     }
 }

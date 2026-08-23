@@ -6,9 +6,9 @@ Snapshot `12763e5c2516c0f237c53ced17b567cf4a35f95fec2ccc63d3c09bf8866a1d81`.
 
 ## Current layout
 
-Score `251.8387`.
+Score `0.1668`.
 
-- cut `252.0000`, imbalance `0.0406`, naming `-0.0019`, path `-0.2000`, anchor `0.0000`
+- cut `0.3281`, imbalance `0.0406`, naming `-0.0019`, path `-0.2000`, anchor `0.0000`
 
 ### Violations
 
@@ -18,49 +18,40 @@ None.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+133.6845`, score `118.1542`)
+_Current layout is already optimal; candidate 1 is the current tree._
 
-- cut `118.0000`, imbalance `0.0610`, naming `-0.0029`, path `-0.1538`, anchor `0.2500`
+### Candidate 1 (improvement `+0.0000`, score `0.1668`)
 
-**Moves**
+- cut `0.3281`, imbalance `0.0406`, naming `-0.0019`, path `-0.2000`, anchor `0.0000`
 
-```
-split — pulled by beta.ts (w 1.0)
-  1. src/util/clamp.ts [constellation-ts/util → constellation-ts/core]
-split — pulled by reader.ts (w 1.0)
-  2. src/util/logger.ts [constellation-ts/util → constellation-ts/io]
-merge — pulled by point.ts (w 2.0)
-  3. src/io/parser.ts [constellation-ts/io → constellation-ts/model]
-  4. src/util/hash.ts [constellation-ts/util → constellation-ts/model]
-  5. src/util/lerp.ts [constellation-ts/util → constellation-ts/model]
-move — pulled by canvas.ts (w 1.0)
-  6. src/core/epsilon.ts [constellation-ts/core → constellation-ts/render]
-split — follows canvas.ts
-  7. src/util/canvas.spec.ts [constellation-ts/util → constellation-ts/render]
-```
+No moves versus the current layout.
 
 ## Greenfield candidates
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+133.9806`, score `118.0580`)
+### Candidate 1 (improvement `+0.1628`, score `0.2040`)
 
-- cut `118.0000`, imbalance `0.0610`, naming `-0.0029`, path `-0.0000`, anchor `0.0000`
+- cut `0.1641`, imbalance `0.0435`, naming `-0.0036`, path `-0.0000`, anchor `0.0000`
 
 **Moves**
 
 ```
-split — pulled by beta.ts (w 1.0)
-  1. src/util/clamp.ts [constellation-ts/util → constellation-ts/core]
-split — pulled by reader.ts (w 1.0)
-  2. src/util/logger.ts [constellation-ts/util → constellation-ts/io]
+merge — pulled by gamma.ts (w 2.0)
+  1. src/model/matrix.ts [constellation-ts/model → constellation-ts/core]
+  2. src/model/mesh.ts [constellation-ts/model → constellation-ts/core]
+  3. src/util/clamp.ts [constellation-ts/util → constellation-ts/core]
+  4. src/util/hash.ts [constellation-ts/util → constellation-ts/core]
+split — pulled by encoder.ts (w 1.0)
+  5. src/util/buffer.ts [constellation-ts/util → constellation-ts/io]
 merge — pulled by point.ts (w 2.0)
-  3. src/io/parser.ts [constellation-ts/io → constellation-ts/model]
-  4. src/util/hash.ts [constellation-ts/util → constellation-ts/model]
-  5. src/util/lerp.ts [constellation-ts/util → constellation-ts/model]
-move — pulled by canvas.ts (w 1.0)
-  6. src/core/epsilon.ts [constellation-ts/core → constellation-ts/render]
-split — follows canvas.ts
-  7. src/util/canvas.spec.ts [constellation-ts/util → constellation-ts/render]
+  6. src/core/alpha.ts [constellation-ts/core → constellation-ts/model]
+  7. src/io/parser.ts [constellation-ts/io → constellation-ts/model]
+  8. src/util/lerp.ts [constellation-ts/util → constellation-ts/model]
+merge — pulled by logger.ts (w 2.0)
+  9. src/core/epsilon.ts [constellation-ts/core → constellation-ts/util]
+  10. src/io/writer.ts [constellation-ts/io → constellation-ts/util]
+  11. src/render/canvas.ts [constellation-ts/render → constellation-ts/util]
+  12. src/render/shader.ts [constellation-ts/render → constellation-ts/util]
 ```
 

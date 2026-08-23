@@ -1,0 +1,85 @@
+# Constraint target for the `relief` fixture — see CONTRACT.md for the schema.
+#
+# Failure mode: over-capacity. `hub/` holds 24 files against the default folder
+# cap of 20, in two disjoint 12-file chains (ingest, emit) that share no edge.
+# The only good proposal splits the folder in two; the defect this target pins
+# is relief that never registers — today's binary reports byte-identical score
+# and zero moves on the sibling e2e fixture despite the capacity findings.
+
+schema = 1
+fixture = "relief"
+
+[meta]
+failure_mode = "over-capacity"
+language = "python"
+question = "Does relieving an over-cap folder register in the proposal at all?"
+
+[run]
+mode = "both"        # both modes must produce a feasible best candidate
+candidates = 3       # engine default k
+seed = 42            # engine default seed
+config = "defaults"  # pure built-in defaults; no fixture strata.toml
+
+[[precondition]]
+kind = "violation_present"
+violation = "capacity"
+location_suffix = "hub"
+because = "hub holds 24 files against the default folder cap of 20; without this finding the fixture measures nothing"
+
+[[precondition]]
+kind = "file_count"
+min = 25
+max = 25
+because = "24 chain files plus main.py; any other count means source discovery broke"
+
+[[assert]]
+modes = ["anchored", "greenfield"]
+candidate = 1
+
+[[assert.capacity_relief]]
+mode = "anchored"
+because = "a best state leaves zero hard capacity findings; a candidate that keeps the 24-file folder is not a best state, it is the defect"
+
+[[assert.capacity_relief]]
+mode = "greenfield"
+because = "greenfield is layout-blind and has no anchoring excuse either; symmetric pin"
+
+[[assert.separate]]
+paths = ["hub/ingest_00.py", "hub/emit_00.py"]
+because = "the chains share no edge of any kind; merging them reproduces the over-cap container under a new name"
+
+[[assert.keep_together]]
+paths = ["hub/ingest_00.py", "hub/ingest_01.py"]
+because = "chain adjacency must survive inside some container; dissolving hub entirely relieves capacity by shredding, which is not the split the fixture hunts"
+
+[[assert.keep_together]]
+paths = ["hub/emit_00.py", "hub/emit_01.py"]
+because = "symmetric adjacency pin on the emit chain; pure dissolution must fail the letter even though every folder-level finding vanishes with it"
+
+[[assert.size_band]]
+scope = "any_container"
+max_files = 20
+because = "no best-state folder may itself breach the cap the proposal just relieved"
+
+[[reference.container]]
+path = "hub-ingest"
+files = [
+  "hub/ingest_00.py", "hub/ingest_01.py", "hub/ingest_02.py", "hub/ingest_03.py",
+  "hub/ingest_04.py", "hub/ingest_05.py", "hub/ingest_06.py", "hub/ingest_07.py",
+  "hub/ingest_08.py", "hub/ingest_09.py", "hub/ingest_10.py", "hub/ingest_11.py",
+]
+
+[[reference.container]]
+# the first connectivity half keeps the real directory's own name (`hub`,
+# folders are reality); only later halves extend it, so the ingest half lands
+# in `hub-ingest` below.
+path = "hub"
+files = [
+  "hub/emit_00.py", "hub/emit_01.py", "hub/emit_02.py", "hub/emit_03.py",
+  "hub/emit_04.py", "hub/emit_05.py", "hub/emit_06.py", "hub/emit_07.py",
+  "hub/emit_08.py", "hub/emit_09.py", "hub/emit_10.py", "hub/emit_11.py",
+]
+
+[[reference.container]]
+path = "root"
+files = ["main.py"]

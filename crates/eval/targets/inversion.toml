@@ -1,0 +1,76 @@
+# Constraint target for the `inversion` fixture — see CONTRACT.md for the schema.
+#
+# Failure mode: anchored-inversion. The layout is already optimal: three
+# cohesive, well-named directories with priced internal chains, no cross-
+# directory edges, plus a thin facade. Anchored pays mu to stay close to this
+# layout, so it must propose nothing; proposing MORE moved files than
+# greenfield is the inversion defect this target pins.
+
+schema = 1
+fixture = "inversion"
+
+[meta]
+failure_mode = "anchored-inversion"
+language = "python"
+question = "Does anchored ever propose more change than greenfield on an optimal layout?"
+
+[run]
+mode = "both"        # non_inversion needs both faces of one run
+candidates = 3       # engine default k
+seed = 42            # engine default seed
+config = "defaults"  # pure built-in defaults; no fixture strata.toml
+
+[[precondition]]
+kind = "file_count"
+min = 7
+max = 7
+because = "two files per feature directory plus the facade; any other count means source discovery broke"
+
+[[assert]]
+modes = ["anchored", "greenfield"]
+candidate = 1
+
+[[assert.move_budget]]
+mode = "anchored"
+max_moved_files = 0
+because = "the layout is the defended best state; any anchored moved file is pure churn charged against mu, and the scorer preferring the merge is part of the measured distance"
+
+[[assert.move_budget]]
+mode = "greenfield"
+max_moved_files = 0
+because = "on an already-optimal layout neither mode should propose change; greenfield churning proves the objective, not the anchor, misranks the merge"
+
+[[assert.non_inversion]]
+because = "anchored carries strictly more active penalty terms than greenfield; moving more files than greenfield on the defended best state is the inversion defect by definition"
+
+[[assert.preserve_dir]]
+path = "geometry"
+because = "a real, cohesive, well-named directory; survival is the floor any proposal must clear"
+
+[[assert.preserve_dir]]
+path = "textwrap"
+because = "symmetric floor: textwrap's two files share a priced import and nothing else touches them"
+
+[[assert.preserve_dir]]
+path = "metrics"
+because = "symmetric floor: metrics' two files share a priced import and nothing else touches them"
+
+[[assert.separate]]
+paths = ["geometry/shape.py", "metrics/counter.py"]
+because = "co-locating unrelated features is misgrouping even when both directories individually survive"
+
+[[reference.container]]
+path = "geometry"
+files = ["geometry/shape.py", "geometry/area.py"]
+
+[[reference.container]]
+path = "textwrap"
+files = ["textwrap/wrap.py", "textwrap/columns.py"]
+
+[[reference.container]]
+path = "metrics"
+files = ["metrics/counter.py", "metrics/rate.py"]
+
+[[reference.container]]
+path = "facade"
+files = ["main.py"]

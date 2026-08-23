@@ -1,0 +1,56 @@
+# Constraint target for the `naming-drift` fixture — see CONTRACT.md for the schema.
+#
+# Failure mode: naming-incoherence. `helpers/` is a misleadingly named directory
+# holding two genuinely distinct clusters: text/date utilities (no shared edge
+# with payments) and a charge/refund payment pair joined by a priced import,
+# with checkout touching only charge. A good proposal splits the roof so the
+# elected container names align with what actually lives inside.
+
+schema = 1
+fixture = "naming-drift"
+
+[meta]
+failure_mode = "naming-incoherence"
+language = "python"
+question = "Does a proposal regroup misnamed containers so names match contents?"
+
+[run]
+mode = "both"        # name alignment is mode-independent in a best state
+candidates = 3       # engine default k
+seed = 42            # engine default seed
+config = "defaults"  # pure built-in defaults; no fixture strata.toml
+
+[[precondition]]
+kind = "file_count"
+min = 5
+max = 5
+because = "four helpers files plus checkout; any other count means source discovery broke"
+
+[[assert]]
+modes = ["anchored", "greenfield"]
+candidate = 1
+
+[[assert.name_alignment]]
+min_ratio = 0.5
+min_members = 2
+because = "a container whose name shares tokens with fewer than half its members is the incoherence itself; elected names derive from members, so misses expose fallback or numeric elections and mixed homes"
+
+[[assert.keep_together]]
+paths = ["helpers/charge.py", "helpers/refund.py"]
+because = "the payment pair is joined by a priced import; splitting it trades real cohesion for token noise"
+
+[[assert.separate]]
+paths = ["helpers/string_utils.py", "helpers/charge.py"]
+because = "shared membership under the misleading helpers roof is the defect; text utilities and card charging must land in different containers"
+
+[[reference.container]]
+path = "utils"
+files = ["helpers/string_utils.py", "helpers/date_utils.py"]
+
+[[reference.container]]
+path = "payments"
+files = ["helpers/charge.py", "helpers/refund.py"]
+
+[[reference.container]]
+path = "checkout"
+files = ["checkout.py"]

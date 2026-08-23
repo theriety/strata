@@ -1,11 +1,98 @@
-snapshot 84f436a6abe243e83d27001cc8172d1b58b8c906829566083426f2a55d56cf64
-summary: 2 symbols, 1 edges, 2 files
-current score: 1.9000
-polarity [violation] serve, sample_fixture :: production symbol `serve` depends on test code `sample_fixture`
-mode anchored: 1 candidate(s)
-  (fewer than k candidates; solution space converged)
-  current layout is already optimal; candidate 1 is the current tree
-  candidate 1 improvement +0.0000 (score 1.9000; 0 move group(s))
-mode greenfield: 1 candidate(s)
-  (fewer than k candidates; solution space converged)
-  candidate 1 improvement +0.0000 (score 2.1000; 0 move group(s))
+================================================================================
+ dataset   : polarity-leak
+ census    : 2 symbols · 1 edges · 2 files (python)
+--------------------------------------------------------------------------------
+ reading rules
+--------------------------------------------------------------------------------
+ scores    : four decimals, lower is better            0.0250 → 0.0250
+ gain      : improvement over that mode's own starting point, measured in
+             the same units as the score              +0.0000
+ modes     : anchored keeps today's good placements as fixed points while
+             improving the rest; greenfield ignores current paths entirely
+             and rebuilds from imports alone
+ leaf      : one relocatable unit — a source file plus the symbols it
+             carries; moving it moves both. A table's leaf is whichever unit
+             that suggestion acts on: usually the whole file, sometimes one
+             symbol or one call.
+ weight    : strength of the import relationship the move satisfies —
+             roughly how many import connections it honors; a bigger number
+             is more valuable to honor
+ comparability: candidate scores are comparable only within one mode of one
+             project — greenfield drops the path and anchor terms and
+             re-baselines. When two candidates share one structure, decide
+             between them by intent, never by raw score.
+ rounding  : columns round independently to four decimals; totals compute unrounded
+ truncation: always explicit (… +N more); nothing is cut silently
+ grain     : every suggestion states what it relocates — whole files, or
+             symbols within one file; a suggestion that changes no placement
+             says so instead of shipping a table. Prose under each table is
+             its caption and carries the why.
+ names     : file, folder and symbol names always appear in `backticks`
+ future    : anything today's strata cannot yet emit keeps the literal label
+             "future capability — not in current output" (none apply here) —
+             the label marks capability, never whether the advice is real
+ grid      : 100 columns · monospace · no color · no links · scroll only
+
+================================================================================
+ §1  The candidates this run produced
+================================================================================
+ candidate count : 2  (anchored mode returned 1 · greenfield mode returned 1)
+
+ candidate 1   anchored/1     score  0.0250   gain +0.0000   best score
+ candidate 2   greenfield/1   score  0.2250   gain +0.0000   different shape, own baseline
+
+ comparability: these two gains have different starting points — anchored baselines the current
+                 tree at 0.0250; greenfield re-prices paths and drops anchor credit, baselining the
+                 same tree at 0.2250. Each gain is measured against its own mode's baseline — never
+                 compare across modes.
+
+ note  fewer than the requested candidates survived; the solution space converged.
+
+================================================================================
+ §2  What would change — candidate 1 (anchored)
+================================================================================
+no change suggested — candidate 1 matches today's layout, file for file.
+
+================================================================================
+ §3  Blast radius — changed containers only
+================================================================================
+nothing relocates — every container keeps its files.
+
+================================================================================
+ §4  Findings this run raised
+================================================================================
+ cycles (0) — cuts that would break them, priced by weight:
+
+ capacity (0) — containers and files over their caps today:
+
+
+ polarity (1) — production depending on test code today:
+
+ production symbol `serve` depends on test code `sample_fixture`
+
+================================================================================
+ §5  Score delta — current → candidate 1
+================================================================================
+ term               current       proposal    delta
+ cut                 0.1250         0.1250        +0.0000
+ imbalance           0.1000         0.1000        +0.0000
+ naming             -0.0000        -0.0000        +0.0000
+ path               -0.2000        -0.2000        +0.0000
+ anchor              0.0000         0.0000        +0.0000
+ score               0.0250         0.0250        +0.0000   (gain +0.0000)
+
+ the five terms combine into the total score; lower is better.
+
+ term gloss  cut = import connections broken by moving · imbalance = lopsided folder sizes · naming
+             = folder names fit their contents · path = how far things travel · anchor = credit for
+             respecting existing well-placed code
+
+================================================================================
+ §6  Recommendation
+================================================================================
+ keep       keep the current layout — the run's best candidate is today's tree unchanged.
+ in part    partial plans are not rescored; apply §2 in its given order, one change at a time.
+
+================================================================================
+ end of report · polarity-leak
+================================================================================

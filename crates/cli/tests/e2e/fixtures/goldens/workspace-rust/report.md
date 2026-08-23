@@ -6,9 +6,9 @@ Snapshot `8795580f9da7539c0f81cfff9a5a94ff00821c1c6231cd0d0a6934cff6e2e7ac`.
 
 ## Current layout
 
-Score `157.5054`.
+Score `0.7266`.
 
-- cut `157.7000`, imbalance `0.0054`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
+- cut `0.9211`, imbalance `0.0054`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
 
 ### Violations
 
@@ -21,9 +21,21 @@ Score `157.5054`.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+136.8865`, score `20.6189`)
+_Current layout is already optimal; candidate 1 is the current tree._
 
-- cut `20.5000`, imbalance `0.0054`, naming `-0.3000`, path `-0.0865`, anchor `0.5000`
+### Candidate 1 (improvement `+0.0000`, score `0.7266`)
+
+- cut `0.9211`, imbalance `0.0054`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
+
+No moves versus the current layout.
+
+## Greenfield candidates
+
+_Fewer than the requested candidates survived; the solution space converged._
+
+### Candidate 1 (improvement `+1.1014`, score `-0.1749`)
+
+- cut `0.1197`, imbalance `0.0054`, naming `-0.3000`, path `-0.0000`, anchor `0.0000`
 
 **Moves**
 
@@ -31,21 +43,5 @@ _Fewer than the requested candidates survived; the solution space converged._
 merge — pulled by lib.rs (w 7.8)
   1. crates/app/src/lib.rs [crates/app → crates/core]
   2. crates/util/src/lib.rs [crates/util → crates/core]
-```
-
-## Greenfield candidates
-
-_Fewer than the requested candidates survived; the solution space converged._
-
-### Candidate 1 (improvement `+137.5000`, score `20.2054`)
-
-- cut `20.5000`, imbalance `0.0054`, naming `-0.3000`, path `-0.0000`, anchor `0.0000`
-
-**Moves**
-
-```
-merge — pulled by lib.rs (w 6.0)
-  1. crates/core/src/lib.rs [crates/core → crates/app]
-  2. crates/util/src/lib.rs [crates/util → crates/app]
 ```
 

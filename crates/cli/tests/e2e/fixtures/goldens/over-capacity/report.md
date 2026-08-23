@@ -8,7 +8,7 @@ Snapshot `0445e5dfd3b113bca4864b0ad1ee2a67b6ed69be2bf170a79677dec9e2ac118a`.
 
 Score `-0.1905`.
 
-- cut `-0.0000`, imbalance `0.0095`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
+- cut `0.0000`, imbalance `0.0095`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
 
 ### Violations
 
@@ -26,7 +26,7 @@ _2 file-level breach(es) exceed the file cap; only conditional splits can fix th
 
 ### Candidate 1 (improvement `+0.0000`, score `-0.1905`)
 
-- cut `-0.0000`, imbalance `0.0095`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
+- cut `0.0000`, imbalance `0.0095`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
 
 No moves versus the current layout.
 
@@ -40,7 +40,7 @@ _2 file-level breach(es) exceed the file cap; only conditional splits can fix th
 
 ### Candidate 1 (improvement `+0.0000`, score `0.0095`)
 
-- cut `-0.0000`, imbalance `0.0095`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+- cut `0.0000`, imbalance `0.0095`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
 No moves versus the current layout.
 

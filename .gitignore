@@ -3,5 +3,5 @@ github-actions-deploy-key
 github-actions-deploy-key.pub
 .claude
 .serena
-.state
+.state/
 .tokensave

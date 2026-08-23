@@ -3253,6 +3253,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-eval"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "strata-engine",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "strata-ir"
 version = "0.1.0"
 dependencies = [

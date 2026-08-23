@@ -1,0 +1,64 @@
+# Constraint target for the `collapse` fixture — see CONTRACT.md for the schema.
+#
+# Failure mode: workspace-collapse. Two packages (manifest-marked roots) each
+# with real subdirectories; the engine's fallback name for an unresolvable
+# group is literally `workspace`, and greenfield regroup historically swallows
+# real directories into that invented bucket. The question is whether real
+# directory names survive the proposal.
+
+schema = 1
+fixture = "collapse"
+
+[meta]
+failure_mode = "workspace-collapse"
+language = "typescript"
+question = "Does a synthetic workspace bucket swallow real directories?"
+
+[run]
+mode = "both"        # the swallow was observed on greenfield; anchored must hold too
+candidates = 3       # engine default k
+seed = 42            # engine default seed
+config = "defaults"  # pure built-in defaults; no fixture strata.toml
+
+[[precondition]]
+kind = "file_count"
+min = 5
+max = 5
+because = "atlas ships three source files and beacon two (manifests are not sources); any other count means manifest or source discovery broke"
+
+[[assert]]
+modes = ["anchored", "greenfield"]
+candidate = 1
+
+[[assert.no_synthetic_bucket]]
+name = "workspace"
+because = "`workspace` is the fallback name for an unresolvable group; its presence means real directories lost their names inside an invented bucket"
+
+[[assert.preserve_dir]]
+path = "store"
+because = "the store directory survives as a named container inside its own package rather than dissolving upward into package or bucket (container keys are package-relative)"
+
+[[assert.preserve_dir]]
+path = "widget"
+because = "symmetric to store: the real directory keeps its name under its own package root"
+
+[[assert.separate]]
+paths = ["atlas/src/store/kit.ts", "beacon/src/widget/panel.ts"]
+because = "cross-package co-location is precisely the swallow this fixture hunts; packages are manifest-declared boundaries, not clustering suggestions"
+
+[[assert.size_band]]
+scope = "any_container"
+max_files = 4
+because = "a folder holding more than one package's directories is the collapse itself"
+
+[[reference.container]]
+path = "atlas-store"
+files = ["atlas/src/store/kit.ts", "atlas/src/store/shelf.ts"]
+
+[[reference.container]]
+path = "atlas-api"
+files = ["atlas/src/api/route.ts"]
+
+[[reference.container]]
+path = "beacon-widget"
+files = ["beacon/src/widget/panel.ts", "beacon/src/widget/frame.ts"]

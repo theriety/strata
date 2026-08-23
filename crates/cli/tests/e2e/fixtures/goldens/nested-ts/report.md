@@ -6,9 +6,9 @@ Snapshot `0ae026419631a59131d81f1e90ba4c679e96a74d71394ac168f3a15263901bc8`.
 
 ## Current layout
 
-Score `38.1190`.
+Score `0.2553`.
 
-- cut `38.2000`, imbalance `0.1190`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
+- cut `0.3363`, imbalance `0.1190`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
 
 ### Violations
 
@@ -18,24 +18,21 @@ None.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+19.7510`, score `18.3681`)
+_Current layout is already optimal; candidate 1 is the current tree._
 
-- cut `18.2000`, imbalance `0.1347`, naming `-0.0000`, path `-0.1333`, anchor `0.1667`
+### Candidate 1 (improvement `+0.0000`, score `0.2553`)
 
-**Moves**
+- cut `0.3363`, imbalance `0.1190`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
 
-```
-move — pulled by rectangle.ts (w 2.0)
-  1. src/app.ts [nested-ts → nested-ts/geometry]
-```
+No moves versus the current layout.
 
 ## Greenfield candidates
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+19.9843`, score `18.3347`)
+### Candidate 1 (improvement `+0.1603`, score `0.2949`)
 
-- cut `18.2000`, imbalance `0.1347`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+- cut `0.1602`, imbalance `0.1347`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
 **Moves**
 

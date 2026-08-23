@@ -68,6 +68,13 @@ pub struct CurrentTree {
     pub score_breakdown: ScoreBreakdown,
     /// The structural violations of the current layout.
     pub violations: Vec<Violation>,
+    /// How many of those violations are capacity findings that hard-breach
+    /// their caps (`Severity::Violation` only). Borderline observations stay
+    /// listed in `violations` but never count as breaks — the same predicate
+    /// that gates `infeasible` standings. This is the authoritative count
+    /// behind the "breaks N capacity findings" narration; faces must not
+    /// re-tally it.
+    pub capacity_breaks: u32,
 }
 
 /// The per-mode candidate sets; a mode that was not requested is `None`.
@@ -164,6 +171,8 @@ pub struct ScoreBreakdown {
     pub path: f64,
     /// The move-distance anchoring penalty.
     pub anchor: f64,
+    /// The scoped over-capacity binding penalty (FIX03).
+    pub capacity: f64,
 }
 
 impl From<strata_core::score::ScoreBreakdown> for ScoreBreakdown {
@@ -174,6 +183,7 @@ impl From<strata_core::score::ScoreBreakdown> for ScoreBreakdown {
             naming: value.naming,
             path: value.path,
             anchor: value.anchor,
+            capacity: value.capacity,
         }
     }
 }
@@ -444,12 +454,14 @@ mod tests {
             naming: -0.5,
             path: 0.0,
             anchor: 0.25,
+            capacity: 0.75,
         };
 
         let json = serde_json::to_string(&breakdown).unwrap_or_default();
 
         assert!(json.contains("\"cut\":1.0"));
         assert!(json.contains("\"anchor\":0.25"));
+        assert!(json.contains("\"capacity\":0.75"));
     }
 
     #[test]
