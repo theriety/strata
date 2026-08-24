@@ -33,15 +33,9 @@ No moves versus the current layout.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+1.1014`, score `-0.1749`)
+### Candidate 1 (improvement `+0.0000`, score `0.9266`)
 
-- cut `0.1197`, imbalance `0.0054`, naming `-0.3000`, path `-0.0000`, anchor `0.0000`
+- cut `0.9211`, imbalance `0.0054`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
-**Moves**
-
-```
-merge — pulled by lib.rs (w 7.8)
-  1. crates/app/src/lib.rs [crates/app → crates/core]
-  2. crates/util/src/lib.rs [crates/util → crates/core]
-```
+No moves versus the current layout.
 

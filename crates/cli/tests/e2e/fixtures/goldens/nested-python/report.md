@@ -30,9 +30,9 @@ No moves versus the current layout.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+0.2855`, score `0.2989`)
+### Candidate 1 (improvement `+0.2994`, score `0.2850`)
 
-- cut `0.1592`, imbalance `0.1396`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+- cut `0.1406`, imbalance `0.1444`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
 **Moves**
 

@@ -115,6 +115,7 @@ mod tests {
                         tree: file("candidate_lib"),
                         conditional_splits: Vec::new(),
                         delta_narration: Vec::new(),
+                        symbol_moves: Vec::new(),
                         capacity_remainder: None,
                     }],
                     pairwise_distance: vec![vec![0.0]],

@@ -1,0 +1,55 @@
+# Constraint target for the `cycle-span` fixture — see CONTRACT.md for the schema.
+#
+# Failure mode: import-cycle. `engine/motor.py` and `drivetrain/shaft.py` import
+# each other across two real directories (both legs priced), so the priced file
+# graph carries one multi-home SCC; `engine/ignition.py` consumes its sibling
+# without joining the cycle, and `app.py` / `drivetrain/coupling.py` are loose
+# residents. The defended best state keeps both real directories whole and
+# keeps anchored at zero churn on this healthy layout.
+
+schema = 1
+fixture = "cycle-span"
+
+[meta]
+failure_mode = "import-cycle"
+language = "python"
+question = "Does an import cycle spanning two real directories keep both directories whole without churning a healthy layout?"
+
+[run]
+mode = "both"        # non_inversion needs both faces on one snapshot
+candidates = 3       # engine default k
+seed = 42            # engine default seed
+config = "defaults"  # pure built-in defaults; no fixture strata.toml
+
+[[precondition]]
+kind = "file_count"
+min = 5
+max = 5
+because = "two cycle files, one intra-directory consumer, one loose drivetrain resident, and the root entry point; any other count means source discovery broke"
+
+# No violation_present(cycle) precondition, deliberately: the engine reports
+# Cycle findings at SYMBOL granularity (run_motor -> spin -> torque_curve is a
+# DAG), while the seed/search grain that can tear here is the FILE-level
+# projection (motor <-> shaft). A file-only import cycle is invisible to the
+# violation layer by construction; the preserve_dir assertions below are the
+# observable trace of the cycle instead. Recorded as a finding, not a defect.
+
+[[assert]]
+modes = ["anchored", "greenfield"]
+candidate = 1
+
+[[assert.preserve_dir]]
+path = "engine"
+because = "the cycle opens inside engine; dissolving or renaming away the directory hides exactly the structure the cycle spans"
+
+[[assert.preserve_dir]]
+path = "drivetrain"
+because = "the cycle closes inside drivetrain; absorbing shaft.py into another container tears the second leg's home directory"
+
+[[assert.move_budget]]
+mode = "anchored"
+max_moved_files = 0
+because = "anchored reads this layout as optimal today (identity wins the pool); a healthy layout whose only anomaly is one small cycle must not be churned"
+
+[[assert.non_inversion]]
+because = "anchored may never move more files structurally than greenfield on the same snapshot"

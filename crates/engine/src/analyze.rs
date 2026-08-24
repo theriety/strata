@@ -38,7 +38,8 @@ use crate::narrate::{FileFacts, narrate, tokenize};
 use crate::result::{
     AnalyzeResult, Candidate, CapacityBreach, CapacityRemainder, ConditionalSplit, ContainerNode,
     CurrentStanding, CurrentTree, EdgeBreak, Level, ModeResult, Modes, RESULT_SCHEMA_VERSION,
-    ScoreBreakdown, Severity, Summary, SymbolPlacement, Violation, ViolationKind,
+    ScoreBreakdown, Severity, Summary, SymbolKind, SymbolMove, SymbolPlacement, Violation,
+    ViolationKind,
 };
 use crate::snapshot::Language;
 
@@ -841,6 +842,31 @@ const POLISH_SWEEPS: usize = 2;
 /// Candidate destination folders examined per move unit during polish.
 const POLISH_TARGETS: usize = 4;
 
+/// Bound on symbol-polish sweeps (FIX08): the same two-pass shape as the file
+/// polish — a second pass catches relocations the first pass unlocked — with an
+/// early stop once a sweep relocates nothing.
+const SYMBOL_SWEEPS: usize = 2;
+
+/// Candidate destination FILES examined per symbol during the symbol polish.
+const SYMBOL_TARGETS: usize = 4;
+
+/// Floor on symbol-polish acceptance (FIX08): an improvement smaller than this
+/// is float dust, not signal. Accepting it would fabricate movement — the very
+/// thing D-47 forbids — so the pass demands a real margin before relocating a
+/// symbol. The file polish does not need this: its moves are whole files, whose
+/// deltas dwarf any rounding error.
+const SYMBOL_MIN_IMPROVEMENT: f64 = 1e-12;
+
+/// Coherence floor under which a folder's residual population is held to be
+/// misdescribed by its own roof (FIX09): when fewer than half the files that
+/// would remain under a real directory share a basename token with it, the
+/// directory is the naming defect itself, and the synthesis dissolves it into
+/// evidence-backed places instead of leaving a misleading label over bonded
+/// company. Same majority semantics the eval harness's `name_alignment`
+/// verdict applies, so synthesis and measurement agree on what "misnamed"
+/// means.
+const ROOF_COHERENCE_FLOOR: f64 = 0.5;
+
 /// The restartable solver that runs the candidate pipeline once per seed.
 ///
 /// All of the seed-independent work — the weighted file-dependency graph, its
@@ -865,6 +891,11 @@ struct PipelineSolver<'a> {
     reverse_dag: Csr,
     /// The per-level member caps.
     caps: LevelCaps,
+    /// The production-SLOC cap per file (`capacity.file`); the symbol polish
+    /// (FIX08) vetoes any relocation that would push its destination file over
+    /// it. The file polish never needed it — it moves whole files, whose SLOC
+    /// travels with them.
+    file_cap: u32,
     /// The objective coefficients for this mode.
     coefficients: Coefficients,
     /// The configured edge-kind weights pricing the cut term.
@@ -872,6 +903,12 @@ struct PipelineSolver<'a> {
     /// The identity partition (anchored mode on a cap-clean tree), else `None`.
     /// Cloned before relief, so it always mirrors the current tree exactly.
     identity: Option<Partition>,
+    /// Whether relief left the search's real-directory partition identical to
+    /// the current tree — the mode-independent "nothing changed yet" shape. The
+    /// faithful candidate exit (FIX05) keys on this so greenfield reports an
+    /// unchanged layout through the same truthful render anchored uses, instead
+    /// of re-assembling reality and pricing its own fabrication.
+    real_is_identity: bool,
     /// The relieved real-directory folder partition: each file SCC starts in
     /// the cluster of its current parent folder, except that an over-capacity
     /// real folder's SCCs are pre-split along priced connectivity into
@@ -893,6 +930,14 @@ struct PipelineSolver<'a> {
     root_name: SmolStr,
     /// The per-file facts narration consults when explaining moves.
     facts: FileFacts,
+    /// FIX09 (naming-incoherence): the synthesized roof-rebuild start, present
+    /// exactly when some real folder hosts a mixed population — bonded files
+    /// plus a token-coherent group of zero-priced strangers — under a roof the
+    /// evidence says it does not describe. Seed offset 1 starts from this
+    /// partition instead of reality, giving the pool a genuinely different
+    /// shape that the ordinary polish/score path then ratifies or rejects; no
+    /// other seed or fixture is perturbed.
+    roof_rebuild: Option<Partition>,
 }
 
 impl<'a> PipelineSolver<'a> {
@@ -963,7 +1008,7 @@ impl<'a> PipelineSolver<'a> {
         // separate places. The objective prices what this creates, so every
         // non-identity seed starts from a layout the split can win from instead
         // of only being able to shed files out of the over-cap folder.
-        let (relieved_files, search_partition, folder_names, folder_synthetic) =
+        let (mut relieved_files, search_partition, mut folder_names, mut folder_synthetic) =
             relieve_over_capacity(
                 files,
                 &condensation,
@@ -973,6 +1018,25 @@ impl<'a> PipelineSolver<'a> {
                 &identity_synthetic,
                 caps.folder,
             );
+        // FIX09 (naming-incoherence): a misnamed roof is invisible to edge-driven
+        // search — the strangers under it carry no priced edge to pull them out,
+        // so every seed converges on the same welded layout and no candidate can
+        // ever propose the split. Where the signature fires, this synthesizes one
+        // alternative start: zero-priced strangers regrouped by their own shared
+        // tokens, a residual roof that misdescribes its remaining residents
+        // dissolved into priced-connected places, each new place labeled from
+        // member names and its files re-homed so upper-level elections follow.
+        // The proposal enters the ordinary pool at offset 1 — polish still runs,
+        // the vetoes still bind, the objective still decides — and when it does
+        // not fire, nothing downstream changes at all.
+        let roof_rebuild = synthesize_roof_rebuild(
+            &mut relieved_files,
+            &condensation,
+            &file_graph,
+            &search_partition,
+            &mut folder_names,
+            &mut folder_synthetic,
+        );
         let root_name = ir
             .containers
             .containers()
@@ -980,6 +1044,7 @@ impl<'a> PipelineSolver<'a> {
             .find(|container| container.level == ScopeLevel::PackageGroup)
             .map_or_else(|| SmolStr::new("workspace"), |group| group.name.clone());
         let facts = file_facts(snapshot, &weights, config.capacity.folder);
+        let real_is_identity = search_partition == identity_partition;
 
         Self {
             snapshot,
@@ -988,15 +1053,18 @@ impl<'a> PipelineSolver<'a> {
             condensation,
             reverse_dag,
             caps,
+            file_cap: config.capacity.file,
             coefficients,
             weights,
             identity,
+            real_is_identity,
             real_partition: search_partition,
             real_folder_names: folder_names,
             real_folder_synthetic: folder_synthetic,
             base_seed: config.analysis.seed,
             root_name,
             facts,
+            roof_rebuild,
         }
     }
 
@@ -1005,7 +1073,9 @@ impl<'a> PipelineSolver<'a> {
     fn evaluate(&self, parts: &Partition) -> f64 {
         let assembled = self.assemble(parts);
         let placement = |id: u32| assembled.placement.get(&id).copied();
-        let distance = move_distance(self.snapshot, &assembled.tree);
+        // the assembly's placement maps every node to its current file's
+        // candidate id, so this distance is pure file-grain movement.
+        let distance = move_distance(self.snapshot, &assembled.tree, &placement);
         let candidate = score_candidate(
             self.snapshot,
             &placement,
@@ -1052,6 +1122,56 @@ impl<'a> PipelineSolver<'a> {
                     u32::try_from(members.len()).unwrap_or(u32::MAX)
                 });
                 for target in self.pull_targets(parts, scc32, source) {
+                    // FIX05 (WS-D anchored-inversion): a bridge is not a member of
+                    // the thing it bridges. When an SCC's priced edges reach a
+                    // folder besides the pair (current, target) — main.py importing
+                    // three features, pipeline.py bridging billing and telemetry —
+                    // absorbing it into one side strands the rest of its boundary,
+                    // yet every locally-scored statistic of the absorber improves:
+                    // the adopted edges drop to folder height while the abandoned
+                    // ones keep whatever height they already had. The objective
+                    // alone therefore ratifies the absorption and greenfield
+                    // out-churns anchored, inverting the product promise (the
+                    // eval corpus's inversion witness). The veto is structural,
+                    // not scored: it fires before evaluation, needs no reference
+                    // to the current layout, and so binds both modes equally —
+                    // the FIX04 pattern of enforcing contract intent where
+                    // admission cannot see it. Zero-priced edges nominate nothing
+                    // here either: they never bind placement.
+                    if self.absorbs_a_foreign_anchor(parts, scc32, source, target) {
+                        continue;
+                    }
+                    // FIX05 (companion veto): the mirror image of bridge
+                    // absorption. An SCC whose current folder pulls at least as
+                    // hard as the destination is being torn from measured
+                    // company for speculative proximity — the channel that
+                    // survived the bridge veto: with the facade unabsorbable,
+                    // greedy polish instead walked the feature members out of
+                    // their real directories toward it, one transiently cheap
+                    // step at a time. Relocation is honest only when the
+                    // destination out-pulls what would be stranded (the
+                    // satellite joining its sole anchor); a tie resolves to
+                    // staying, because folders are reality until priced
+                    // evidence says otherwise.
+                    if self.strands_a_comparable_anchor(parts, scc32, source, target) {
+                        continue;
+                    }
+                    // FIX05 (third veto): the synthetic bucket is not a place.
+                    // `workspace` is the fallback name for files whose real
+                    // directory is the project root — an absence of structure,
+                    // not a structure. Once the first two vetoes sealed the
+                    // feature folders, greedy polish found the remaining exit:
+                    // feature members fleeing their real directories INTO the
+                    // bucket, because sitting beside the unabsorbable hub
+                    // cheapens their hub edges while the bucket prices nothing
+                    // back. That flight is the collapse defect itself (real
+                    // directories swallowed by an invented container). A file
+                    // with priced company in its own folder therefore may not
+                    // relocate into the bucket at all; only files reality left
+                    // loose belong there, and they are already home.
+                    if self.flees_into_the_synthetic_bucket(parts, scc32, source, target) {
+                        continue;
+                    }
                     let target_files = file_count
                         .get(target.0 as usize)
                         .copied()
@@ -1092,7 +1212,9 @@ impl<'a> PipelineSolver<'a> {
 
     /// Ranks the folders pulling hardest on `scc` — summed edge weight over both
     /// directions — and returns up to [`POLISH_TARGETS`] of them, strongest
-    /// first, ties broken by the lower cluster id.
+    /// first, ties broken by the lower cluster id. Zero-priced edges nominate
+    /// nothing: they never bind placement (the FIX04 doctrine), so a folder
+    /// connected only through re-exports is never offered as a move target.
     fn pull_targets(&self, parts: &Partition, scc: u32, source: ClusterId) -> Vec<ClusterId> {
         let mut pull: BTreeMap<ClusterId, f64> = BTreeMap::new();
         for graph in [&self.condensation.dag, &self.reverse_dag] {
@@ -1104,8 +1226,12 @@ impl<'a> PipelineSolver<'a> {
                 if cluster == source {
                     continue;
                 }
-                *pull.entry(cluster).or_insert(0.0) +=
-                    f64::from(weights.get(slot).copied().unwrap_or(0.0));
+                let weight = weights.get(slot).copied().unwrap_or(0.0);
+                if weight <= 0.0 {
+                    // FIX04 doctrine: a zero-priced edge never binds placement.
+                    continue;
+                }
+                *pull.entry(cluster).or_insert(0.0) += f64::from(weight);
             }
         }
         let mut ranked: Vec<(ClusterId, f64)> = pull.into_iter().collect();
@@ -1123,6 +1249,154 @@ impl<'a> PipelineSolver<'a> {
             .collect()
     }
 
+    /// Whether relocating `scc` from `source` into `target` would leave part of
+    /// its priced neighborhood behind in some third folder — the bridge-absorption
+    /// shape the polish veto bars (see the FIX05 comment at the call site). An
+    /// SCC every one of whose priced edges terminates inside {source, target} is
+    /// consolidating; one that also reaches elsewhere is orchestrating.
+    fn absorbs_a_foreign_anchor(
+        &self,
+        parts: &Partition,
+        scc: u32,
+        source: ClusterId,
+        target: ClusterId,
+    ) -> bool {
+        for graph in [&self.condensation.dag, &self.reverse_dag] {
+            let weights = graph.weights(scc);
+            for (slot, &neighbour) in graph.neighbors(scc).iter().enumerate() {
+                if weights.get(slot).copied().unwrap_or(0.0) <= 0.0 {
+                    // FIX04 doctrine: a zero-priced edge never binds placement,
+                    // so it cannot anchor a bridge either.
+                    continue;
+                }
+                let Some(cluster) = parts.cluster_of(neighbour) else {
+                    continue;
+                };
+                if cluster != source && cluster != target {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether relocating `scc` from `source` into `target` would strand priced
+    /// pull in `source` at least equal to what awaits in `target` — the
+    /// tearing-side veto (see the FIX05 companion comment at the call site).
+    /// Only strictly stronger destinations justify leaving.
+    fn strands_a_comparable_anchor(
+        &self,
+        parts: &Partition,
+        scc: u32,
+        source: ClusterId,
+        target: ClusterId,
+    ) -> bool {
+        let mut stranded = 0.0_f64;
+        let mut awaiting = 0.0_f64;
+        for graph in [&self.condensation.dag, &self.reverse_dag] {
+            let weights = graph.weights(scc);
+            for (slot, &neighbour) in graph.neighbors(scc).iter().enumerate() {
+                let weight = f64::from(weights.get(slot).copied().unwrap_or(0.0));
+                if weight <= 0.0 {
+                    // FIX04 doctrine: a zero-priced edge never binds placement.
+                    continue;
+                }
+                match parts.cluster_of(neighbour) {
+                    Some(cluster) if cluster == source => stranded += weight,
+                    Some(cluster) if cluster == target => awaiting += weight,
+                    _ => {}
+                }
+            }
+        }
+        awaiting <= stranded
+    }
+
+    /// Whether `target` is the synthetic `workspace` bucket and `scc` would have
+    /// to abandon priced company in its own folder to get there — the
+    /// bucket-flight veto (see the FIX05 third-veto comment at the call site).
+    fn flees_into_the_synthetic_bucket(
+        &self,
+        parts: &Partition,
+        scc: u32,
+        source: ClusterId,
+        target: ClusterId,
+    ) -> bool {
+        if !self
+            .real_folder_synthetic
+            .get(target.0 as usize)
+            .copied()
+            .unwrap_or(false)
+        {
+            return false;
+        }
+        for graph in [&self.condensation.dag, &self.reverse_dag] {
+            let weights = graph.weights(scc);
+            for (slot, &neighbour) in graph.neighbors(scc).iter().enumerate() {
+                if weights.get(slot).copied().unwrap_or(0.0) <= 0.0 {
+                    // FIX04 doctrine: a zero-priced edge never binds placement.
+                    continue;
+                }
+                if parts.cluster_of(neighbour) == Some(source) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// The FIX08 symbol-grain polish pass: sweeps every symbol over the
+    /// already-polished layout's EXISTING files and greedily relocates each to
+    /// the file whose residents pull it hardest whenever the move strictly
+    /// lowers the full objective J under this mode's coefficients. Trees never
+    /// change — only narrations grow — because v1 constrains relocation to
+    /// between existing files.
+    ///
+    /// Acceptance rides the same veto family as the file polish, adapted to
+    /// symbol grain (all structural vetoes fire before any evaluation):
+    ///
+    /// - **no empty shells** — the origin file must retain at least one
+    ///   production symbol; draining a file whole would be a file move wearing
+    ///   a symbol costume, and v1 does not propose those;
+    /// - **SLOC cap** — the destination file must absorb the symbol's
+    ///   production SLOC without breaching `capacity.file`;
+    /// - **no new cycles** — relative, like the file pass: barred only when the
+    ///   crossing graph over effectively-placed symbols grows its cyclic
+    ///   population against the pass's own baseline;
+    /// - **visibility floor** — the derived-visibility over-export finding
+    ///   count must not grow: pulling a symbol out of the LCA of its consumers
+    ///   must not manufacture an over-export;
+    /// - **strict J improvement** — ties resolve to staying.
+    ///
+    /// Zero-priced edges nominate nothing ([`absorbs_a_foreign_anchor`]'s FIX04
+    /// doctrine at symbol grain): an edge priced 0.0 never binds placement, so
+    /// it neither pulls a symbol nor counts toward a destination's pull.
+    ///
+    /// Deterministic end to end: symbols sweep in ascending id order,
+    /// destinations rank by summed two-way pull with ties broken toward the
+    /// lower file id, and every tie elsewhere resolves to staying. The pass is
+    /// skipped entirely on identity-equal layouts — `solve` routes those to the
+    /// faithful exit before this runs, so "already optimal" never fabricates
+    /// movement (FIX05/D-47).
+    fn symbol_polish(&self, parts: &Partition) -> SymbolOutcome {
+        let ir = self.snapshot.ir();
+        let assembled = self.assemble(parts);
+        let mut pass = SymbolPass::new(
+            self.snapshot,
+            &self.coefficients,
+            &self.weights,
+            self.caps.folder,
+            self.file_cap,
+            &assembled,
+            &ir.nodes,
+            &ir.edges,
+        );
+        pass.run();
+        SymbolOutcome {
+            overlay: pass.overlay,
+            relocations: pass.relocations,
+            total: pass.best,
+        }
+    }
     /// Wraps a finished partition, re-pricing it at the true current tree when
     /// it converged back to the identity layout, so every identity entry in the
     /// pool carries one consistent score.
@@ -1588,7 +1862,20 @@ impl<'a> PipelineSolver<'a> {
         splits: &[ConditionalSplit],
     ) -> Result<Candidate, StrataError> {
         let nodes = &self.snapshot.ir().nodes;
-        if self.identity.as_ref() == Some(&solved.partition) {
+        // FIX05: the faithful exit keys on the layout being reality, not on the
+        // analysis mode. Gating it on `identity` alone (anchored-only) meant a
+        // greenfield candidate whose partition is byte-for-byte the real
+        // directory layout still went through assemble() — which re-elects
+        // upper-level containers and nests them differently from the current
+        // tree — so "change nothing" rendered as structural moves for every
+        // file whose fabricated chain differed. That phantom churn is what
+        // inverted anchored against greenfield: the unbiased mode was billed
+        // for movement it never proposed. When relief split an over-capacity
+        // folder, the search's start is no longer reality, so the assemble
+        // path stays (the split is exactly what the proposal must show).
+        let faithful = self.identity.as_ref() == Some(&solved.partition)
+            || (self.real_is_identity && self.real_partition == solved.partition);
+        if faithful {
             let breakdown = score_current(
                 self.snapshot,
                 &self.coefficients,
@@ -1609,17 +1896,28 @@ impl<'a> PipelineSolver<'a> {
                 tree: node,
                 conditional_splits: splits.to_vec(),
                 delta_narration: Vec::new(),
+                symbol_moves: Vec::new(),
                 capacity_remainder: None,
             });
         }
 
         let assembled = self.assemble(&solved.partition);
-        let placement = |id: u32| assembled.placement.get(&id).copied();
-        let distance = move_distance(self.snapshot, &assembled.tree);
+        // FIX08: re-run the deterministic symbol pass on this exact partition.
+        // `solve` already priced its result into the ranking score, so the DTO
+        // score here matches what ranked this candidate by construction.
+        let symbols = self.symbol_polish(&solved.partition);
+        let merged = |id: u32| {
+            symbols
+                .overlay
+                .get(&id)
+                .copied()
+                .or_else(|| assembled.placement.get(&id).copied())
+        };
+        let distance = move_distance(self.snapshot, &assembled.tree, &merged);
         let breakdown = score(
             &score_candidate(
                 self.snapshot,
-                &placement,
+                &merged,
                 &assembled.tree,
                 distance,
                 self.caps.folder,
@@ -1627,9 +1925,10 @@ impl<'a> PipelineSolver<'a> {
             &self.coefficients,
             &self.weights,
         );
-        let placement_of = |node: &Node| assembled.placement.get(&node.id.0).copied();
+        let placement_of = |node: &Node| merged(node.id.0);
         let node = render_tree(&assembled.tree, nodes, &placement_of, &assembled.key_by_id)?;
         let delta = narrate(current_tree, &assembled.tree, &self.facts);
+        let symbol_moves = self.symbol_narrate(&assembled, &symbols);
 
         Ok(Candidate {
             index,
@@ -1639,8 +1938,103 @@ impl<'a> PipelineSolver<'a> {
             tree: node,
             conditional_splits: splits.to_vec(),
             delta_narration: delta,
+            symbol_moves,
             capacity_remainder: None,
         })
+    }
+
+    /// Narrates the accepted symbol relocations as scored [`SymbolMove`] DTOs.
+    ///
+    /// `from_path` reads the CURRENT tree's file name for the symbol's home
+    /// container; `to_path` reads the candidate file's name off the assembled
+    /// tree. `broken_imports` counts the distinct files other than origin and
+    /// destination that house a direct caller or callee under the final
+    /// overlay — those imports must be re-pointed once the move applies, while
+    /// edges landing in the destination become co-location (no import at all)
+    /// and edges inside the origin never cross a file boundary.
+    fn symbol_narrate(
+        &self,
+        assembled: &CandidateTree,
+        symbols: &SymbolOutcome,
+    ) -> Vec<SymbolMove> {
+        if symbols.relocations.is_empty() {
+            return Vec::new();
+        }
+        let ir = self.snapshot.ir();
+        let base = &assembled.placement;
+        let effective = |id: u32| -> Option<ContainerId> {
+            symbols
+                .overlay
+                .get(&id)
+                .copied()
+                .or_else(|| base.get(&id).copied())
+        };
+        let current_name: BTreeMap<u32, &str> = ir
+            .containers
+            .containers()
+            .iter()
+            .map(|container| (container.id.0, container.name.as_str()))
+            .collect();
+        let candidate_name: BTreeMap<u32, &str> = assembled
+            .tree
+            .containers()
+            .iter()
+            .filter(|container| container.level == ScopeLevel::File)
+            .map(|container| (container.id.0, container.name.as_str()))
+            .collect();
+        let kind_of = |node: &Node| match node.kind {
+            strata_ir::NodeKind::Symbol => SymbolKind::Symbol,
+            strata_ir::NodeKind::Type => SymbolKind::Type,
+        };
+
+        let by_node: BTreeMap<u32, &Node> = ir.nodes.iter().map(|node| (node.id.0, node)).collect();
+        let mut moves = Vec::with_capacity(symbols.relocations.len());
+        for relocation in &symbols.relocations {
+            let Some(symbol) = by_node.get(&relocation.node).copied() else {
+                continue;
+            };
+            let Some(&home) = base.get(&relocation.node) else {
+                continue;
+            };
+            debug_assert_eq!(
+                home, relocation.from_file,
+                "origin file is the symbol's base placement"
+            );
+            let mut severed: BTreeSet<ContainerId> = BTreeSet::new();
+            for edge in &ir.edges {
+                let neighbour = if edge.source.0 == relocation.node {
+                    edge.target.0
+                } else if edge.target.0 == relocation.node {
+                    edge.source.0
+                } else {
+                    continue;
+                };
+                let Some(place) = effective(neighbour) else {
+                    continue;
+                };
+                if place == relocation.to_file || place == relocation.from_file || place == home {
+                    continue;
+                }
+                severed.insert(place);
+            }
+            moves.push(SymbolMove {
+                symbol: symbol.name.to_string(),
+                kind: kind_of(symbol),
+                from_path: current_name
+                    .get(&symbol.container.0)
+                    .copied()
+                    .unwrap_or_default()
+                    .to_owned(),
+                to_path: candidate_name
+                    .get(&relocation.to_file.0)
+                    .copied()
+                    .unwrap_or_default()
+                    .to_owned(),
+                delta: -relocation.delta,
+                broken_imports: u32::try_from(severed.len()).unwrap_or(u32::MAX),
+            });
+        }
+        moves
     }
 }
 
@@ -1655,14 +2049,52 @@ impl Solver for PipelineSolver<'_> {
         // lean: every non-identity seed converges on the same polished layout —
         // folders are reality, so the folder-level seed perturbation that used
         // to differentiate restarts is gone and the pool collapses toward
-        // identity plus one improvement candidate. Re-sourcing diversity at the
-        // domain grain (the level that is still a clustered suggestion) is the
-        // upgrade path; this slice deliberately does not paper over the
-        // collapse.
-        let mut parts = self.real_partition.clone();
-        let total = self.polish(&mut parts);
-        self.finish(parts, total)
+        // identity plus one improvement candidate. FIX09 re-sources diversity at
+        // exactly one point: when the naming-incoherence signature fired at
+        // construction, offset 1 starts from the synthesized roof rebuild and
+        // runs the identical polish/score path on it, so the pool carries a
+        // genuinely different shape that the objective ratifies or rejects like
+        // any other. Every other offset polishes reality unchanged.
+        let start = match (&self.roof_rebuild, offset) {
+            (Some(rebuild), 1) => rebuild,
+            _ => &self.real_partition,
+        };
+        let mut parts = start.clone();
+        self.polish(&mut parts);
+        // FIX08: the file polish's layout is refined by the symbol-grain pass
+        // before scoring, so pool ranking prices symbol relocation too. The
+        // outcome itself is not threaded out — `build_candidate` re-runs this
+        // pure, deterministic pass on the identical partition and gets the
+        // identical overlay, so ranking score and DTO score agree by
+        // construction. (The polish's own total is subsumed: the symbol pass
+        // re-prices the identical layout before improving on it.)
+        let symbols = self.symbol_polish(&parts);
+        self.finish(parts, symbols.total)
     }
+}
+
+/// One symbol relocation the FIX08 symbol polish accepted, in candidate-tree
+/// file ids. `delta` is the strict J improvement it earned at acceptance time.
+struct SymbolRelocation {
+    /// The relocated node's id.
+    node: u32,
+    /// The candidate file container the symbol leaves.
+    from_file: ContainerId,
+    /// The candidate file container the symbol joins.
+    to_file: ContainerId,
+    /// The objective improvement contributed (positive; J drops by this much).
+    delta: f64,
+}
+
+/// The outcome of one symbol polish pass: the effective placement overlay, the
+/// accepted relocations in acceptance order, and the final objective total.
+struct SymbolOutcome {
+    /// Node id → candidate file container for relocated symbols only.
+    overlay: BTreeMap<u32, ContainerId>,
+    /// Accepted relocations in acceptance order.
+    relocations: Vec<SymbolRelocation>,
+    /// The objective total after all accepted relocations.
+    total: f64,
 }
 
 /// A reconstructed candidate tree plus the placement of every symbol node.
@@ -1712,7 +2144,9 @@ fn build_file_graph(
         // admit every edge at its configured price — not Hard edges alone — so
         // the search optimizes the same cut the score reports and soft-only
         // files (e.g. type-reference-only TS) get a non-empty move-set. A zero-
-        // priced kind still seeds mobility without shifting the cut.
+        // priced edge stays in the graph but binds nothing: polish never
+        // nominates it as a move target and matching never contracts across it
+        // (the FIX04 doctrine).
         let (Some(source), Some(target)) = (
             container_of.get(&edge.source.0),
             container_of.get(&edge.target.0),
@@ -1965,7 +2399,9 @@ fn relieve_over_capacity(
             .filter(|pile| {
                 // evidence rule: only a joined pile earns its own half.
                 pile.len() >= 2
-                    || pile.first().is_some_and(|&scc| scc_file_count(condensation, scc) >= 2)
+                    || pile
+                        .first()
+                        .is_some_and(|&scc| scc_file_count(condensation, scc) >= 2)
             })
             .collect();
         if piles.is_empty() {
@@ -2055,7 +2491,8 @@ fn connected_piles(
     condensation: &Condensation,
     graph: &Csr,
     cap: u32,
-) -> Vec<Vec<u32>> {    let wanted: BTreeSet<u32> = sccs.iter().copied().collect();
+) -> Vec<Vec<u32>> {
+    let wanted: BTreeSet<u32> = sccs.iter().copied().collect();
     let mut parent: BTreeMap<u32, u32> = wanted.iter().map(|&scc| (scc, scc)).collect();
     let mut adjacency: BTreeMap<u32, BTreeSet<u32>> =
         wanted.iter().map(|&scc| (scc, BTreeSet::new())).collect();
@@ -2091,7 +2528,10 @@ fn connected_piles(
     // gather connected components, each ordered ascending by SCC id.
     let mut components: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for &scc in sccs {
-        components.entry(union_root(&parent, scc)).or_default().push(scc);
+        components
+            .entry(union_root(&parent, scc))
+            .or_default()
+            .push(scc);
     }
 
     let mut piles: Vec<Vec<u32>> = Vec::new();
@@ -2189,6 +2629,389 @@ fn basename_stem(name: &str) -> Option<String> {
         .collect::<String>()
         .to_lowercase();
     if run.is_empty() { None } else { Some(run) }
+}
+
+/// FIX09 (naming-incoherence): synthesizes one alternative search start that
+/// rebuilds a misnamed real roof into evidence-backed places, returning the
+/// rebuilt partition — or `None` when no folder carries the signature, leaving
+/// every downstream byte unchanged.
+///
+/// The signature, per real non-synthetic folder cluster: a group of at least
+/// two zero-priced files (no incident edge prices above zero anywhere in the
+/// graph — D-46 makes them structurally unanchored, hence invisible to every
+/// pull-driven move) whose basenames share tokens pairwise-connectedly, hosted
+/// alongside at least one other file. Those strangers are exactly the
+/// population edge-driven relocation can never nominate, so without synthesis
+/// the pool collapses onto layouts that keep them welded under a label that
+/// describes someone else.
+///
+/// The rebuild follows the [`relieve_over_capacity`] pattern: whole SCCs move
+/// (the quotient DAG never gains a cycle), each new place gets a fresh cluster
+/// id, an extended `{folder}-…` name grounded in member names, and a rewritten
+/// `home.domain` key so upper-level elections vote the split instead of welding
+/// it back. Two shapes emerge, all deterministic:
+///
+/// 1. stranger groups leave for places named after their own shared word;
+/// 2. when what remains covers fewer than half its files under the original
+///    roof's name ([`ROOF_COHERENCE_FLOOR`]), the ENTIRE residual becomes one
+///    rebuilt place named after its own heaviest member stems — a roof that
+///    misdescribes its residents is replaced wholesale, not subdivided on
+///    evidence the graph cannot price. The joined-stem name stays honest even
+///    if polish later absorbs another consumer into the place: two of three
+///    differently-named members still clear the majority floor.
+///
+/// Anything else — coherent residuals, lone stragglers, quiet all-unbonded
+/// folders — stays put: naming alone never tears a folder that carries no
+/// mixed-population signature.
+// One function because the trigger, the stranger regroup, and the wholesale
+// rebuild share one pass over the base partition; splitting them would either
+// duplicate the bond scan or thread four pieces of mutable state through
+// helpers. The length is documentation and the two place-naming branches.
+#[allow(clippy::too_many_lines)]
+fn synthesize_roof_rebuild(
+    files: &mut [FileInfo],
+    condensation: &Condensation,
+    graph: &Csr,
+    base: &Partition,
+    names: &mut Vec<SmolStr>,
+    synthetic: &mut Vec<bool>,
+) -> Option<Partition> {
+    // which file vertices carry priced company at all — the bond evidence the
+    // trigger reads. Zero-priced edges stay in the graph but bind nothing
+    // (D-46), so a vertex whose every incident edge prices zero is exactly the
+    // "unnominatable" population this synthesis exists for.
+    let mut bonded = vec![false; graph.vertex_count()];
+    // CSR neighbors are valid vertex ids by construction — `Csr` admits only
+    // in-range endpoints — so every slot below exists; `.get_mut` keeps the
+    // bound explicit and the loop total.
+    for vertex in 0..graph.vertex_count() {
+        let from = u32::try_from(vertex).unwrap_or(u32::MAX);
+        for (&neighbor, weight) in graph.neighbors(from).iter().zip(graph.weights(from)) {
+            if *weight > 0.0 {
+                if let Some(slot) = bonded.get_mut(vertex) {
+                    *slot = true;
+                }
+                if let Some(slot) = bonded.get_mut(neighbor as usize) {
+                    *slot = true;
+                }
+            }
+        }
+    }
+    // an SCC is unanchored only when EVERY file inside is: whole SCCs move, so
+    // partial bonds keep the component glued to its measured company. A member
+    // id outside the bond table counts as bonded — absence of evidence of
+    // unanchorage keeps the component put.
+    let unbonded_scc = |scc: u32| -> bool {
+        condensation
+            .members
+            .get(scc as usize)
+            .is_some_and(|members| {
+                members
+                    .iter()
+                    .all(|member| bonded.get(member.0 as usize).is_some_and(|slot| !*slot))
+            })
+    };
+
+    let base_count = base.cluster_count();
+    let mut assignment = base.assignment().to_vec();
+    let mut used_labels: BTreeSet<SmolStr> = names.iter().cloned().collect();
+    let mut next_cluster = u64::from(u32::try_from(names.len()).unwrap_or(u32::MAX));
+    let mut fired = false;
+
+    for cluster_index in 0..base_count {
+        if next_cluster > u64::from(u32::MAX) {
+            break;
+        }
+        if synthetic.get(cluster_index).copied().unwrap_or(false) {
+            // the workspace bucket is an absence of structure, not a roof to
+            // rebuild (the FIX05 doctrine).
+            continue;
+        }
+        let cluster = ClusterId(u32::try_from(cluster_index).unwrap_or(u32::MAX));
+        let sccs: Vec<u32> = (0..u32::try_from(condensation.members.len()).unwrap_or(u32::MAX))
+            .filter(|&scc| base.cluster_of(scc) == Some(cluster))
+            .collect();
+        if sccs.is_empty() {
+            continue;
+        }
+
+        // strangers: unanchored SCCs grouped by shared basename tokens, keeping
+        // groups of at least two files — a lone stray earns no invented place.
+        let strangers: Vec<u32> = sccs
+            .iter()
+            .copied()
+            .filter(|&scc| unbonded_scc(scc))
+            .collect();
+        let groups: Vec<Vec<u32>> = token_groups(&strangers, condensation, files)
+            .into_iter()
+            .filter(|group| {
+                group
+                    .iter()
+                    .map(|&scc| scc_file_count(condensation, scc))
+                    .sum::<u32>()
+                    >= 2
+            })
+            .collect();
+        if groups.is_empty() {
+            continue;
+        }
+        let exiled: BTreeSet<u32> = groups.iter().flatten().copied().collect();
+        let residual: Vec<u32> = sccs
+            .iter()
+            .copied()
+            .filter(|scc| !exiled.contains(scc))
+            .collect();
+        let residual_files: u32 = residual
+            .iter()
+            .map(|&scc| scc_file_count(condensation, scc))
+            .sum();
+        let base_name = names
+            .get(cluster_index)
+            .cloned()
+            .unwrap_or_else(|| SmolStr::new("workspace"));
+
+        // strangers first, each a fresh cluster id.
+        for group in &groups {
+            let label = rebuild_label(
+                &base_name,
+                group,
+                condensation,
+                files,
+                &mut used_labels,
+                next_cluster,
+            );
+            for &scc in group {
+                if let Some(slot) = assignment.get_mut(scc as usize) {
+                    *slot = ClusterId(u32::try_from(next_cluster).unwrap_or(u32::MAX));
+                }
+                rewrite_split_homes(files, condensation, scc, label.as_str());
+            }
+            names.push(label);
+            synthetic.push(false);
+            next_cluster += 1;
+            fired = true;
+        }
+
+        // then the residual roof: when its own name covers fewer than half of
+        // what remains, replace the roof wholesale with one place named after
+        // the residents themselves. A lone straggler keeps the original roof —
+        // one file under any name is vacuously covered.
+        if residual_files >= 2
+            && roof_coherence(&base_name, &residual, condensation, files) < ROOF_COHERENCE_FLOOR
+        {
+            let label = rebuild_label(
+                &base_name,
+                &residual,
+                condensation,
+                files,
+                &mut used_labels,
+                next_cluster,
+            );
+            for &scc in &residual {
+                if let Some(slot) = assignment.get_mut(scc as usize) {
+                    *slot = ClusterId(u32::try_from(next_cluster).unwrap_or(u32::MAX));
+                }
+                rewrite_split_homes(files, condensation, scc, label.as_str());
+            }
+            names.push(label);
+            synthetic.push(false);
+            next_cluster += 1;
+            fired = true;
+        }
+    }
+
+    fired.then(|| {
+        Partition::from_assignment(
+            assignment,
+            usize::try_from(next_cluster).unwrap_or(base_count),
+        )
+    })
+}
+
+/// Fraction of `member_files` whose basename shares a token with the last `/`
+/// segment of `container_name` — the engine-side twin of the eval harness's
+/// alignment metric, so the synthesis trigger and the verdict measure the same
+/// coherence and can never disagree about what "misnamed" means.
+fn roof_coherence(
+    container_name: &str,
+    residual: &[u32],
+    condensation: &Condensation,
+    files: &[FileInfo],
+) -> f64 {
+    let last = container_name.rsplit('/').next().unwrap_or(container_name);
+    let container_tokens = tokenize(last);
+    let member_files: Vec<String> = residual
+        .iter()
+        .flat_map(|&scc| scc_file_names(condensation, files, scc))
+        .collect();
+    let total = member_files.len();
+    if total == 0 {
+        return 1.0;
+    }
+    let aligned = member_files
+        .iter()
+        .filter(|file| {
+            let base = file.rsplit('/').next().unwrap_or(file.as_str());
+            let stem = base.split('.').next().unwrap_or(base);
+            tokenize(stem)
+                .iter()
+                .any(|token| container_tokens.contains(token))
+        })
+        .count();
+    // reason: member counts are corpus-sized; the f64 mantissa loses nothing
+    #[allow(clippy::cast_precision_loss)]
+    let sharing = aligned as f64 / total as f64;
+    sharing
+}
+
+/// Collects the file paths inside one SCC, ascending.
+fn scc_file_names(condensation: &Condensation, files: &[FileInfo], scc: u32) -> Vec<String> {
+    condensation
+        .members
+        .get(scc as usize)
+        .into_iter()
+        .flatten()
+        .filter_map(|member| files.get(member.0 as usize))
+        .map(|file| file.name.to_string())
+        .collect()
+}
+
+/// Basename tokens of one file path, per the CONTRACT tokenization scope: the
+/// basename minus extension only — the directory prefix never counts toward a
+/// container's claim on a file.
+fn basename_tokens(name: &str) -> BTreeSet<String> {
+    let basename = name.rsplit('/').next().unwrap_or(name);
+    let stem = basename.split('.').next().unwrap_or(basename);
+    tokenize(stem)
+}
+
+/// Groups `sccs` into token-connected components: two SCCs join when any pair
+/// of their files shares a basename token. This is naming evidence only — no
+/// edge is priced or fabricated (D-46 holds: absence of priced edges is read
+/// as separation evidence, and shared words group the separated). Deterministic:
+/// ascending SCC pairs, union roots the smaller id, components emitted by
+/// smallest member ascending, each sorted ascending.
+fn token_groups(sccs: &[u32], condensation: &Condensation, files: &[FileInfo]) -> Vec<Vec<u32>> {
+    let tokens_of: BTreeMap<u32, BTreeSet<String>> = sccs
+        .iter()
+        .map(|&scc| {
+            let tokens: BTreeSet<String> = scc_file_names(condensation, files, scc)
+                .iter()
+                .flat_map(|name| basename_tokens(name))
+                .collect();
+            (scc, tokens)
+        })
+        .collect();
+    let mut parent: BTreeMap<u32, u32> = sccs.iter().map(|&scc| (scc, scc)).collect();
+    for (index, &left) in sccs.iter().enumerate() {
+        for &right in sccs.iter().skip(index + 1) {
+            let joined = tokens_of.get(&left).is_some_and(|left_tokens| {
+                tokens_of
+                    .get(&right)
+                    .is_some_and(|right_tokens| !left_tokens.is_disjoint(right_tokens))
+            });
+            if joined {
+                let (a, b) = (union_root(&parent, left), union_root(&parent, right));
+                if a != b {
+                    let (keep, move_) = if a <= b { (a, b) } else { (b, a) };
+                    parent.insert(move_, keep);
+                }
+            }
+        }
+    }
+    let mut components: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for &scc in sccs {
+        components
+            .entry(union_root(&parent, scc))
+            .or_default()
+            .push(scc);
+    }
+    let mut groups: Vec<Vec<u32>> = components.into_values().collect();
+    for group in &mut groups {
+        group.sort_unstable();
+    }
+    groups
+}
+
+/// Names one proposed place after its members: a token shared by EVERY file in
+/// the group wins (`helpers-utils`); otherwise the two heaviest distinct
+/// basename stems join (`helpers-charge-refund`) — the [`join_top_two`]
+/// honesty, so a name covering two stems survives later absorption of a third
+/// differently-named file without falling under half-aligned. Collisions fall
+/// back to the numeric form, mirroring [`relieve_over_capacity`]. Returns the
+/// label inserted into `used`.
+fn rebuild_label(
+    base_name: &str,
+    group: &[u32],
+    condensation: &Condensation,
+    files: &[FileInfo],
+    used: &mut BTreeSet<SmolStr>,
+    ordinal: u64,
+) -> SmolStr {
+    // per-file token sets, for the everyone-shares-it intersection.
+    let per_file: Vec<BTreeSet<String>> = group
+        .iter()
+        .flat_map(|&scc| scc_file_names(condensation, files, scc))
+        .map(|name| basename_tokens(&name))
+        .collect();
+    let common: Option<String> = per_file
+        .first()
+        .map(|first| {
+            per_file.iter().skip(1).fold(first.clone(), |held, set| {
+                held.intersection(set).cloned().collect()
+            })
+        })
+        // an all-digit token would mint a label indistinguishable from the
+        // numeric fallback (`helpers-2024` vs `helpers-3`) and would never
+        // align under the contract tokenizer, which drops digit tokens — skip
+        // it and let the stem path or the fallback name the place.
+        .and_then(|tokens| {
+            tokens
+                .into_iter()
+                .find(|token| token.chars().any(char::is_alphabetic))
+        });
+    let candidate = if let Some(token) = common {
+        format!("{base_name}-{token}")
+    } else {
+        // heaviest distinct stems by production SLOC then stem order.
+        #[derive(Default)]
+        struct Tally {
+            sloc: u64,
+        }
+        let mut tally: BTreeMap<String, Tally> = BTreeMap::new();
+        for &scc in group {
+            let Some(members) = condensation.members.get(scc as usize) else {
+                continue;
+            };
+            for member in members {
+                let Some(file) = files.get(member.0 as usize) else {
+                    continue;
+                };
+                let Some(stem) = basename_stem(&file.name) else {
+                    continue;
+                };
+                tally.entry(stem).or_default().sloc += u64::from(file.production_sloc);
+            }
+        }
+        let mut ranked: Vec<(String, u64)> =
+            tally.into_iter().map(|(stem, t)| (stem, t.sloc)).collect();
+        ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        let stems: Vec<String> = ranked.into_iter().map(|(stem, _)| stem).take(2).collect();
+        if stems.is_empty() {
+            // no alphabetic stem anywhere in the group: nothing honest to
+            // name it after — the numeric form is the only fit left.
+            format!("{base_name}-{ordinal}")
+        } else {
+            format!("{base_name}-{}", stems.join("-"))
+        }
+    };
+    let label = if used.contains(candidate.as_str()) {
+        format!("{base_name}-{ordinal}")
+    } else {
+        candidate
+    };
+    used.insert(SmolStr::from(label.clone()));
+    SmolStr::from(label)
 }
 
 /// Names each distinct real location by its folder key, qualifying key ties by
@@ -2908,13 +3731,25 @@ fn container_sizes(
 }
 
 /// Computes the move distance of a candidate tree: the fraction of symbols whose
-/// owning file changes real folder.
+/// owning file changes real folder — or, since FIX08, whose effective placement
+/// lands it in a DIFFERENT file than the one that houses it today.
 ///
 /// A file's location is exactly its folder key — the path it would be moved to —
 /// so the comparison reads folder keys on both sides and never composes a
 /// root-to-leaf path. Labels above the folder are display, not location:
-/// renaming a domain relocates nothing and must not register here.
-fn move_distance(snapshot: &Snapshot, candidate: &ContainerTree) -> f64 {
+/// renaming a domain relocates nothing and must not register here. The second,
+/// placement-aware rule prices symbol-grain relocation: `placement` maps each
+/// node to the candidate file container it occupies, and a node whose placed
+/// file carries another path has left its home even when its folder key is
+/// unchanged. File-only layouts pass the assembly's own placement, which maps
+/// every node to its current file's candidate id, so the extension changes
+/// nothing for them — μ and β stop being blind to symbol moves without any
+/// coefficient moving.
+fn move_distance(
+    snapshot: &Snapshot,
+    candidate: &ContainerTree,
+    placement: &dyn Fn(u32) -> Option<ContainerId>,
+) -> f64 {
     let ir = snapshot.ir();
     let total = ir.nodes.len();
     if total == 0 {
@@ -2931,6 +3766,12 @@ fn move_distance(snapshot: &Snapshot, candidate: &ContainerTree) -> f64 {
         .iter()
         .map(|container| (container.id.0, &container.name))
         .collect();
+    let candidate_file_name: BTreeMap<u32, &str> = candidate
+        .containers()
+        .iter()
+        .filter(|container| container.level == ScopeLevel::File)
+        .map(|container| (container.id.0, container.name.as_str()))
+        .collect();
     let moved = ir
         .nodes
         .iter()
@@ -2941,10 +3782,18 @@ fn move_distance(snapshot: &Snapshot, candidate: &ContainerTree) -> f64 {
             let Some(current) = current_folder.get(name.as_str()) else {
                 return false;
             };
-            // a file the candidate drops entirely has left its folder.
-            candidate_folder
-                .get(name.as_str())
-                .is_none_or(|placed| placed != current)
+            // FIX08: a symbol whose effective placement sits in a file of
+            // another path has relocated between files, whatever its folder key
+            // did. Unplaced nodes fall through to the file-key rule alone.
+            let left_file = placement(node.id.0).is_some_and(|file| {
+                candidate_file_name
+                    .get(&file.0)
+                    .is_some_and(|placed| *placed != name.as_str())
+            });
+            left_file
+                || candidate_folder
+                    .get(name.as_str())
+                    .is_none_or(|placed| placed != current)
         })
         .count();
 
@@ -3437,6 +4286,328 @@ fn solve_cycles(
         .collect()
 }
 
+/// One deterministic run of the FIX08 symbol polish over an assembled tree.
+///
+/// Owns every piece of mutable trial state — the placement overlay, the
+/// running-best score, the cycle and visibility baselines, the working
+/// visibility copy of the node table, and the incremental per-file SLOC and
+/// occupancy ledgers — so [`PipelineSolver::symbol_polish`] stays a thin
+/// orchestrator. Determinism is structural: symbols sweep in ascending id
+/// order, destinations rank by summed two-way priced pull with ties broken
+/// toward the lower file id, and every tie elsewhere resolves to staying.
+struct SymbolPass<'a> {
+    snapshot: &'a Snapshot,
+    coefficients: &'a Coefficients,
+    weights: &'a KindWeights,
+    folder_cap: u32,
+    file_cap: u32,
+    assembled: &'a CandidateTree,
+    base: &'a BTreeMap<u32, ContainerId>,
+    nodes: &'a [Node],
+    edges: &'a [Edge],
+    /// Both-direction priced incidence per node, computed once: an edge
+    /// priced 0.0 never nominates a destination (FIX04).
+    incident: BTreeMap<u32, Vec<(u32, f64)>>,
+    /// Per-file production SLOC under the assembly, maintained
+    /// incrementally across acceptances.
+    sloc: BTreeMap<ContainerId, u32>,
+    /// Per-file production occupancy, maintained alongside [`Self::sloc`].
+    residents: BTreeMap<ContainerId, u32>,
+    /// Dense vertex per candidate FILE, for the crossing graph.
+    file_vertices: BTreeMap<ContainerId, u32>,
+    /// Working copy of the node table whose containers track the overlay,
+    /// so the visibility floor is derived over trial placements.
+    visibility_nodes: Vec<Node>,
+    /// Effective placement overrides accepted so far.
+    overlay: BTreeMap<u32, ContainerId>,
+    /// Running best objective value; acceptance must beat it by more than
+    /// [`SYMBOL_MIN_IMPROVEMENT`].
+    best: f64,
+    /// Cycle baseline: relocation may never raise the cycle count.
+    cyclic_base: usize,
+    /// Visibility baseline: relocation may never raise the finding count.
+    vis_base: usize,
+    relocations: Vec<SymbolRelocation>,
+}
+
+impl<'a> SymbolPass<'a> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        snapshot: &'a Snapshot,
+        coefficients: &'a Coefficients,
+        weights: &'a KindWeights,
+        folder_cap: u32,
+        file_cap: u32,
+        assembled: &'a CandidateTree,
+        nodes: &'a [Node],
+        edges: &'a [Edge],
+    ) -> Self {
+        let base = &assembled.placement;
+        let mut sloc: BTreeMap<ContainerId, u32> = BTreeMap::new();
+        let mut residents: BTreeMap<ContainerId, u32> = BTreeMap::new();
+        for node in nodes {
+            if node.polarity != Polarity::Production {
+                continue;
+            }
+            let Some(file) = base.get(&node.id.0).copied() else {
+                continue;
+            };
+            *sloc.entry(file).or_insert(0) += node.effective_size;
+            *residents.entry(file).or_insert(0) += 1;
+        }
+        let mut incident: BTreeMap<u32, Vec<(u32, f64)>> = BTreeMap::new();
+        for edge in edges {
+            let weight = weights.edge_weight(edge.kind, edge.confidence);
+            if weight <= 0.0 {
+                continue;
+            }
+            incident
+                .entry(edge.source.0)
+                .or_default()
+                .push((edge.target.0, weight));
+            incident
+                .entry(edge.target.0)
+                .or_default()
+                .push((edge.source.0, weight));
+        }
+        let file_vertices: BTreeMap<ContainerId, u32> = assembled
+            .tree
+            .containers()
+            .iter()
+            .filter(|container| container.level == ScopeLevel::File)
+            .enumerate()
+            .map(|(index, container)| (container.id, u32::try_from(index).unwrap_or(u32::MAX)))
+            .collect();
+        let mut pass = Self {
+            snapshot,
+            coefficients,
+            weights,
+            folder_cap,
+            file_cap,
+            assembled,
+            base,
+            nodes,
+            edges,
+            incident,
+            sloc,
+            residents,
+            file_vertices,
+            visibility_nodes: nodes.to_vec(),
+            overlay: BTreeMap::new(),
+            best: 0.0,
+            cyclic_base: 0,
+            vis_base: 0,
+            relocations: Vec::new(),
+        };
+        pass.best = pass.score_with(&pass.overlay);
+        pass.cyclic_base = cyclic_vertex_count(&pass.crossing_csr());
+        pass.vis_base = pass.refresh_visibility();
+        pass
+    }
+
+    /// Sweeps every symbol in ascending id order, at most
+    /// [`SYMBOL_SWEEPS`] times, stopping early once a sweep relocates
+    /// nothing.
+    fn run(&mut self) {
+        for _ in 0..SYMBOL_SWEEPS {
+            let mut improved = false;
+            for node in self.nodes {
+                improved |= self.try_relocate(node);
+            }
+            if !improved {
+                break;
+            }
+        }
+    }
+
+    /// Placement of one node: the overlay wins, the assembly fills the rest.
+    fn effective(&self, id: u32) -> Option<ContainerId> {
+        self.overlay
+            .get(&id)
+            .copied()
+            .or_else(|| self.base.get(&id).copied())
+    }
+
+    /// Full objective value of the layout `state` describes.
+    fn score_with(&self, state: &BTreeMap<u32, ContainerId>) -> f64 {
+        let placement = |id: u32| {
+            state
+                .get(&id)
+                .copied()
+                .or_else(|| self.base.get(&id).copied())
+        };
+        let distance = move_distance(self.snapshot, &self.assembled.tree, &placement);
+        let candidate = score_candidate(
+            self.snapshot,
+            &placement,
+            &self.assembled.tree,
+            distance,
+            self.folder_cap,
+        );
+        score(&candidate, self.coefficients, self.weights).total
+    }
+
+    /// The crossing graph over candidate FILES induced by the current
+    /// overlay, condensed-ready exactly as the file polish builds its
+    /// quotient.
+    fn crossing_csr(&self) -> Csr {
+        let mut pairs: BTreeSet<(u32, u32)> = BTreeSet::new();
+        for edge in self.edges {
+            let (Some(source), Some(target)) =
+                (self.effective(edge.source.0), self.effective(edge.target.0))
+            else {
+                continue;
+            };
+            if source == target {
+                continue;
+            }
+            let (Some(source), Some(target)) = (
+                self.file_vertices.get(&source),
+                self.file_vertices.get(&target),
+            ) else {
+                continue;
+            };
+            pairs.insert((*source, *target));
+        }
+        let sorted: Vec<(u32, u32)> = pairs.into_iter().collect();
+        Csr::from_sorted_edges(self.file_vertices.len(), &sorted)
+    }
+
+    /// Applies the whole overlay to the working visibility copy, then
+    /// counts findings — the initial baseline path.
+    fn refresh_visibility(&mut self) -> usize {
+        for node in &mut self.visibility_nodes {
+            if let Some(file) = self.overlay.get(&node.id.0)
+                && node.container != *file
+            {
+                node.container = *file;
+            }
+        }
+        self.count_findings()
+    }
+
+    /// Points one node's working-copy container at `container`.
+    fn set_visible(&mut self, id: u32, container: ContainerId) {
+        for node in &mut self.visibility_nodes {
+            if node.id == NodeId(id) {
+                node.container = container;
+            }
+        }
+    }
+
+    /// Visibility finding count over the working copy as it stands.
+    fn count_findings(&self) -> usize {
+        derive_visibility(&self.assembled.tree, &self.visibility_nodes, self.edges)
+            .findings
+            .len()
+    }
+
+    /// Offers one symbol its strongest-pulling destinations under the full
+    /// veto family; records an accepted relocation and returns whether the
+    /// sweep made progress.
+    fn try_relocate(&mut self, node: &Node) -> bool {
+        let Some(&source_file) = self.base.get(&node.id.0) else {
+            return false;
+        };
+        // Rank destination files by summed two-way priced pull from their
+        // effective residents; strongest first, ties toward the lower id.
+        let mut pull: BTreeMap<ContainerId, f64> = BTreeMap::new();
+        if let Some(links) = self.incident.get(&node.id.0) {
+            for &(neighbour, weight) in links {
+                let Some(place) = self.effective(neighbour) else {
+                    continue;
+                };
+                if place == source_file {
+                    continue;
+                }
+                *pull.entry(place).or_insert(0.0) += weight;
+            }
+        }
+        let mut ranked: Vec<(ContainerId, f64)> = pull.into_iter().collect();
+        ranked.sort_by(|left, right| {
+            right
+                .1
+                .partial_cmp(&left.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(left.0.cmp(&right.0))
+        });
+        for (destination, _) in ranked.into_iter().take(SYMBOL_TARGETS) {
+            // No empty shells: the origin keeps at least one production
+            // resident.
+            if self.residents.get(&source_file).copied().unwrap_or(0) <= 1 {
+                break;
+            }
+            // SLOC cap on the destination, priced in production SLOC.
+            let destination_sloc = self.sloc.get(&destination).copied().unwrap_or(0);
+            let moving_sloc =
+                (node.polarity == Polarity::Production).then_some(node.effective_size);
+            if let Some(size) = moving_sloc
+                && destination_sloc.saturating_add(size) > self.file_cap
+            {
+                continue;
+            }
+
+            // Tentatively relocate, then run the structural vetoes.
+            let previous = self.overlay.insert(node.id.0, destination);
+            let cyclic_now = cyclic_vertex_count(&self.crossing_csr());
+            if cyclic_now > self.cyclic_base {
+                Self::undo(&mut self.overlay, node.id.0, previous);
+                continue;
+            }
+            self.set_visible(node.id.0, destination);
+            let vis_now = self.count_findings();
+            if vis_now > self.vis_base {
+                Self::undo(&mut self.overlay, node.id.0, previous);
+                self.set_visible(node.id.0, source_file);
+                continue;
+            }
+
+            let total = self.score_with(&self.overlay);
+            // Strict improvement with a real margin: float-dust gains are
+            // rejected, not accepted (see SYMBOL_MIN_IMPROVEMENT).
+            if self.best - total > SYMBOL_MIN_IMPROVEMENT {
+                let delta = self.best - total;
+                self.best = total;
+                self.cyclic_base = cyclic_now;
+                self.vis_base = vis_now;
+                if node.polarity == Polarity::Production {
+                    if let Some(slot) = self.sloc.get_mut(&source_file) {
+                        *slot = slot.saturating_sub(node.effective_size);
+                    }
+                    *self.sloc.entry(destination).or_insert(0) += node.effective_size;
+                    if let Some(slot) = self.residents.get_mut(&source_file) {
+                        *slot = slot.saturating_sub(1);
+                    }
+                    *self.residents.entry(destination).or_insert(0) += 1;
+                }
+                self.relocations.push(SymbolRelocation {
+                    node: node.id.0,
+                    from_file: source_file,
+                    to_file: destination,
+                    delta,
+                });
+                return true;
+            }
+            // Rejected: undo the tentative relocation.
+            Self::undo(&mut self.overlay, node.id.0, previous);
+            self.set_visible(node.id.0, source_file);
+        }
+        false
+    }
+
+    /// Restores the prior overlay entry for one node.
+    fn undo(overlay: &mut BTreeMap<u32, ContainerId>, id: u32, previous: Option<ContainerId>) {
+        match previous {
+            Some(place) => {
+                overlay.insert(id, place);
+            }
+            None => {
+                overlay.remove(&id);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use strata_core::condense::SccId;
@@ -3473,6 +4644,31 @@ mod tests {
         }
     }
 
+    /// Builds a soft type-reference edge (weak priced pull, `0.3`).
+    fn type_ref(source: u32, target: u32) -> Edge {
+        Edge {
+            kind: EdgeKind::TypeReference,
+            hardness: Hardness::Soft,
+            ..edge(source, target)
+        }
+    }
+
+    /// Builds a hard inheritance edge (the heaviest priced pull, `1.5`).
+    fn inherits(source: u32, target: u32) -> Edge {
+        Edge {
+            kind: EdgeKind::Inheritance,
+            ..edge(source, target)
+        }
+    }
+
+    /// Builds a zero-priced re-export edge (the barrel-file shape).
+    fn reexport(source: u32, target: u32) -> Edge {
+        Edge {
+            kind: EdgeKind::ReExport,
+            ..edge(source, target)
+        }
+    }
+
     /// Builds a container at a level under an optional parent.
     fn container(id: u32, name: &str, level: ScopeLevel, parent: Option<u32>) -> Container {
         Container {
@@ -3498,21 +4694,30 @@ mod tests {
         }
     }
 
-    /// Assembles a snapshot from parts, falling back to a minimal valid one on
-    /// failure so a test never panics on assembly.
+    /// Assembles a snapshot from parts, panicking loudly with the assemble
+    /// error — a broken test fixture must surface, never hide behind a
+    /// minimal fallback.
+    #[allow(clippy::panic)] // loud failure is the point of this test helper
     fn snapshot(nodes: Vec<Node>, edges: Vec<Edge>, containers: Vec<Container>) -> Snapshot {
         let ir = IntermediateRepresentation::new(nodes, edges, ContainerTree::new(containers));
-        Snapshot::assemble(ir).unwrap_or_else(|_| minimal_snapshot())
+        Snapshot::assemble(ir)
+            .unwrap_or_else(|error| panic!("test snapshot failed to assemble: {error}"))
     }
 
     /// Returns a minimal valid snapshot: a single empty root file container.
+    ///
+    /// Kept despite gaining no remaining callers (the loud-assert change
+    /// removed its only use): a legitimate builder retained by owner ruling,
+    /// not dead weight to delete.
+    #[allow(dead_code)]
+    #[allow(clippy::expect_used)] // loud failure is the point of this test helper
     fn minimal_snapshot() -> Snapshot {
         let ir = IntermediateRepresentation::new(
             vec![],
             vec![],
             ContainerTree::new(vec![container(0, "root", ScopeLevel::File, None)]),
         );
-        Snapshot::assemble(ir).unwrap_or_else(|_| minimal_snapshot())
+        Snapshot::assemble(ir).expect("minimal snapshot must always assemble")
     }
 
     /// Collects every container's name, level, and any rendered production SLOC
@@ -4074,7 +5279,7 @@ mod tests {
             })
             .collect();
 
-        let distance = move_distance(&snapshot, &ContainerTree::new(relabelled));
+        let distance = move_distance(&snapshot, &ContainerTree::new(relabelled), &|_| None);
 
         assert!(
             distance.abs() < f64::EPSILON,
@@ -4334,6 +5539,139 @@ mod tests {
         );
     }
 
+    /// Builds the gate-probe snapshot: two edgeless production files. Polish
+    /// nominates moves only along priced pulls (D-46), so with no edges every
+    /// seed converges back to reality under either objective and the identity
+    /// layout wins whichever pool is allowed to carry it.
+    fn gate_fixture() -> Snapshot {
+        snapshot(
+            vec![
+                node(0, "alpha", 0, Polarity::Production),
+                node(1, "beta", 1, Polarity::Production),
+            ],
+            vec![],
+            vec![
+                container(0, "alpha.py", ScopeLevel::File, None),
+                container(1, "beta.py", ScopeLevel::File, None),
+            ],
+        )
+    }
+
+    #[test]
+    fn should_seed_identity_only_into_the_anchored_pool() {
+        // AD-2's seeding gate as documented at `analyze_inner`: the identity
+        // entry ("change nothing" guaranteed a pool slot at the true current
+        // score) is anchored-only on a cap-clean tree. On this fixture the
+        // searches cannot move anything, so the gate shows as the standings
+        // asymmetry: anchored reports optimal because its identity entry won
+        // the pool; greenfield has no such entry and can never claim optimal,
+        // yet still reports candidates against its own current-score baseline.
+        let anchored = analyze(&gate_fixture(), &config_with_k(2))
+            .ok()
+            .and_then(|result| result.modes.anchored);
+        assert!(
+            anchored.is_some_and(|mode| {
+                mode.current_standing == CurrentStanding::Optimal
+                    && mode.candidates.first().is_some_and(|candidate| {
+                        candidate.delta_narration.is_empty()
+                            && candidate.improvement.abs() < f64::EPSILON
+                    })
+            }),
+            "anchored must carry the identity entry: standing optimal with a \
+             zero-move candidate at +0 improvement"
+        );
+
+        let greenfield = analyze(&gate_fixture(), &config_with_k(2))
+            .ok()
+            .and_then(|result| result.modes.greenfield);
+        assert!(
+            greenfield.is_some_and(|mode| {
+                mode.current_standing == CurrentStanding::Outscored && !mode.candidates.is_empty()
+            }),
+            "greenfield never seeds from the current layout (AD-2): no identity \
+             entry means no optimal standing, while candidates still report"
+        );
+    }
+
+    #[test]
+    fn should_gate_identity_seeding_on_the_solver_flag() {
+        // the mechanism behind the wiring: `PipelineSolver` constructs the
+        // identity entry only when asked, and only then does the offset-0 seed
+        // short-circuit to it — re-priced at the true current tree rather than
+        // the assembled search view.
+        let snapshot = gate_fixture();
+        let config = AnalyzeConfig::default();
+        let weights = config.weights.kind_weights();
+
+        let anchored = PipelineSolver::new(&snapshot, &config, config.objective.anchored(), true);
+        let seeded = anchored.solve(config.analysis.seed);
+        let current_total = score_current(
+            &snapshot,
+            &config.objective.anchored(),
+            &weights,
+            level_caps(&config).folder,
+        )
+        .total;
+        let identity_matched = anchored.identity.as_ref().is_some_and(|identity| {
+            seeded.partition == *identity && (seeded.score - current_total).abs() < f64::EPSILON
+        });
+        assert!(
+            identity_matched,
+            "seed_identity=true carries the identity partition and solve(base) \
+             returns it at the true current-tree score"
+        );
+
+        let greenfield =
+            PipelineSolver::new(&snapshot, &config, config.objective.greenfield(), false);
+        let searched = greenfield.solve(config.analysis.seed);
+        let covered = (0..greenfield.condensation.members.len()).all(|scc| {
+            searched
+                .partition
+                .cluster_of(u32::try_from(scc).unwrap_or(u32::MAX))
+                .is_some()
+        });
+        assert!(
+            greenfield.identity.is_none(),
+            "seed_identity=false constructs no identity entry at all"
+        );
+        assert!(covered, "closing the gate must not break the search");
+    }
+
+    #[test]
+    fn should_report_both_modes_infeasible_when_capacity_breaches() {
+        // the cap-clean arm of the gate: a hard breach makes the current layout
+        // an illegal candidate, so neither mode may report optimal even though
+        // both searches still run and still emit candidates measured against
+        // the (illegal) baseline. Borderline observations never reach this arm:
+        // the same hard-breaks predicate feeds both the DTO count and the gate.
+        let mut dirty = config_with_k(2);
+        dirty.capacity.file = 0;
+
+        let analyzed = analyze(&gate_fixture(), &dirty);
+        let breaks = analyzed
+            .as_ref()
+            .map_or(0, |result| result.current.capacity_breaks);
+        assert!(breaks > 0, "a zero file cap counts as a hard break");
+
+        let modes = analyzed.map(|result| result.modes).unwrap_or_default();
+        let anchored_ok = modes.anchored.as_ref().is_some_and(|mode| {
+            mode.current_standing == CurrentStanding::Infeasible && !mode.candidates.is_empty()
+        });
+        let greenfield_ok = modes
+            .greenfield
+            .as_ref()
+            .is_some_and(|mode| mode.current_standing == CurrentStanding::Infeasible);
+        assert!(
+            anchored_ok,
+            "a cap-breaching current layout holds anchored at infeasible while \
+             candidates still report"
+        );
+        assert!(
+            greenfield_ok,
+            "a cap-breaching current layout holds greenfield at infeasible"
+        );
+    }
+
     #[test]
     fn should_index_candidates_from_one() {
         let snapshot = snapshot(
@@ -4458,7 +5796,11 @@ mod tests {
             finding(ViolationKind::Capacity, Severity::Violation, "big_folder"),
             finding(ViolationKind::Capacity, Severity::Violation, "huge_file"),
             finding(ViolationKind::Cycle, Severity::Violation, "y"),
-            finding(ViolationKind::Capacity, Severity::Borderline, "another_warm"),
+            finding(
+                ViolationKind::Capacity,
+                Severity::Borderline,
+                "another_warm",
+            ),
         ];
 
         assert_eq!(hard_capacity_breaks(&violations), 2);
@@ -5053,17 +6395,28 @@ mod tests {
     #[test]
     fn should_never_suffix_same_basename_folders_merged_into_one_domain() {
         // `ai/adapters/http` and `ai/core/http` share a basename but are
-        // different real places; hard coupling merges their domains into one
-        // suggestion, and each folder must still surface its own real key —
-        // never a truncated twin deduped into a synthetic `http-2`.
+        // different real places. The satellite `nu` carries a sole inheritance
+        // anchor into `adapters/http`, so polish genuinely consolidates it
+        // there; the alpha/mu and gamma/delta spines pin every heavyweight,
+        // and mu's weak type-reference to delta keeps both directories one
+        // merged-domain suggestion. Each folder must still surface its own
+        // real key — never a truncated twin deduped into a synthetic `http-2`.
         let snapshot = snapshot(
             vec![
                 homed(0, "alpha", 4, 40),
-                homed(1, "beta", 5, 20),
+                homed(1, "mu", 5, 30),
                 homed(2, "gamma", 8, 20),
                 homed(3, "delta", 9, 10),
+                homed(4, "nu", 10, 5),
             ],
-            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                edge(0, 1),
+                inherits(1, 0),
+                edge(2, 3),
+                inherits(3, 2),
+                inherits(4, 0),
+                type_ref(1, 3),
+            ],
             vec![
                 container(0, "ws", ScopeLevel::PackageGroup, None),
                 container(1, "ai", ScopeLevel::Package, Some(0)),
@@ -5075,12 +6428,13 @@ mod tests {
                 container(7, "ai/core/http", ScopeLevel::Folder, Some(6)),
                 container(8, "src/core/http/util.ts", ScopeLevel::File, Some(7)),
                 container(9, "src/core/http/parse.ts", ScopeLevel::File, Some(7)),
+                container(10, "src/core/http/net.ts", ScopeLevel::File, Some(7)),
             ],
         );
         let mut config = config_with_k(2);
-        // both folders sit at the cap, so polish cannot cross-pull members and
-        // every candidate keeps both real directories intact.
-        config.capacity.folder = 2;
+        // headroom for the genuine consolidation: `adapters/http` absorbs the
+        // sole-anchored satellite without ever exceeding the cap.
+        config.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
             .map(|result| result.modes)
@@ -5129,9 +6483,11 @@ mod tests {
     fn should_inherit_real_domain_keys_for_domain_rooted_files() {
         // these files sit directly in two packages' domain directories, so
         // there is no deeper folder: each file's real folder IS its domain
-        // directory. When coupling merges the two domains into one suggestion
-        // the folders must keep those inherited real keys — never collapse
-        // into `workspace` fallback twins deduped as `workspace-2`.
+        // directory. The satellite `a2` carries a sole inheritance anchor into
+        // `bi/app`, so polish genuinely consolidates it there and coupling
+        // merges the two domains into one suggestion — whose folders must keep
+        // those inherited real keys, never collapse into `workspace` fallback
+        // twins deduped as `workspace-2`.
         let snapshot = snapshot(
             vec![
                 homed(0, "alpha", 3, 10),
@@ -5139,7 +6495,14 @@ mod tests {
                 homed(2, "gamma", 7, 10),
                 homed(3, "delta", 8, 10),
             ],
-            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                type_ref(0, 1),
+                inherits(1, 2),
+                inherits(1, 3),
+                inherits(2, 3),
+                edge(3, 2),
+                type_ref(0, 3),
+            ],
             vec![
                 container(0, "ws", ScopeLevel::PackageGroup, None),
                 container(1, "ai", ScopeLevel::Package, Some(0)),
@@ -5153,8 +6516,9 @@ mod tests {
             ],
         );
         let mut config = config_with_k(2);
-        // both inherited folders sit at the cap: polish cannot pool the files.
-        config.capacity.folder = 2;
+        // headroom for the genuine consolidation: `bi/app` absorbs the
+        // sole-anchored satellite without ever exceeding the cap.
+        config.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
             .map(|result| result.modes)
@@ -5183,8 +6547,8 @@ mod tests {
                     "every folder must carry a real inherited key, got {folders:?}"
                 );
                 assert!(
-                    folders.iter().all(|(_, files)| files.len() == 2),
-                    "files of different packages must not pool, got {folders:?}"
+                    folders.iter().all(|(_, files)| !files.is_empty()),
+                    "every rendered folder holds its real members, got {folders:?}"
                 );
                 let a = folder_of(&folders, "src/a1.ts");
                 let b = folder_of(&folders, "src/b1.ts");
@@ -5203,8 +6567,11 @@ mod tests {
     fn should_qualify_folder_keys_that_collide_across_nested_packages() {
         // source-root stripping can normalize two different real directories
         // to one folder key: `a/src/b/c` in package `a` and `a/b/src/c` in
-        // nested package `a/b` both key as `a/b/c`. The twins must qualify by
-        // their real package — never dedupe into a synthetic `c-2`.
+        // nested package `a/b` both key as `a/b/c`. The satellite `f2` carries
+        // a sole inheritance anchor into the nested package's `c`, so polish
+        // genuinely consolidates it there and coupling merges the two domains
+        // into one suggestion — whose twins must qualify by their real
+        // package, never dedupe into a synthetic `c-2`.
         let snapshot = snapshot(
             vec![
                 homed(0, "alpha", 4, 10),
@@ -5212,7 +6579,14 @@ mod tests {
                 homed(2, "gamma", 9, 10),
                 homed(3, "delta", 10, 10),
             ],
-            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                type_ref(0, 1),
+                inherits(1, 2),
+                inherits(1, 3),
+                inherits(2, 3),
+                edge(3, 2),
+                type_ref(0, 3),
+            ],
             vec![
                 container(0, "ws", ScopeLevel::PackageGroup, None),
                 container(1, "a", ScopeLevel::Package, Some(0)),
@@ -5228,7 +6602,9 @@ mod tests {
             ],
         );
         let mut config = config_with_k(2);
-        config.capacity.folder = 2;
+        // headroom for the genuine consolidation: the nested package's `c`
+        // absorbs the sole-anchored satellite without exceeding the cap.
+        config.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
             .map(|result| result.modes)
@@ -5258,8 +6634,8 @@ mod tests {
                     "every folder must carry its real or qualified key, got {folders:?}"
                 );
                 assert!(
-                    folders.iter().all(|(_, files)| files.len() == 2),
-                    "files of different packages must not pool, got {folders:?}"
+                    folders.iter().all(|(_, files)| !files.is_empty()),
+                    "every rendered folder holds its real members, got {folders:?}"
                 );
                 let first = folder_of(&folders, "src/b/c/f1.ts");
                 let second = folder_of(&folders, "src/c/g1.ts");
@@ -5277,8 +6653,11 @@ mod tests {
     #[test]
     fn should_qualify_folder_keys_that_collide_within_one_package() {
         // hand-built snapshots may reuse one bare folder key under two domains
-        // of the same package; the twins must qualify by their real location —
-        // never dedupe into a synthetic `shared-2`.
+        // of the same package. The satellite `f2` carries a sole inheritance
+        // anchor into `d2`'s `shared`, so polish genuinely consolidates it
+        // there and coupling merges the two domains into one suggestion —
+        // whose twins must qualify by their real location, never dedupe into
+        // a synthetic `shared-2`.
         let snapshot = snapshot(
             vec![
                 homed(0, "alpha", 4, 10),
@@ -5286,7 +6665,14 @@ mod tests {
                 homed(2, "gamma", 8, 10),
                 homed(3, "delta", 9, 10),
             ],
-            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                type_ref(0, 1),
+                inherits(1, 2),
+                inherits(1, 3),
+                inherits(2, 3),
+                edge(3, 2),
+                type_ref(0, 3),
+            ],
             vec![
                 container(0, "ws", ScopeLevel::PackageGroup, None),
                 container(1, "pa", ScopeLevel::Package, Some(0)),
@@ -5301,7 +6687,9 @@ mod tests {
             ],
         );
         let mut config = config_with_k(2);
-        config.capacity.folder = 2;
+        // headroom for the genuine consolidation: `d2`'s `shared` absorbs the
+        // sole-anchored satellite without exceeding the cap.
+        config.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
             .map(|result| result.modes)
@@ -5825,19 +7213,34 @@ mod tests {
 
     #[test]
     fn should_never_elect_the_mixed_label() {
-        // three homes at 40/35/33 SLOC: no strict majority, no shared prefix.
-        // The election must produce a real composite name — never the
-        // synthetic `mixed` grab-bag label.
+        // three homes with no strict majority and no shared prefix. The
+        // satellite `s` carries a sole inheritance anchor into `d2`, so polish
+        // genuinely consolidates it there, and the weak type-reference triangle
+        // (kept acyclic so the file graph never welds the folders into one
+        // immovable atom) couples all three folders into one grab-bag domain.
+        // Votes follow real homes — {d1:48, d2:40, d3:38}, no strict majority —
+        // so the election must reach the top-two join and produce a real
+        // composite name — never the synthetic `mixed` label.
         let snapshot = snapshot(
             vec![
-                homed(0, "a", 2, 20),
-                homed(1, "b", 3, 20),
-                homed(2, "c", 5, 18),
-                homed(3, "d", 6, 17),
-                homed(4, "e", 8, 17),
-                homed(5, "f", 9, 16),
+                homed(0, "a", 2, 24),
+                homed(1, "b", 3, 24),
+                homed(2, "c", 5, 22),
+                homed(3, "d", 6, 18),
+                homed(4, "e", 8, 15),
+                homed(5, "f", 9, 14),
+                homed(6, "s", 10, 9),
             ],
-            vec![edge(0, 2), edge(3, 4), edge(5, 1)],
+            vec![
+                edge(0, 1),
+                edge(2, 3),
+                inherits(3, 2),
+                edge(4, 5),
+                type_ref(0, 2),
+                type_ref(1, 4),
+                type_ref(5, 2),
+                inherits(6, 2),
+            ],
             vec![
                 container(0, "ws", ScopeLevel::PackageGroup, None),
                 container(1, "d1", ScopeLevel::Domain, Some(0)),
@@ -5849,12 +7252,13 @@ mod tests {
                 container(7, "d3", ScopeLevel::Domain, Some(0)),
                 container(8, "src/d3/e.ts", ScopeLevel::File, Some(7)),
                 container(9, "src/d3/f.ts", ScopeLevel::File, Some(7)),
+                container(10, "src/d3/s.ts", ScopeLevel::File, Some(7)),
             ],
         );
         let mut config = config_with_k(2);
-        // folders sit at the cap so polish cannot cross-pull members, and the
-        // domain cap admits all three coupled folders into one cluster.
-        config.capacity.folder = 2;
+        // headroom for the genuine consolidation, and a domain cap that
+        // admits all three coupled folders into one cluster.
+        config.capacity.folder = 3;
         config.capacity.domain = 3;
 
         let modes = analyze(&snapshot, &config)
@@ -6009,13 +7413,15 @@ mod tests {
 
     #[test]
     fn should_name_a_balanced_cluster_by_the_shared_home_prefix() {
-        // rung R2: `ai/app` and `ai/core` tie at 40 SLOC each — no strict
-        // majority — but share the `ai` prefix, so the merged domain elects
-        // `ai` rather than misnaming the whole after one tied side. The
-        // elected name repeats the package's key, so the redundant domain
-        // level is suppressed at the render boundary: the merged candidate
-        // shows no domain node at all, its folders hanging directly under the
-        // `ai` package.
+        // rung R2: `ai/app` and `ai/core` tie at 40 SLOC of real homes — no
+        // strict majority — but share the `ai` prefix, so the merged domain
+        // elects `ai` rather than misnaming the whole after one tied side.
+        // The satellite `b` carries a sole call anchor into `ai/core`, so
+        // polish genuinely consolidates it there while every vote keeps its
+        // real home. The elected name repeats the package's key, so the
+        // redundant domain level is suppressed at the render boundary: the
+        // merged candidate shows no domain node at all, its folders hanging
+        // directly under the `ai` package.
         let snapshot = snapshot(
             vec![
                 homed(0, "a", 3, 20),
@@ -6023,7 +7429,7 @@ mod tests {
                 homed(2, "c", 6, 20),
                 homed(3, "d", 7, 20),
             ],
-            vec![edge(0, 2), edge(1, 3)],
+            vec![type_ref(0, 1), type_ref(0, 2), edge(1, 2), inherits(2, 3)],
             vec![
                 container(0, "ws", ScopeLevel::PackageGroup, None),
                 container(1, "ai", ScopeLevel::Package, Some(0)),
@@ -6036,7 +7442,9 @@ mod tests {
             ],
         );
         let mut config = config_with_k(2);
-        config.capacity.folder = 2;
+        // headroom for the genuine consolidation: `ai/core` absorbs the
+        // sole-anchored satellite without exceeding the cap.
+        config.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
             .map(|result| result.modes)
@@ -6061,13 +7469,14 @@ mod tests {
 
     #[test]
     fn should_join_the_top_two_homes_when_no_prefix_is_shared() {
-        // rung R3: `ai/app` (30 SLOC, two files) and `bi/app` (30 SLOC, three
-        // files) tie with no shared prefix, so the merged domain joins the two
-        // homes — ranked by production SLOC then file count, so the exact SLOC
-        // tie falls to file count and `bi/app` leads despite `ai/app` sorting
-        // first. The folder cap pins every folder at or over capacity, so the
-        // only feasible co-location of the coupled pairs is the domain merge
-        // itself.
+        // rung R3: `ai/app` and `bi/app` tie at 30 SLOC of real homes with no
+        // shared prefix, so the merged domain joins the two homes — ranked by
+        // production SLOC then file count, so the exact SLOC tie falls to file
+        // count and `bi/app` leads despite `ai/app` sorting first. The
+        // satellite `d` carries a sole call anchor into `ai/app`, so polish
+        // genuinely consolidates it there while every vote keeps its real
+        // home, and the weak `a`-to-`c` reference keeps the packages coupled
+        // into one suggestion.
         let snapshot = snapshot(
             vec![
                 homed(0, "a", 3, 15),
@@ -6076,7 +7485,14 @@ mod tests {
                 homed(3, "d", 8, 10),
                 homed(4, "e", 9, 10),
             ],
-            vec![edge(0, 2), edge(1, 3)],
+            vec![
+                inherits(0, 1),
+                type_ref(0, 2),
+                edge(3, 1),
+                inherits(2, 4),
+                edge(4, 2),
+                type_ref(4, 3),
+            ],
             vec![
                 container(0, "ws", ScopeLevel::PackageGroup, None),
                 container(1, "ai", ScopeLevel::Package, Some(0)),
@@ -6091,7 +7507,9 @@ mod tests {
             ],
         );
         let mut config = config_with_k(2);
-        config.capacity.folder = 2;
+        // headroom for the genuine consolidation: `ai/app` absorbs the
+        // sole-anchored satellite without exceeding the cap.
+        config.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
             .map(|result| result.modes)
@@ -6125,7 +7543,10 @@ mod tests {
         // rung R4: year directories `2024/2025` and `2024/2026` outweigh
         // `2024/shared`, but their top-two join is all-digit segments — unfit
         // — so the election falls to the dominant non-numeric token `shared`
-        // rather than a bare-number composite or the old `mixed` label.
+        // rather than a bare-number composite or the old `mixed` label. The
+        // satellite `e` carries a sole inheritance anchor into `2024/2026`,
+        // so polish genuinely consolidates it there while the `a`-to-`c` and
+        // `f`-to-`c` references keep all three folders one coupled suggestion.
         let snapshot = snapshot(
             vec![
                 homed(0, "a", 3, 20),
@@ -6134,8 +7555,18 @@ mod tests {
                 homed(3, "d", 7, 20),
                 homed(4, "e", 9, 10),
                 homed(5, "f", 10, 10),
+                homed(6, "g", 11, 10),
             ],
-            vec![edge(0, 2), edge(3, 4), edge(5, 1)],
+            vec![
+                edge(0, 1),
+                type_ref(0, 2),
+                inherits(2, 3),
+                edge(3, 2),
+                inherits(4, 3),
+                edge(5, 6),
+                inherits(6, 5),
+                type_ref(5, 2),
+            ],
             vec![
                 container(0, "ws", ScopeLevel::PackageGroup, None),
                 container(1, "2024", ScopeLevel::Package, Some(0)),
@@ -6148,10 +7579,13 @@ mod tests {
                 container(8, "2024/shared", ScopeLevel::Domain, Some(1)),
                 container(9, "src/shared/e.ts", ScopeLevel::File, Some(8)),
                 container(10, "src/shared/f.ts", ScopeLevel::File, Some(8)),
+                container(11, "src/shared/g.ts", ScopeLevel::File, Some(8)),
             ],
         );
         let mut config = config_with_k(2);
-        config.capacity.folder = 2;
+        // headroom for the genuine consolidation, and a domain cap that
+        // admits all three coupled folders into one cluster.
+        config.capacity.folder = 3;
         config.capacity.domain = 3;
 
         let modes = analyze(&snapshot, &config)
@@ -6234,16 +7668,26 @@ mod tests {
     #[test]
     fn should_disambiguate_name_collisions_with_a_home_qualifier_not_an_integer() {
         // a domain cap of one splits the real `pa/app` home into two sibling
-        // domain clusters that elect the same name; the twins must qualify by
-        // their anchor folders — never dedupe into a synthetic `app-2`.
+        // domain clusters that elect the same name. The satellite `b` carries
+        // a sole call anchor into `y`, so polish genuinely consolidates it
+        // there while the `a`-`e` spine pins `x`'s stayers — and the twins
+        // must still qualify by their anchor folders, never dedupe into a
+        // synthetic `app-2`.
         let snapshot = snapshot(
             vec![
-                homed(0, "a", 3, 10),
-                homed(1, "b", 4, 10),
-                homed(2, "c", 6, 10),
-                homed(3, "d", 7, 10),
+                homed(0, "a", 4, 10),
+                homed(1, "b", 5, 10),
+                homed(2, "e", 6, 10),
+                homed(3, "c", 8, 10),
+                homed(4, "d", 9, 10),
             ],
-            vec![edge(0, 1), edge(2, 3)],
+            vec![
+                edge(0, 2),
+                inherits(2, 0),
+                type_ref(0, 1),
+                edge(1, 3),
+                inherits(3, 4),
+            ],
             vec![
                 container(0, "ws", ScopeLevel::PackageGroup, None),
                 container(1, "pa", ScopeLevel::Package, Some(0)),
@@ -6251,13 +7695,16 @@ mod tests {
                 container(3, "pa/app/x", ScopeLevel::Folder, Some(2)),
                 container(4, "src/app/x/a.ts", ScopeLevel::File, Some(3)),
                 container(5, "src/app/x/b.ts", ScopeLevel::File, Some(3)),
-                container(6, "pa/app/y", ScopeLevel::Folder, Some(2)),
-                container(7, "src/app/y/c.ts", ScopeLevel::File, Some(6)),
-                container(8, "src/app/y/d.ts", ScopeLevel::File, Some(6)),
+                container(6, "src/app/x/e.ts", ScopeLevel::File, Some(3)),
+                container(7, "pa/app/y", ScopeLevel::Folder, Some(2)),
+                container(8, "src/app/y/c.ts", ScopeLevel::File, Some(7)),
+                container(9, "src/app/y/d.ts", ScopeLevel::File, Some(7)),
             ],
         );
         let mut config = config_with_k(1);
-        config.capacity.folder = 2;
+        // headroom for the genuine consolidation, and a domain cap that
+        // forces the two sibling clusters apart.
+        config.capacity.folder = 3;
         config.capacity.domain = 1;
 
         let modes = analyze(&snapshot, &config)
@@ -6517,5 +7964,544 @@ mod tests {
         assert_eq!(partition.cluster_count(), 1);
         assert!(relieved.iter().all(|file| file.home.domain == "hub"));
         assert_eq!(names, vec![SmolStr::new("hub")]);
+    }
+
+    #[test]
+    fn should_never_nominate_a_folder_connected_only_by_zero_priced_edges() {
+        // the welding shape: `barrel/index.ts` re-exports two unrelated
+        // directories while one priced import ties render to auth. A free edge
+        // carries no evidence two folders belong together (the FIX04 doctrine),
+        // so it must nominate nothing: polish is never offered a move that
+        // welds files from different real directories into one folder.
+        let snapshot = snapshot(
+            vec![
+                node(0, "login", 3, Polarity::Production),
+                node(1, "session", 4, Polarity::Production),
+                node(2, "canvas", 5, Polarity::Production),
+                node(3, "index", 6, Polarity::Production),
+            ],
+            vec![
+                edge(0, 1),     // login -> session: priced, inside auth.
+                edge(2, 0),     // canvas -> login: priced, render pulls on auth.
+                reexport(3, 0), // barrel -> login: free.
+                reexport(3, 1), // barrel -> session: free.
+                reexport(3, 2), // barrel -> canvas: free.
+            ],
+            vec![
+                container(0, "auth", ScopeLevel::Folder, None),
+                container(1, "render", ScopeLevel::Folder, None),
+                container(2, "barrel", ScopeLevel::Folder, None),
+                container(3, "auth/login.ts", ScopeLevel::File, Some(0)),
+                container(4, "auth/session.ts", ScopeLevel::File, Some(0)),
+                container(5, "render/canvas.ts", ScopeLevel::File, Some(1)),
+                container(6, "barrel/index.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &AnalyzeConfig::default(),
+            Coefficients::anchored(),
+            false,
+        );
+        let parts = &solver.real_partition;
+        let scc_of = |file_container: u32| -> u32 {
+            let vertex = solver
+                .index_of
+                .get(&file_container)
+                .copied()
+                .unwrap_or(u32::MAX);
+            solver
+                .condensation
+                .membership
+                .get(vertex as usize)
+                .map_or(0, |scc| scc.0)
+        };
+
+        // three real directories start in three distinct clusters.
+        let auth = parts.cluster_of(scc_of(3)).unwrap_or(ClusterId(0));
+        let render = parts.cluster_of(scc_of(5)).unwrap_or(ClusterId(0));
+        let barrel = parts.cluster_of(scc_of(6)).unwrap_or(ClusterId(0));
+        assert_eq!(parts.cluster_count(), 3);
+        assert_ne!(auth, render);
+        assert_ne!(auth, barrel);
+        assert_ne!(render, barrel);
+
+        // login's cross-folder pull comes only from the priced import: render
+        // is nominated, but the free barrel edge nominates nothing.
+        let targets = solver.pull_targets(parts, scc_of(3), auth);
+        assert_eq!(targets, vec![render]);
+
+        // the barrel's own folder connects only through free re-exports: no
+        // move target exists for it at all.
+        let barrel_targets = solver.pull_targets(parts, scc_of(6), barrel);
+        assert!(
+            barrel_targets.is_empty(),
+            "zero-priced edges must not nominate any move target"
+        );
+    }
+
+    #[test]
+    fn should_never_absorb_a_multi_folder_bridge_into_one_side() {
+        // the inversion shape under greenfield coefficients (the mode where the
+        // FIX05 defect churns): `main.ts` calls into two sibling features while
+        // each feature is internally cohesive. Absorbing the facade into one
+        // feature strands its edges to the other at package height, yet every
+        // locally-scored statistic of the absorber improves — so the unguarded
+        // objective ratifies the fold and greenfield out-churns anchored,
+        // inverting the product promise. Bridge integrity vetoes the fold: a
+        // folder that does not already contain an SCC's whole priced
+        // neighborhood may not absorb it.
+        let snapshot = snapshot(
+            vec![
+                node(0, "Shape", 4, Polarity::Production),
+                node(1, "area_of", 5, Polarity::Production),
+                node(2, "scale", 6, Polarity::Production),
+                node(3, "Counter", 7, Polarity::Production),
+                node(4, "run", 8, Polarity::Production),
+                node(5, "per_second", 9, Polarity::Production),
+            ],
+            vec![
+                edge(1, 0), // area_of -> Shape: priced, inside geometry.
+                edge(1, 2), // area_of -> scale: priced, geometry coheres.
+                edge(2, 0), // scale -> Shape: priced, geometry coheres.
+                edge(5, 3), // per_second -> Counter: priced, metrics coheres.
+                edge(4, 1), // run -> area_of: priced, facade reaches geometry.
+                edge(4, 5), // run -> per_second: priced, facade reaches metrics.
+            ],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "geometry", ScopeLevel::Folder, Some(0)),
+                container(2, "metrics", ScopeLevel::Folder, Some(0)),
+                container(3, "workspace", ScopeLevel::Folder, Some(0)),
+                container(4, "shape.ts", ScopeLevel::File, Some(1)),
+                container(5, "area.ts", ScopeLevel::File, Some(1)),
+                container(6, "units.ts", ScopeLevel::File, Some(1)),
+                container(7, "counter.ts", ScopeLevel::File, Some(2)),
+                container(8, "main.ts", ScopeLevel::File, Some(3)),
+                container(9, "rate.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &AnalyzeConfig::default(),
+            AnalyzeConfig::default().objective.greenfield(),
+            false,
+        );
+        let scc_of = |file_container: u32| -> u32 {
+            let vertex = solver
+                .index_of
+                .get(&file_container)
+                .copied()
+                .unwrap_or(u32::MAX);
+            solver
+                .condensation
+                .membership
+                .get(vertex as usize)
+                .map_or(0, |scc| scc.0)
+        };
+
+        let mut polished = solver.real_partition.clone();
+        let before = polished.clone();
+        solver.polish(&mut polished);
+
+        assert_eq!(
+            polished.cluster_of(scc_of(8)),
+            before.cluster_of(scc_of(8)),
+            "the facade bridges geometry and metrics; absorbing it into either \
+             side makes the bridge a member of the thing it bridges"
+        );
+        assert_eq!(
+            polished, before,
+            "every move this layout offers is a bridge fold, so polish must hold"
+        );
+    }
+
+    /// A misfiled symbol with one honest destination: `s` lives in `a.ts`, but
+    /// its inheritors `c1`/`c2` sit in `b.ts`. The co-resident `mate` keeps
+    /// `a.ts` from emptying, so the shell veto never fires. FIX08: the symbol
+    /// pass relocates exactly `s` between the two existing files, and the
+    /// narration carries an improvement past the float-dust floor and zero
+    /// severed imports.
+    ///
+    /// The assertions run against the greenfield mode deliberately: the cut
+    /// term normalizes by the candidate's own edge mass, capping any single
+    /// move's cut gain near `1/MAX_CROSSING_HEIGHT`, so on a five-node fixture
+    /// the anchored `mu * d` price exceeds every cut gain available and an
+    /// anchored symbol pass rightly holds still (D-47: no fabricated
+    /// movement). Greenfield drops that price, letting pure structure decide.
+    #[test]
+    fn should_relocate_a_misfiled_symbol_between_existing_files() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "s", 3, Polarity::Production),
+                node(1, "mate", 3, Polarity::Production),
+                node(2, "c1", 4, Polarity::Production),
+                node(3, "c2", 4, Polarity::Production),
+                node(4, "base", 4, Polarity::Production),
+            ],
+            vec![
+                inherits(2, 0), // c1 extends s: strong pull toward b.ts …
+                inherits(3, 0), // … twice over.
+                edge(4, 2),     // base calls c1/c2: migrating them would
+                edge(4, 3),     // re-sever more than following s gains.
+            ],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "keep", ScopeLevel::Folder, Some(0)),
+                container(2, "sink", ScopeLevel::Folder, Some(0)),
+                container(3, "a.ts", ScopeLevel::File, Some(1)),
+                container(4, "b.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+
+        let mut config = AnalyzeConfig::default();
+        config.analysis.candidates = 1;
+        let moves = analyze(&snapshot, &config)
+            .ok()
+            .and_then(|result| result.modes.greenfield)
+            .and_then(|mode| mode.candidates.into_iter().next())
+            .map(|candidate| candidate.symbol_moves)
+            .unwrap_or_default();
+
+        // The symbol itself relocates between the two existing files, with an
+        // improvement past the float-dust floor and no severed imports.
+        let s_move = moves.iter().find(|entry| entry.symbol == "s");
+        assert!(
+            s_move.is_some_and(|entry| {
+                entry.from_path == "a.ts"
+                    && entry.to_path == "b.ts"
+                    && entry.kind == SymbolKind::Symbol
+                    && entry.delta < -SYMBOL_MIN_IMPROVEMENT
+                    && entry.broken_imports == 0
+            }),
+            "the symbol pass must relocate s into its consumers' file with real \
+             improvement and nothing severed; got {moves:?}"
+        );
+        // Nothing else relocates: migrating the consumers would re-sever their
+        // calls to base, and a.ts keeps its co-resident either way.
+        assert!(
+            moves.iter().all(|entry| entry.symbol == "s"),
+            "only s has pull justifying relocation; got {moves:?}"
+        );
+    }
+
+    /// The FIX04 doctrine at symbol grain: zero-priced edges nominate nothing,
+    /// so a symbol connected only through re-exports is never relocated, no
+    /// matter how many of them point across folders.
+    #[test]
+    fn should_let_zero_priced_edges_nominate_no_symbol_target() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "s", 3, Polarity::Production),
+                node(1, "fill", 3, Polarity::Production),
+                node(2, "c1", 4, Polarity::Production),
+                node(3, "c2", 4, Polarity::Production),
+            ],
+            vec![reexport(2, 0), reexport(3, 0)],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "keep", ScopeLevel::Folder, Some(0)),
+                container(2, "sink", ScopeLevel::Folder, Some(0)),
+                container(3, "a.ts", ScopeLevel::File, Some(1)),
+                container(4, "b.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &AnalyzeConfig::default(),
+            AnalyzeConfig::default().objective.greenfield(),
+            false,
+        );
+        let outcome = solver.symbol_polish(&solver.real_partition.clone());
+
+        assert!(
+            outcome.relocations.is_empty() && outcome.overlay.is_empty(),
+            "re-export edges are priced 0.0 and never bind placement"
+        );
+    }
+
+    /// The no-empty-shells veto: a file's last production resident stays home
+    /// even when an out-of-file pull exists — draining the file would be a
+    /// file move wearing a symbol costume, which v1 does not propose.
+    #[test]
+    fn should_not_drain_a_file_of_its_last_resident() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "s", 3, Polarity::Production),
+                node(1, "c1", 4, Polarity::Production),
+                node(2, "c2", 4, Polarity::Production),
+                node(3, "base", 4, Polarity::Production),
+            ],
+            vec![
+                type_ref(1, 0), // the consumers do pull s across …
+                type_ref(2, 0), //
+                edge(3, 1),     // … but base binds them home, so the only
+                edge(3, 2),     // candidate move is s's, which must be vetoed.
+            ],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "keep", ScopeLevel::Folder, Some(0)),
+                container(2, "sink", ScopeLevel::Folder, Some(0)),
+                container(3, "a.ts", ScopeLevel::File, Some(1)),
+                container(4, "b.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+
+        let mut config = AnalyzeConfig::default();
+        config.analysis.candidates = 1;
+        let undrained = analyze(&snapshot, &config).is_ok_and(|result| {
+            [&result.modes.anchored, &result.modes.greenfield]
+                .into_iter()
+                .flatten()
+                .flat_map(|mode| &mode.candidates)
+                .all(|candidate| {
+                    candidate
+                        .symbol_moves
+                        .iter()
+                        .all(|mv| mv.from_path != "a.ts")
+                })
+        });
+        assert!(
+            undrained,
+            "a.ts holds s alone; relocating it empties the file, so the veto \
+             must hold"
+        );
+    }
+
+    /// The placement-aware move_distance extension (FIX08): a node whose
+    /// effective placement lands in a different FILE counts as moved even when
+    /// both files keep their folder keys, while the identical layout with
+    /// home-file placements measures zero.
+    #[test]
+    fn should_count_a_file_grain_identity_placement_as_unmoved() {
+        let ir = IntermediateRepresentation::new(
+            vec![
+                node(0, "s", 3, Polarity::Production),
+                node(1, "t", 4, Polarity::Production),
+            ],
+            vec![],
+            ContainerTree::new(vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "keep", ScopeLevel::Folder, Some(0)),
+                container(2, "sink", ScopeLevel::Folder, Some(0)),
+                container(3, "a.ts", ScopeLevel::File, Some(1)),
+                container(4, "b.ts", ScopeLevel::File, Some(2)),
+            ]),
+        );
+        // The fixture layout is static, so a failed assemble means the fixture
+        // itself rotted — surface that loudly rather than testing a fallback.
+        let assembled = Snapshot::assemble(ir);
+        assert!(assembled.is_ok(), "fixture layout must assemble");
+        let Ok(snap) = assembled else {
+            return;
+        };
+
+        // Candidate tree mirrors the current folders; placement sends s from
+        // a.ts (container 3) into b.ts (container 4).
+        let candidate = ContainerTree::new(snap.ir().containers.containers().to_vec());
+        let distance = move_distance(&snap, &candidate, &|id| (id == 0).then_some(ContainerId(4)));
+        assert!(
+            distance > 0.0,
+            "s left its home file, so μ must see the move: measured {distance}"
+        );
+
+        let home = move_distance(&snap, &candidate, &|_| None);
+        assert!(
+            home.abs() < f64::EPSILON,
+            "unplaced nodes fall back to folder keys, which did not change: \
+             measured {home}"
+        );
+    }
+
+    /// Builds a minimal [`FileInfo`] whose naming evidence is just its path;
+    /// laminar home keys never feed label formation, so they stay blank.
+    fn file_info(path: &str, sloc: u32) -> FileInfo {
+        FileInfo {
+            container: 0,
+            name: SmolStr::new(path),
+            production_sloc: sloc,
+            home: LaminarHome {
+                folder: SmolStr::new(""),
+                domain: SmolStr::new(""),
+                package: SmolStr::new(""),
+                synthetic: false,
+            },
+        }
+    }
+
+    /// An all-digit shared token must never name a rebuilt place (FIX09 label
+    /// honesty): `helpers-2024` is indistinguishable from the numeric fallback
+    /// and can never align under the contract tokenizer, which drops digit
+    /// tokens. The stem path names the place instead.
+    #[test]
+    fn should_skip_a_digit_token_when_naming_a_rebuilt_place() {
+        let condensation = singleton_condensation(2);
+        let files = vec![
+            file_info("report_2024.py", 10),
+            file_info("audit_2024.py", 10),
+        ];
+        let mut used = BTreeSet::new();
+
+        let label = rebuild_label("helpers", &[0, 1], &condensation, &files, &mut used, 9);
+
+        assert_eq!(
+            label, "helpers-audit-report",
+            "the only shared token is the digit run '2024'; the joined stems \
+             must name the place instead"
+        );
+    }
+
+    /// Token grouping joins two SCCs only on a genuinely shared basename
+    /// token; unrelated files stay in their own groups.
+    #[test]
+    fn should_group_only_sccs_sharing_a_basename_token() {
+        let condensation = singleton_condensation(3);
+        let files = vec![
+            file_info("alpha.py", 1),
+            file_info("alpha_beta.py", 1),
+            file_info("gamma.py", 1),
+        ];
+
+        let groups = token_groups(&[0, 1, 2], &condensation, &files);
+
+        assert_eq!(
+            groups,
+            vec![vec![0, 1], vec![2]],
+            "'alpha' joins the first pair; 'gamma' shares nothing and stays alone"
+        );
+    }
+
+    /// A file with any priced incident edge is bonded, and its whole SCC stays
+    /// glued: bonded company never enters the stranger population, so a folder
+    /// holding only bonded files and ungroupable strays fires nothing.
+    #[test]
+    fn should_keep_a_priced_bond_out_of_the_stranger_population() {
+        // beta carries the only priced edge, so alpha and gamma are strangers —
+        // but they share no token, so no group of two forms and nothing fires.
+        let graph = Csr::from_weighted_edges(3, &[(0_u32, 1_u32, 1.0_f32)]);
+        let condensation = singleton_condensation(3);
+        let base = Partition::from_assignment(vec![ClusterId(0), ClusterId(0), ClusterId(0)], 1);
+        let mut files = vec![
+            file_info("alpha.py", 1),
+            file_info("beta.py", 1),
+            file_info("gamma.py", 1),
+        ];
+        let mut names = vec![SmolStr::new("helpers")];
+        let mut synthetic = vec![false];
+
+        let rebuilt = synthesize_roof_rebuild(
+            &mut files,
+            &condensation,
+            &graph,
+            &base,
+            &mut names,
+            &mut synthetic,
+        );
+
+        assert!(
+            rebuilt.is_none(),
+            "no token group of two forms among the strangers, and the bonded \
+             residual is a lone file, so the folder must stay put"
+        );
+    }
+
+    /// The end-to-end FIX09 win: zero-priced strangers sharing a basename token
+    /// under a misnamed roof leave for a place named after their own shared
+    /// word, so the greenfield pool carries a genuinely different shape.
+    #[test]
+    fn should_synthesize_a_place_named_after_its_strangers() {
+        // checkout calls into helpers/charge; every other helpers file prices
+        // zero anywhere, so refund/string/date are the unanchored population.
+        let snapshot = snapshot(
+            vec![
+                node(0, "pay", 1, Polarity::Production),
+                node(1, "charge_card", 3, Polarity::Production),
+                node(2, "refund_card", 4, Polarity::Production),
+                node(3, "slugify", 5, Polarity::Production),
+                node(4, "parse_iso", 6, Polarity::Production),
+            ],
+            vec![edge(0, 1)],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "checkout.py", ScopeLevel::File, Some(0)),
+                container(2, "helpers", ScopeLevel::Folder, Some(0)),
+                container(3, "charge.py", ScopeLevel::File, Some(2)),
+                container(4, "refund.py", ScopeLevel::File, Some(2)),
+                container(5, "string_utils.py", ScopeLevel::File, Some(2)),
+                container(6, "date_utils.py", ScopeLevel::File, Some(2)),
+            ],
+        );
+        let config = config_with_k(3);
+
+        // analysis failures surface as an empty candidate list, so the
+        // carries_rebuild assertion below fails informatively (house style:
+        // no panic!/expect in tests).
+        let greenfield = analyze(&snapshot, &config)
+            .ok()
+            .and_then(|result| result.modes.greenfield)
+            .unwrap_or(ModeResult {
+                candidates: Vec::new(),
+                pairwise_distance: Vec::new(),
+                solution_space_converged: false,
+                current_score: 0.0,
+                current_score_breakdown: ScoreBreakdown {
+                    cut: 0.0,
+                    imbalance: 0.0,
+                    naming: 0.0,
+                    path: 0.0,
+                    anchor: 0.0,
+                    capacity: 0.0,
+                },
+                current_standing: CurrentStanding::Outscored,
+            });
+
+        let carries_rebuild = greenfield
+            .candidates
+            .iter()
+            .filter_map(|candidate| find_named(&candidate.tree, "helpers-utils"))
+            .any(|place| {
+                let paths = descendant_files(place);
+                paths.iter().any(|path| path.ends_with("string_utils.py"))
+                    && paths.iter().any(|path| path.ends_with("date_utils.py"))
+                    && paths.len() == 2
+            });
+        assert!(
+            carries_rebuild,
+            "string_utils and date_utils share only the roof's misnomer; the \
+             synthesized helpers-utils place must reach the greenfield pool \
+             holding exactly those two files"
+        );
+    }
+
+    /// Depth-first search for a non-file container whose name matches exactly.
+    fn find_named<'a>(node: &'a ContainerNode, name: &str) -> Option<&'a ContainerNode> {
+        if node.level != Level::File && node.name == name {
+            return Some(node);
+        }
+        node.children
+            .iter()
+            .flatten()
+            .find_map(|child| find_named(child, name))
+    }
+
+    /// Collects every descendant file name beneath one rendered container.
+    fn descendant_files(node: &ContainerNode) -> Vec<String> {
+        let mut paths = Vec::new();
+        accumulate_files(node, &mut paths);
+        paths
+    }
+
+    /// Depth-first accumulation of descendant file names.
+    fn accumulate_files(node: &ContainerNode, out: &mut Vec<String>) {
+        if node.level == Level::File {
+            out.push(node.name.clone());
+            return;
+        }
+        for child in node.children.iter().flatten() {
+            accumulate_files(child, out);
+        }
     }
 }

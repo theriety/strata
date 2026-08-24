@@ -18,7 +18,7 @@ use std::io::{self, Write};
 
 use strata_engine::{
     AnalyzeResult, Candidate, ContainerNode, CurrentStanding, FileMove, Level, ModeResult, Move,
-    MoveKind, MoveReason, ScoreBreakdown, Severity, Violation, ViolationKind,
+    MoveKind, MoveReason, ScoreBreakdown, Severity, SymbolMove, Violation, ViolationKind,
 };
 
 /// The output format the `analyze` command renders in.
@@ -256,7 +256,9 @@ fn leaf_names(files: &[FileMove]) -> Vec<String> {
         .iter()
         .map(|path| {
             let name = base(path);
-            let shared = paths.iter().any(|other| other != path && base(other) == name);
+            let shared = paths
+                .iter()
+                .any(|other| other != path && base(other) == name);
             if !shared {
                 return name;
             }
@@ -275,9 +277,9 @@ fn leaf_names(files: &[FileMove]) -> Vec<String> {
                         .join("/")
                 };
                 let candidate = suffix(path);
-                let clash = paths
-                    .iter()
-                    .any(|other| other != path && base(other) == name && suffix(other) == candidate);
+                let clash = paths.iter().any(|other| {
+                    other != path && base(other) == name && suffix(other) == candidate
+                });
                 depth += 1;
                 if total_segments < depth || !clash {
                     break candidate;
@@ -291,11 +293,7 @@ fn leaf_names(files: &[FileMove]) -> Vec<String> {
     let collapsed = grown
         .iter()
         .any(|name| grown.iter().filter(|other| *other == name).count() > 1);
-    if collapsed {
-        paths
-    } else {
-        grown
-    }
+    if collapsed { paths } else { grown }
 }
 
 /// Bounds a composed suggestion title so `prefix` plus the title stays inside
@@ -673,7 +671,11 @@ fn infeasibility_note(result: &AnalyzeResult) -> Option<String> {
         && let Some(remainder) = candidate.capacity_remainder
     {
         if remainder.remaining == 0 {
-            let _ = write!(note, " Candidate {} clears every one of them.", candidate.index);
+            let _ = write!(
+                note,
+                " Candidate {} clears every one of them.",
+                candidate.index
+            );
         } else {
             let _ = write!(
                 note,
@@ -704,9 +706,10 @@ fn changes_section(result: &AnalyzeResult) -> Vec<String> {
         .iter()
         .map(|entry| entry.files.len())
         .sum();
+    let symbol_count = featured.symbol_moves.len();
 
     let mut lines = Vec::new();
-    if moved == 0 {
+    if moved == 0 && symbol_count == 0 {
         lines.push(format!(
             "no change suggested — candidate {} matches today's layout, file for file.",
             featured.index
@@ -718,8 +721,12 @@ fn changes_section(result: &AnalyzeResult) -> Vec<String> {
         .into_iter()
         .find(|(name, _)| *name != featured_name)
         .and_then(|(_, mode)| mode.candidates.first());
+    let plans_differ = |other: &Candidate| {
+        other.delta_narration != featured.delta_narration
+            || other.symbol_moves != featured.symbol_moves
+    };
     let lead = match other_head {
-        Some(other) if other.delta_narration != featured.delta_narration => format!(
+        Some(other) if plans_differ(other) => format!(
             "{}'s plan ({} changes) differs from {featured_name}'s in detail — only candidate \
              {} is itemized below.",
             other_mode_name(result, featured_name),
@@ -733,13 +740,30 @@ fn changes_section(result: &AnalyzeResult) -> Vec<String> {
         ),
         None => String::new(),
     };
-    if lead.is_empty() {
+    // FIX08: when the candidate carries symbol-grain relocations the preamble
+    // must claim them — "relocates whole files" alone would under-report the
+    // plan. The note is appended only when symbols actually moved, so
+    // file-only candidates keep their prior wording byte for byte.
+    let symbols_note = if symbol_count > 0 {
+        format!(" The plan also relocates {symbol_count} symbol(s) between files, itemized below.")
+    } else {
+        String::new()
+    };
+    if lead.is_empty() && symbols_note.is_empty() {
         lines.push(format!(
             "Every suggestion relocates whole files ({moved} in all):"
         ));
+    } else if lead.is_empty() {
+        lines.extend(wrap(
+            &format!("Every suggestion relocates whole files ({moved} in all).{symbols_note}"),
+            1,
+            1,
+        ));
     } else {
         lines.extend(wrap(
-            &format!("{lead} Every suggestion relocates whole files ({moved} in all)."),
+            &format!(
+                "{lead} Every suggestion relocates whole files ({moved} in all).{symbols_note}"
+            ),
             1,
             1,
         ));
@@ -748,6 +772,16 @@ fn changes_section(result: &AnalyzeResult) -> Vec<String> {
 
     for (step, entry) in featured.delta_narration.iter().enumerate() {
         lines.extend(suggestion_block(step + 1, entry));
+    }
+
+    // FIX08: the symbol-grain itemization rides after the whole-file blocks —
+    // same static-text dump, one prose line per relocation.
+    if symbol_count > 0 {
+        lines.push(String::new());
+        lines.push(format!(" Symbol moves ({symbol_count} in all):"));
+        for entry in &featured.symbol_moves {
+            lines.push(symbol_move_line(entry));
+        }
     }
 
     let unchanged = result
@@ -870,6 +904,17 @@ fn change_table(files: &[FileMove], names: &[String], to: &str) -> (Vec<String>,
     build(
         before_full.min(half + (budget % 2)).max(12),
         after_full.min(half).max(11),
+    )
+}
+
+/// One prose line per symbol relocation (FIX08): what moves, from which file
+/// to which file, the objective delta it earned at acceptance, and how many
+/// imports must be re-pointed. Full repo-relative paths — symbol moves name no
+/// folder to abbreviate against.
+fn symbol_move_line(entry: &SymbolMove) -> String {
+    format!(
+        " - move `{}` from {} to {} (delta {:+.4}, {} import(s) to re-point)",
+        entry.symbol, entry.from_path, entry.to_path, entry.delta, entry.broken_imports
     )
 }
 
@@ -1212,7 +1257,9 @@ fn recommendation_section(result: &AnalyzeResult) -> Vec<String> {
         .map(|(name, _)| *name)
         .collect();
     let keep = if let [single] = infeasible.as_slice() {
-        format!("not offered — the {single} mode marks today's layout infeasible under its own caps (§4).")
+        format!(
+            "not offered — the {single} mode marks today's layout infeasible under its own caps (§4)."
+        )
     } else if infeasible.len() > 1 {
         "not offered — both modes mark today's layout infeasible under its own caps (§4)."
             .to_owned()
@@ -1356,22 +1403,37 @@ fn write_tree_node(
 ///
 /// Returns an [`io::Error`] if writing fails.
 pub fn render_diff(candidate: &Candidate, out: &mut impl Write) -> io::Result<()> {
-    if candidate.delta_narration.is_empty() {
+    let no_symbols = candidate.symbol_moves.is_empty();
+    if candidate.delta_narration.is_empty() && no_symbols {
         return writeln!(out, "no moves");
     }
-    let groups = candidate.delta_narration.len();
-    let files: usize = candidate
-        .delta_narration
-        .iter()
-        .map(|entry| entry.files.len())
-        .sum();
-    writeln!(
-        out,
-        "moves ({groups} group(s), {files} file(s); improvement {:+.4}):",
-        candidate.improvement
-    )?;
-    for line in move_step_lines(&candidate.delta_narration) {
-        writeln!(out, "{line}")?;
+    if candidate.delta_narration.is_empty() {
+        writeln!(
+            out,
+            "symbol moves ({} symbol(s); improvement {:+.4}):",
+            candidate.symbol_moves.len(),
+            candidate.improvement
+        )?;
+    } else {
+        let groups = candidate.delta_narration.len();
+        let files: usize = candidate
+            .delta_narration
+            .iter()
+            .map(|entry| entry.files.len())
+            .sum();
+        writeln!(
+            out,
+            "moves ({groups} group(s), {files} file(s); improvement {:+.4}):",
+            candidate.improvement
+        )?;
+        for line in move_step_lines(&candidate.delta_narration) {
+            writeln!(out, "{line}")?;
+        }
+    }
+    // FIX08: symbol-grain relocations ride after the whole-file steps so the
+    // diff face reports the full plan.
+    for entry in &candidate.symbol_moves {
+        writeln!(out, "{}", symbol_move_line(entry).trim_start())?;
     }
     Ok(())
 }
@@ -1528,6 +1590,7 @@ mod tests {
                     },
                     conditional_splits: Vec::new(),
                     delta_narration: Vec::new(),
+                    symbol_moves: Vec::new(),
                     capacity_remainder: None,
                 }],
                 pairwise_distance: Vec::new(),
@@ -1710,13 +1773,13 @@ mod tests {
             assert!(line.chars().count() <= 99, "wrapped line fits: {line}");
         }
         assert!(
-            lines
-                .first()
-                .is_some_and(|first| first.starts_with("   ")),
+            lines.first().is_some_and(|first| first.starts_with("   ")),
             "first pad applies: {lines:?}"
         );
         assert!(
-            lines.get(1).is_some_and(|second| second.starts_with("       ")),
+            lines
+                .get(1)
+                .is_some_and(|second| second.starts_with("       ")),
             "continuation pad applies"
         );
     }
@@ -2030,6 +2093,7 @@ mod tests {
                 },
                 conditional_splits: Vec::new(),
                 delta_narration: Vec::new(),
+                symbol_moves: Vec::new(),
                 capacity_remainder: None,
             }],
             pairwise_distance: Vec::new(),
@@ -2379,6 +2443,7 @@ mod tests {
             tree: file_node("lib", 1),
             conditional_splits: Vec::new(),
             delta_narration: Vec::new(),
+            symbol_moves: Vec::new(),
             capacity_remainder: None,
         };
         let mut buffer = Vec::new();
@@ -2404,6 +2469,7 @@ mod tests {
                 "new",
                 MoveReason::Clustering,
             )],
+            symbol_moves: Vec::new(),
             capacity_remainder: None,
         };
         let mut buffer = Vec::new();
@@ -2433,6 +2499,7 @@ mod tests {
                 "new",
                 MoveReason::Clustering,
             )],
+            symbol_moves: Vec::new(),
             capacity_remainder: None,
         };
         let mut buffer = Vec::new();
@@ -2476,6 +2543,7 @@ mod tests {
                 to: "new".to_owned(),
                 reason: MoveReason::Clustering,
             }],
+            symbol_moves: Vec::new(),
             capacity_remainder: None,
         };
         let mut buffer = Vec::new();

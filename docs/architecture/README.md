@@ -7,7 +7,7 @@ departed from spec.
 
 ## Decisions
 
-| ID | Title | Status |
+| Document | Title | Status |
 | --- | --- | --- |
 | [ADR-0001](decisions/0001-recommendations-only.md) | Recommendations only — strata never delivers or executes move scripts | Accepted |
 | [ADR-0002](decisions/0002-report-format-action-list.md) | Report format — suggested action list vocabulary for all suggestion faces | Accepted |

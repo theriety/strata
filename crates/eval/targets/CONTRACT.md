@@ -39,7 +39,9 @@ finding.
 
 Canonical failure modes: `directory-tearing`, `cross-dir-welding`,
 `over-capacity`, `workspace-collapse`, `anchored-inversion`,
-`naming-incoherence`, `scale`.
+`naming-incoherence`, `import-cycle`, `scale`. The `import-cycle` mode covers
+fixtures whose designed defect is one genuine priced import cycle spanning two
+real directories — the substrate the FIX07 seed-granularity probe measures.
 
 ## The evaluation surface
 
@@ -251,6 +253,21 @@ because = "..."
 [[assert.non_inversion]]
 because = "..."
 
+# a SYMBOL keeps its current home file in the asserted candidate. `path` is
+# the symbol's FULL repo-relative file path in today's layout (not the
+# package-relative container key preserve_dir uses); the harness checks at
+# load that the CURRENT tree really shows the symbol in that file, so the pin
+# documents an existing home rather than wishing one into existence. The best
+# candidate of each asserted mode must still show the symbol in a FILE node
+# with exactly that path — folder moves above the file are fine, moving the
+# symbol out is not. Use it to pin that a defect lives in the misleading
+# ROOF (naming/placement of containers), not in member placement, so fixing
+# the roof must not churn innocent symbols.
+[[assert.preserve_symbol_home]]
+symbol = "charge_card"
+path = "src/billing/helpers/charge.py"
+because = "..."
+
 # --- optional reference best state: pair-F1 ONLY, never pass/fail ---------------
 # `path` is a label only: pair-F1 reads the listed files, never the name.
 # Reference names are NOT naming obligations (an ideal roof like `payments`
@@ -261,7 +278,8 @@ files = ["billing/invoice.py", "billing/pricing.py", "billing/ledger.py"]
 ```
 
 At load the harness validates every referenced file path against the fixture
-census and every `preserve_dir` key against the package/source-root layout. A
+census, every `preserve_dir` key against the package/source-root layout, and
+every `preserve_symbol_home` pin against the CURRENT tree's symbol homes. A
 misspelled path is a load-time error, never a verdict — a silent typo would
 mint permanent fake distance, which is the corpus's core currency.
 
@@ -270,6 +288,7 @@ Per-kind keys (missing-required and unknown alike fail loud):
 | kind | required | optional |
 | --- | --- | --- |
 | preserve_dir | `path` | `mode` |
+| preserve_symbol_home | `symbol`, `path` | `mode` |
 | keep_together / separate | `paths` (≥2) | `mode` |
 | size_band | `max_files`; exactly one of `scope`/`container` | `min_files`, `mode` |
 | move_budget | `mode`; exactly one of `max_moved_files`/`min_moved_files` | — |

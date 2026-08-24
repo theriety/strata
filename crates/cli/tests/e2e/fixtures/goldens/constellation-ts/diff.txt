@@ -1,1 +1,5 @@
-no moves
+moves (2 group(s), 2 file(s); improvement +0.0256):
+move — pulled by point.ts (w 1.0)
+  1. src/io/parser.ts [constellation-ts/io → constellation-ts/model]
+move — pulled by canvas.ts (w 1.0)
+  2. src/core/epsilon.ts [constellation-ts/core → constellation-ts/render]

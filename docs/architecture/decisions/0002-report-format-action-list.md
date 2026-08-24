@@ -1,7 +1,8 @@
 # ADR-0002: Report format — suggested action list
 
-**Date:** 2026-08-23
-**Status:** Accepted (owner ruling, design rounds 5–10)
+- **Status:** Accepted
+- **Date:** 2026-08-23
+- Accepted by owner ruling after design rounds 5–10; see Context.
 
 ## Context
 

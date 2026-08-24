@@ -4,9 +4,9 @@
 --------------------------------------------------------------------------------
  reading rules
 --------------------------------------------------------------------------------
- scores    : four decimals, lower is better            0.1668 → 0.1668
+ scores    : four decimals, lower is better            0.1668 → 0.1412
  gain      : improvement over that mode's own starting point, measured in
-             the same units as the score              +0.0000
+             the same units as the score              +0.0256
  modes     : anchored keeps today's good placements as fixed points while
              improving the rest; greenfield ignores current paths entirely
              and rebuilds from imports alone
@@ -38,8 +38,8 @@
 ================================================================================
  candidate count : 2  (anchored mode returned 1 · greenfield mode returned 1)
 
- candidate 1   anchored/1     score  0.1668   gain +0.0000   best score
- candidate 2   greenfield/1   score  0.2040   gain +0.1628   different shape, own baseline
+ candidate 1   anchored/1     score  0.1412   gain +0.0256   best score
+ candidate 2   greenfield/1   score  0.2164   gain +0.1504   different shape, own baseline
 
  comparability: these two gains have different starting points — anchored baselines the current
                  tree at 0.1668; greenfield re-prices paths and drops anchor credit, baselining the
@@ -51,12 +51,42 @@
 ================================================================================
  §2  What would change — candidate 1 (anchored)
 ================================================================================
-no change suggested — candidate 1 matches today's layout, file for file.
+ greenfield's plan (4 changes) differs from anchored's in detail — only candidate 1 is itemized
+ below. Every suggestion relocates whole files (2 in all).
+
+ --------------------------------------------------------------------------------
+ 1 · Move `parser.ts` into `constellation-ts/model`
+--------------------------------------------------------------------------------
+ grain : whole files
+
+ leaf        | before place          | after place
+ `parser.ts` | `constellation-ts/io` | `constellation-ts/model`
+
+ caption  WHY pulled toward `src/model/point.ts` — weight 1.0.
+
+ --------------------------------------------------------------------------------
+ 2 · Move `epsilon.ts` into `constellation-ts/render`
+--------------------------------------------------------------------------------
+ grain : whole files
+
+ leaf         | before place            | after place
+ `epsilon.ts` | `constellation-ts/core` | `constellation-ts/render`
+
+ caption  WHY pulled toward `src/render/canvas.ts` — weight 1.0.
+
+ The other 26 files are absent because nothing about them changes.
 
 ================================================================================
  §3  Blast radius — changed containers only
 ================================================================================
-nothing relocates — every container keeps its files.
+ 4 containers change as 2 files relocate; the 4 largest:
+
+ `constellation-ts/core`    -1f
+ `constellation-ts/io`      -1f
+ `constellation-ts/model`   +1f
+ `constellation-ts/render`  +1f
+
+ the tally balances: every file that leaves a container arrives in one, so the changes sum to zero.
 
 ================================================================================
  §4  Findings this run raised
@@ -70,12 +100,12 @@ nothing relocates — every container keeps its files.
  §5  Score delta — current → candidate 1
 ================================================================================
  term               current       proposal    delta
- cut                 0.3281         0.3281        +0.0000
- imbalance           0.0406         0.0406        +0.0000
- naming             -0.0019        -0.0019        +0.0000
- path               -0.2000        -0.2000        +0.0000
- anchor              0.0000         0.0000        +0.0000
- score               0.1668         0.1668        +0.0000   (gain +0.0000)
+ cut                 0.3281         0.2135        -0.1146
+ imbalance           0.0406         0.0425        +0.0019
+ naming             -0.0019        -0.0016        +0.0003
+ path               -0.2000        -0.1846        +0.0154
+ anchor              0.0000         0.0714        +0.0714
+ score               0.1668         0.1412        -0.0256   (gain +0.0256)
 
  the five terms combine into the total score; lower is better.
 
@@ -86,7 +116,12 @@ nothing relocates — every container keeps its files.
 ================================================================================
  §6  Recommendation
 ================================================================================
- keep       keep the current layout — the run's best candidate is today's tree unchanged.
+ adopt      candidate 1 — 0.1412, gain +0.0256, 2 changes relocating 2 files (§2). It goes straight
+            at the cut that dominates today's score (0.3281 → 0.2135).
+ second     greenfield reaches a related but different shape — 0.2164, gain +0.1504 against its own
+            0.3668 baseline; decide between the two by intent, never across baselines.
+ keep       keeping today's layout remains possible — it scores 0.1668 against this proposal's
+            0.1412.
  in part    partial plans are not rescored; apply §2 in its given order, one change at a time.
 
 ================================================================================

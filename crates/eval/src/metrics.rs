@@ -123,6 +123,19 @@ pub fn walk_containers<'a>(
     walk_inner(root, &Vec::new(), visit);
 }
 
+/// Walks `root`, applying `visit` to every file node. The complement of
+/// [`walk_containers`] — that walker deliberately skips files so structural
+/// assertions see only scoped containers; symbol-grain assertions need the
+/// files themselves, wherever the tree nests them.
+pub fn walk_files<'a>(root: &'a ContainerNode, visit: &mut dyn FnMut(&'a ContainerNode)) {
+    if root.level == Level::File {
+        visit(root);
+    }
+    for child in root.children.iter().flatten() {
+        walk_files(child, visit);
+    }
+}
+
 fn walk_inner<'a>(
     node: &'a ContainerNode,
     chain: &[String],

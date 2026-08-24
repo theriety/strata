@@ -152,8 +152,10 @@ struct Matching {
 /// index — so each dependent gets first pick of its dependencies (its outgoing
 /// neighbours). Each unmatched vertex `u` picks the heaviest eligible outgoing
 /// partner `v` (an edge `u -> v` whose contraction stays acyclic and that is
-/// itself unmatched); ties break toward the smaller vertex index. Unmatched
-/// vertices map to fresh singleton coarse vertices.
+/// itself unmatched); ties break toward the smaller vertex index. Zero-priced
+/// edges are never matched — a free edge carries no evidence two vertices belong
+/// together ([`pick_partner`]). Unmatched vertices map to fresh singleton coarse
+/// vertices.
 fn match_heavy_edges(
     graph: &Csr,
     layers: &[u32],
@@ -218,7 +220,9 @@ fn assign(partner: &mut [u32], fine_to_coarse: &mut [u32], u: u32, v: u32, coars
 }
 
 /// Picks the heaviest acyclicity-safe unmatched partner of `u` whose merged
-/// capacity weight stays within `max_weight`, or `None`.
+/// capacity weight stays within `max_weight`, or `None`. Zero-priced edges are
+/// never matched: a free edge carries no evidence that two vertices belong
+/// together, so contracting across one would weld unrelated vertices.
 fn pick_partner(
     graph: &Csr,
     layers: &[u32],
@@ -247,6 +251,10 @@ fn pick_partner(
             continue;
         }
         let weight = weights.get(slot).copied().unwrap_or(0.0);
+        if weight <= 0.0 {
+            // FIX04 doctrine: a zero-priced edge never binds placement.
+            continue;
+        }
         let take = match best {
             None => true,
             // Strictly heavier wins; on a tie the smaller index already held the
@@ -409,6 +417,14 @@ mod tests {
         Csr::from_sorted_edges(vertex_count, &edges)
     }
 
+    /// Builds a CSR over `vertex_count` vertices with every edge priced
+    /// `weight`. Coarsening only contracts priced edges, so merge-expecting
+    /// fixtures must build on this, never on [`csr`].
+    fn weighted_csr(vertex_count: usize, edges: Vec<(u32, u32)>, weight: f32) -> Csr {
+        let weighted = edges.into_iter().map(|(u, v)| (u, v, weight));
+        Csr::from_weighted_edges(vertex_count, &weighted.collect::<Vec<_>>())
+    }
+
     /// Unit capacity weights: one member per vertex, no weight cap in play.
     fn unit(vertex_count: usize) -> Vec<u32> {
         vec![1; vertex_count]
@@ -462,8 +478,8 @@ mod tests {
 
     #[test]
     fn should_merge_an_adjacent_layer_pair() {
-        // 1 -> 0 only: a single safe edge, layers 2 and 1.
-        let graph = csr(2, vec![(1, 0)]);
+        // 1 -> 0 only: a single priced, safe edge, layers 2 and 1.
+        let graph = weighted_csr(2, vec![(1, 0)], 1.0);
         let layers = layers_of(&graph);
 
         let matching = match_heavy_edges(&graph, &layers, &unit(graph.vertex_count()), u32::MAX);
@@ -471,6 +487,34 @@ mod tests {
         // Both vertices fold into one coarse vertex.
         assert_eq!(matching.contracted, 1);
         assert_eq!(matching.fine_to_coarse, vec![0, 0]);
+    }
+
+    #[test]
+    fn should_never_match_across_a_zero_priced_edge() {
+        // 1 -> 0 is structurally identical to the priced pair above but carries
+        // no price (a re-export): it must never contract the two vertices.
+        let graph = csr(2, vec![(1, 0)]);
+        let layers = layers_of(&graph);
+
+        let matching = match_heavy_edges(&graph, &layers, &unit(graph.vertex_count()), u32::MAX);
+
+        assert_eq!(matching.contracted, 2);
+        // two singletons; visitation descends layers, so vertex 1 takes id 0.
+        assert_eq!(matching.fine_to_coarse, vec![1, 0]);
+    }
+
+    #[test]
+    fn should_prefer_a_priced_partner_over_a_zero_priced_one() {
+        // 0 -> 1 is free while 0 -> 3 costs 2: the free edge must not win even
+        // though its neighbour sorts first.
+        let priced: Vec<(u32, u32, f32)> = vec![(0, 1, 0.0), (0, 3, 2.0)];
+        let graph = Csr::from_weighted_edges(4, &priced);
+        let layers = [4, 3, 1, 3];
+        let partner = [UNMATCHED; 4];
+
+        let chosen = pick_partner(&graph, &layers, &partner, 0, &unit(4), u32::MAX);
+
+        assert_eq!(chosen, Some(3));
     }
 
     #[test]
@@ -494,8 +538,8 @@ mod tests {
 
     #[test]
     fn should_pick_the_smaller_index_on_a_weight_tie() {
-        // 0 -> 1 and 0 -> 2 with equal (zero) weights: the smaller neighbour wins.
-        let base = csr(3, vec![(0, 1), (0, 2)]);
+        // 0 -> 1 and 0 -> 2 with equal positive weights: the smaller neighbour wins.
+        let base = weighted_csr(3, vec![(0, 1), (0, 2)], 1.0);
         let layers = [2, 1, 1];
         let partner = [UNMATCHED; 3];
 
@@ -508,7 +552,7 @@ mod tests {
     fn should_keep_every_coarse_level_acyclic() {
         // A wider DAG that needs several coarsening rounds.
         let edges = vec![(5, 4), (5, 3), (4, 2), (3, 2), (2, 1), (2, 0), (1, 0)];
-        let graph = csr(6, edges);
+        let graph = weighted_csr(6, edges, 1.0);
         let layers = layers_of(&graph);
 
         let chain = coarsen_chain(&graph, &layers, &unit(graph.vertex_count()), u32::MAX);
@@ -523,7 +567,7 @@ mod tests {
         // a 40-vertex chain coarsens at least twice; every level must carry a
         // layering sized to its own vertex count, not the base level's.
         let edges: Vec<(u32, u32)> = (1..40).map(|i| (i, i - 1)).collect();
-        let graph = csr(40, edges);
+        let graph = weighted_csr(40, edges, 1.0);
         let layers = layers_of(&graph);
 
         let chain = coarsen_chain(&graph, &layers, &unit(graph.vertex_count()), u32::MAX);
@@ -540,7 +584,7 @@ mod tests {
         // projected level by level, must land on the base level with every
         // vertex owned by the cluster of its composed coarse image.
         let edges: Vec<(u32, u32)> = (1..40).map(|i| (i, i - 1)).collect();
-        let graph = csr(40, edges);
+        let graph = weighted_csr(40, edges, 1.0);
         let layers = layers_of(&graph);
         let chain = coarsen_chain(&graph, &layers, &unit(graph.vertex_count()), u32::MAX);
         assert!(chain.len() > 2, "40-vertex chain must coarsen twice");
@@ -587,9 +631,9 @@ mod tests {
 
     #[test]
     fn should_refuse_to_contract_a_pair_past_the_weight_cap() {
-        // 1 -> 0 is safe to merge, but the combined capacity weight 11 + 5
-        // exceeds the cap of 15, so the pair must stay apart.
-        let graph = csr(2, vec![(1, 0)]);
+        // 1 -> 0 is priced and safe to merge, but the combined capacity weight
+        // 11 + 5 exceeds the cap of 15, so the pair must stay apart.
+        let graph = weighted_csr(2, vec![(1, 0)], 1.0);
         let layers = layers_of(&graph);
 
         let matching = match_heavy_edges(&graph, &layers, &[11, 5], 15);
@@ -602,7 +646,7 @@ mod tests {
         // 20 chained vertices of weight 3, cap 15: the chain coarsens, and every
         // level carries per-vertex weight sums that never breach the cap.
         let edges: Vec<(u32, u32)> = (1..20).map(|i| (i, i - 1)).collect();
-        let graph = csr(20, edges);
+        let graph = weighted_csr(20, edges, 1.0);
         let layers = layers_of(&graph);
 
         let chain = coarsen_chain(&graph, &layers, &[3; 20], 15);

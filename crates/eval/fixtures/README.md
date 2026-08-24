@@ -14,6 +14,7 @@ real OSS code, deterministic bytes, no timestamps or randomness.
 | `inversion` | anchored-inversion | python | 7 | does anchored ever propose more change than greenfield on an optimal layout? |
 | `naming-drift` | naming-incoherence | python | 5 | does a proposal regroup misnamed containers so names match contents? |
 | `large-app` | scale | typescript | 108 | does proposal quality hold at three figures of file count? |
+| `cycle-span` | import-cycle | python | 5 | does an import cycle spanning two real directories keep both whole without churning a healthy layout? |
 
 Authoring rules live in CONTRACT.md; the short form: match the e2e fixture
 style under `crates/cli/tests/e2e/fixtures/`, tiny files whose imports express

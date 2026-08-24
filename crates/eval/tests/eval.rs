@@ -1,11 +1,16 @@
 //! The eval gate: one test per committed target, plus e2e smoke cases and the
 //! β ≡ −0.0 witness.
 //!
-//! Exit state by design: `cargo test -p strata-eval` fails ONLY on the four
-//! witness fixtures (tearing, relief, inversion, naming-drift) and the beta
-//! witness — each failure message names the defect it measures. Welding,
-//! collapse, and large-app hold their best state today; when an algorithm fix
-//! lands, its witnesses flip green and nothing else may go red.
+//! Exit state: one standing red by design. Witnesses start red on purpose —
+//! each failure message names the defect it measures — and flip exactly
+//! themselves green when the matching fix lands. naming-drift's anchored
+//! verdicts closed as pins on the scorer's measured, honorable election
+//! (deviation D-49), no coefficient touched. cycle-span's stays red as the
+//! standing witness for a capability the scorer lacks: no lawful proposal can
+//! reproduce a layout that splits an import-cycle atom across directories —
+//! a measured impossibility (deviation D-50), and per owner ruling
+//! 2026-08-24 the partitioner redesign enabling it ships as its own
+//! follow-up stream.
 
 use strata_engine::config::AnalyzeConfig;
 use strata_engine::{analyze, snapshot_from_root};
@@ -13,7 +18,7 @@ use strata_eval::{e2e_fixture_root, eval_fixture_root, harness, load_target};
 
 /// The compile-time-checked case table: every committed target paired with the
 /// designed defect its distance is measured against.
-const CASES: [(&str, &str); 7] = [
+const CASES: [(&str, &str); 8] = [
     ("collapse", "workspace collapse"),
     ("large-app", "proposal quality at scale"),
     ("welding", "cross-directory welding"),
@@ -21,6 +26,7 @@ const CASES: [(&str, &str); 7] = [
     ("relief", "unrelieved capacity"),
     ("inversion", "anchored inversion"),
     ("naming-drift", "naming incoherence"),
+    ("cycle-span", "import-cycle tearing"),
 ];
 
 /// The designed defect of one case, read from [`CASES`] without indexing.
@@ -99,6 +105,14 @@ fn inversion_witnesses_anchored_inversion() {
 #[test]
 fn naming_drift_witnesses_naming_incoherence() {
     assert_best_state("naming-drift");
+}
+
+/// RED AS DESIGNED: green when a cross-directory import cycle stops tearing one
+/// of its two real directories out of the greenfield proposal (anchored already
+/// keeps the layout at zero churn).
+#[test]
+fn cycle_span_witnesses_import_cycle_tearing() {
+    assert_best_state("cycle-span");
 }
 
 /// EVL04 coverage guard: the table covers exactly the committed target files,

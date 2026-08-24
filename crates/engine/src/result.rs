@@ -151,6 +151,12 @@ pub struct Candidate {
     pub conditional_splits: Vec<ConditionalSplit>,
     /// The explained moves versus the current layout.
     pub delta_narration: Vec<Move>,
+    /// Scored per-symbol relocations accompanying the whole-file moves (FIX08).
+    /// Absent when the candidate proposes none, so file-only candidates keep
+    /// their exact prior shape on the wire (the FIX10 additive-field precedent;
+    /// no schema bump).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub symbol_moves: Vec<SymbolMove>,
     /// The hard capacity findings left in this candidate's tree; present only
     /// when the mode's `current_standing` is `Infeasible`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -248,6 +254,42 @@ pub struct SymbolPlacement {
     pub name: String,
     /// The declared external visibility of the symbol.
     pub visibility: Level,
+}
+
+/// What kind of program entity a [`SymbolMove`] relocates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SymbolKind {
+    /// A value-level symbol (function, constant, variable).
+    Symbol,
+    /// A type-level entity (struct, enum, interface, alias).
+    Type,
+}
+
+/// One symbol-grain relocation proposed alongside whole-file moves (FIX08).
+///
+/// Whole-file [`Move`]s relocate containers; a `SymbolMove` relocates a single
+/// symbol BETWEEN two files that both survive the proposal. `delta` is the
+/// objective improvement the relocation earned when the symbol polish accepted
+/// it (always negative — acceptance requires strict J improvement), and
+/// `broken_imports` counts the distinct other files whose imports would need
+/// re-pointing once the move applies (see the engine's symbol narration).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolMove {
+    /// The relocated symbol's source-declared name.
+    pub symbol: String,
+    /// Whether the entity is a value symbol or a type.
+    pub kind: SymbolKind,
+    /// Full repo-relative path of the file the symbol leaves.
+    pub from_path: String,
+    /// Full repo-relative path of the file the symbol lands in.
+    pub to_path: String,
+    /// Objective improvement contributed by this relocation (`ΔJ < 0`).
+    pub delta: f64,
+    /// Distinct files other than the origin housing a direct caller or callee
+    /// that is NOT a future co-resident — the imports this move severs.
+    pub broken_imports: u32,
 }
 
 /// The kind of a narrated change.

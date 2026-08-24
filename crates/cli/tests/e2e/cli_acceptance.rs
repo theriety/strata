@@ -542,17 +542,27 @@ fn should_truncate_a_candidate_tree_at_the_requested_depth() {
 fn should_not_fabricate_a_package_segment_folder_for_a_cross_domain_real_directory() {
     // `workspace-ts-leak` has two packages; `atlas` has a `core` directory
     // (a dense mutual cluster) and a sibling `agent` directory whose files
-    // import so heavily from `core` that greenfield clusters them into the
-    // `core` domain. `agent` is a real directory, but it is foreign to the
-    // `core` domain: its key `atlas/agent` does not extend the domain's key
-    // `atlas/core`, so `increment_name` falls back to the whole key and
-    // `nest_folder_segments` explodes it into a fabricated `atlas [folder]`
-    // wrapper around the real `agent [folder]` -- `atlas` is the package
-    // root, not a subdirectory that exists on disk under `core`.
+    // import so heavily from `core` that greenfield legitimately dissolves
+    // them into the `core` cluster — each agent file's sole priced anchors
+    // all sit in `core`, so absorption is the honest consolidation. Both
+    // faces must stay clean: the anchored candidate keeps the current
+    // layout (`agent` its own domain over its own folder), and the
+    // greenfield candidate renders the dissolved members inside `core`'s
+    // real folder — never through a fabricated `atlas [folder]` wrapper
+    // exploding the foreign key `atlas/agent` into package segments.
     let result = analyze_to_file("workspace-ts-leak");
     let result_str = result.to_str().unwrap_or_default();
 
-    let outcome = run(&[
+    let anchored = run(&[
+        "tree",
+        "--input",
+        result_str,
+        "--mode",
+        "anchored",
+        "--candidate",
+        "1",
+    ]);
+    let greenfield = run(&[
         "tree",
         "--input",
         result_str,
@@ -563,24 +573,35 @@ fn should_not_fabricate_a_package_segment_folder_for_a_cross_domain_real_directo
     ]);
 
     let _ = std::fs::remove_file(&result);
-    assert_eq!(outcome.code, 0, "a candidate tree renders and exits 0");
-    assert!(
-        !outcome.stdout.contains("atlas [folder]"),
-        "the package name must never render as a fabricated folder node: {}",
-        outcome.stdout
+    assert_eq!(anchored.code, 0, "the anchored tree renders and exits 0");
+    assert_eq!(
+        greenfield.code, 0,
+        "the greenfield tree renders and exits 0"
     );
-    // the adjacency is line-anchored on both sides: a bare 6-space
-    // `contains` would also match the buggy 8-space line as a substring
-    // (under the fabricated wrapper), so the check pins `agent [folder]`
-    // to the exact folder depth AND directly below its domain line.
+    // the anchored face keeps the current layout: `agent` remains its own
+    // domain directly over its own real folder.
     assert!(
-        outcome
+        anchored
             .stdout
-            .contains("\n    core [domain]\n      agent [folder]\n"),
-        "the real `agent` directory must nest directly under its domain \
-         (two levels under the package group), not under a fabricated \
-         package-segment wrapper: {}",
-        outcome.stdout
+            .contains("\n    agent [domain]\n      agent [folder]\n"),
+        "the anchored candidate keeps `agent` as its own domain over its \
+         own folder: {}",
+        anchored.stdout
+    );
+    // neither face may fabricate the package segment as a folder node.
+    assert!(
+        !greenfield.stdout.contains("atlas [folder]")
+            && !anchored.stdout.contains("atlas [folder]"),
+        "the package name must never render as a fabricated folder node: {}",
+        greenfield.stdout
+    );
+    // the greenfield face dissolves the satellite into the pulling cluster:
+    // the absorbed agent files render inside `core`'s real folder.
+    assert!(
+        greenfield.stdout.contains("core [folder]"),
+        "the greenfield candidate dissolves the sole-anchored agent files \
+         into `core`'s real folder: {}",
+        greenfield.stdout
     );
 }
 
@@ -1311,11 +1332,14 @@ fn should_render_a_greenfield_candidate_tree_for_the_workspace_fixture() {
 
 #[test]
 fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
-    // the greenfield delta of workspace-rust merges the cross-crate files into
-    // the folder of the crate whose lib.rs pulls them hardest — a real home
-    // with a dependency-pull reason. Synthetic grab-bag labels like `mixed`
-    // are dead: every destination is a real directory-derived name.
-    let result = analyze_to_file("workspace-rust");
+    // the narration contract is pinned on constellation-ts's greenfield delta:
+    // four move groups over five files, each destination a real directory-
+    // derived cluster name (`constellation-ts/model`) reached through a
+    // dependency-pull reason. workspace-rust no longer carries this contract —
+    // its greenfield candidate now converges back to the identity layout, so
+    // diffing it against current narrates `no moves`. Synthetic grab-bag
+    // labels like `mixed` stay dead: every destination is real.
+    let result = analyze_to_file("constellation-ts");
     let result_str = result.to_str().unwrap_or_default();
 
     let outcome = run(&["diff", "--input", result_str, "current", "greenfield/1"]);
@@ -1328,10 +1352,8 @@ fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("→ crates/core]"),
-        "the cross-crate files merge into the pulling crate itself: a root-level \
-         file's synthetic `workspace` bucket collapses at render, so the move \
-         target is the package, not an invented `crates/app/workspace` path: {}",
+        outcome.stdout.contains("→ constellation-ts/model]"),
+        "the pulled files merge into the real `model` cluster of the package: {}",
         outcome.stdout
     );
     assert!(
@@ -1484,10 +1506,13 @@ fn should_truncate_the_workspace_tree_at_each_requested_depth() {
         at_zero.stdout, "workspace-rust [packageGroup]\n",
         "depth 0 prints only the root container"
     );
-    // depth 1 adds exactly the next container level and no deeper.
+    // depth 1 adds exactly the next container level and no deeper. The
+    // package containers render under their real qualified keys — one per
+    // crate directory (`crates/app`, `crates/core`, `crates/util`) — and no
+    // domain level survives the cut.
     assert!(
-        at_one.stdout.contains("crates [package]") && !at_one.stdout.contains("[domain]"),
-        "depth 1 stops one level below the root: {}",
+        at_one.stdout.contains("crates/app [package]") && !at_one.stdout.contains("[domain]"),
+        "depth 1 stops one level below the root at the real package keys: {}",
         at_one.stdout
     );
     // a depth past the tree height is a no-op equal to the untruncated render.
@@ -1929,8 +1954,10 @@ fn should_score_greenfield_candidates_identically_across_renames() {
         "greenfield scores are rename-invariant: {score_a} vs {score_b}"
     );
     assert!(
-        a.stdout.contains("no change suggested — candidate 1 matches today's layout")
-            && b.stdout.contains("no change suggested — candidate 1 matches today's layout"),
+        a.stdout
+            .contains("no change suggested — candidate 1 matches today's layout")
+            && b.stdout
+                .contains("no change suggested — candidate 1 matches today's layout"),
         "both propose the same empty move set: {} / {}",
         a.stdout,
         b.stdout
@@ -2400,7 +2427,9 @@ fn should_emit_the_identity_candidate_when_the_current_layout_is_optimal() {
         summary.stdout
     );
     assert!(
-        summary.stdout.contains("keep the current layout — the run's best candidate is today's tree unchanged."),
+        summary.stdout.contains(
+            "keep the current layout — the run's best candidate is today's tree unchanged."
+        ),
         "the recommendation keeps the optimal layout: {}",
         summary.stdout
     );
@@ -3082,16 +3111,20 @@ fn should_yield_byte_identical_output_across_root_path_forms() {
 fn should_resolve_a_relative_root_to_real_names_and_full_rust_edges() {
     // the `.`-form is the default a user gets running strata from inside their
     // repo; `.` has no `file_name()`, so Bug B dropped it to 4 edges and the
-    // empty-name fallback group `root`, flipping the greenfield merge target.
-    // Canonicalization restores the real directory name as the package group and
-    // the full edge graph, so the greenfield merge lands in the pulling crate
-    // exactly as the absolute form does.
+    // empty-name fallback group `root`. Canonicalization makes the snapshot a
+    // function of the resolved directory, not of the root's spelling: the
+    // `.`-form run from inside the fixture and an absolute-root run from
+    // anywhere must persist BYTE-EQUAL results, and the current tree carries
+    // the real directory name as its package group.
     let canonical = std::fs::canonicalize(fixture("workspace-rust"))
         .unwrap_or_else(|_| fixture("workspace-rust"));
-    let result = std::env::temp_dir().join(format!("strata-accept-dotroot-{}.json", nanos()));
-    let result_str = result.to_str().unwrap_or_default();
+    let canonical_str = canonical.to_str().unwrap_or_default();
+    let dot_result = std::env::temp_dir().join(format!("strata-accept-dotroot-{}.json", nanos()));
+    let abs_result = std::env::temp_dir().join(format!("strata-accept-absroot-{}.json", nanos()));
+    let dot_str = dot_result.to_str().unwrap_or_default();
+    let abs_str = abs_result.to_str().unwrap_or_default();
 
-    let saved = run_in(
+    let saved_dot = run_in(
         &canonical,
         &[
             "analyze",
@@ -3102,27 +3135,38 @@ fn should_resolve_a_relative_root_to_real_names_and_full_rust_edges() {
             "--format",
             "json",
             "--output",
-            result_str,
+            dot_str,
         ],
     );
-    let tree = run(&["tree", "--input", result_str, "--current"]);
-    let diff = run(&["diff", "--input", result_str, "current", "greenfield/1"]);
+    let saved_abs = run(&[
+        "analyze",
+        "--root",
+        canonical_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "json",
+        "--output",
+        abs_str,
+    ]);
+    let dot_json = std::fs::read_to_string(&dot_result).unwrap_or_default();
+    let abs_json = std::fs::read_to_string(&abs_result).unwrap_or_default();
 
-    let _ = std::fs::remove_file(&result);
-    assert_eq!(saved.code, 0, "the .-form analyze exits 0");
+    let tree = run(&["tree", "--input", dot_str, "--current"]);
+
+    let _ = std::fs::remove_file(&dot_result);
+    let _ = std::fs::remove_file(&abs_result);
+    assert_eq!(saved_dot.code, 0, "the .-form analyze exits 0");
+    assert_eq!(saved_abs.code, 0, "the absolute-root analyze exits 0");
+    assert_eq!(
+        dot_json, abs_json,
+        "the `.`-form and absolute-root runs persist byte-equal snapshots"
+    );
     assert_eq!(tree.code, 0, "the current tree renders");
-    assert_eq!(diff.code, 0, "the greenfield diff renders");
     assert!(
         tree.stdout.contains("workspace-rust [packageGroup]"),
         "the package group is named for the real directory, not the fallback `root`: {}",
         tree.stdout
-    );
-    assert!(
-        diff.stdout.contains("→ crates/core]"),
-        "the full 13-edge graph lands the greenfield merge in crates/core — \
-         whichever crate pulls hardest under the D-37 normalized objective — \
-         exactly as the absolute form does: {}",
-        diff.stdout
     );
 }
 

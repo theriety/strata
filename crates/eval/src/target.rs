@@ -70,6 +70,8 @@ pub enum FailureMode {
     AnchoredInversion,
     /// Container names misaligned with their members.
     NamingIncoherence,
+    /// A genuine import cycle spanning two real directories (FIX07 probe substrate).
+    ImportCycle,
     /// Proposal quality at three-figure file counts.
     Scale,
 }
@@ -245,11 +247,37 @@ pub struct AssertBlock {
     /// Anchored-must-not-out-churn-greenfield pins (requires run mode both).
     #[serde(default)]
     pub non_inversion: Vec<NonInversion>,
+    /// Symbols that must keep their home file in the best candidate (FIX08:
+    /// symbol-grain relocation must not churn homes the best state keeps).
+    #[serde(default)]
+    pub preserve_symbol_home: Vec<PreserveSymbolHome>,
 }
 
 /// Default candidate index: the best-scoring candidate.
 fn default_candidate() -> u32 {
     1
+}
+
+/// A symbol that must keep its home file in the asserted candidate tree.
+///
+/// `symbol` names the entity exactly as the engine reports it; `path` is the
+/// FULL repo-relative path of the file that houses it in the best state (file
+/// paths are never container keys, so no package/source-root resolution
+/// applies). The harness verifies against the current layout that the symbol
+/// actually lives there today — a typo is a load-time error, never fake
+/// distance.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreserveSymbolHome {
+    /// The symbol's source-declared name.
+    pub symbol: String,
+    /// Full repo-relative path of the file the symbol must keep as home.
+    pub path: String,
+    /// Overrides `[assert].modes` for this assertion alone.
+    #[serde(default)]
+    pub mode: Option<FaceMode>,
+    /// Why this home holds in the best state.
+    pub because: String,
 }
 
 /// A directory that must survive as a named container once per package that
@@ -589,6 +617,28 @@ impl TargetSpec {
                     "non_inversion compares both faces and requires [run].mode = both".to_owned(),
                 ));
             }
+        }
+        Self::validate_symbol_homes(block, run, fixture)
+    }
+
+    /// Symbol-grain pins need a rationale, a non-empty symbol and path pair,
+    /// and a mode the configured run actually produces.
+    fn validate_symbol_homes(
+        block: &AssertBlock,
+        run: RunMode,
+        fixture: &str,
+    ) -> Result<(), EvalError> {
+        let lift =
+            |checked: Result<(), String>| checked.map_err(|message| invalid(fixture, message));
+        for home in &block.preserve_symbol_home {
+            lift(check_rationale(&home.because, "preserve_symbol_home"))?;
+            if home.symbol.trim().is_empty() || home.path.trim().is_empty() {
+                return Err(invalid(
+                    fixture,
+                    "preserve_symbol_home needs a non-empty symbol and path".to_owned(),
+                ));
+            }
+            lift(check_own_mode(run, home.mode))?;
         }
         Ok(())
     }

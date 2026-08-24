@@ -21,7 +21,8 @@ use crate::metrics;
 use crate::target::{
     AssertBlock, BandScope, BucketName, CapacityRelief, ConfigSource, FaceMode, MoveBudget,
     NameAlignment, NonInversion, PathSetAssertion, Precondition, PreconditionKind, PreserveDir,
-    ReferenceSet, RunMode, SeverityFilter, SizeBand, TargetSpec, ViolationClass,
+    PreserveSymbolHome, ReferenceSet, RunMode, SeverityFilter, SizeBand, TargetSpec,
+    ViolationClass,
 };
 
 /// One measured outcome: what was checked, whether the best state satisfies it,
@@ -286,7 +287,14 @@ pub fn run_case(
 
     let census: BTreeSet<String> = metrics::members(&result.current.tree).into_iter().collect();
     let packages = discover_packages(&result.current.tree, &census);
-    let mut errors = validate_references(spec, block, &census, &packages, expected_fixture);
+    let mut errors = validate_references(
+        spec,
+        block,
+        &census,
+        &packages,
+        &result.current.tree,
+        expected_fixture,
+    );
 
     // Preconditions are verified against current BEFORE scoring; a failure is a
     // harness or fixture defect, never distance, so it lands in `errors` too.
@@ -330,6 +338,7 @@ fn validate_references(
     block: &AssertBlock,
     census: &BTreeSet<String>,
     packages: &[PackageScope],
+    current: &ContainerNode,
     fixture: &str,
 ) -> Vec<EvalError> {
     let mut errors = Vec::new();
@@ -365,7 +374,40 @@ fn validate_references(
             });
         }
     }
+
+    // FIX08: a symbol home must exist in the CURRENT layout — the assertion
+    // pins an existing home, so a misspelled symbol or path is a harness
+    // error, never permanent fake distance.
+    let homes = current_symbol_homes(current);
+    for assertion in &block.preserve_symbol_home {
+        if !homes
+            .get(&assertion.path)
+            .is_some_and(|symbols| symbols.contains(&assertion.symbol))
+        {
+            errors.push(EvalError::TargetInvalid {
+                target: fixture.to_owned(),
+                message: format!(
+                    "preserve_symbol_home pins {:?} in {:?}, which the current layout does not show",
+                    assertion.symbol, assertion.path
+                ),
+            });
+        }
+    }
     errors
+}
+
+/// Maps every file node of `root` to the set of symbol names it carries.
+fn current_symbol_homes(root: &ContainerNode) -> BTreeMap<String, BTreeSet<String>> {
+    let mut homes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    metrics::walk_files(root, &mut |node| {
+        if let Some(symbols) = &node.symbols {
+            let entry = homes.entry(node.name.clone()).or_default();
+            for placement in symbols {
+                entry.insert(placement.name.clone());
+            }
+        }
+    });
+    homes
 }
 
 /// Builds the evaluator inputs: current-tree placement plus one face entry per
@@ -392,6 +434,12 @@ fn build_inputs<'a>(
         .chain(block.no_synthetic_bucket.iter().filter_map(|a| a.mode))
         .chain(block.name_alignment.iter().filter_map(|a| a.mode))
         .chain(block.capacity_relief.iter().map(|relief| relief.mode))
+        .chain(
+            block
+                .preserve_symbol_home
+                .iter()
+                .filter_map(|assertion| assertion.mode),
+        )
     {
         if !needed.contains(&face) {
             needed.push(face);
@@ -496,6 +544,11 @@ fn evaluate_assertions(
     for inversion in &block.non_inversion {
         verdicts.push(evaluate_non_inversion(inversion, inputs));
     }
+    for home in &block.preserve_symbol_home {
+        for face in faces_for(home.mode, &block.modes) {
+            verdicts.push(evaluate_preserve_symbol_home(home, face, inputs));
+        }
+    }
 
     let mut pair_f1: PairF1Report = Vec::new();
     if let Some(reference) = reference {
@@ -512,6 +565,61 @@ fn evaluate_assertions(
         }
     }
     (verdicts, pair_f1)
+}
+
+/// `preserve_symbol_home`: the named symbol still resides in the named file of
+/// the asserted candidate tree. File identity is the full repo-relative path
+/// (stable across trees per the contract), and symbol membership is read off
+/// the file's `symbols` list — exactly what FIX08's symbol-grain relocation
+/// rewrites, so this is the assertion that catches gratuitous home churn.
+fn evaluate_preserve_symbol_home(
+    assertion: &PreserveSymbolHome,
+    face: FaceMode,
+    inputs: &EvalInputs<'_>,
+) -> Verdict {
+    let label = format!("preserve_symbol_home({})#{face:?}", assertion.symbol);
+    let Some(tree) = inputs.faces.get(&face).map(|face_inputs| face_inputs.tree) else {
+        return Verdict {
+            label: format!("#{face:?}"),
+            passed: false,
+            detail: format!("the {face:?} mode was not evaluated"),
+        };
+    };
+    let mut found_home = false;
+    let mut now_in: Vec<String> = Vec::new();
+    metrics::walk_files(tree, &mut |node| {
+        let Some(symbols) = &node.symbols else {
+            return;
+        };
+        let carries = symbols
+            .iter()
+            .any(|placement| placement.name == assertion.symbol);
+        if carries && node.name == assertion.path {
+            found_home = true;
+        }
+        if carries {
+            now_in.push(node.name.clone());
+        }
+    });
+    Verdict {
+        label,
+        passed: found_home,
+        detail: if found_home {
+            format!("{} still lives in {}", assertion.symbol, assertion.path)
+        } else if now_in.is_empty() {
+            format!(
+                "{} does not appear in any file of the candidate tree",
+                assertion.symbol
+            )
+        } else {
+            format!(
+                "{} left its pinned home {}: it now appears in {}",
+                assertion.symbol,
+                assertion.path,
+                now_in.join(", ")
+            )
+        },
+    }
 }
 
 /// The faces an assertion applies to: its own override, else the block default.
@@ -1301,6 +1409,7 @@ mod tests {
             name_alignment: Vec::new(),
             capacity_relief: Vec::new(),
             non_inversion: Vec::new(),
+            preserve_symbol_home: Vec::new(),
         }
     }
 

@@ -202,6 +202,7 @@ mod tests {
                 to: "new".to_owned(),
                 reason: MoveReason::Clustering,
             }],
+            symbol_moves: Vec::new(),
             capacity_remainder: None,
         }
     }

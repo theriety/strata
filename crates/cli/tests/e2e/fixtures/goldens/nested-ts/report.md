@@ -30,14 +30,9 @@ No moves versus the current layout.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+0.1603`, score `0.2949`)
+### Candidate 1 (improvement `+0.0000`, score `0.4553`)
 
-- cut `0.1602`, imbalance `0.1347`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+- cut `0.3363`, imbalance `0.1190`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
-**Moves**
-
-```
-move — pulled by rectangle.ts (w 2.0)
-  1. src/app.ts [nested-ts → nested-ts/geometry]
-```
+No moves versus the current layout.
 

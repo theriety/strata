@@ -35,7 +35,7 @@ pub use crate::error::StrataError;
 pub use crate::result::{
     AnalyzeResult, Candidate, CapacityBreach, CapacityRemainder, ConditionalSplit, ContainerNode,
     CurrentStanding, CurrentTree, EdgeBreak, FileMove, Level, ModeResult, Modes, Move, MoveKind,
-    MoveReason, RESULT_SCHEMA_VERSION, ScoreBreakdown, Severity, Summary, SymbolPlacement,
-    Violation, ViolationKind,
+    MoveReason, RESULT_SCHEMA_VERSION, ScoreBreakdown, Severity, Summary, SymbolKind, SymbolMove,
+    SymbolPlacement, Violation, ViolationKind,
 };
 pub use crate::snapshot::snapshot_from_root;
