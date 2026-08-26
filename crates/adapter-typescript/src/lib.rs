@@ -14,6 +14,7 @@
 //! [`bind`]: bind::bind
 
 pub mod bind;
+pub mod package_json;
 pub mod parse;
 pub mod sloc;
 pub mod tsconfig;
@@ -28,25 +29,34 @@ use crate::parse::ParsedModule;
 
 /// The TypeScript adapter: parses and binds `.ts` / `.tsx` sources.
 ///
-/// The adapter is anchored at a repository `root`; module specifiers and
-/// `tsconfig` `paths` aliases resolve relative to it. The alias table is read
-/// once at construction (the `tsconfig` cache).
+/// The adapter is anchored at a repository `root`; module specifiers resolve
+/// relative to it through three config surfaces read once at construction:
+/// `tsconfig` `paths` aliases and the Node.js subpath-import map from the root
+/// `package.json`.
 #[derive(Debug, Clone)]
 pub struct TypeScriptAdapter {
     /// Repository root that module paths are relative to.
     root: PathBuf,
     /// `tsconfig` `paths` alias prefix -> repo-relative target prefix.
     aliases: BTreeMap<SmolStr, SmolStr>,
+    /// Node.js subpath-import specifier -> target from the root `package.json`.
+    subpath_imports: BTreeMap<SmolStr, SmolStr>,
 }
 
 impl TypeScriptAdapter {
     /// Creates an adapter anchored at `root`, reading `root/tsconfig.json` for
-    /// `paths` aliases when present.
+    /// `paths` aliases and `root/package.json` for `imports` shortcuts when
+    /// present.
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         let aliases = tsconfig::load_aliases(&root);
-        Self { root, aliases }
+        let subpath_imports = package_json::load_subpath_imports(&root);
+        Self {
+            root,
+            aliases,
+            subpath_imports,
+        }
     }
 }
 
@@ -67,9 +77,11 @@ impl Adapter for TypeScriptAdapter {
             .iter()
             .map(deserialize_module)
             .collect::<Result<Vec<_>, _>>()?;
-        bind::bind(&modules, &self.root, &self.aliases).map_err(|outcome| AdapterError::Bind {
-            path: SmolStr::new(""),
-            reason: outcome.to_string(),
+        bind::bind(&modules, &self.root, &self.aliases, &self.subpath_imports).map_err(|outcome| {
+            AdapterError::Bind {
+                path: SmolStr::new(""),
+                reason: outcome.to_string(),
+            }
         })
     }
 }

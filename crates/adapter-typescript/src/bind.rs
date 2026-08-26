@@ -5,10 +5,10 @@
 //! laminar container tree over files/folders/domains/packages, typed dependency
 //! edges, and three-valued test polarity.
 //!
-//! Module specifiers resolve in the order **relative path -> `tsconfig` `paths`
-//! alias -> package entry point**. References that cannot be resolved statically
-//! (dynamic `import('...')`) become low-confidence edges rather than being
-//! dropped.
+//! Module specifiers resolve in the order **relative path -> Node.js subpath
+//! import -> `tsconfig` `paths` alias -> package entry point**. References that
+//! cannot be resolved statically (dynamic `import('...')`) become low-confidence
+//! edges rather than being dropped.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -44,8 +44,9 @@ pub fn bind(
     modules: &[ParsedModule],
     root: &Path,
     aliases: &BTreeMap<SmolStr, SmolStr>,
+    subpath_imports: &BTreeMap<SmolStr, SmolStr>,
 ) -> Result<IrFragment, BindOutcome> {
-    let resolver = Resolver::new(modules, aliases.clone());
+    let resolver = Resolver::new(modules, aliases.clone(), subpath_imports.clone());
 
     // Assign a dense node id to every declaration, in module-then-source order.
     let mut nodes = Vec::new();
@@ -534,23 +535,35 @@ struct Resolver {
     known: HashSet<SmolStr>,
     /// `tsconfig`-style alias prefix -> target path prefix mappings.
     aliases: BTreeMap<SmolStr, SmolStr>,
+    /// Node.js subpath-import specifier -> target mappings (`package.json`).
+    imports: BTreeMap<SmolStr, SmolStr>,
 }
 
 impl Resolver {
-    /// Builds a resolver over the known module set and `tsconfig` aliases.
-    fn new(modules: &[ParsedModule], aliases: BTreeMap<SmolStr, SmolStr>) -> Self {
+    /// Builds a resolver over the known module set, `tsconfig` aliases, and
+    /// Node.js subpath imports.
+    fn new(
+        modules: &[ParsedModule],
+        aliases: BTreeMap<SmolStr, SmolStr>,
+        imports: BTreeMap<SmolStr, SmolStr>,
+    ) -> Self {
         Self {
             known: modules.iter().map(|module| module.path.clone()).collect(),
             aliases,
+            imports,
         }
     }
 
     /// Resolves `specifier` imported from `importer` to a known module path.
     ///
-    /// Order: relative path -> alias prefix -> package entry (`index`).
+    /// Order: relative path -> Node.js subpath import -> alias prefix ->
+    /// package entry (`index`).
     fn resolve(&self, importer: &str, specifier: &str) -> Option<SmolStr> {
         if specifier.starts_with('.') {
             return self.resolve_relative(importer, specifier);
+        }
+        if specifier.starts_with('#') && !self.imports.is_empty() {
+            return self.resolve_subpath_import(specifier);
         }
         if let Some(resolved) = self.resolve_alias(specifier) {
             return Some(resolved);
@@ -584,6 +597,42 @@ impl Resolver {
         let base = format!("{specifier}/src/index");
         self.with_extensions(&base)
             .or_else(|| self.with_extensions(&format!("{specifier}/index")))
+    }
+
+    /// Resolves a Node.js subpath import (`#agent/schemas`) through the root
+    /// `package.json` `imports` map. Exact keys win over single-star patterns;
+    /// the matched pattern's `*` substitutes once into the target's own `*`.
+    fn resolve_subpath_import(&self, specifier: &str) -> Option<SmolStr> {
+        if let Some(direct) = self.imports.get(specifier) {
+            return self.resolve_import_target(direct);
+        }
+        for (pattern, target) in &self.imports {
+            let Some((prefix, suffix)) = pattern.split_once('*') else {
+                continue;
+            };
+            let Some(rest) = specifier.strip_prefix(prefix) else {
+                continue;
+            };
+            let Some(rest) = rest.strip_suffix(suffix) else {
+                continue;
+            };
+            if rest.contains('*') {
+                continue;
+            }
+            return self.resolve_import_target(&target.replace('*', rest));
+        }
+        None
+    }
+
+    /// Resolves an `imports` target against the repository root: literal known
+    /// paths win, otherwise extension and index-barrel forms apply.
+    fn resolve_import_target(&self, target: &str) -> Option<SmolStr> {
+        let trimmed = target.trim_start_matches("./");
+        let literal = SmolStr::new(trimmed);
+        if self.known.contains(&literal) {
+            return Some(literal);
+        }
+        self.with_extensions(trimmed)
     }
 
     /// Tries the candidate path with each TypeScript extension and `index` form.
@@ -795,8 +844,13 @@ mod tests {
             dynamic_imports: Vec::new(),
         });
 
-        let fragment = bind(&[consumer, provider], Path::new("repo"), &BTreeMap::new())
-            .expect("bind succeeds");
+        let fragment = bind(
+            &[consumer, provider],
+            Path::new("repo"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("bind succeeds");
 
         let calls: Vec<&Edge> = fragment
             .edges
@@ -841,8 +895,13 @@ mod tests {
             dynamic_imports: Vec::new(),
         });
 
-        let fragment =
-            bind(&[barrel, provider], Path::new("repo"), &BTreeMap::new()).expect("bind succeeds");
+        let fragment = bind(
+            &[barrel, provider],
+            Path::new("repo"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("bind succeeds");
 
         let re_exports: Vec<&Edge> = fragment
             .edges
@@ -880,7 +939,7 @@ mod tests {
     #[test]
     fn should_resolve_a_relative_specifier_against_the_importer_directory() {
         let modules = [module_at("src/app.ts"), module_at("src/geometry/shape.ts")];
-        let resolver = Resolver::new(&modules, BTreeMap::new());
+        let resolver = Resolver::new(&modules, BTreeMap::new(), BTreeMap::new());
 
         let resolved = resolver.resolve("src/app.ts", "./geometry/shape");
 
@@ -893,7 +952,7 @@ mod tests {
             module_at("src/__tests__/support.ts"),
             module_at("src/geometry/rectangle.ts"),
         ];
-        let resolver = Resolver::new(&modules, BTreeMap::new());
+        let resolver = Resolver::new(&modules, BTreeMap::new(), BTreeMap::new());
 
         let resolved = resolver.resolve("src/__tests__/support.ts", "../geometry/rectangle");
 
@@ -903,7 +962,7 @@ mod tests {
     #[test]
     fn should_resolve_a_relative_directory_to_its_index_barrel() {
         let modules = [module_at("src/app.ts"), module_at("src/geometry/index.ts")];
-        let resolver = Resolver::new(&modules, BTreeMap::new());
+        let resolver = Resolver::new(&modules, BTreeMap::new(), BTreeMap::new());
 
         let resolved = resolver.resolve("src/app.ts", "./geometry");
 
@@ -915,7 +974,7 @@ mod tests {
         let modules = [module_at("src/lib/util.ts"), module_at("src/app.ts")];
         let mut aliases = BTreeMap::new();
         aliases.insert(SmolStr::new("@app/"), SmolStr::new("src/"));
-        let resolver = Resolver::new(&modules, aliases);
+        let resolver = Resolver::new(&modules, aliases, BTreeMap::new());
 
         let resolved = resolver.resolve("src/app.ts", "@app/lib/util");
 
@@ -928,7 +987,7 @@ mod tests {
             module_at("packages/core/src/index.ts"),
             module_at("src/app.ts"),
         ];
-        let resolver = Resolver::new(&modules, BTreeMap::new());
+        let resolver = Resolver::new(&modules, BTreeMap::new(), BTreeMap::new());
 
         let resolved = resolver.resolve("src/app.ts", "packages/core");
 
@@ -938,7 +997,7 @@ mod tests {
     #[test]
     fn should_return_none_for_an_unknown_external_specifier() {
         let modules = [module_at("src/app.ts")];
-        let resolver = Resolver::new(&modules, BTreeMap::new());
+        let resolver = Resolver::new(&modules, BTreeMap::new(), BTreeMap::new());
 
         assert_eq!(resolver.resolve("src/app.ts", "react"), None);
     }
@@ -966,5 +1025,110 @@ mod tests {
         assert!(is_test_path("src/app.test.ts"));
         assert!(is_test_path("src/__tests__/support.ts"));
         assert!(!is_test_path("src/app.ts"));
+    }
+
+    #[test]
+    fn should_emit_an_edge_from_a_module_body_declaration_to_its_twin() {
+        // A vitest-style spec: the twin is used only inside describe/it
+        // callbacks, which aggregate into the synthetic `<module>` declaration.
+        let mut spec = module_at("src/batch/openai.spec.ts");
+        spec.imports.push(crate::parse::StaticImport {
+            source: SmolStr::new("./openai"),
+            names: vec![SmolStr::new("makeLister")],
+            type_only: false,
+        });
+        spec.declarations.push(crate::parse::Declaration {
+            name: SmolStr::new("<module>"),
+            is_type: false,
+            exported: false,
+            sloc: 4,
+            supertypes: Vec::new(),
+            referenced: vec![SmolStr::new("describe"), SmolStr::new("makeLister")],
+            called: vec![SmolStr::new("describe"), SmolStr::new("makeLister")],
+            dynamic_imports: Vec::new(),
+        });
+        let mut twin = module_at("src/batch/openai.ts");
+        twin.declarations.push(crate::parse::Declaration {
+            name: SmolStr::new("makeLister"),
+            is_type: false,
+            exported: true,
+            sloc: 3,
+            supertypes: Vec::new(),
+            referenced: Vec::new(),
+            called: Vec::new(),
+            dynamic_imports: Vec::new(),
+        });
+
+        let fragment = bind(
+            &[spec, twin],
+            Path::new("repo"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("bind succeeds");
+
+        let body = fragment
+            .nodes
+            .iter()
+            .find(|node| node.name == "<module>")
+            .map(|node| node.id);
+        let target = fragment
+            .nodes
+            .iter()
+            .find(|node| node.name == "makeLister")
+            .map(|node| node.id);
+        let linked = match (body, target) {
+            (Some(body), Some(target)) => fragment.edges.iter().any(|edge| {
+                edge.source == body && edge.target == target && edge.kind == EdgeKind::Call
+            }),
+            _ => false,
+        };
+        assert!(
+            linked,
+            "the module body's callback reference must couple the spec to its twin"
+        );
+    }
+
+    #[test]
+    fn should_resolve_a_subpath_import_through_an_exact_key() {
+        let modules = [module_at("src/app.ts"), module_at("src/agent/schemas.ts")];
+        let mut imports = BTreeMap::new();
+        imports.insert(
+            SmolStr::new("#agent/schemas"),
+            SmolStr::new("./src/agent/schemas"),
+        );
+        let resolver = Resolver::new(&modules, BTreeMap::new(), imports);
+
+        let resolved = resolver.resolve("src/app.ts", "#agent/schemas");
+
+        assert_eq!(resolved, Some(SmolStr::new("src/agent/schemas.ts")));
+    }
+
+    #[test]
+    fn should_resolve_a_subpath_import_through_a_star_pattern() {
+        let modules = [
+            module_at("src/app.ts"),
+            module_at("src/adapters/openai/index.ts"),
+        ];
+        let mut imports = BTreeMap::new();
+        imports.insert(
+            SmolStr::new("#adapters/*"),
+            SmolStr::new("./src/adapters/*"),
+        );
+        let resolver = Resolver::new(&modules, BTreeMap::new(), imports);
+
+        let resolved = resolver.resolve("src/app.ts", "#adapters/openai");
+
+        assert_eq!(resolved, Some(SmolStr::new("src/adapters/openai/index.ts")),);
+    }
+
+    #[test]
+    fn should_return_none_for_a_subpath_import_without_a_matching_key() {
+        let modules = [module_at("src/app.ts")];
+        let mut imports = BTreeMap::new();
+        imports.insert(SmolStr::new("#agent/*"), SmolStr::new("./src/agent/*"));
+        let resolver = Resolver::new(&modules, BTreeMap::new(), imports);
+
+        assert_eq!(resolver.resolve("src/app.ts", "#other/thing"), None);
     }
 }

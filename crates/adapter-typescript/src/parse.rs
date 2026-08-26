@@ -140,6 +140,11 @@ fn extract(path: &SmolStr, module: &Module, contents: &str, base: BytePos) -> Pa
     let mut declarations = Vec::new();
     let mut imports = Vec::new();
     let mut re_exports = Vec::new();
+    // Top-level statements that declare nothing — vitest/jest suites
+    // (`describe('...', () => ...)`) and side-effect calls alike. Nothing about
+    // them is minted as a symbol, yet their references couple this module to
+    // others, so they aggregate into one synthetic `<module>` declaration.
+    let mut module_statements: Vec<&swc_ecma_ast::Stmt> = Vec::new();
 
     for item in &module.body {
         match item {
@@ -191,9 +196,30 @@ fn extract(path: &SmolStr, module: &Module, contents: &str, base: BytePos) -> Pa
             ModuleItem::Stmt(stmt) => {
                 if let swc_ecma_ast::Stmt::Decl(decl) = stmt {
                     push_decl(decl, false, contents, base, &mut declarations);
+                } else if !matches!(stmt, swc_ecma_ast::Stmt::Empty(_)) {
+                    module_statements.push(stmt);
                 }
             }
         }
+    }
+
+    if !module_statements.is_empty() {
+        let mut references = ReferenceCollector::default();
+        let mut sloc: u32 = 0;
+        for statement in &module_statements {
+            statement.visit_with(&mut references);
+            sloc = sloc.saturating_add(slice_sloc(statement.span(), contents, base));
+        }
+        declarations.push(Declaration {
+            name: SmolStr::new("<module>"),
+            is_type: false,
+            exported: false,
+            sloc,
+            supertypes: Vec::new(),
+            referenced: references.referenced,
+            called: references.called,
+            dynamic_imports: references.dynamic_imports,
+        });
     }
 
     ParsedModule {
