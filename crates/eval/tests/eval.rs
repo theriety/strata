@@ -18,7 +18,7 @@ use strata_eval::{e2e_fixture_root, eval_fixture_root, harness, load_target};
 
 /// The compile-time-checked case table: every committed target paired with the
 /// designed defect its distance is measured against.
-const CASES: [(&str, &str); 8] = [
+const CASES: [(&str, &str); 9] = [
     ("collapse", "workspace collapse"),
     ("large-app", "proposal quality at scale"),
     ("welding", "cross-directory welding"),
@@ -27,6 +27,7 @@ const CASES: [(&str, &str); 8] = [
     ("inversion", "anchored inversion"),
     ("naming-drift", "naming incoherence"),
     ("cycle-span", "import-cycle tearing"),
+    ("spec-twin-ts", "source-test mixing"),
 ];
 
 /// The designed defect of one case, read from [`CASES`] without indexing.
@@ -113,6 +114,13 @@ fn naming_drift_witnesses_naming_incoherence() {
 #[test]
 fn cycle_span_witnesses_import_cycle_tearing() {
     assert_best_state("cycle-span");
+}
+
+/// RED AS DESIGNED: green when the symbol pass stops relocating production
+/// symbols across the source/test boundary into their mirrored spec twins.
+#[test]
+fn spec_twin_ts_witnesses_source_test_mixing() {
+    assert_best_state("spec-twin-ts");
 }
 
 /// EVL04 coverage guard: the table covers exactly the committed target files,

@@ -1158,6 +1158,7 @@ impl<'a> PipelineSolver<'a> {
             &relieved_files,
             &condensation,
             &file_graph,
+            &test_zone,
             &search_partition,
             &mut folder_names,
             &mut folder_synthetic,
@@ -1629,6 +1630,10 @@ impl<'a> PipelineSolver<'a> {
     /// - **no empty shells** — the origin file must retain at least one
     ///   production symbol; draining a file whole would be a file move wearing
     ///   a symbol costume, and v1 does not propose those;
+    /// - **source/test boundary** — a relocation whose origin and destination
+    ///   sit on opposite sides of the test zone is barred outright (FIX11), in
+    ///   either direction; the incidence map already zero-prices every
+    ///   zone-touching edge so spec twins nominate nothing in the first place;
     /// - **SLOC cap** — the destination file must absorb the symbol's
     ///   production SLOC without breaching `capacity.file`;
     /// - **no new cycles** — relative, like the file pass: barred only when the
@@ -1792,6 +1797,7 @@ impl<'a> PipelineSolver<'a> {
             return CandidateTree {
                 tree: ContainerTree::new(vec![root]),
                 placement: BTreeMap::new(),
+                zone_by_file: BTreeMap::new(),
                 key_by_id: BTreeMap::new(),
             };
         }
@@ -1892,6 +1898,7 @@ impl<'a> PipelineSolver<'a> {
         );
 
         let mut file_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
+        let mut zone_by_file: BTreeMap<ContainerId, bool> = BTreeMap::new();
         for (&folder, members) in members_of {
             let Some(&(domain, _, _)) = chain_of.get(&folder) else {
                 continue;
@@ -1930,12 +1937,20 @@ impl<'a> PipelineSolver<'a> {
                     synthetic: false,
                 });
                 file_ids.insert(vertex, id);
+                zone_by_file.insert(
+                    id,
+                    self.test_zone
+                        .get(vertex as usize)
+                        .copied()
+                        .unwrap_or(false),
+                );
             }
         }
 
         CandidateTree {
             tree: ContainerTree::new(arena.containers),
             placement: self.placements(&file_ids),
+            zone_by_file,
             key_by_id,
         }
     }
@@ -2380,6 +2395,11 @@ struct CandidateTree {
     tree: ContainerTree,
     /// The file container each symbol node lands in, keyed by node id.
     placement: BTreeMap<u32, ContainerId>,
+    /// Whether each candidate file sits inside the test zone (FIX11). Candidate
+    /// file ids are fresh arena ids, so the file graph's vertex-parallel zone
+    /// marks cannot be consulted directly at symbol grain — they ride here,
+    /// populated where files are emitted, so every grain shares one boundary.
+    zone_by_file: BTreeMap<ContainerId, bool>,
     /// The undecorated elected key of each upper container whose display name
     /// `qualify_elected` had to disambiguate, keyed by container id — empty when
     /// no sibling name collided. The render boundary strips a folder's increment
@@ -3014,6 +3034,7 @@ fn synthesize_roof_rebuild(
     files: &[FileInfo],
     condensation: &Condensation,
     graph: &Csr,
+    test_zone: &[bool],
     base: &Partition,
     names: &mut Vec<SmolStr>,
     synthetic: &mut Vec<bool>,
@@ -3079,10 +3100,23 @@ fn synthesize_roof_rebuild(
 
         // strangers: unanchored SCCs grouped by shared basename tokens, keeping
         // groups of at least two files — a lone stray earns no invented place.
+        // FIX11: an all-test-zone SCC is the spec-twin population; zone edges
+        // price zero so such an SCC always looks unanchored, and the roof
+        // rebuild must never sweep it into an invented production place.
         let strangers: Vec<u32> = sccs
             .iter()
             .copied()
             .filter(|&scc| unbonded_scc(scc))
+            .filter(|&scc| {
+                condensation
+                    .members
+                    .get(scc as usize)
+                    .is_some_and(|members| {
+                        members.iter().all(|member| {
+                            !test_zone.get(member.0 as usize).copied().unwrap_or(false)
+                        })
+                    })
+            })
             .collect();
         let groups: Vec<Vec<u32>> = token_groups(&strangers, condensation, files)
             .into_iter()
@@ -4698,9 +4732,20 @@ impl<'a> SymbolPass<'a> {
             *residents.entry(file).or_insert(0) += 1;
         }
         let mut incident: BTreeMap<u32, Vec<(u32, f64)>> = BTreeMap::new();
+        // FIX11: the test-zone tie-cut rides placement into symbol grain. A
+        // node's zone is its placed file's mark; an edge with either endpoint
+        // inside the zone prices to zero exactly as `build_file_graph` prices
+        // it — the single-pricing choke point, mirrored so no grain disagrees
+        // about what binds placement.
+        let touches_zone = |node: u32| -> bool {
+            base.get(&node)
+                .and_then(|file| assembled.zone_by_file.get(file))
+                .copied()
+                .unwrap_or(false)
+        };
         for edge in edges {
             let weight = weights.edge_weight(edge.kind, edge.confidence);
-            if weight <= 0.0 {
+            if weight <= 0.0 || touches_zone(edge.source.0) || touches_zone(edge.target.0) {
                 continue;
             }
             incident
@@ -4878,6 +4923,32 @@ impl<'a> SymbolPass<'a> {
             // resident.
             if self.residents.get(&source_file).copied().unwrap_or(0) <= 1 {
                 break;
+            }
+            // FIX11 source/test boundary: a relocation whose origin and
+            // destination sit on opposite sides of the test zone is barred
+            // outright, in either direction. This static check runs before any
+            // evaluation; nomination should already keep zone files out of
+            // `ranked` because the incidence map zero-prices every
+            // zone-touching edge, so the veto is defense in depth against
+            // future nomination paths. Every emitted file gets a zone entry,
+            // so the map is empty only on the no-files early return — where
+            // placement is empty and `try_relocate` declines before ever
+            // reaching this check; lookups nonetheless default to false on
+            // both sides.
+            if self
+                .assembled
+                .zone_by_file
+                .get(&source_file)
+                .copied()
+                .unwrap_or(false)
+                != self
+                    .assembled
+                    .zone_by_file
+                    .get(&destination)
+                    .copied()
+                    .unwrap_or(false)
+            {
+                continue;
             }
             // SLOC cap on the destination, priced in production SLOC.
             let destination_sloc = self.sloc.get(&destination).copied().unwrap_or(0);
@@ -8770,6 +8841,7 @@ mod tests {
             &files,
             &condensation,
             &graph,
+            &[false, false, false],
             &base,
             &mut names,
             &mut synthetic,
@@ -9058,12 +9130,475 @@ mod tests {
         );
     }
 
+    /// The FIX11 repro, mirrored on the `ai` codec.ts ↔ codec.spec.ts shape: a
+    /// production subject whose spec twin pulls hardest (two inherited
+    /// extensions) must never be relocated across the source/test boundary —
+    /// the file-graph tie-cut prices that bond at zero, so the symbol pass
+    /// must read the same price and nominate nothing across it, in either
+    /// direction.
+    #[test]
+    fn should_not_relocate_a_production_symbol_into_its_spec_twin() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "to_gemini_image_response", 3, Polarity::Production),
+                node(1, "codec_helper", 3, Polarity::Production),
+                node(2, "google_codec", 4, Polarity::Production),
+                node(3, "batch_codec", 4, Polarity::Production),
+                node(4, "codec_spec_case", 5, Polarity::TestCase),
+            ],
+            vec![
+                edge(2, 0),     // consumers import the subject, but the
+                edge(3, 0),     // spec twin pulls harder: the mirrored
+                inherits(4, 0), // spec extends it twice over, the heaviest
+                inherits(4, 0), // priced pull this graph can carry.
+            ],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "src", ScopeLevel::Folder, Some(0)),
+                container(2, "spec", ScopeLevel::Folder, Some(0)),
+                container(3, "src/codec.ts", ScopeLevel::File, Some(1)),
+                container(4, "src/consumers.ts", ScopeLevel::File, Some(1)),
+                container(5, "spec/codec.spec.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+
+        // The pass driven straight on the real layout: no relocation may
+        // touch the spec twin, in either direction.
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &AnalyzeConfig::default(),
+            AnalyzeConfig::default().objective.greenfield(),
+            false,
+            &tests,
+        );
+        let assembled = solver.assemble(&solver.real_partition);
+        let spec_file = assembled
+            .tree
+            .containers()
+            .iter()
+            .find(|file| {
+                file.level == ScopeLevel::File && file.name.as_str() == "spec/codec.spec.ts"
+            })
+            .map(|file| file.id);
+        let outcome = solver.symbol_polish(&solver.real_partition);
+        let crossings: Vec<String> = outcome
+            .relocations
+            .iter()
+            .filter(|relocation| {
+                Some(relocation.to_file) == spec_file || Some(relocation.from_file) == spec_file
+            })
+            .map(|relocation| {
+                format!(
+                    "node {} across file {}",
+                    relocation.node, relocation.to_file.0
+                )
+            })
+            .collect();
+        assert!(
+            crossings.is_empty(),
+            "the symbol pass must never relocate across the source/test \
+             boundary in either direction; crossed {crossings:?}"
+        );
+
+        // End to end: no candidate of either mode narrates a move whose
+        // destination is the spec twin.
+        let mut config = AnalyzeConfig::default();
+        config.analysis.candidates = 1;
+        let offenders: Vec<String> = analyze(&snapshot, &config)
+            .ok()
+            .map(|result| {
+                [&result.modes.anchored, &result.modes.greenfield]
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|mode| &mode.candidates)
+                    .flat_map(|candidate| &candidate.symbol_moves)
+                    .filter(|move_entry| move_entry.to_path.ends_with(".spec.ts"))
+                    .map(|move_entry| {
+                        format!(
+                            "{}: {} -> {}",
+                            move_entry.symbol, move_entry.from_path, move_entry.to_path
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            offenders.is_empty(),
+            "no candidate may suggest moving a production symbol into its \
+             spec twin; suggested {offenders:?}"
+        );
+    }
+
+    /// The FIX11 incidence tie-cut at symbol grain: an edge with either
+    /// endpoint resident in a test-zone file prices zero in the pass's
+    /// incident map, exactly as `build_file_graph` prices it — while priced
+    /// production bonds survive untouched.
+    #[test]
+    fn should_zero_price_incident_edges_touching_the_test_zone() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "gemini_image_codec", 3, Polarity::Production),
+                node(1, "codec_helper", 3, Polarity::Production),
+                node(2, "google_codec", 4, Polarity::Production),
+                node(3, "codec_spec_case", 5, Polarity::TestCase),
+            ],
+            vec![edge(2, 0), edge(2, 1), inherits(3, 0)],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "src", ScopeLevel::Folder, Some(0)),
+                container(2, "spec", ScopeLevel::Folder, Some(0)),
+                container(3, "src/codec.ts", ScopeLevel::File, Some(1)),
+                container(4, "src/google.ts", ScopeLevel::File, Some(1)),
+                container(5, "spec/codec.spec.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+        let tests = TestPolicy::defaults();
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        let ir = snapshot.ir();
+        let assembled = solver.assemble(&solver.real_partition);
+        let pass = SymbolPass::new(
+            &snapshot,
+            &solver.coefficients,
+            &solver.weights,
+            solver.caps.folder,
+            solver.file_cap,
+            &assembled,
+            &ir.nodes,
+            &ir.edges,
+        );
+
+        // the spec twin nominates nothing: no incident slot at all.
+        assert!(
+            pass.incident.get(&3).is_none_or(Vec::is_empty),
+            "the test-zone resident must carry no priced incident edges"
+        );
+        // and no priced production link points at it either way.
+        for id in [0u32, 1, 2] {
+            let links = pass.incident.get(&id).map_or(&[][..], Vec::as_slice);
+            assert!(
+                links.iter().all(|&(neighbour, _)| neighbour != 3),
+                "node {id} still carries a priced link into the test zone"
+            );
+        }
+        // positive control: the production bond survived the cut.
+        let subject_links = pass.incident.get(&0).map_or(&[][..], Vec::as_slice);
+        assert!(
+            subject_links.iter().any(|&(neighbour, _)| neighbour == 2),
+            "the codec's priced bond to its consumer must survive the cut"
+        );
+    }
+
+    /// Defense in depth: even when a priced link smuggles a cross-boundary
+    /// destination into a symbol's nomination ranking, the static boundary
+    /// veto bars the relocation before any evaluation runs.
+    #[test]
+    fn should_veto_a_cross_boundary_destination_even_when_priced() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "gemini_image_codec", 3, Polarity::Production),
+                node(1, "codec_helper", 3, Polarity::Production),
+                node(2, "codec_spec_case", 4, Polarity::TestCase),
+            ],
+            vec![inherits(2, 0)],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "src", ScopeLevel::Folder, Some(0)),
+                container(2, "spec", ScopeLevel::Folder, Some(0)),
+                container(3, "src/codec.ts", ScopeLevel::File, Some(1)),
+                container(4, "spec/codec.spec.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+        let tests = TestPolicy::defaults();
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        let ir = snapshot.ir();
+        let assembled = solver.assemble(&solver.real_partition);
+        let mut pass = SymbolPass::new(
+            &snapshot,
+            &solver.coefficients,
+            &solver.weights,
+            solver.caps.folder,
+            solver.file_cap,
+            &assembled,
+            &ir.nodes,
+            &ir.edges,
+        );
+        // simulate a future nomination path that prices the twin pull despite
+        // the tie-cut: the strongest possible lure across the boundary.
+        pass.incident.entry(0).or_default().push((2, 5.0));
+        // Float surgery: hold strict-J aside so a J-cost rejection cannot
+        // masquerade as the veto — with best at infinity, any destination
+        // that survives the gate chain is deterministically accepted, so
+        // `!accepted` proves THIS veto fired.
+        pass.best = f64::INFINITY;
+
+        let accepted = ir
+            .nodes
+            .first()
+            .is_some_and(|subject| pass.try_relocate(subject));
+        assert!(
+            !accepted && pass.relocations.is_empty(),
+            "a cross-boundary destination must be vetoed even when priced; \
+             relocations {:?}",
+            pass.relocations.iter().map(|r| r.node).collect::<Vec<_>>()
+        );
+    }
+
+    /// A production symbol misfiled INSIDE the test zone stays there: the
+    /// outward crossing is barred the same as the inward one.
+    #[test]
+    fn should_keep_a_test_zone_resident_inside_the_test_zone() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "stray_helper", 4, Polarity::Production),
+                node(1, "fellow_stray", 4, Polarity::Production),
+                node(2, "greeter", 3, Polarity::Production),
+            ],
+            vec![],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "src", ScopeLevel::Folder, Some(0)),
+                container(2, "spec", ScopeLevel::Folder, Some(0)),
+                container(3, "src/home.ts", ScopeLevel::File, Some(1)),
+                container(4, "spec/legacy.spec.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+        let tests = policy(&TestsConfig {
+            patterns: vec![String::from("*.spec.ts")],
+            ..TestsConfig::default()
+        });
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        let ir = snapshot.ir();
+        let assembled = solver.assemble(&solver.real_partition);
+        let mut pass = SymbolPass::new(
+            &snapshot,
+            &solver.coefficients,
+            &solver.weights,
+            solver.caps.folder,
+            solver.file_cap,
+            &assembled,
+            &ir.nodes,
+            &ir.edges,
+        );
+        // a priced-looking lure out toward the production home file.
+        pass.incident.entry(0).or_default().push((2, 3.0));
+        // Float surgery: hold strict-J aside so a J-cost rejection cannot
+        // masquerade as the veto — with best at infinity, any destination
+        // that survives the gate chain is deterministically accepted, so
+        // `!accepted` proves THIS veto fired.
+        pass.best = f64::INFINITY;
+
+        let accepted = ir
+            .nodes
+            .first()
+            .is_some_and(|stray| pass.try_relocate(stray));
+        assert!(
+            !accepted && pass.relocations.is_empty(),
+            "a test-zone resident must never relocate out of the zone; \
+             relocations {:?}",
+            pass.relocations.iter().map(|r| r.node).collect::<Vec<_>>()
+        );
+    }
+
+    /// The boundary vetoes crossings, not motion: with the objective held
+    /// aside, a misfiled symbol pulled toward callers inside the SAME zone
+    /// clears the whole veto family — the veto never fires on intra-zone
+    /// pairs.
+    #[test]
+    fn should_still_allow_moves_inside_one_zone() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "misfiled_formatter", 2, Polarity::Production),
+                node(1, "zone_bystander", 2, Polarity::Production),
+                node(2, "format_caller", 3, Polarity::Production),
+                node(3, "second_caller", 3, Polarity::Production),
+            ],
+            vec![edge(2, 0), edge(3, 0)],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "spec", ScopeLevel::Folder, Some(0)),
+                container(2, "spec/generated.spec.ts", ScopeLevel::File, Some(1)),
+                container(3, "spec/callers.spec.ts", ScopeLevel::File, Some(1)),
+            ],
+        );
+        let tests = policy(&TestsConfig {
+            patterns: vec![String::from("*.spec.ts")],
+            ..TestsConfig::default()
+        });
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        let ir = snapshot.ir();
+        let assembled = solver.assemble(&solver.real_partition);
+        let mut pass = SymbolPass::new(
+            &snapshot,
+            &solver.coefficients,
+            &solver.weights,
+            solver.caps.folder,
+            solver.file_cap,
+            &assembled,
+            &ir.nodes,
+            &ir.edges,
+        );
+        // the tie-cut zeroed the zone edges, so nomination needs the simulated
+        // priced pull; the destination sits inside the same zone.
+        pass.incident.entry(0).or_default().push((2, 5.0));
+        // Float surgery: hold strict-J aside so THIS test exercises the veto
+        // family alone — with zone edges priced zero everywhere, an intra-zone
+        // move can never pay its own displacement under J, and that pricing
+        // doctrine is covered by the zero-price tests, not here.
+        pass.best = f64::INFINITY;
+
+        let accepted = ir
+            .nodes
+            .first()
+            .is_some_and(|misfiled| pass.try_relocate(misfiled));
+        assert!(
+            accepted,
+            "an intra-zone relocation must clear the veto family; relocations \
+             {:?}",
+            pass.relocations.iter().map(|r| r.node).collect::<Vec<_>>()
+        );
+        assert_eq!(pass.relocations.len(), 1);
+        assert_eq!(pass.relocations.first().map(|r| r.node), Some(0));
+    }
+
+    /// Zoning by `[tests]` patterns alone (no polarity hint): a file matching
+    /// only the configured pattern is equally out of bounds as a destination.
+    #[test]
+    fn should_veto_entry_into_a_pattern_marked_test_zone() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "hero_widget", 2, Polarity::Production),
+                node(1, "rival_widget", 3, Polarity::Production),
+                node(2, "probe_case", 4, Polarity::TestCase),
+            ],
+            vec![edge(1, 0), type_ref(2, 0)],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "src", ScopeLevel::Folder, Some(0)),
+                container(2, "src/hero.ts", ScopeLevel::File, Some(1)),
+                container(3, "src/rival.ts", ScopeLevel::File, Some(1)),
+                container(4, "src/probe.custom-test.ts", ScopeLevel::File, Some(1)),
+            ],
+        );
+        let tests = policy(&TestsConfig {
+            patterns: vec![String::from("*.custom-test.ts")],
+            ..TestsConfig::default()
+        });
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        // Fresh candidate ids are arena-issued, so locate the zone file by its
+        // snapshot name rather than assuming a literal id.
+        let assembled = solver.assemble(&solver.real_partition);
+        let probe_file = assembled
+            .tree
+            .containers()
+            .iter()
+            .find(|file| {
+                file.level == ScopeLevel::File && file.name.as_str() == "src/probe.custom-test.ts"
+            })
+            .map(|file| file.id);
+        // the pattern itself must be what marked the file: pin the zone map
+        // before asserting anything about relocations.
+        assert_eq!(
+            probe_file.and_then(|id| assembled.zone_by_file.get(&id)),
+            Some(&true),
+            "the [tests] pattern must mark probe.custom-test.ts into the zone"
+        );
+        let outcome = solver.symbol_polish(&solver.real_partition);
+        let crossings: Vec<String> = outcome
+            .relocations
+            .iter()
+            .filter(|relocation| {
+                Some(relocation.to_file) == probe_file || Some(relocation.from_file) == probe_file
+            })
+            .map(|relocation| {
+                format!(
+                    "node {} across file {}",
+                    relocation.node, relocation.to_file.0
+                )
+            })
+            .collect();
+        assert!(
+            crossings.is_empty(),
+            "a pattern-marked test file is the same boundary; crossed \
+             {crossings:?}"
+        );
+    }
+
+    /// The R6 companion guard at roof grain: two all-test-zone SCCs sharing a
+    /// basename token are exactly who the stranger sweep would group — and the
+    /// rebuild must never sweep spec twins into an invented production place.
+    #[test]
+    fn should_not_sweep_a_test_zone_stranger_into_a_token_group() {
+        // no priced edges anywhere: both zone files look unanchored, and their
+        // shared `case` token would form a group of two without the guard.
+        let graph = Csr::from_weighted_edges(2, &[]);
+        let condensation = singleton_condensation(2);
+        let base = Partition::from_assignment(vec![ClusterId(0), ClusterId(0)], 1);
+        let files = vec![
+            file_info(0, "refund_case.py", 1),
+            file_info(0, "date_case.py", 1),
+        ];
+        let mut names = vec![SmolStr::new("helpers")];
+        let mut synthetic = vec![false];
+
+        let rebuilt = synthesize_roof_rebuild(
+            &files,
+            &condensation,
+            &graph,
+            &[true, true],
+            &base,
+            &mut names,
+            &mut synthetic,
+        );
+
+        assert!(
+            rebuilt.is_none(),
+            "all-test-zone SCCs must never enter the stranger population, no \
+             matter what token they share"
+        );
+    }
+
+    /// The spec lives in its own real directory, so the real-dir partition
+    /// starts it apart from its twin; the tie-cut prices their bond to zero
+    /// so polish never pulls them together. The shadow pass is what joins
+    /// them.
     #[test]
     fn should_shadow_follow_a_spec_to_its_subjects_cluster() {
-        // The spec lives in its own real directory, so the real-dir partition
-        // starts it apart from its twin; the tie-cut prices their bond to zero
-        // so polish never pulls them together. The shadow pass is what joins
-        // them.
         let nodes = vec![
             node(0, "openai", 3, Polarity::Production),
             node(1, "openai_spec", 4, Polarity::TestCase),

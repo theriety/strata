@@ -39,7 +39,7 @@
  candidate count : 2  (anchored mode returned 1 · greenfield mode returned 1)
 
  candidate 1   anchored/1     score  0.2553   gain +0.0000   best score
- candidate 2   greenfield/1   score  0.3299   gain +0.1254   different shape, own baseline
+ candidate 2   greenfield/1   score  0.3840   gain +0.0712   different shape, own baseline
 
  comparability: these two gains have different starting points — anchored baselines the current
                  tree at 0.2553; greenfield re-prices paths and drops anchor credit, baselining the

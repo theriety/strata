@@ -39,9 +39,13 @@ finding.
 
 Canonical failure modes: `directory-tearing`, `cross-dir-welding`,
 `over-capacity`, `workspace-collapse`, `anchored-inversion`,
-`naming-incoherence`, `import-cycle`, `scale`. The `import-cycle` mode covers
-fixtures whose designed defect is one genuine priced import cycle spanning two
-real directories — the substrate the FIX07 seed-granularity probe measures.
+`naming-incoherence`, `import-cycle`, `scale`, `source-test-mixing`. The
+`import-cycle` mode covers fixtures whose designed defect is one genuine priced
+import cycle spanning two real directories — the substrate the FIX07
+seed-granularity probe measures. The `source-test-mixing` mode covers fixtures
+whose designed defect is a production symbol relocated across the source/test
+boundary into (or out of) its spec twins — the symbol-grain gap the file-graph
+test-zone tie-cut cannot reach (FIX11).
 
 ## The evaluation surface
 
@@ -269,7 +273,10 @@ because = "..."
 # with exactly that path — folder moves above the file are fine, moving the
 # symbol out is not. Use it to pin that a defect lives in the misleading
 # ROOF (naming/placement of containers), not in member placement, so fixing
-# the roof must not churn innocent symbols.
+# the roof must not churn innocent symbols. For `source-test-mixing`
+# fixtures, file-path pins are the sanctioned expression of the mode — the
+# DTO carries no polarity, so pinning each production symbol's home file is
+# how "the product stays on its side of the test zone" is asserted.
 [[assert.preserve_symbol_home]]
 symbol = "charge_card"
 path = "src/billing/helpers/charge.py"

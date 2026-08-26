@@ -74,6 +74,9 @@ pub enum FailureMode {
     ImportCycle,
     /// Proposal quality at three-figure file counts.
     Scale,
+    /// Production symbols relocated across the source/test boundary into (or out
+    /// of) their spec twins (FIX11).
+    SourceTestMixing,
 }
 
 /// The language adapters a fixture exercises.

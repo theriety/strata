@@ -1,0 +1,65 @@
+# Constraint target for the `spec-twin-ts` fixture — see CONTRACT.md for the schema.
+#
+# Failure mode: source-test-mixing. A production codec sits in src/generators
+# beside its heaviest pullers; a mirrored spec twin in spec imports it with
+# relative paths, so the symbol pass sees the twin as the strongest pull and
+# may relocate production symbols across the source/test boundary — exactly
+# what the file-graph tie-cut already forbids at file grain.
+
+schema = 1
+fixture = "spec-twin-ts"
+
+[meta]
+failure_mode = "source-test-mixing"
+language = "typescript"
+question = "Does the symbol pass relocate production symbols across the source/test boundary into their spec twins?"
+
+[run]
+mode = "both"        # a crossing in either mode's best candidate is a defect
+candidates = 3       # engine default k
+seed = 42            # engine default seed
+config = "defaults"  # pure built-in defaults; no fixture strata.toml
+
+[[precondition]]
+kind = "file_count"
+min = 4
+max = 4
+because = "the fixture ships exactly four files (codec, two adapters, one spec twin); any other count means source discovery broke"
+
+[[assert]]
+modes = ["anchored", "greenfield"]
+candidate = 1
+
+# Every production symbol pinned to its src home: the DTO carries no polarity,
+# so file-path pins are the honest expression of "the product stays in src".
+[[assert.preserve_symbol_home]]
+symbol = "GeminiImageCodec"
+path = "app/src/generators/codec.ts"
+because = "the codec lives in production src; relocating it into spec/codec.spec.ts welds the test mirror into the product"
+
+[[assert.preserve_symbol_home]]
+symbol = "normalizePayload"
+path = "app/src/generators/codec.ts"
+because = "the shared payload hygiene helper keeps its production home; the spec twin's calls must not pull it across the boundary"
+
+[[assert.preserve_symbol_home]]
+symbol = "GoogleImageCodec"
+path = "app/src/generators/google.ts"
+because = "an adapter belongs with its generator siblings; no pull justifies crossing into the test zone"
+
+[[assert.preserve_symbol_home]]
+symbol = "BatchImageCodec"
+path = "app/src/generators/batch.ts"
+because = "symmetric to google: the batch adapter keeps its src home in any best state"
+
+[[reference.container]]
+path = "generators"
+files = [
+  "app/src/generators/codec.ts",
+  "app/src/generators/google.ts",
+  "app/src/generators/batch.ts",
+]
+
+[[reference.container]]
+path = "spec"
+files = ["app/spec/codec.spec.ts"]
