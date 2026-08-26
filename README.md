@@ -150,7 +150,7 @@ Every command reads `strata.toml` from the analysis root (override with `--confi
 | `[weights]` | Per-edge-kind weights (`value-import`, `inheritance`, `call`, `type-reference`, `re-export`). |
 | `[solver]` | `ilp-threshold` (max SCC size for the exact ILP) and `timeout-seconds`. |
 | `[diversity]` | Candidate diversification: `seeds-per-candidate`, `score-tolerance`, `min-distance`. |
-| `[tests]` | `helper-cap` for test-support files. |
+| `[tests]` | `helper-cap` for test-support files; `patterns` globs extending built-in test detection; `builtins` toggle for that detection. |
 
 The checked-in [`strata.toml`](strata.toml) documents every key alongside its default value.
 

@@ -18,18 +18,13 @@ None.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+0.0256`, score `0.1412`)
+_Current layout is already optimal; candidate 1 is the current tree._
 
-- cut `0.2135`, imbalance `0.0425`, naming `-0.0016`, path `-0.1846`, anchor `0.0714`
+### Candidate 1 (improvement `+0.0000`, score `0.1668`)
 
-**Moves**
+- cut `0.3281`, imbalance `0.0406`, naming `-0.0019`, path `-0.2000`, anchor `0.0000`
 
-```
-move — pulled by point.ts (w 1.0)
-  1. src/io/parser.ts [constellation-ts/io → constellation-ts/model]
-move — pulled by canvas.ts (w 1.0)
-  2. src/core/epsilon.ts [constellation-ts/core → constellation-ts/render]
-```
+No moves versus the current layout.
 
 ## Greenfield candidates
 

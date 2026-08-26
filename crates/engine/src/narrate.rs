@@ -32,6 +32,10 @@ pub(crate) struct FileFacts {
     pub(crate) edge_weights: BTreeMap<(String, String), f64>,
     /// Files whose symbols are exclusively test cases (spec files).
     pub(crate) test_case_files: BTreeSet<String>,
+    /// The rest of the tie-cut zone — `[tests]`-pattern matches and
+    /// test-support helpers beyond the case-only set. Their moves narrate as
+    /// following a subject exactly like spec files do.
+    pub(crate) shadow_test_files: BTreeSet<String>,
     /// The folder member cap, for the cap-relief reason.
     pub(crate) folder_cap: u32,
 }
@@ -230,12 +234,14 @@ fn followed_subject(
     after: &FilePlacements,
     facts: &FileFacts,
 ) -> Option<String> {
-    if !facts.test_case_files.contains(file) {
+    if !facts.test_case_files.contains(file) && !facts.shadow_test_files.contains(file) {
         return None;
     }
+    let is_test =
+        |path: &str| facts.test_case_files.contains(path) || facts.shadow_test_files.contains(path);
     let mut best: Option<(&String, f64)> = None;
     for ((source, target), weight) in &facts.edge_weights {
-        if source.as_str() != file || facts.test_case_files.contains(target) {
+        if source.as_str() != file || is_test(target) {
             continue;
         }
         // strictly-greater keeps the earlier (lexicographically smaller) target
@@ -466,6 +472,7 @@ mod tests {
         FileFacts {
             edge_weights: BTreeMap::new(),
             test_case_files: BTreeSet::new(),
+            shadow_test_files: BTreeSet::new(),
             folder_cap: 15,
         }
     }
@@ -617,6 +624,7 @@ mod tests {
             .into_iter()
             .collect(),
             test_case_files: ["src/io/app.spec.ts".to_owned()].into_iter().collect(),
+            shadow_test_files: BTreeSet::new(),
             folder_cap: 15,
         };
 
@@ -633,6 +641,93 @@ mod tests {
         assert_eq!(
             entry.map(|m| m.reason.to_string()),
             Some("follows app.ts".to_owned())
+        );
+    }
+
+    #[test]
+    fn should_narrate_a_co_moved_spec_as_following_its_twin() {
+        // Subject and spec start together in `src/core`; the candidate moves
+        // both into the new nested folder `src/core/app`. Each role narrates on
+        // its own: the twin is pulled by its spec, the spec follows back.
+        let start = ContainerTree::new(vec![
+            container(0, "app", ScopeLevel::Domain, None),
+            container(1, "src/core", ScopeLevel::Folder, Some(0)),
+            container(2, "src/io", ScopeLevel::Folder, Some(0)),
+            container(3, "src/core/app.ts", ScopeLevel::File, Some(1)),
+            container(4, "src/core/app.spec.ts", ScopeLevel::File, Some(1)),
+            container(5, "src/io/keep.ts", ScopeLevel::File, Some(2)),
+        ]);
+        let candidate = ContainerTree::new(vec![
+            container(0, "app", ScopeLevel::Domain, None),
+            container(1, "src/core", ScopeLevel::Folder, Some(0)),
+            container(2, "src/io", ScopeLevel::Folder, Some(0)),
+            container(3, "src/core/app", ScopeLevel::Folder, Some(1)),
+            container(4, "src/core/app.ts", ScopeLevel::File, Some(3)),
+            container(5, "src/core/app.spec.ts", ScopeLevel::File, Some(3)),
+            container(6, "src/io/keep.ts", ScopeLevel::File, Some(2)),
+        ]);
+        let facts = FileFacts {
+            edge_weights: [(
+                (
+                    "src/core/app.spec.ts".to_owned(),
+                    "src/core/app.ts".to_owned(),
+                ),
+                2.0,
+            )]
+            .into_iter()
+            .collect(),
+            test_case_files: ["src/core/app.spec.ts".to_owned()].into_iter().collect(),
+            shadow_test_files: BTreeSet::new(),
+            folder_cap: 15,
+        };
+
+        let moves = narrate(&start, &candidate, &facts);
+
+        assert_eq!(moves.len(), 2, "each role narrates as its own entry");
+        let followed = moves.iter().find(|entry| {
+            entry
+                .files
+                .iter()
+                .any(|file| file.path.ends_with(".spec.ts"))
+        });
+        assert_eq!(
+            followed.map(|entry| entry.reason.to_string()),
+            Some("follows app.ts".to_owned())
+        );
+    }
+
+    #[test]
+    fn should_narrate_a_shadow_test_file_as_following_its_subject() {
+        // a `[tests]`-pattern match that is not case-only polarity — a test
+        // support file — narrates exactly like a spec: it follows its subject.
+        let current = two_folder_tree(&["src/core/app.ts"], &["src/io/app.test-utils.ts"]);
+        let candidate = two_folder_tree(&["src/core/app.ts", "src/io/app.test-utils.ts"], &[]);
+        let facts = FileFacts {
+            // narration reads the uncut IR weights, not the tie-cut graph.
+            edge_weights: [(
+                (
+                    "src/io/app.test-utils.ts".to_owned(),
+                    "src/core/app.ts".to_owned(),
+                ),
+                2.0,
+            )]
+            .into_iter()
+            .collect(),
+            test_case_files: BTreeSet::new(),
+            shadow_test_files: ["src/io/app.test-utils.ts".to_owned()]
+                .into_iter()
+                .collect(),
+            folder_cap: 15,
+        };
+
+        let moves = narrate(&current, &candidate, &facts);
+
+        assert_eq!(moves.len(), 1);
+        assert_eq!(
+            moves.first().map(|m| m.reason.clone()),
+            Some(MoveReason::Follows {
+                subject: "src/core/app.ts".to_owned(),
+            })
         );
     }
 
@@ -662,6 +757,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             test_case_files: ["app.spec.ts".to_owned()].into_iter().collect(),
+            shadow_test_files: BTreeSet::new(),
             folder_cap: 15,
         };
 
@@ -682,6 +778,7 @@ mod tests {
         let facts = FileFacts {
             edge_weights: BTreeMap::new(),
             test_case_files: BTreeSet::new(),
+            shadow_test_files: BTreeSet::new(),
             folder_cap: 3,
         };
 
@@ -737,6 +834,7 @@ mod tests {
         let facts = FileFacts {
             edge_weights: BTreeMap::new(),
             test_case_files: BTreeSet::new(),
+            shadow_test_files: BTreeSet::new(),
             folder_cap: 3,
         };
 
@@ -776,6 +874,7 @@ mod tests {
             .into_iter()
             .collect(),
             test_case_files: BTreeSet::new(),
+            shadow_test_files: BTreeSet::new(),
             folder_cap: 15,
         };
 

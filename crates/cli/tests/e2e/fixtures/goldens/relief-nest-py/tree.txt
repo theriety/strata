@@ -1,0 +1,52 @@
+relief-nest-py [packageGroup]
+  relief-nest-py [package]
+    hub [domain]
+      hub [folder]
+        hub/emit_00.py [file] 1 sloc
+          - emit_seed (file)
+        hub/emit_01.py [file] 1 sloc
+          - emit_stage (file)
+        hub/emit_02.py [file] 1 sloc
+          - emit_stage (file)
+        hub/emit_03.py [file] 1 sloc
+          - emit_stage (file)
+        hub/emit_04.py [file] 1 sloc
+          - emit_stage (file)
+        hub/emit_05.py [file] 1 sloc
+          - emit_stage (file)
+        hub/emit_06.py [file] 1 sloc
+          - emit_stage (file)
+        hub/emit_07.py [file] 1 sloc
+          - emit_stage (file)
+        hub/emit_08.py [file] 1 sloc
+          - emit_stage (file)
+        hub/emit_09.py [file] 1 sloc
+          - emit_stage (file)
+        hub/emit_10.py [file] 1 sloc
+          - emit_stage (file)
+        hub/emit_11.py [file] 1 sloc
+          - emit_stage (file)
+        hub/ingest_00.py [file] 1 sloc
+          - ingest_seed (file)
+        hub/ingest_01.py [file] 1 sloc
+          - ingest_stage (file)
+        hub/ingest_02.py [file] 1 sloc
+          - ingest_stage (file)
+        hub/ingest_03.py [file] 1 sloc
+          - ingest_stage (file)
+        hub/ingest_04.py [file] 1 sloc
+          - ingest_stage (file)
+        hub/ingest_05.py [file] 1 sloc
+          - ingest_stage (file)
+        hub/ingest_06.py [file] 1 sloc
+          - ingest_stage (file)
+        hub/ingest_07.py [file] 1 sloc
+          - ingest_stage (file)
+        hub/ingest_08.py [file] 1 sloc
+          - ingest_stage (file)
+        hub/ingest_09.py [file] 1 sloc
+          - ingest_stage (file)
+        hub/ingest_10.py [file] 1 sloc
+          - ingest_stage (file)
+        hub/ingest_11.py [file] 1 sloc
+          - ingest_stage (file)

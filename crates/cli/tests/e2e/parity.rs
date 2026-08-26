@@ -32,7 +32,7 @@ use strata_engine::{AnalyzeConfig, analyze, snapshot_from_root};
 /// every member. The three violation-focused fixtures (`cyclic`, `over-capacity`,
 /// `polarity-leak`) are deliberately *excluded* here — each would gate one of the
 /// shared invariants — and instead receive their own parity and golden tests.
-const FIXTURES: [&str; 9] = [
+const FIXTURES: [&str; 10] = [
     "ts",
     "rust",
     "python",
@@ -42,6 +42,7 @@ const FIXTURES: [&str; 9] = [
     "rust-cfg-test",
     "constellation-ts",
     "test-heavy-ts",
+    "twin-follow-ts",
 ];
 
 /// A non-existent config path, forcing the binary onto its built-in defaults so
@@ -359,6 +360,26 @@ fn should_match_the_library_result_for_the_test_heavy_fixture() {
 #[test]
 fn should_match_the_goldens_for_the_test_heavy_fixture() {
     assert_goldens("test-heavy-ts");
+}
+
+#[test]
+fn should_match_the_library_result_for_the_twin_follow_fixture() {
+    assert_parity("twin-follow-ts");
+}
+
+#[test]
+fn should_match_the_goldens_for_the_twin_follow_fixture() {
+    assert_goldens("twin-follow-ts");
+}
+
+#[test]
+fn should_match_the_library_result_for_the_relief_nest_py_fixture() {
+    assert_parity("relief-nest-py");
+}
+
+#[test]
+fn should_match_the_goldens_for_the_relief_nest_py_fixture() {
+    assert_goldens("relief-nest-py");
 }
 
 #[test]

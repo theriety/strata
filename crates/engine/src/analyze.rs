@@ -28,11 +28,11 @@ use strata_core::score::{
 use strata_core::shatter::{BreakSet, EdgeRef, EdgeWeights, SccView, shatter};
 use strata_core::visibility::derive_visibility;
 use strata_ir::{
-    Container, ContainerId, ContainerTree, Edge, Hardness, Node, NodeId, Polarity, ScopeLevel,
-    Snapshot,
+    Container, ContainerId, ContainerTree, Edge, Hardness, IntermediateRepresentation, Node,
+    NodeId, Polarity, ScopeLevel, Snapshot,
 };
 
-use crate::config::AnalyzeConfig;
+use crate::config::{AnalyzeConfig, TestsConfig};
 use crate::error::StrataError;
 use crate::narrate::{FileFacts, narrate, tokenize};
 use crate::result::{
@@ -46,6 +46,87 @@ use crate::snapshot::Language;
 /// The capacity borderline band: a finding within ±10% of a cap is borderline
 /// and never gates CI (reference `BORDERLINE_CAPACITY_MARGIN`).
 pub const BORDERLINE_CAPACITY_MARGIN: f64 = 0.1;
+
+/// The compiled `[tests]` policy deciding which files count as tests for the
+/// clustering tie-cut and the subject-following shadow pass.
+///
+/// Built-in detection stays polarity-driven — the adapters already mark
+/// symbols from `.spec.`/`.test.` paths, `tests/` directories, and language
+/// test attributes. Patterns extend that with glob matching against a file's
+/// project-relative place (its container chain joined with `/`, ending in the
+/// file name), so `*.spec.*` applies repo-wide while `spec/mocks/**` stays
+/// scoped.
+#[derive(Debug, Clone)]
+struct TestPolicy {
+    /// Whether the built-in per-language detection participates.
+    builtins: bool,
+    /// Compiled patterns containing `/`: matched against the full path.
+    path_patterns: Vec<glob::Pattern>,
+    /// Compiled bare patterns: matched against the file name alone.
+    base_patterns: Vec<glob::Pattern>,
+}
+
+impl TestPolicy {
+    /// Compiles the configured policy, attributing a failed pattern at its
+    /// `tests.patterns[i]` key.
+    ///
+    /// [`AnalyzeConfig::validate`] compiles every pattern once during loading;
+    /// this second compilation covers embedders who build an
+    /// [`AnalyzeConfig`] directly and never validate it.
+    fn new(config: &TestsConfig) -> Result<Self, StrataError> {
+        let mut policy = Self {
+            builtins: config.builtins,
+            path_patterns: Vec::new(),
+            base_patterns: Vec::new(),
+        };
+        for (index, pattern) in config.patterns.iter().enumerate() {
+            let compiled =
+                glob::Pattern::new(pattern).map_err(|error| StrataError::ConfigInvalid {
+                    key: Some(format!("tests.patterns[{index}]")),
+                    reason: error.to_string(),
+                })?;
+            if pattern.contains('/') {
+                policy.path_patterns.push(compiled);
+            } else {
+                policy.base_patterns.push(compiled);
+            }
+        }
+        Ok(policy)
+    }
+
+    /// The shipped default: built-in detection on, no extra globs.
+    #[cfg(test)]
+    fn defaults() -> Self {
+        Self {
+            builtins: true,
+            path_patterns: Vec::new(),
+            base_patterns: Vec::new(),
+        }
+    }
+
+    /// The inert policy: configuration alone marks nothing as a test.
+    #[cfg(test)]
+    fn disabled() -> Self {
+        Self {
+            builtins: false,
+            path_patterns: Vec::new(),
+            base_patterns: Vec::new(),
+        }
+    }
+
+    /// Whether `path` matches any configured pattern; bare patterns face the
+    /// final segment alone so `*.spec.*` needs no directory knowledge.
+    fn matches(&self, path: &str) -> bool {
+        let basename = path.rsplit('/').next().unwrap_or(path);
+        self.base_patterns
+            .iter()
+            .any(|pattern| pattern.matches(basename))
+            || self
+                .path_patterns
+                .iter()
+                .any(|pattern| pattern.matches(path))
+    }
+}
 
 /// Analyzes `snapshot` under `config`, returning the owned [`AnalyzeResult`].
 ///
@@ -91,6 +172,7 @@ fn analyze_inner(
         &BTreeMap::new(),
     )?;
     let weights = config.weights.kind_weights();
+    let tests = TestPolicy::new(&config.tests)?;
     let cycles = solve_cycles(snapshot, config, &weights);
     let violations = collect_violations(snapshot, config, &current_node, &cycles);
     let current_breakdown = score_current(
@@ -123,6 +205,7 @@ fn analyze_inner(
                 capacity_clean,
                 capacity_clean,
                 &splits,
+                &tests,
             )
         })
         .transpose()?;
@@ -136,6 +219,7 @@ fn analyze_inner(
                 false,
                 capacity_clean,
                 &splits,
+                &tests,
             )
         })
         .transpose()?;
@@ -660,8 +744,9 @@ fn build_mode_result(
     seed_identity: bool,
     capacity_clean: bool,
     splits: &[ConditionalSplit],
+    tests: &TestPolicy,
 ) -> Result<ModeResult, StrataError> {
-    let solver = PipelineSolver::new(snapshot, config, *coefficients, seed_identity);
+    let solver = PipelineSolver::new(snapshot, config, *coefficients, seed_identity, tests);
     let mode_config = mode_config(config);
     let CoreModeResult {
         candidates,
@@ -674,9 +759,27 @@ fn build_mode_result(
         &config.weights.kind_weights(),
         config.capacity.folder,
     );
+    // A suggestion must at least tie keeping today's layout: the diversifier's
+    // tolerance band measures against the pool's own best, so a diverse shape can
+    // clear that bar yet still price above the current tree (the tie-cut withdrew
+    // the test-edge pulls that used to keep every diversifier ahead). Candidates
+    // scored above the current layout under this mode's own objective are
+    // therefore never offered — `improvement` stays non-negative by construction,
+    // which is the reliability contract the acceptance suite states. When nothing
+    // clears the bar — an infeasible tree whose every restructuring costs more
+    // than it saves — the least-bad shape is still offered, because for a
+    // cap-breached layout doing nothing is not on the table.
+    let mut offered: Vec<SolvedCandidate> = candidates
+        .iter()
+        .filter(|solved| solved.score <= current_breakdown.total)
+        .cloned()
+        .collect();
+    if offered.is_empty() {
+        offered = candidates.first().cloned().into_iter().collect();
+    }
     let current_tree = &snapshot.ir().containers;
-    let mut built = Vec::with_capacity(candidates.len());
-    for (index, solved) in candidates.iter().enumerate() {
+    let mut built = Vec::with_capacity(offered.len());
+    for (index, solved) in offered.iter().enumerate() {
         let mut candidate = solver.build_candidate(
             current_tree,
             solved,
@@ -704,7 +807,7 @@ fn build_mode_result(
         CurrentStanding::Infeasible
     };
 
-    let pairwise_distance = pairwise_distances(&candidates);
+    let pairwise_distance = pairwise_distances(&offered);
     Ok(ModeResult {
         candidates: built,
         pairwise_distance,
@@ -880,6 +983,10 @@ const ROOF_COHERENCE_FLOOR: f64 = 0.5;
 struct PipelineSolver<'a> {
     /// The analyzed snapshot.
     snapshot: &'a Snapshot,
+    /// Whether each file-graph vertex is a test-zone file under the `[tests]`
+    /// policy — polarity detection plus configured patterns. Drives the shadow
+    /// pass that follows subjects.
+    test_zone: Vec<bool>,
     /// The current tree's file containers, ascending container id; vertex `i` of
     /// the file graph is `files[i]`.
     files: Vec<FileInfo>,
@@ -917,7 +1024,8 @@ struct PipelineSolver<'a> {
     /// shares; only the identity entry bypasses it.
     real_partition: Partition,
     /// Each relieved folder cluster's directory name, indexed by cluster id;
-    /// split halves extend the table with `{folder}-{token}` labels.
+    /// split halves extend the table with `{folder}/{token}` labels that path-
+    /// extend their base folder at render time.
     real_folder_names: Vec<SmolStr>,
     /// Whether each relieved folder cluster is the synthetic `workspace`
     /// bucket, indexed by cluster id in lockstep with `real_folder_names`.
@@ -940,6 +1048,51 @@ struct PipelineSolver<'a> {
     roof_rebuild: Option<Partition>,
 }
 
+/// Inventories the current tree's file containers in file-graph vertex order:
+/// every file with its laminar home keys, ascending container id, paired with
+/// the container-to-vertex index. Production SLOC is folded into each entry so
+/// relief and narration can weigh files without re-walking the IR nodes.
+fn file_inventory(ir: &IntermediateRepresentation) -> (Vec<FileInfo>, BTreeMap<u32, u32>) {
+    // index the laminar containers by id so each file can read its already-
+    // resolved folder/domain/package name keys off its ancestor chain.
+    let by_id: BTreeMap<u32, &Container> = ir
+        .containers
+        .containers()
+        .iter()
+        .map(|container| (container.id.0, container))
+        .collect();
+    let mut files: Vec<FileInfo> = ir
+        .containers
+        .containers()
+        .iter()
+        .filter(|container| container.level == ScopeLevel::File)
+        .map(|container| FileInfo {
+            container: container.id.0,
+            name: container.name.clone(),
+            production_sloc: 0,
+            home: laminar_home(&by_id, container.id.0),
+        })
+        .collect();
+    files.sort_by_key(|file| file.container);
+    let index_of: BTreeMap<u32, u32> = files
+        .iter()
+        .enumerate()
+        .map(|(index, file)| (file.container, u32::try_from(index).unwrap_or(u32::MAX)))
+        .collect();
+    for node in &ir.nodes {
+        if node.polarity != Polarity::Production {
+            continue;
+        }
+        let Some(&index) = index_of.get(&node.container.0) else {
+            continue;
+        };
+        if let Some(file) = files.get_mut(index as usize) {
+            file.production_sloc = file.production_sloc.saturating_add(node.effective_size);
+        }
+    }
+    (files, index_of)
+}
+
 impl<'a> PipelineSolver<'a> {
     /// Builds the solver, computing every seed-independent pipeline input once.
     fn new(
@@ -947,49 +1100,22 @@ impl<'a> PipelineSolver<'a> {
         config: &AnalyzeConfig,
         coefficients: Coefficients,
         seed_identity: bool,
+        tests: &'a TestPolicy,
     ) -> Self {
         let ir = snapshot.ir();
         let weights = config.weights.kind_weights();
+        let (files, index_of) = file_inventory(ir);
 
-        // index the laminar containers by id so each file can read its already-
-        // resolved folder/domain/package name keys off its ancestor chain.
-        let by_id: BTreeMap<u32, &Container> = ir
-            .containers
-            .containers()
-            .iter()
-            .map(|container| (container.id.0, container))
-            .collect();
-        let mut files: Vec<FileInfo> = ir
-            .containers
-            .containers()
-            .iter()
-            .filter(|container| container.level == ScopeLevel::File)
-            .map(|container| FileInfo {
-                container: container.id.0,
-                name: container.name.clone(),
-                production_sloc: 0,
-                home: laminar_home(&by_id, container.id.0),
-            })
-            .collect();
-        files.sort_by_key(|file| file.container);
-        let index_of: BTreeMap<u32, u32> = files
-            .iter()
-            .enumerate()
-            .map(|(index, file)| (file.container, u32::try_from(index).unwrap_or(u32::MAX)))
-            .collect();
-        for node in &ir.nodes {
-            if node.polarity != Polarity::Production {
-                continue;
-            }
-            let Some(&index) = index_of.get(&node.container.0) else {
-                continue;
-            };
-            if let Some(file) = files.get_mut(index as usize) {
-                file.production_sloc = file.production_sloc.saturating_add(node.effective_size);
-            }
-        }
+        let test_zone = test_zone_marks(tests, &files, &ir.nodes);
 
-        let file_graph = build_file_graph(&ir.edges, &ir.nodes, &index_of, files.len(), &weights);
+        let file_graph = build_file_graph(
+            &ir.edges,
+            &ir.nodes,
+            &index_of,
+            files.len(),
+            &weights,
+            &test_zone,
+        );
         let condensation = condense(&file_graph);
         let caps = level_caps(config);
         let reverse_dag = reverse_csr(&condensation.dag);
@@ -1003,12 +1129,11 @@ impl<'a> PipelineSolver<'a> {
 
         // FIX03 relieves over-capacity binding in the search grain itself: a
         // real folder holding more files than its budget is pre-split along
-        // priced connectivity into cap-respecting halves, and each half's files
-        // carry an overridden domain home key so coarsening treats them as
-        // separate places. The objective prices what this creates, so every
+        // priced connectivity into cap-respecting halves named to path-extend
+        // their base folder. The objective prices what this creates, so every
         // non-identity seed starts from a layout the split can win from instead
         // of only being able to shed files out of the over-cap folder.
-        let (mut relieved_files, search_partition, mut folder_names, mut folder_synthetic) =
+        let (relieved_files, search_partition, mut folder_names, mut folder_synthetic) =
             relieve_over_capacity(
                 files,
                 &condensation,
@@ -1025,12 +1150,12 @@ impl<'a> PipelineSolver<'a> {
         // alternative start: zero-priced strangers regrouped by their own shared
         // tokens, a residual roof that misdescribes its remaining residents
         // dissolved into priced-connected places, each new place labeled from
-        // member names and its files re-homed so upper-level elections follow.
+        // member names to path-extend its base folder.
         // The proposal enters the ordinary pool at offset 1 — polish still runs,
         // the vetoes still bind, the objective still decides — and when it does
         // not fire, nothing downstream changes at all.
         let roof_rebuild = synthesize_roof_rebuild(
-            &mut relieved_files,
+            &relieved_files,
             &condensation,
             &file_graph,
             &search_partition,
@@ -1043,11 +1168,18 @@ impl<'a> PipelineSolver<'a> {
             .iter()
             .find(|container| container.level == ScopeLevel::PackageGroup)
             .map_or_else(|| SmolStr::new("workspace"), |group| group.name.clone());
-        let facts = file_facts(snapshot, &weights, config.capacity.folder);
+        let facts = file_facts(
+            snapshot,
+            &weights,
+            config.capacity.folder,
+            &relieved_files,
+            &test_zone,
+        );
         let real_is_identity = search_partition == identity_partition;
 
         Self {
             snapshot,
+            test_zone,
             files: relieved_files,
             index_of,
             condensation,
@@ -1247,6 +1379,146 @@ impl<'a> PipelineSolver<'a> {
             .take(POLISH_TARGETS)
             .map(|(cluster, _)| cluster)
             .collect()
+    }
+
+    /// The shadow pass: every test-zone SCC follows its unique source twin.
+    ///
+    /// The tie-cut left test files with zero-priced edges and zero production
+    /// SLOC, so the polish had no priced reason to move them — they sit where
+    /// reality put them while everything around them re-groups. Left there, a
+    /// spec strands away from the subject it exists to test once that subject
+    /// relocates. This pass closes the gap by placement, not price: each
+    /// test-zone file pairs with the one production file it was named after
+    /// (same package home, same stem once the test markers strip away), and
+    /// its whole SCC moves into the twin's cluster — production placements
+    /// themselves never move here. The move serves exactly the coupling the
+    /// cut removed from pricing, so acceptance is structural only: the folder
+    /// cap holds and the quotient gains no cycles, mirroring the polish's
+    /// vetoes. A file with no twin, or more than one equally-named candidate,
+    /// stays put (ADR-0002 rule 1: unchanged placements are never advice).
+    /// Shadow-assigns test-zone files to their unique subject twin's placement.
+    ///
+    /// Runs after the polish so a test file follows the placement its subject
+    /// actually earned. Production placements are never moved: only whole-SCC
+    /// units made up entirely of test-zone files are relocated (an SCC mixing
+    /// production members is a production unit and stays where the search put
+    /// it), and the folder cap vetoes an overflowing move exactly like it does
+    /// for polish moves.
+    ///
+    /// No cyclicity veto: every edge touching a test-zone file is priced zero
+    /// (the tie-cut in [`build_file_graph`]), so a moved unit carries no priced
+    /// edges at all — the *priced* quotient the objective reads is invariant
+    /// under this pass, and FIX04 doctrine says a zero-priced edge binds
+    /// nothing, the cyclicity veto included. The structural quotient may still
+    /// cycle through cut edges (`spec` → `support` → subject), which is exactly
+    /// the weld this pass exists to undo; counting it would veto every follow
+    /// in a mirrored test tree.
+    fn shadow_tests(&self, parts: &mut Partition) {
+        // live per-cluster file counts, mirroring the polish's bookkeeping:
+        // clusters size in SCCs, caps count in files.
+        let mut file_count: Vec<u32> = vec![0; parts.cluster_count()];
+        for (scc, members) in self.condensation.members.iter().enumerate() {
+            let Some(cluster) = parts.cluster_of(u32::try_from(scc).unwrap_or(u32::MAX)) else {
+                continue;
+            };
+            if let Some(slot) = file_count.get_mut(cluster.0 as usize) {
+                *slot = slot.saturating_add(u32::try_from(members.len()).unwrap_or(u32::MAX));
+            }
+        }
+
+        for (vertex, zone) in self.test_zone.iter().enumerate() {
+            if !zone {
+                continue;
+            }
+            let Some(file) = self.files.get(vertex) else {
+                continue;
+            };
+            let Some(twin_vertex) = self.unique_subject_twin(file) else {
+                continue;
+            };
+            let unit = self
+                .condensation
+                .membership
+                .get(vertex)
+                .copied()
+                .map_or(u32::MAX, |scc| scc.0);
+            // never shadow-move an SCC that carries production code: its
+            // placement was earned by the priced search, not by the tie-cut.
+            let unit_members = self.condensation.members.get(unit as usize);
+            if unit_members.is_none_or(|unit_members| {
+                unit_members.iter().any(|member| {
+                    !self
+                        .test_zone
+                        .get(member.0 as usize)
+                        .copied()
+                        .unwrap_or(true)
+                })
+            }) {
+                continue;
+            }
+            let subject = self
+                .condensation
+                .membership
+                .get(twin_vertex)
+                .copied()
+                .map_or(u32::MAX, |scc| scc.0);
+            let (Some(source), Some(target)) = (parts.cluster_of(unit), parts.cluster_of(subject))
+            else {
+                continue;
+            };
+            if source == target {
+                continue;
+            }
+            let unit_files = self
+                .condensation
+                .members
+                .get(unit as usize)
+                .map_or(0, |unit_scc_files| {
+                    u32::try_from(unit_scc_files.len()).unwrap_or(u32::MAX)
+                });
+            let target_files = file_count
+                .get(target.0 as usize)
+                .copied()
+                .unwrap_or(u32::MAX);
+            if target_files.saturating_add(unit_files) > self.caps.folder {
+                continue;
+            }
+            if !parts.move_node(unit, target) {
+                continue;
+            }
+            if let Some(slot) = file_count.get_mut(source.0 as usize) {
+                *slot = slot.saturating_sub(unit_files);
+            }
+            if let Some(slot) = file_count.get_mut(target.0 as usize) {
+                *slot = slot.saturating_add(unit_files);
+            }
+        }
+    }
+
+    /// Returns the file-graph vertex of the unique production-zone file this
+    /// test-zone file was named after: same package home, same stem once the
+    /// test markers strip away. Two equally-named candidates are no twin at
+    /// all — ambiguity keeps the test file where reality has it.
+    fn unique_subject_twin(&self, file: &FileInfo) -> Option<usize> {
+        let stem = subject_stem(&file.name);
+        if stem.is_empty() {
+            return None;
+        }
+        let mut twin: Option<usize> = None;
+        for (index, candidate) in self.files.iter().enumerate() {
+            if candidate.container == file.container
+                || candidate.home.package != file.home.package
+                || self.test_zone.get(index).copied().unwrap_or(true)
+                || subject_stem(&candidate.name) != stem
+            {
+                continue;
+            }
+            if twin.is_some() {
+                return None;
+            }
+            twin = Some(index);
+        }
+        twin
     }
 
     /// Whether relocating `scc` from `source` into `target` would leave part of
@@ -2061,6 +2333,10 @@ impl Solver for PipelineSolver<'_> {
         };
         let mut parts = start.clone();
         self.polish(&mut parts);
+        // The shadow pass runs on the polished layout so a test file follows
+        // the placement its subject actually earned, not the one reality
+        // suggested; production placements are never moved by it.
+        self.shadow_tests(&mut parts);
         // FIX08: the file polish's layout is refined by the symbol-grain pass
         // before scoring, so pool ranking prices symbol relocation too. The
         // outcome itself is not threaded out — `build_candidate` re-runs this
@@ -2128,12 +2404,59 @@ struct CandidateTree {
 /// adds to those levels (which counterbalances the extra crossings), not a
 /// narrower graph here — re-gating would misalign search from score and hide the
 /// collapse rather than resolve it.
+/// Marks each file-graph vertex whose clustering edges are priced to zero.
+/// Built-in detection marks a file that holds at least one symbol and nothing
+/// but non-production symbols — test cases or test support — reusing the
+/// polarity adapters already compute; configured `[tests]` patterns mark a
+/// file by repo-relative path regardless of its symbols. Disabling builtins
+/// leaves only the patterns to decide. The returned slice is parallel to
+/// `files`, i.e. to the file graph's vertices.
+fn test_zone_marks(tests: &TestPolicy, files: &[FileInfo], nodes: &[Node]) -> Vec<bool> {
+    let mut marks: Vec<bool> = files.iter().map(|file| tests.matches(&file.name)).collect();
+    if tests.builtins {
+        let mut case_only: BTreeMap<u32, bool> = BTreeMap::new();
+        for node in nodes {
+            let entry = case_only.entry(node.container.0).or_insert(true);
+            *entry &= node.polarity != Polarity::Production;
+        }
+        for (index, file) in files.iter().enumerate() {
+            if !case_only.get(&file.container).copied().unwrap_or(false) {
+                continue;
+            }
+            if let Some(mark) = marks.get_mut(index) {
+                *mark = true;
+            }
+        }
+    }
+    marks
+}
+
+/// Strips the test markers from a path's basename down to its subject stem:
+/// the final extension goes (`openai.spec.ts` → `openai.spec`), then a
+/// `.spec`/`.test` infix (`openai.spec` → `openai`), then `test_`/`_test`
+/// affixes (`test_openai`, `openai_test` → `openai`). Comparison is
+/// byte-wise and conservative: anything that does not reduce cleanly pairs
+/// with nothing.
+fn subject_stem(path: &str) -> &str {
+    let base = path.rsplit('/').next().unwrap_or(path);
+    let mut stem = base.rsplit_once('.').map_or(base, |(stem, _)| stem);
+    if let Some(without_marker) = stem
+        .strip_suffix(".spec")
+        .or_else(|| stem.strip_suffix(".test"))
+    {
+        stem = without_marker;
+    }
+    let stem = stem.strip_prefix("test_").unwrap_or(stem);
+    stem.strip_suffix("_test").unwrap_or(stem)
+}
+
 fn build_file_graph(
     edges: &[Edge],
     nodes: &[Node],
     index_of: &BTreeMap<u32, u32>,
     file_count: usize,
     weights: &KindWeights,
+    test_zone: &[bool],
 ) -> Csr {
     let container_of: BTreeMap<u32, u32> = nodes
         .iter()
@@ -2162,6 +2485,18 @@ fn build_file_graph(
         // reason: csr weights are f32 by contract (ad-6); narrowing the f64 price is the one lossy step
         #[allow(clippy::cast_possible_truncation)]
         let weight = weights.edge_weight(edge.kind, edge.confidence) as f32;
+        // The test tie-cut prices an edge touching a test-zone file at zero —
+        // both directions, test↔test included — so test coupling can neither
+        // weld a spec to its subject nor bond test files into a place of their
+        // own. This is the single pricing choke point every downstream stage
+        // (relief piles, polish moves, heavy-edge matching) reads.
+        let weight = if test_zone.get(from as usize).copied().unwrap_or(false)
+            || test_zone.get(to as usize).copied().unwrap_or(false)
+        {
+            0.0
+        } else {
+            weight
+        };
         crossings.push((from, to, weight));
     }
     Csr::from_weighted_edges(file_count, &crossings)
@@ -2169,8 +2504,15 @@ fn build_file_graph(
 
 /// Builds the per-file facts narration consults: config-priced edge weights
 /// summed per directed file pair (every edge, the objective's currency),
-/// spec files (symbols exclusively test cases), and the folder cap.
-fn file_facts(snapshot: &Snapshot, weights: &KindWeights, folder_cap: u32) -> FileFacts {
+/// spec files (symbols exclusively test cases), the rest of the tie-cut zone
+/// (`[tests]`-pattern matches and test-support helpers), and the folder cap.
+fn file_facts(
+    snapshot: &Snapshot,
+    weights: &KindWeights,
+    folder_cap: u32,
+    files: &[FileInfo],
+    test_zone: &[bool],
+) -> FileFacts {
     let ir = snapshot.ir();
     let file_of: BTreeMap<u32, &SmolStr> = ir
         .containers
@@ -2217,9 +2559,22 @@ fn file_facts(snapshot: &Snapshot, weights: &KindWeights, folder_cap: u32) -> Fi
         .filter_map(|(container, _)| file_of.get(container).map(std::string::ToString::to_string))
         .collect();
 
+    // the tie-cut zone beyond the case-only set: pattern-marked paths and
+    // support-polarity helpers narrate their moves as following a subject
+    // exactly like spec files do.
+    let mut shadow_test_files = BTreeSet::new();
+    for (index, file) in files.iter().enumerate() {
+        let zone = test_zone.get(index).copied().unwrap_or(false);
+        let only_cases = case_only.get(&file.container).copied().unwrap_or(false);
+        if zone && !only_cases {
+            shadow_test_files.insert(file.name.to_string());
+        }
+    }
+
     FileFacts {
         edge_weights,
         test_case_files,
+        shadow_test_files,
         folder_cap,
     }
 }
@@ -2354,14 +2709,15 @@ fn real_dir_partition(
 /// which is honest.
 ///
 /// Pile 0 of each folder keeps the folder's original cluster id; every later
-/// pile gets a fresh cluster id, an extended `{folder}-{token}` name, and a
-/// `false` synthetic marker. Split files' `home.domain` is rewritten to their
-/// half's label so coarsening votes them into separate domains — without it,
-/// heavy-edge matching would weld the halves straight back together. Returns
-/// the mutated files plus the relieved partition and its extended tables; the
+/// pile gets a fresh cluster id, a `{folder}/{token}` name that path-extends
+/// its base folder at render time, and a `false` synthetic marker. Members'
+/// `home.domain` keys stay untouched: the halves already sit in one domain —
+/// their base folder's — and the slash in the label is what nests the half
+/// under it, so no home rewriting can weld or split anything here. Returns the
+/// files plus the relieved partition and its extended tables; the
 /// identity entry must be cloned before this runs (the caller does).
 fn relieve_over_capacity(
-    mut files: Vec<FileInfo>,
+    files: Vec<FileInfo>,
     condensation: &Condensation,
     graph: &Csr,
     base: &Partition,
@@ -2413,22 +2769,21 @@ fn relieve_over_capacity(
             .unwrap_or_else(|| SmolStr::new("workspace"));
         for (ordinal, pile) in piles.iter().enumerate().skip(1) {
             let token = elect_split_token(pile, condensation, &files);
-            // half names extend the real directory so they can never collide
-            // with it or a sibling; a repeated dominant token falls back to
-            // the numeric form.
+            // half names path-extend the real directory so they render nested
+            // under it and can never collide with it or a sibling; a repeated
+            // dominant token falls back to the numeric form.
             let mut label = token.map_or_else(
-                || format!("{base_name}-{ordinal}"),
-                |stem| format!("{base_name}-{stem}"),
+                || format!("{base_name}/{ordinal}"),
+                |stem| format!("{base_name}/{stem}"),
             );
             if used_labels.contains(label.as_str()) {
-                label = format!("{base_name}-{ordinal}");
+                label = format!("{base_name}/{ordinal}");
             }
             used_labels.insert(SmolStr::from(label.clone()));
             for &scc in pile {
                 if let Some(slot) = assignment.get_mut(scc as usize) {
                     *slot = ClusterId(u32::try_from(next_cluster).unwrap_or(u32::MAX));
                 }
-                rewrite_split_homes(&mut files, condensation, scc, &label);
             }
             names.push(SmolStr::from(label));
             synthetic.push(false);
@@ -2451,19 +2806,6 @@ fn scc_file_count(condensation: &Condensation, scc: u32) -> u32 {
     condensation.members.get(scc as usize).map_or(0, |members| {
         u32::try_from(members.len()).unwrap_or(u32::MAX)
     })
-}
-
-/// Rewrites every file in `scc` to carry `label` as its domain home key, so
-/// the half this SCC belongs to votes and coarsens as its own place.
-fn rewrite_split_homes(files: &mut [FileInfo], condensation: &Condensation, scc: u32, label: &str) {
-    let Some(members) = condensation.members.get(scc as usize) else {
-        return;
-    };
-    for member in members {
-        if let Some(file) = files.get_mut(member.0 as usize) {
-            file.home.domain = SmolStr::from(label);
-        }
-    }
 }
 
 /// Follows `parent` links from `start` to its union-find root.
@@ -2647,9 +2989,9 @@ fn basename_stem(name: &str) -> Option<String> {
 ///
 /// The rebuild follows the [`relieve_over_capacity`] pattern: whole SCCs move
 /// (the quotient DAG never gains a cycle), each new place gets a fresh cluster
-/// id, an extended `{folder}-…` name grounded in member names, and a rewritten
-/// `home.domain` key so upper-level elections vote the split instead of welding
-/// it back. Two shapes emerge, all deterministic:
+/// id and a `{folder}/…` name grounded in member names that path-extends its
+/// base folder at render time; member `home.domain` keys stay untouched. Two
+/// shapes emerge, all deterministic:
 ///
 /// 1. stranger groups leave for places named after their own shared word;
 /// 2. when what remains covers fewer than half its files under the original
@@ -2669,7 +3011,7 @@ fn basename_stem(name: &str) -> Option<String> {
 // helpers. The length is documentation and the two place-naming branches.
 #[allow(clippy::too_many_lines)]
 fn synthesize_roof_rebuild(
-    files: &mut [FileInfo],
+    files: &[FileInfo],
     condensation: &Condensation,
     graph: &Csr,
     base: &Partition,
@@ -2784,7 +3126,6 @@ fn synthesize_roof_rebuild(
                 if let Some(slot) = assignment.get_mut(scc as usize) {
                     *slot = ClusterId(u32::try_from(next_cluster).unwrap_or(u32::MAX));
                 }
-                rewrite_split_homes(files, condensation, scc, label.as_str());
             }
             names.push(label);
             synthetic.push(false);
@@ -2811,7 +3152,6 @@ fn synthesize_roof_rebuild(
                 if let Some(slot) = assignment.get_mut(scc as usize) {
                     *slot = ClusterId(u32::try_from(next_cluster).unwrap_or(u32::MAX));
                 }
-                rewrite_split_homes(files, condensation, scc, label.as_str());
             }
             names.push(label);
             synthetic.push(false);
@@ -2934,12 +3274,14 @@ fn token_groups(sccs: &[u32], condensation: &Condensation, files: &[FileInfo]) -
 }
 
 /// Names one proposed place after its members: a token shared by EVERY file in
-/// the group wins (`helpers-utils`); otherwise the two heaviest distinct
-/// basename stems join (`helpers-charge-refund`) — the [`join_top_two`]
+/// the group wins (`helpers/utils`); otherwise the two heaviest distinct
+/// basename stems join (`helpers/charge-refund`) — the [`join_top_two`]
 /// honesty, so a name covering two stems survives later absorption of a third
-/// differently-named file without falling under half-aligned. Collisions fall
-/// back to the numeric form, mirroring [`relieve_over_capacity`]. Returns the
-/// label inserted into `used`.
+/// differently-named file without falling under half-aligned. The separator
+/// between base and suffix is a slash — the label path-extends its base folder
+/// at render time — while a joined stem pair stays dash-joined inside the last
+/// segment. Collisions fall back to the numeric form, mirroring
+/// [`relieve_over_capacity`]. Returns the label inserted into `used`.
 fn rebuild_label(
     base_name: &str,
     group: &[u32],
@@ -2962,7 +3304,7 @@ fn rebuild_label(
             })
         })
         // an all-digit token would mint a label indistinguishable from the
-        // numeric fallback (`helpers-2024` vs `helpers-3`) and would never
+        // numeric fallback (`helpers/2024` vs `helpers/3`) and would never
         // align under the contract tokenizer, which drops digit tokens — skip
         // it and let the stem path or the fallback name the place.
         .and_then(|tokens| {
@@ -2971,7 +3313,7 @@ fn rebuild_label(
                 .find(|token| token.chars().any(char::is_alphabetic))
         });
     let candidate = if let Some(token) = common {
-        format!("{base_name}-{token}")
+        format!("{base_name}/{token}")
     } else {
         // heaviest distinct stems by production SLOC then stem order.
         #[derive(Default)]
@@ -3000,13 +3342,13 @@ fn rebuild_label(
         if stems.is_empty() {
             // no alphabetic stem anywhere in the group: nothing honest to
             // name it after — the numeric form is the only fit left.
-            format!("{base_name}-{ordinal}")
+            format!("{base_name}/{ordinal}")
         } else {
-            format!("{base_name}-{}", stems.join("-"))
+            format!("{base_name}/{}", stems.join("-"))
         }
     };
     let label = if used.contains(candidate.as_str()) {
-        format!("{base_name}-{ordinal}")
+        format!("{base_name}/{ordinal}")
     } else {
         candidate
     };
@@ -5603,7 +5945,14 @@ mod tests {
         let config = AnalyzeConfig::default();
         let weights = config.weights.kind_weights();
 
-        let anchored = PipelineSolver::new(&snapshot, &config, config.objective.anchored(), true);
+        let anchored_tests = TestPolicy::defaults();
+        let anchored = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.anchored(),
+            true,
+            &anchored_tests,
+        );
         let seeded = anchored.solve(config.analysis.seed);
         let current_total = score_current(
             &snapshot,
@@ -5621,8 +5970,14 @@ mod tests {
              returns it at the true current-tree score"
         );
 
-        let greenfield =
-            PipelineSolver::new(&snapshot, &config, config.objective.greenfield(), false);
+        let greenfield_tests = TestPolicy::defaults();
+        let greenfield = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &greenfield_tests,
+        );
         let searched = greenfield.solve(config.analysis.seed);
         let covered = (0..greenfield.condensation.members.len()).all(|scc| {
             searched
@@ -6246,15 +6601,16 @@ mod tests {
         );
         // the first pile keeps the real directory's own name — folders are
         // reality, so the original place never renames; only a new pile earns
-        // an extended `{dir}-{stem}` label.
+        // an extended `{dir}/{stem}` label, which the render boundary nests
+        // under the same directory instead of minting a dash-joined sibling.
         assert!(
             folders.iter().any(|name| name.as_str() == "openai"),
             "the original directory must keep its real name, got {folders:?}"
         );
         assert!(
-            folders.iter().any(|name| name.as_str() == "openai-dalle"),
-            "the second half must extend the real directory with its dominant \
-             stem, got {folders:?}"
+            folders.iter().any(|name| name.as_str() == "dalle"),
+            "the second half must nest its dominant stem under the base \
+             directory's place, got {folders:?}"
         );
     }
 
@@ -7076,11 +7432,13 @@ mod tests {
 
     /// Folder clusters of the identity partition, keyed by file container id.
     fn identity_clusters(snapshot: &Snapshot, file_containers: &[u32]) -> Vec<Option<ClusterId>> {
+        let tests = TestPolicy::defaults();
         let solver = PipelineSolver::new(
             snapshot,
             &AnalyzeConfig::default(),
             Coefficients::anchored(),
             true,
+            &tests,
         );
         file_containers
             .iter()
@@ -7896,9 +8254,14 @@ mod tests {
                 "the later pile gets the fresh cluster id"
             );
             let home = relieved.get(index).map(|file| file.home.domain.as_str());
-            assert_eq!(home, Some("hub-emit"));
+            assert_eq!(
+                home,
+                Some("hub"),
+                "split halves never rewrite member homes — the '/' label alone \
+                 nests the half under its base folder"
+            );
         }
-        assert_eq!(names, vec![SmolStr::new("hub"), SmolStr::new("hub-emit")]);
+        assert_eq!(names, vec![SmolStr::new("hub"), SmolStr::new("hub/emit")]);
         assert_eq!(synthetic, vec![false, false]);
     }
 
@@ -7927,14 +8290,18 @@ mod tests {
         );
 
         assert_eq!(partition.cluster_count(), 2);
-        let moved: Vec<usize> = relieved
-            .iter()
-            .enumerate()
-            .filter(|(_, file)| file.home.domain == "hub-1")
-            .map(|(index, _)| index)
+        let moved: Vec<usize> = (0..u32::try_from(file_count).unwrap_or(u32::MAX))
+            .filter(|scc| partition.cluster_of(*scc) != Some(ClusterId(0)))
+            .map(|scc| usize::try_from(scc).unwrap_or(usize::MAX))
             .collect();
         assert_eq!(moved, vec![20, 21], "only the overflow chunk moves");
-        assert_eq!(names.get(1), Some(&SmolStr::new("hub-1")));
+        assert!(
+            moved.iter().all(|&index| relieved
+                .get(index)
+                .is_some_and(|file| file.home.domain == "hub")),
+            "the numeric fallback half also keeps its base domain"
+        );
+        assert_eq!(names.get(1), Some(&SmolStr::new("hub/1")));
     }
 
     #[test]
@@ -7998,11 +8365,13 @@ mod tests {
             ],
         );
 
+        let tests = TestPolicy::defaults();
         let solver = PipelineSolver::new(
             &snapshot,
             &AnalyzeConfig::default(),
             Coefficients::anchored(),
             false,
+            &tests,
         );
         let parts = &solver.real_partition;
         let scc_of = |file_container: u32| -> u32 {
@@ -8083,11 +8452,13 @@ mod tests {
             ],
         );
 
+        let tests = TestPolicy::defaults();
         let solver = PipelineSolver::new(
             &snapshot,
             &AnalyzeConfig::default(),
             AnalyzeConfig::default().objective.greenfield(),
             false,
+            &tests,
         );
         let scc_of = |file_container: u32| -> u32 {
             let vertex = solver
@@ -8209,11 +8580,13 @@ mod tests {
             ],
         );
 
+        let tests = TestPolicy::defaults();
         let solver = PipelineSolver::new(
             &snapshot,
             &AnalyzeConfig::default(),
             AnalyzeConfig::default().objective.greenfield(),
             false,
+            &tests,
         );
         let outcome = solver.symbol_polish(&solver.real_partition.clone());
 
@@ -8316,11 +8689,12 @@ mod tests {
         );
     }
 
-    /// Builds a minimal [`FileInfo`] whose naming evidence is just its path;
-    /// laminar home keys never feed label formation, so they stay blank.
-    fn file_info(path: &str, sloc: u32) -> FileInfo {
+    /// Builds a minimal [`FileInfo`] owning `container`, whose naming evidence
+    /// is just its path; laminar home keys never feed label formation, so they
+    /// stay blank.
+    fn file_info(container: u32, path: &str, sloc: u32) -> FileInfo {
         FileInfo {
-            container: 0,
+            container,
             name: SmolStr::new(path),
             production_sloc: sloc,
             home: LaminarHome {
@@ -8333,22 +8707,22 @@ mod tests {
     }
 
     /// An all-digit shared token must never name a rebuilt place (FIX09 label
-    /// honesty): `helpers-2024` is indistinguishable from the numeric fallback
+    /// honesty): `helpers/2024` is indistinguishable from the numeric fallback
     /// and can never align under the contract tokenizer, which drops digit
     /// tokens. The stem path names the place instead.
     #[test]
     fn should_skip_a_digit_token_when_naming_a_rebuilt_place() {
         let condensation = singleton_condensation(2);
         let files = vec![
-            file_info("report_2024.py", 10),
-            file_info("audit_2024.py", 10),
+            file_info(0, "report_2024.py", 10),
+            file_info(0, "audit_2024.py", 10),
         ];
         let mut used = BTreeSet::new();
 
         let label = rebuild_label("helpers", &[0, 1], &condensation, &files, &mut used, 9);
 
         assert_eq!(
-            label, "helpers-audit-report",
+            label, "helpers/audit-report",
             "the only shared token is the digit run '2024'; the joined stems \
              must name the place instead"
         );
@@ -8360,9 +8734,9 @@ mod tests {
     fn should_group_only_sccs_sharing_a_basename_token() {
         let condensation = singleton_condensation(3);
         let files = vec![
-            file_info("alpha.py", 1),
-            file_info("alpha_beta.py", 1),
-            file_info("gamma.py", 1),
+            file_info(0, "alpha.py", 1),
+            file_info(0, "alpha_beta.py", 1),
+            file_info(0, "gamma.py", 1),
         ];
 
         let groups = token_groups(&[0, 1, 2], &condensation, &files);
@@ -8384,16 +8758,16 @@ mod tests {
         let graph = Csr::from_weighted_edges(3, &[(0_u32, 1_u32, 1.0_f32)]);
         let condensation = singleton_condensation(3);
         let base = Partition::from_assignment(vec![ClusterId(0), ClusterId(0), ClusterId(0)], 1);
-        let mut files = vec![
-            file_info("alpha.py", 1),
-            file_info("beta.py", 1),
-            file_info("gamma.py", 1),
+        let files = vec![
+            file_info(0, "alpha.py", 1),
+            file_info(0, "beta.py", 1),
+            file_info(0, "gamma.py", 1),
         ];
         let mut names = vec![SmolStr::new("helpers")];
         let mut synthetic = vec![false];
 
         let rebuilt = synthesize_roof_rebuild(
-            &mut files,
+            &files,
             &condensation,
             &graph,
             &base,
@@ -8458,21 +8832,29 @@ mod tests {
                 current_standing: CurrentStanding::Outscored,
             });
 
-        let carries_rebuild = greenfield
-            .candidates
-            .iter()
-            .filter_map(|candidate| find_named(&candidate.tree, "helpers-utils"))
-            .any(|place| {
-                let paths = descendant_files(place);
-                paths.iter().any(|path| path.ends_with("string_utils.py"))
-                    && paths.iter().any(|path| path.ends_with("date_utils.py"))
-                    && paths.len() == 2
-            });
+        let carries_rebuild = greenfield.candidates.iter().any(|candidate| {
+            // the rebuilt label path-extends its base folder, so the rendered
+            // tree nests `utils` under `helpers` rather than naming one node
+            // with the slash — match the pair structurally.
+            find_named(&candidate.tree, "helpers")
+                .and_then(|helpers| {
+                    helpers
+                        .children
+                        .as_ref()
+                        .and_then(|children| children.iter().find(|child| child.name == "utils"))
+                })
+                .is_some_and(|place| {
+                    let paths = descendant_files(place);
+                    paths.iter().any(|path| path.ends_with("string_utils.py"))
+                        && paths.iter().any(|path| path.ends_with("date_utils.py"))
+                        && paths.len() == 2
+                })
+        });
         assert!(
             carries_rebuild,
             "string_utils and date_utils share only the roof's misnomer; the \
-             synthesized helpers-utils place must reach the greenfield pool \
-             holding exactly those two files"
+             synthesized helpers/utils place must reach the greenfield pool \
+             nested under helpers, holding exactly those two files"
         );
     }
 
@@ -8503,5 +8885,349 @@ mod tests {
         for child in node.children.iter().flatten() {
             accumulate_files(child, out);
         }
+    }
+
+    /// Compiles a `[tests]` section into a policy, failing loudly on an
+    /// invalid fixture pattern — a broken test must surface, never hide.
+    #[allow(clippy::panic)] // loud failure is the point of this test helper
+    fn policy(tests: &TestsConfig) -> TestPolicy {
+        match TestPolicy::new(tests) {
+            Ok(compiled) => compiled,
+            Err(error) => panic!("test policy failed to compile: {error}"),
+        }
+    }
+
+    /// Returns the weight of the `from -> to` edge in a CSR, or `None` when no
+    /// such edge exists.
+    fn edge_weight(graph: &Csr, from: u32, to: u32) -> Option<f32> {
+        let slot = graph
+            .neighbors(from)
+            .iter()
+            .position(|&target| target == to)?;
+        graph.weights(from).get(slot).copied()
+    }
+
+    #[test]
+    fn should_mark_a_polarity_detected_spec_as_the_test_zone() {
+        // the spec holds one test-case symbol; its subject is production.
+        let nodes = vec![
+            node(0, "openai", 1, Polarity::Production),
+            node(1, "openai_spec", 2, Polarity::TestCase),
+        ];
+        let files = [
+            file_info(1, "src/openai.ts", 1),
+            file_info(2, "src/openai.spec.ts", 0),
+        ];
+
+        assert_eq!(
+            test_zone_marks(&TestPolicy::defaults(), &files, &nodes),
+            vec![false, true]
+        );
+    }
+
+    #[test]
+    fn should_not_mark_a_file_holding_any_production_symbol() {
+        let nodes = vec![
+            node(0, "helper", 1, Polarity::TestCase),
+            node(1, "real", 1, Polarity::Production),
+        ];
+        let files = [file_info(1, "src/mixed.ts", 1)];
+
+        assert_eq!(
+            test_zone_marks(&TestPolicy::defaults(), &files, &nodes),
+            vec![false]
+        );
+    }
+
+    #[test]
+    fn should_mark_a_pattern_matched_file_even_when_production_polarity() {
+        let tests = TestsConfig {
+            patterns: vec!["*.custom-test.*".to_owned()],
+            ..TestsConfig::default()
+        };
+        let nodes = vec![node(0, "weird", 1, Polarity::Production)];
+        let files = [
+            file_info(1, "src/plain.ts", 1),
+            file_info(2, "src/weird.custom-test.ts", 1),
+        ];
+
+        assert_eq!(
+            test_zone_marks(&policy(&tests), &files, &nodes),
+            vec![false, true]
+        );
+    }
+
+    #[test]
+    fn should_leave_the_zone_inert_when_builtins_are_off_and_no_patterns_given() {
+        let nodes = vec![node(0, "spec", 1, Polarity::TestCase)];
+        let files = [file_info(1, "src/x.spec.ts", 0)];
+
+        assert_eq!(
+            test_zone_marks(&TestPolicy::disabled(), &files, &nodes),
+            vec![false]
+        );
+    }
+
+    #[test]
+    fn should_zero_price_every_edge_touching_the_test_zone() {
+        // spec imports both production files; the two production files bond
+        // with each other. Only edges touching vertex 1 (the spec) may cut.
+        let nodes = vec![
+            node(0, "alpha", 1, Polarity::Production),
+            node(1, "beta", 2, Polarity::Production),
+            node(2, "alpha_spec", 3, Polarity::TestCase),
+        ];
+        let edges = vec![edge(0, 1), edge(2, 0)];
+        let index_of = BTreeMap::from([(1_u32, 0_u32), (2, 1), (3, 2)]);
+        let weights = AnalyzeConfig::default().weights.kind_weights();
+        let test_zone = vec![false, false, true];
+
+        let graph = build_file_graph(&edges, &nodes, &index_of, 3, &weights, &test_zone);
+
+        // FIX04 doctrine: cut edges stay in the graph at price zero — the CSR
+        // shape must not change, only the binding.
+        #[allow(clippy::cast_possible_truncation)] // mirrors the production narrowing
+        let call = weights.call as f32;
+        assert_eq!(graph.edge_count(), 2);
+        assert_eq!(edge_weight(&graph, 0, 1), Some(call));
+        assert_eq!(edge_weight(&graph, 1, 0), None); // never priced in reverse
+        assert_eq!(edge_weight(&graph, 2, 0), Some(0.0)); // spec -> subject: cut
+    }
+
+    #[test]
+    fn should_zero_price_test_to_test_edges_in_both_directions() {
+        let nodes = vec![
+            node(0, "one", 1, Polarity::TestCase),
+            node(1, "two", 2, Polarity::TestCase),
+        ];
+        let edges = vec![edge(0, 1), edge(1, 0)];
+        let index_of = BTreeMap::from([(1_u32, 0_u32), (2, 1_u32)]);
+        let weights = AnalyzeConfig::default().weights.kind_weights();
+        let test_zone = vec![true, true];
+
+        let graph = build_file_graph(&edges, &nodes, &index_of, 2, &weights, &test_zone);
+
+        assert_eq!(graph.edge_count(), 2);
+        assert_eq!(edge_weight(&graph, 0, 1), Some(0.0));
+        assert_eq!(edge_weight(&graph, 1, 0), Some(0.0));
+    }
+
+    #[test]
+    fn should_give_a_spec_no_priced_pull_toward_its_subject() {
+        // The exact openai.spec.ts shape: a mirrored spec tree importing its
+        // production twin. Condensation stays structural (Tarjan folds real
+        // cycles whatever they cost), but every stage that moves files —
+        // relief piles, polish pulls, heavy-edge matching — reads prices and
+        // skips zero, so the cut must leave no priced edge anywhere between
+        // the pair's components.
+        let nodes = vec![
+            node(0, "openai", 1, Polarity::Production),
+            node(1, "openai_spec", 2, Polarity::TestCase),
+        ];
+        let edges = vec![edge(1, 0)];
+        let containers = vec![
+            container(0, "workspace", ScopeLevel::PackageGroup, None),
+            container(1, "src/openai.ts", ScopeLevel::File, Some(0)),
+            container(2, "spec/openai.spec.ts", ScopeLevel::File, Some(0)),
+        ];
+        let snap = snapshot(nodes, edges, containers);
+
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(
+            &snap,
+            &AnalyzeConfig::default(),
+            Coefficients::anchored(),
+            true,
+            &tests,
+        );
+
+        let mut priced: Vec<(u32, u32)> = Vec::new();
+        for vertex in 0..solver.condensation.dag.vertex_count() {
+            let from = u32::try_from(vertex).unwrap_or(u32::MAX);
+            let weights = solver.condensation.dag.weights(from);
+            for (slot, &to) in solver.condensation.dag.neighbors(from).iter().enumerate() {
+                if weights.get(slot).copied().unwrap_or(0.0) > 0.0 {
+                    priced.push((from, to));
+                }
+            }
+        }
+
+        assert!(
+            priced.is_empty(),
+            "the tie-cut left a priced edge between spec and subject: {priced:?}"
+        );
+    }
+
+    #[test]
+    fn should_shadow_follow_a_spec_to_its_subjects_cluster() {
+        // The spec lives in its own real directory, so the real-dir partition
+        // starts it apart from its twin; the tie-cut prices their bond to zero
+        // so polish never pulls them together. The shadow pass is what joins
+        // them.
+        let nodes = vec![
+            node(0, "openai", 3, Polarity::Production),
+            node(1, "openai_spec", 4, Polarity::TestCase),
+        ];
+        let edges = vec![edge(1, 0)];
+        let containers = vec![
+            container(0, "workspace", ScopeLevel::PackageGroup, None),
+            container(1, "src", ScopeLevel::Folder, Some(0)),
+            container(2, "spec", ScopeLevel::Folder, Some(0)),
+            container(3, "src/openai.ts", ScopeLevel::File, Some(1)),
+            container(4, "spec/openai.spec.ts", ScopeLevel::File, Some(2)),
+        ];
+        let snap = snapshot(nodes, edges, containers);
+
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(
+            &snap,
+            &AnalyzeConfig::default(),
+            Coefficients::anchored(),
+            true,
+            &tests,
+        );
+
+        let scc_of = |file_container: u32| -> u32 {
+            let vertex = solver
+                .index_of
+                .get(&file_container)
+                .copied()
+                .unwrap_or(u32::MAX);
+            solver
+                .condensation
+                .membership
+                .get(vertex as usize)
+                .map_or(u32::MAX, |scc| scc.0)
+        };
+
+        let mut parts = solver.real_partition.clone();
+        let unit = scc_of(4); // the spec
+        let subject = scc_of(3); // the twin
+        assert_ne!(
+            parts.cluster_of(unit),
+            parts.cluster_of(subject),
+            "setup: real dirs must start the pair apart"
+        );
+
+        solver.shadow_tests(&mut parts);
+
+        assert_eq!(parts.cluster_of(unit), parts.cluster_of(subject));
+    }
+
+    #[test]
+    fn should_keep_an_ambiguously_twinned_spec_where_it_is() {
+        // Two production files reduce to the same stem in the same package —
+        // no unique twin, so the shadow pass must leave the spec alone (ADR-0002
+        // rule 1: unchanged placements are never listed).
+        let nodes = vec![
+            node(0, "one", 4, Polarity::Production),
+            node(1, "two", 5, Polarity::Production),
+            node(2, "spec", 3, Polarity::TestCase),
+        ];
+        let edges = vec![edge(2, 0)];
+        let containers = vec![
+            container(0, "workspace", ScopeLevel::PackageGroup, None),
+            container(1, "spec", ScopeLevel::Folder, Some(0)),
+            container(2, "alt", ScopeLevel::Folder, Some(0)),
+            container(3, "spec/openai.spec.ts", ScopeLevel::File, Some(1)),
+            container(4, "alt/openai.ts", ScopeLevel::File, Some(2)),
+            container(5, "alt/openai.tsx", ScopeLevel::File, Some(2)),
+        ];
+        let snap = snapshot(nodes, edges, containers);
+
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(
+            &snap,
+            &AnalyzeConfig::default(),
+            Coefficients::anchored(),
+            true,
+            &tests,
+        );
+
+        let scc_of = |file_container: u32| -> u32 {
+            let vertex = solver
+                .index_of
+                .get(&file_container)
+                .copied()
+                .unwrap_or(u32::MAX);
+            solver
+                .condensation
+                .membership
+                .get(vertex as usize)
+                .map_or(u32::MAX, |scc| scc.0)
+        };
+
+        let mut parts = solver.real_partition.clone();
+        let unit = scc_of(3);
+        let before = parts.cluster_of(unit);
+        assert!(before.is_some(), "setup: the spec starts placed");
+        assert_ne!(
+            before,
+            parts.cluster_of(scc_of(4)),
+            "setup: the spec starts apart from its would-be twins"
+        );
+
+        solver.shadow_tests(&mut parts);
+
+        assert_eq!(parts.cluster_of(unit), before);
+    }
+
+    #[test]
+    fn should_veto_a_shadow_move_that_would_overflow_the_folder_cap() {
+        // A folder cap of one leaves no room next to the twin; the cap veto
+        // binds exactly like it does for polish moves.
+        let config = AnalyzeConfig {
+            capacity: crate::CapacityConfig {
+                folder: 1,
+                ..crate::CapacityConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+        let nodes = vec![
+            node(0, "openai", 3, Polarity::Production),
+            node(1, "openai_spec", 4, Polarity::TestCase),
+        ];
+        let edges = vec![edge(1, 0)];
+        let containers = vec![
+            container(0, "workspace", ScopeLevel::PackageGroup, None),
+            container(1, "src", ScopeLevel::Folder, Some(0)),
+            container(2, "spec", ScopeLevel::Folder, Some(0)),
+            container(3, "src/openai.ts", ScopeLevel::File, Some(1)),
+            container(4, "spec/openai.spec.ts", ScopeLevel::File, Some(2)),
+        ];
+        let snap = snapshot(nodes, edges, containers);
+
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+
+        let scc_of = |file_container: u32| -> u32 {
+            let vertex = solver
+                .index_of
+                .get(&file_container)
+                .copied()
+                .unwrap_or(u32::MAX);
+            solver
+                .condensation
+                .membership
+                .get(vertex as usize)
+                .map_or(u32::MAX, |scc| scc.0)
+        };
+
+        let mut parts = solver.real_partition.clone();
+        let unit = scc_of(4);
+        let subject = scc_of(3);
+        assert_ne!(
+            parts.cluster_of(unit),
+            parts.cluster_of(subject),
+            "setup: real dirs must start the pair apart"
+        );
+
+        solver.shadow_tests(&mut parts);
+
+        assert_ne!(
+            parts.cluster_of(unit),
+            parts.cluster_of(subject),
+            "the cap veto binds even against a unique twin"
+        );
     }
 }

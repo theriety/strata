@@ -5,10 +5,11 @@
 //! a line/column-derived reason — files are never skipped silently.
 //!
 //! The extractor walks only the module's top level: every `def` / `async def`
-//! function and every `class` becomes a [`Declaration`], and module-level
-//! `import` / `from import` statements become [`Import`]s. References, calls,
-//! annotation types, and base classes are collected from each declaration's
-//! body so the binder can resolve them through the scope chain.
+//! function, every `class`, and every module-level constant binding becomes a
+//! [`Declaration`], and module-level `import` / `from import` statements become
+//! [`Import`]s. References, calls, annotation types, and base classes are
+//! collected from each declaration's body so the binder can resolve them
+//! through the scope chain.
 
 use rayon::prelude::*;
 use rustpython_parser::Parse;
@@ -34,12 +35,14 @@ pub enum DynamicRef {
     ImportModule(SmolStr),
 }
 
-/// A top-level declaration (function or class) with its production SLOC.
+/// A top-level declaration (function, class, or constant) with its production
+/// SLOC.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Declaration {
-    /// Source-declared name of the function or class.
+    /// Source-declared name of the function, class, or constant.
     pub name: SmolStr,
-    /// Whether the declaration is a class (`true`) or a function (`false`).
+    /// Whether the declaration is a class (`true`) or a value symbol — a
+    /// function or a module-level constant (`false`).
     pub is_class: bool,
     /// Production SLOC attributed to this declaration (docstrings excluded).
     pub sloc: u32,
@@ -83,7 +86,7 @@ pub struct Import {
 pub struct ParsedModule {
     /// Repository-relative path of the source file.
     pub path: SmolStr,
-    /// Top-level functions and classes in source order.
+    /// Top-level functions, classes, and constant bindings in source order.
     pub declarations: Vec<Declaration>,
     /// Module-level import statements.
     pub imports: Vec<Import>,
@@ -144,6 +147,22 @@ fn extract(path: &SmolStr, suite: &[Stmt], source: &str) -> ParsedModule {
             Stmt::ImportFrom(from) => imports.push(from_import(from)),
             Stmt::Assign(assign) => {
                 collect_dunder_all(&assign.targets, &assign.value, &mut dunder_all);
+                declarations.extend(constant_declarations(
+                    &assign.targets,
+                    Some(&assign.value),
+                    None,
+                    statement,
+                    source,
+                ));
+            }
+            Stmt::AnnAssign(annotation) => {
+                declarations.extend(constant_declarations(
+                    std::slice::from_ref(annotation.target.as_ref()),
+                    annotation.value.as_deref(),
+                    Some(&annotation.annotation),
+                    statement,
+                    source,
+                ));
             }
             _ => {}
         }
@@ -212,6 +231,91 @@ fn class_declaration(class: &StmtClassDef, source: &str) -> Declaration {
         called: collector.called,
         dynamic: collector.dynamic,
     }
+}
+
+/// Mints one constant [`Declaration`] per simple name a module-level assignment
+/// binds (`x = v`, `a, b = v`, `x: T = v`).
+///
+/// A constant's references, calls, and dynamic constructs come from its
+/// initializing value exactly as a function body's would, so `_cache =
+/// build_cache(limit)` prices the same dependency a call inside a function
+/// would. `__all__` is exempt — it feeds the star-import surface table rather
+/// than the value graph — and a bare `x: T` without a value imports to nothing,
+/// so neither mints a symbol.
+fn constant_declarations(
+    targets: &[Expr],
+    value: Option<&Expr>,
+    annotation: Option<&Expr>,
+    statement: &Stmt,
+    source: &str,
+) -> Vec<Declaration> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for target in targets {
+        constant_target_names(target, &mut names);
+    }
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let mut collector = ReferenceCollector::default();
+    collector.collect_expression(value);
+    if let Some(annotation) = annotation {
+        collector.collect_annotation(annotation);
+    }
+    names
+        .into_iter()
+        .map(|name| Declaration {
+            name,
+            is_class: false,
+            sloc: statement_sloc(statement, source),
+            bases: Vec::new(),
+            annotations: collector.annotations.clone(),
+            referenced: collector.referenced.clone(),
+            called: collector.called.clone(),
+            dynamic: collector.dynamic.clone(),
+        })
+        .collect()
+}
+
+/// Collects the importable names bound by an assignment target: the identifier
+/// itself for `x`, and each element's names for tuple or list unpacking.
+/// Attribute and subscript targets bind no module-level name.
+fn constant_target_names(target: &Expr, out: &mut Vec<SmolStr>) {
+    match target {
+        Expr::Name(name) => {
+            if is_extracted_constant(name.id.as_str()) {
+                out.push(SmolStr::new(name.id.as_str()));
+            }
+        }
+        Expr::Tuple(tuple) => {
+            for element in &tuple.elts {
+                constant_target_names(element, out);
+            }
+        }
+        Expr::List(list) => {
+            for element in &list.elts {
+                constant_target_names(element, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Returns `true` unless the bound name is excluded from symbol extraction.
+///
+/// `__all__` is the one exclusion: it drives the star-import public surface,
+/// where a phantom `__all__` symbol would double-represent it.
+fn is_extracted_constant(name: &str) -> bool {
+    name != "__all__"
+}
+
+/// Computes production SLOC for a single top-level statement.
+fn statement_sloc(statement: &Stmt, source: &str) -> u32 {
+    let lo = usize::from(statement.start());
+    let hi = usize::from(statement.end());
+    source.get(lo..hi).map_or(0, production_sloc)
 }
 
 /// Builds an [`Import`] from a plain `import a, b.c as d` statement.
@@ -728,6 +832,85 @@ mod tests {
             module.dunder_all,
             vec![SmolStr::new("a"), SmolStr::new("b")]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn should_extract_a_module_level_constant_as_a_declaration() -> Result<(), AdapterError> {
+        let module = parse_source("pkg/mod.py", "_ledger = []\n")?;
+
+        let names: Vec<&str> = module
+            .declarations
+            .iter()
+            .map(|declaration| declaration.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["_ledger"]);
+        let first = first_declaration(&module)?;
+        assert!(!first.is_class);
+        assert!(first.sloc >= 1);
+        Ok(())
+    }
+
+    #[test]
+    fn should_collect_the_initializer_calls_of_a_constant() -> Result<(), AdapterError> {
+        let module = parse_source(
+            "pkg/mod.py",
+            "def build(limit):\n    return limit\n\n\n_cache = build(8)\n",
+        )?;
+
+        let cache = module
+            .declarations
+            .iter()
+            .find(|declaration| declaration.name == "_cache")
+            .ok_or_else(|| AdapterError::Bind {
+                path: module.path.clone(),
+                reason: "no _cache declaration".to_string(),
+            })?;
+        assert_eq!(cache.called, vec![SmolStr::new("build")]);
+        Ok(())
+    }
+
+    #[test]
+    fn should_collect_the_annotation_of_an_annotated_constant() -> Result<(), AdapterError> {
+        let module = parse_source("pkg/mod.py", "limit: MaxSize = MAX\n")?;
+
+        let first = first_declaration(&module)?;
+        assert_eq!(first.name, SmolStr::new("limit"));
+        assert_eq!(first.annotations, vec![SmolStr::new("MaxSize")]);
+        assert_eq!(first.referenced, vec![SmolStr::new("MAX")]);
+        Ok(())
+    }
+
+    #[test]
+    fn should_mint_one_declaration_per_tuple_unpack_target() -> Result<(), AdapterError> {
+        let module = parse_source("pkg/mod.py", "lo, hi = 0, 100\n")?;
+
+        let names: Vec<&str> = module
+            .declarations
+            .iter()
+            .map(|declaration| declaration.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["lo", "hi"]);
+        Ok(())
+    }
+
+    #[test]
+    fn should_not_mint_a_symbol_for_dunder_all() -> Result<(), AdapterError> {
+        let module = parse_source("pkg/__init__.py", "__all__ = [\"a\", \"b\"]\n")?;
+
+        assert!(module.declarations.is_empty());
+        assert_eq!(
+            module.dunder_all,
+            vec![SmolStr::new("a"), SmolStr::new("b")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn should_skip_augmented_assignment_and_bare_annotations() -> Result<(), AdapterError> {
+        let module = parse_source("pkg/mod.py", "total += 1\ncount: int\n")?;
+
+        assert!(module.declarations.is_empty());
         Ok(())
     }
 

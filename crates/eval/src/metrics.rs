@@ -86,8 +86,11 @@ impl CharKind {
 
 /// Collects the names of every file-level descendant, transitively.
 ///
-/// This is CONTRACT.md's `members(v)`: file names are full repo-relative paths,
-/// so they double as stable identities across trees.
+/// This is the census form: universes and placement initialization need every
+/// file in a subtree regardless of where it nests. Structural predicates never
+/// count with this — they use [`direct_members`], because a folder's own
+/// children are its membership and nested descendants belong to their own
+/// places.
 #[must_use]
 pub fn members(node: &ContainerNode) -> Vec<String> {
     let mut files = Vec::new();
@@ -103,6 +106,23 @@ fn collect_members(node: &ContainerNode, files: &mut Vec<String>) {
     for child in node.children.iter().flatten() {
         collect_members(child, files);
     }
+}
+
+/// Collects the names of a container's DIRECT file children only.
+///
+/// This is CONTRACT.md's counting rule: when tallying what a folder holds,
+/// only its first level counts — nested sub-containers contribute nothing
+/// because their files already belong to their own place. Splitting an
+/// over-cap folder into halves that nest under it therefore reads as two
+/// within-band places, not one still-over-cap umbrella.
+#[must_use]
+pub fn direct_members(node: &ContainerNode) -> Vec<String> {
+    node.children
+        .iter()
+        .flatten()
+        .filter(|child| child.level == Level::File)
+        .map(|child| child.name.clone())
+        .collect()
 }
 
 /// Whether a node participates in structural assertions: folder/domain only.
@@ -170,13 +190,13 @@ fn walk_inner<'a>(
 #[must_use]
 pub fn structural_placement(root: &ContainerNode) -> BTreeMap<String, String> {
     // Total over the census: every file starts loose (empty path) and gains
-    // its container chain when a visited folder/domain claims it.
+    // its container chain when its immediate folder/domain claims it.
     let mut placements: BTreeMap<String, String> = members(root)
         .into_iter()
         .map(|file| (file, String::new()))
         .collect();
     let mut visit = |node: &ContainerNode, path: &str| {
-        for member in members(node) {
+        for member in direct_members(node) {
             placements.insert(member, path.to_owned());
         }
     };
@@ -201,7 +221,9 @@ pub fn moved_files(
 
 /// Builds the unordered co-membership pair set over `universe` induced by the
 /// folder/domain nodes of `root`. Envelopes are excluded, mirroring
-/// `separate`; pairs are normalized `(smaller, larger)` tuples.
+/// `separate`; pairs form among a container's DIRECT file children only, so an
+/// ancestor never welds its descendants' files into one group; pairs are
+/// normalized `(smaller, larger)` tuples.
 #[must_use]
 pub fn co_membership_pairs(
     root: &ContainerNode,
@@ -209,7 +231,7 @@ pub fn co_membership_pairs(
 ) -> BTreeSet<(String, String)> {
     let mut pairs = BTreeSet::new();
     let mut visit = |node: &ContainerNode, _path: &str| {
-        let contained: Vec<String> = members(node)
+        let contained: Vec<String> = direct_members(node)
             .into_iter()
             .filter(|file| universe.contains(file))
             .collect();
@@ -392,6 +414,38 @@ mod tests {
                 "billing/invoice.py".to_owned(),
                 "billing/pricing.py".to_owned()
             ]
+        );
+    }
+
+    #[test]
+    fn direct_members_counts_only_the_first_level() {
+        let tree = container(
+            Level::PackageGroup,
+            "root",
+            vec![container(
+                Level::Domain,
+                "hub",
+                vec![
+                    file("hub/emit_00.py"),
+                    container(
+                        Level::Folder,
+                        "ingest",
+                        vec![file("hub/ingest/ingest_00.py")],
+                    ),
+                ],
+            )],
+        );
+        // The nested ingest half contributes nothing to hub's tally: a
+        // folder's membership is its own children, never its descendants'.
+        let members = tree
+            .children
+            .as_deref()
+            .and_then(<[_]>::first)
+            .map(direct_members);
+        assert_eq!(
+            members,
+            Some(vec!["hub/emit_00.py".to_owned()]),
+            "only hub's own file counts; the nested folder is invisible"
         );
     }
 

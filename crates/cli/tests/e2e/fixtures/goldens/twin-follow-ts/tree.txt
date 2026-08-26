@@ -1,0 +1,10 @@
+twin-follow-ts [packageGroup]
+  twin-follow-ts [package]
+    api [domain]
+      api [folder]
+        src/api/openai.ts [file] 3 sloc
+          - complete (file)
+    specs [domain]
+      specs [folder]
+        src/specs/openai.spec.ts [file] 0 sloc
+          - shouldComplete (file)

@@ -947,6 +947,21 @@ mod tests {
         }
     }
 
+    /// Builds a leaf declaration that reads the given names without calling
+    /// them (the value-import shape of a constant consumer).
+    fn reader(name: &str, reads: &[&str]) -> Declaration {
+        Declaration {
+            name: SmolStr::new(name),
+            is_class: false,
+            sloc: 1,
+            bases: Vec::new(),
+            annotations: Vec::new(),
+            referenced: reads.iter().copied().map(SmolStr::new).collect(),
+            called: Vec::new(),
+            dynamic: Vec::new(),
+        }
+    }
+
     #[test]
     fn should_emit_a_hard_call_edge_for_an_invoked_absolute_import() {
         let mut consumer = module_at("pkg/app.py");
@@ -980,6 +995,65 @@ mod tests {
                 .all(|edge| edge.kind != EdgeKind::ValueImport),
             "an invoked import must not also be a value-import"
         );
+    }
+
+    #[test]
+    fn should_bind_a_private_constant_import_to_its_reader() {
+        let mut provider = module_at("pkg/charge.py");
+        // A `_`-prefixed constant is private to the surface but still a
+        // module-level binding an in-package sibling may import.
+        let ledger = leaf("_ledger");
+        provider.declarations.push(ledger);
+        let mut consumer = module_at("pkg/refund.py");
+        consumer.imports.push(Import {
+            module: SmolStr::new("charge"),
+            level: 1,
+            names: vec![SmolStr::new("_ledger")],
+            targets: vec![SmolStr::new("_ledger")],
+            star: false,
+        });
+        consumer.declarations.push(reader("refund", &["_ledger"]));
+
+        let fragment = bind(&[consumer, provider], Path::new("repo")).expect("bind succeeds");
+
+        let value_imports: Vec<&Edge> = fragment
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::ValueImport)
+            .collect();
+        assert_eq!(value_imports.len(), 1, "the constant import prices an edge");
+        assert_eq!(
+            value_imports
+                .first()
+                .map(|edge| (edge.hardness, edge.confidence)),
+            Some((Hardness::Hard, CONFIDENCE_STATIC))
+        );
+    }
+
+    #[test]
+    fn should_price_a_constant_initializer_call_to_an_imported_builder() {
+        let mut holder = module_at("pkg/config.py");
+        holder.imports.push(Import {
+            module: SmolStr::new("pkg.build"),
+            level: 0,
+            names: vec![SmolStr::new("build")],
+            targets: vec![SmolStr::new("build")],
+            star: false,
+        });
+        let mut cache = leaf("_cache");
+        cache.called = vec![SmolStr::new("build")];
+        holder.declarations.push(cache);
+        let mut builder = module_at("pkg/build.py");
+        builder.declarations.push(leaf("build"));
+
+        let fragment = bind(&[holder, builder], Path::new("repo")).expect("bind succeeds");
+
+        let calls: Vec<&Edge> = fragment
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Call)
+            .collect();
+        assert_eq!(calls.len(), 1, "the initializer's call prices an edge");
     }
 
     #[test]

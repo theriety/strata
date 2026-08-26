@@ -62,7 +62,7 @@ max_files = 20
 because = "no best-state folder may itself breach the cap the proposal just relieved"
 
 [[reference.container]]
-path = "hub-ingest"
+path = "hub/ingest"
 files = [
   "hub/ingest_00.py", "hub/ingest_01.py", "hub/ingest_02.py", "hub/ingest_03.py",
   "hub/ingest_04.py", "hub/ingest_05.py", "hub/ingest_06.py", "hub/ingest_07.py",
@@ -71,8 +71,8 @@ files = [
 
 [[reference.container]]
 # the first connectivity half keeps the real directory's own name (`hub`,
-# folders are reality); only later halves extend it, so the ingest half lands
-# in `hub-ingest` below.
+# folders are reality); only later halves path-extend it, so the ingest half
+# nests as `hub/ingest` below.
 path = "hub"
 files = [
   "hub/emit_00.py", "hub/emit_01.py", "hub/emit_02.py", "hub/emit_03.py",

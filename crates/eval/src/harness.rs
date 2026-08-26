@@ -707,7 +707,13 @@ fn evaluate_preserve_dir(
 }
 
 /// Whether some folder/domain descendant named exactly `path` contains every
-/// file in `expected`.
+/// file in `expected` anywhere in its subtree.
+///
+/// Unlike the counting predicates this is deliberately SUBTREE-scoped:
+/// `preserve_dir` pins tearing, and tearing means expected files LEAVING the
+/// directory's reach — a directory that keeps its files across nested
+/// sub-places inside itself has not been torn, whatever the first-level split
+/// beneath it looks like.
 fn surviving_container(package_node: &ContainerNode, path: &str, expected: &[String]) -> bool {
     let expected_set: BTreeSet<&String> = expected.iter().collect();
     let mut found = false;
@@ -727,7 +733,9 @@ fn surviving_container(package_node: &ContainerNode, path: &str, expected: &[Str
 }
 
 /// `keep_together` / `separate`: co-location required, or co-location banned,
-/// over folder/domain containers only.
+/// over folder/domain containers only. Membership is first-level: a container
+/// holds exactly its direct file children, so nesting one place under another
+/// never reads as the two places merging.
 fn evaluate_path_set(
     assertion: &PathSetAssertion,
     face: FaceMode,
@@ -751,7 +759,7 @@ fn evaluate_path_set(
             if !metrics::is_scoped_container(node) {
                 return;
             }
-            let member_list = metrics::members(node);
+            let member_list = metrics::direct_members(node);
             let members: BTreeSet<&String> = member_list.iter().collect();
             let held: Vec<String> = wanted
                 .intersection(&members)
@@ -798,8 +806,10 @@ fn evaluate_path_set(
     }
 }
 
-/// `size_band`: every selected container's transitive member count lies within
-/// the inclusive band; ancestors bind, so nesting cannot dodge a split.
+/// `size_band`: every selected container's first-level member count lies
+/// within the inclusive band. Only a folder's own children are its members —
+/// nested sub-places contribute nothing — so splitting an over-cap folder into
+/// halves that nest under it reads as two within-band places.
 fn evaluate_size_band(band: &SizeBand, face: FaceMode, inputs: &EvalInputs<'_>) -> Verdict {
     let selector = match (&band.scope, &band.container) {
         (Some(BandScope::AnyContainer), _) => "any_container".to_owned(),
@@ -825,7 +835,7 @@ fn evaluate_size_band(band: &SizeBand, face: FaceMode, inputs: &EvalInputs<'_>) 
             if !selected {
                 return;
             }
-            let count = metrics::members(node).len();
+            let count = metrics::direct_members(node).len();
             let over_max = usize::try_from(band.max_files).is_ok_and(|max| count > max);
             let under_min = band
                 .min_files
@@ -858,7 +868,7 @@ fn evaluate_size_band(band: &SizeBand, face: FaceMode, inputs: &EvalInputs<'_>) 
                 label,
                 passed: false,
                 detail: format!(
-                    "over-capacity: container {name:?} holds {count} members against {bound} (transitive members bind ancestors too)"
+                    "over-capacity: container {name:?} holds {count} members against {bound} (first-level members only)"
                 ),
             }
         }
@@ -954,7 +964,9 @@ fn evaluate_no_synthetic_bucket(
 }
 
 /// `name_alignment`: every folder/domain container with at least `min_members`
-/// members keeps at least `min_ratio` of them sharing a naming token.
+/// first-level members keeps at least `min_ratio` of them sharing a naming
+/// token. A folder is judged by its own children; descendants belong to their
+/// own places and never dilute an ancestor's alignment.
 fn evaluate_name_alignment(
     alignment: &NameAlignment,
     face: FaceMode,
@@ -979,7 +991,7 @@ fn evaluate_name_alignment(
             if !metrics::is_scoped_container(node) {
                 return;
             }
-            let members = metrics::members(node);
+            let members = metrics::direct_members(node);
             if members.len() < min_members || members.is_empty() {
                 return;
             }

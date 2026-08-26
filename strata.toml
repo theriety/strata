@@ -25,11 +25,11 @@ jobs = 0
 # Production SLOC per file (non-blank, non-comment).
 file = 250
 # File nodes per folder.
-folder = 15
+folder = 20
 # Folders per domain.
-domain = 12
+domain = 16
 # Domains per package.
-package = 10
+package = 15
 # Packages per package group.
 package-group = 12
 
@@ -72,3 +72,12 @@ min-distance = 0.05
 [tests]
 # File cap (in production SLOC) for test-support files; test-case files exempt.
 helper-cap = 250
+# Extra glob patterns marking test files beyond the built-in detection.
+# A pattern containing '/' matches against the repo-relative path; a bare
+# pattern matches against the basename. Invalid or empty patterns are
+# rejected with a `tests.patterns[i]` error.
+# patterns = ["*.spec.*", "apps/web/__tests__/**"]
+# Keep the built-in per-language detection (TS `.spec.` / `.test.` / `__tests__`,
+# Rust `tests/` + `#[cfg(test)]`, Python mirrors). Disabling it makes only
+# `patterns` decide; with an empty list nothing is a test file.
+builtins = true

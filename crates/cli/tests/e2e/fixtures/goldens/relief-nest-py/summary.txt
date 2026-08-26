@@ -1,12 +1,12 @@
 ================================================================================
- dataset   : nested-ts
- census    : 12 symbols · 13 edges · 6 files (typescript)
+ dataset   : relief-nest-py
+ census    : 24 symbols · 22 edges · 24 files (python)
 --------------------------------------------------------------------------------
  reading rules
 --------------------------------------------------------------------------------
- scores    : four decimals, lower is better            0.2553 → 0.2553
+ scores    : four decimals, lower is better            1.4728 → 1.2250
  gain      : improvement over that mode's own starting point, measured in
-             the same units as the score              +0.0000
+             the same units as the score              +0.2478
  modes     : anchored keeps today's good placements as fixed points while
              improving the rest; greenfield ignores current paths entirely
              and rebuilds from imports alone
@@ -38,57 +38,97 @@
 ================================================================================
  candidate count : 2  (anchored mode returned 1 · greenfield mode returned 1)
 
- candidate 1   anchored/1     score  0.2553   gain +0.0000   best score
- candidate 2   greenfield/1   score  0.3299   gain +0.1254   different shape, own baseline
+ candidate 1   anchored/1     score  1.2250   gain +0.2478   best score
+ candidate 2   greenfield/1   score  0.8250   gain +0.8478   same shape, own baseline
 
  comparability: these two gains have different starting points — anchored baselines the current
-                 tree at 0.2553; greenfield re-prices paths and drops anchor credit, baselining the
-                 same tree at 0.4553. Each gain is measured against its own mode's baseline — never
+                 tree at 1.4728; greenfield re-prices paths and drops anchor credit, baselining the
+                 same tree at 1.6728. Each gain is measured against its own mode's baseline — never
                  compare across modes.
 
  note  fewer than the requested candidates survived; the solution space converged.
 
+ note  both modes record today's layout as infeasible — it breaks 1 capacity finding (§4), so
+       keeping everything as-is is not a result this run offers. Candidate 1 clears every one of
+       them.
+
 ================================================================================
  §2  What would change — candidate 1 (anchored)
 ================================================================================
-no change suggested — candidate 1 matches today's layout, file for file.
+ greenfield's plan matches this one change for change. Every suggestion relocates whole files (12
+ in all). Every suggestion relocates whole files (12 in all).
+
+ --------------------------------------------------------------------------------
+ 1 · Move `ingest_00.py` into `relief-nest-py/hub/ingest`
+--------------------------------------------------------------------------------
+ grain : whole files
+
+ leaf           | before place         | after place
+ `ingest_00.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `ingest_01.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `ingest_02.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `ingest_03.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `ingest_04.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `ingest_05.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `ingest_06.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `ingest_07.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `ingest_08.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `ingest_09.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `ingest_10.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `ingest_11.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+
+ caption  WHY relieves `relief-nest-py/hub`, which holds 24 against a cap of 20.
+
+ The other 12 files are absent because nothing about them changes.
 
 ================================================================================
  §3  Blast radius — changed containers only
 ================================================================================
-nothing relocates — every container keeps its files.
+ 2 containers change as 12 files relocate; the 2 largest:
+
+ `relief-nest-py/hub`         -12f
+ `relief-nest-py/hub/ingest`  +12f
+
+ the tally balances: every file that leaves a container arrives in one, so the changes sum to zero.
 
 ================================================================================
  §4  Findings this run raised
 ================================================================================
  cycles (0) — cuts that would break them, priced by weight:
 
- capacity (0) — containers and files over their caps today:
 
+ capacity (1) — containers and files over their caps today:
+
+ folder `hub` holds 24 against a cap of 20
 
 ================================================================================
  §5  Score delta — current → candidate 1
 ================================================================================
  term               current       proposal    delta
- cut                 0.3363         0.3363        +0.0000
- imbalance           0.1190         0.1190        +0.0000
- naming             -0.0000        -0.0000        +0.0000
- path               -0.2000        -0.2000        +0.0000
- anchor              0.0000         0.0000        +0.0000
- score               0.2553         0.2553        +0.0000   (gain +0.0000)
+ cut                 0.1250         0.1250        +0.0000
+ imbalance           0.0000         0.0000        +0.0000
+ naming             -0.0522        -0.1000        -0.0478
+ path               -0.2000        -0.1000        +0.1000
+ anchor              0.0000         0.5000        +0.5000
+ capacity            1.6000         0.8000        -0.8000
+ score               1.4728         1.2250        -0.2478   (gain +0.2478)
 
- the five terms combine into the total score; lower is better.
+ the terms combine into the total score; lower is better.
 
  term gloss  cut = import connections broken by moving · imbalance = lopsided folder sizes · naming
              = folder names fit their contents · path = how far things travel · anchor = credit for
-             respecting existing well-placed code
+             respecting existing well-placed code · capacity = penalty for containers still over
+             cap
 
 ================================================================================
  §6  Recommendation
 ================================================================================
- keep       keep the current layout — the run's best candidate is today's tree unchanged.
+ adopt      candidate 1 — 1.2250, gain +0.2478, 1 changes relocating 12 files (§2).
+ second     greenfield reaches the same grouping — 0.8250, gain +0.8478 against its own 1.6728
+            baseline; decide between the two by intent, never across baselines.
+ keep       not offered — both modes mark today's layout infeasible under its own caps (§4).
  in part    partial plans are not rescored; apply §2 in its given order, one change at a time.
 
 ================================================================================
- end of report · nested-ts
+ end of report · relief-nest-py
 ================================================================================

@@ -316,8 +316,9 @@ pub enum BandScope {
     AnyContainer,
 }
 
-/// A member-count band over transitively counted members; binds ancestors too,
-/// so nesting an over-cap folder under an umbrella does not satisfy it.
+/// A member-count band over first-level members only: a folder's membership is
+/// its direct file children, and nested sub-places contribute nothing, so
+/// halves that nest under their base folder each measure on their own.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SizeBand {

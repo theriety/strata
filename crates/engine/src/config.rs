@@ -319,19 +319,36 @@ impl Default for DiversityConfig {
     }
 }
 
-/// Settings governing how test files are capped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Settings governing how test files are detected and capped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct TestsConfig {
     /// File cap (in production SLOC) for test-support files; test-case files are
     /// exempt.
     #[serde(rename = "helper-cap")]
     pub helper_cap: u32,
+    /// Extra glob patterns marking test files beyond the built-in detection.
+    ///
+    /// Patterns use [`glob::Pattern`] syntax against repo-relative paths; a
+    /// pattern containing `/` matches the whole path while a bare pattern
+    /// matches the file name alone, so `*.spec.*` applies repo-wide and
+    /// `apps/web/__tests__/**` stays scoped. A file matching any pattern is
+    /// treated as a test file for the clustering tie-cut and subject-following
+    /// passes regardless of its language's own detection.
+    pub patterns: Vec<String>,
+    /// Whether the built-in per-language detection participates alongside
+    /// `patterns`. Disabling it makes only `patterns` decide; with an empty
+    /// pattern list the tie-cut becomes fully inert.
+    pub builtins: bool,
 }
 
 impl Default for TestsConfig {
     fn default() -> Self {
-        Self { helper_cap: 250 }
+        Self {
+            helper_cap: 250,
+            patterns: Vec::new(),
+            builtins: true,
+        }
     }
 }
 
@@ -357,7 +374,7 @@ pub struct AnalyzeConfig {
     pub solver: SolverConfig,
     /// The diversification parameters.
     pub diversity: DiversityConfig,
-    /// Test-file capping settings.
+    /// Test-file detection and capping settings.
     pub tests: TestsConfig,
 }
 
@@ -393,6 +410,18 @@ impl AnalyzeConfig {
         within_ceiling("capacity.domain", self.capacity.domain)?;
         within_ceiling("capacity.package", self.capacity.package)?;
         positive("tests.helper-cap", self.tests.helper_cap)?;
+        for (index, pattern) in self.tests.patterns.iter().enumerate() {
+            if pattern.is_empty() {
+                return Err(StrataError::ConfigInvalid {
+                    key: Some(format!("tests.patterns[{index}]")),
+                    reason: "a pattern must not be empty".to_owned(),
+                });
+            }
+            glob::Pattern::new(pattern).map_err(|error| StrataError::ConfigInvalid {
+                key: Some(format!("tests.patterns[{index}]")),
+                reason: error.to_string(),
+            })?;
+        }
         positive("solver.ilp-threshold", self.solver.ilp_threshold)?;
         at_most(
             "solver.ilp-threshold",
@@ -640,6 +669,55 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "capacity.file"
+        ));
+    }
+
+    #[test]
+    fn should_parse_tests_patterns_and_builtins_from_toml() {
+        let toml =
+            "[tests]\npatterns = [\"*.spec.*\", \"apps/web/__tests__/**\"]\nbuiltins = false\n";
+
+        let config: AnalyzeConfig =
+            toml::from_str(toml).unwrap_or_else(|_| AnalyzeConfig::default());
+
+        assert_eq!(
+            config.tests.patterns,
+            vec!["*.spec.*", "apps/web/__tests__/**"]
+        );
+        assert!(!config.tests.builtins);
+        // an omitted key keeps its default.
+        assert_eq!(config.tests.helper_cap, 250);
+    }
+
+    #[test]
+    fn should_reject_an_empty_tests_pattern_with_its_index() {
+        let config = AnalyzeConfig {
+            tests: TestsConfig {
+                patterns: vec!["*.spec.*".to_owned(), String::new()],
+                ..TestsConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "tests.patterns[1]"
+        ));
+    }
+
+    #[test]
+    fn should_reject_an_invalid_tests_glob_with_its_index() {
+        let config = AnalyzeConfig {
+            tests: TestsConfig {
+                patterns: vec!["[".to_owned()],
+                ..TestsConfig::default()
+            },
+            ..AnalyzeConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "tests.patterns[0]"
         ));
     }
 

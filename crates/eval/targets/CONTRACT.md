@@ -89,7 +89,13 @@ Naming facts the harness relies on (from `crates/engine/src/analyze.rs` and
   assume a level exists in a given tree.
 
 Membership of a non-file node `v` — written `members(v)` — is the set of
-`name`s of all file-level descendants, transitively through `children`.
+`name`s of its DIRECT file children only. Counting is first-level: a folder
+holds exactly what sits in it, and nested sub-containers contribute nothing to
+an ancestor's membership, because their files already belong to their own
+place. Splitting an over-cap folder into halves that nest under it therefore
+reads as two within-band places, not one still-over-cap umbrella. (The
+transitive descendant set remains the census form — universes and placement
+initialization — but no structural predicate counts with it.)
 
 ### Container scope principle (root-ward envelopes are exempt)
 
@@ -188,13 +194,15 @@ because = "..."
 paths = ["a.py", "b.py"]
 because = "..."
 
-# no folder/domain-level node's members contain two or more of the listed paths
-# (must-not-co-locate; also the pairwise unit of pair-F1)
+# no folder/domain-level node's DIRECT file children include two or more of
+# the listed paths (must-not-co-locate; also the pairwise unit of pair-F1;
+# first-level membership — nesting one place under another never reads as the
+# two places merging)
 [[assert.separate]]
 paths = ["a.py", "b.py"]
 because = "..."
 
-# size band on transitively-counted members:
+# size band on first-level members only:
 #   scope = "any_container"            → every non-file node at level `folder`
 #                                        or `domain` (package/packageGroup are
 #                                        exempt: they legitimately hold whole
@@ -202,10 +210,9 @@ because = "..."
 #                                        only ever restate the file census),
 #                                        OR
 #   container = "<full-prefix name>"   → each node with that name, any level
-# Members count transitively, so the band binds on ANCESTORS too: splitting an
-# over-cap folder into children beneath a retained umbrella does NOT satisfy
-# it — the umbrella still holds every file. The winning move is a genuine
-# split or dissolution, not nesting.
+# A folder's count is its direct file children; nested sub-places contribute
+# nothing, so halves that path-extend their base folder each measure on their
+# own and the band binds exactly where the cap binds in the engine.
 [[assert.size_band]]
 scope = "any_container"
 max_files = 20
