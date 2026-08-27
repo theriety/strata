@@ -1,14 +1,14 @@
 # Strata report
 
-Snapshot `030b7ceea0b0e82b31def08265b1a1c8a6ff87423cd36f8067d7630cc88aab56`.
+Snapshot `53cda24aee44debedcd5a5f4927b49da2df6f0c4730c9eaa8c2d90dd0040afc5`.
 
-- 4 symbols, 2 edges, 2 files
+- 4 symbols, 4 edges, 2 files
 
 ## Current layout
 
-Score `-0.0639`.
+Score `-0.0853`.
 
-- cut `0.1250`, imbalance `0.0111`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
+- cut `0.1036`, imbalance `0.0111`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
 
 ### Violations
 
@@ -20,9 +20,9 @@ _Fewer than the requested candidates survived; the solution space converged._
 
 _Current layout is already optimal; candidate 1 is the current tree._
 
-### Candidate 1 (improvement `+0.0000`, score `-0.0639`)
+### Candidate 1 (improvement `+0.0000`, score `-0.0853`)
 
-- cut `0.1250`, imbalance `0.0111`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
+- cut `0.1036`, imbalance `0.0111`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
 
 No moves versus the current layout.
 
@@ -30,9 +30,9 @@ No moves versus the current layout.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+0.0000`, score `0.1361`)
+### Candidate 1 (improvement `+0.0000`, score `0.1147`)
 
-- cut `0.1250`, imbalance `0.0111`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
+- cut `0.1036`, imbalance `0.0111`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
 No moves versus the current layout.
 

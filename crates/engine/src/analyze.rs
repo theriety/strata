@@ -3832,6 +3832,45 @@ fn cyclic_vertex_count(graph: &Csr) -> usize {
         .sum()
 }
 
+/// Counts the edges of `graph` whose endpoints share a cyclic strongly
+/// connected component — the cyclicity the vertex count cannot see.
+///
+/// [`cyclic_vertex_count`] measures which vertices are entangled, not how
+/// densely: a fresh cycle closed between two files already inside one component
+/// adds no vertex, so the vertex measure reads it as free. Counting the edges
+/// held inside a component catches exactly that move.
+fn cyclic_edge_count(graph: &Csr) -> usize {
+    let condensation = condense(graph);
+    let cyclic: Vec<bool> = condensation
+        .members
+        .iter()
+        .map(|members| members.len() > 1)
+        .collect();
+    let mut total = 0;
+    for source in 0..graph.vertex_count() {
+        let Ok(source) = u32::try_from(source) else {
+            continue;
+        };
+        let Some(&component) = condensation.membership.get(source as usize) else {
+            continue;
+        };
+        if !cyclic.get(component.0 as usize).copied().unwrap_or(false) {
+            continue;
+        }
+        total += graph
+            .neighbors(source)
+            .iter()
+            .filter(|&&target| {
+                condensation
+                    .membership
+                    .get(target as usize)
+                    .is_some_and(|owner| *owner == component)
+            })
+            .count();
+    }
+    total
+}
+
 /// Builds the scorer's [`ScoreCandidate`] view from a node-placement function over
 /// the candidate `tree`.
 ///
@@ -4852,6 +4891,9 @@ struct SymbolPass<'a> {
     best: f64,
     /// Cycle baseline: relocation may never raise the cycle count.
     cyclic_base: usize,
+    /// Cyclic-edge baseline, catching a cycle closed inside a component the
+    /// vertex count already counts (see [`cyclic_edge_count`]).
+    cyclic_edge_base: usize,
     /// Visibility baseline: relocation may never raise the finding count.
     vis_base: usize,
     relocations: Vec<SymbolRelocation>,
@@ -4939,11 +4981,14 @@ impl<'a> SymbolPass<'a> {
             overlay: BTreeMap::new(),
             best: 0.0,
             cyclic_base: 0,
+            cyclic_edge_base: 0,
             vis_base: 0,
             relocations: Vec::new(),
         };
         pass.best = pass.score_with(&pass.overlay);
-        pass.cyclic_base = cyclic_vertex_count(&pass.crossing_csr());
+        let crossing = pass.crossing_csr();
+        pass.cyclic_base = cyclic_vertex_count(&crossing);
+        pass.cyclic_edge_base = cyclic_edge_count(&crossing);
         pass.vis_base = pass.refresh_visibility();
         pass
     }
@@ -5143,8 +5188,10 @@ impl<'a> SymbolPass<'a> {
 
             // Tentatively relocate, then run the structural vetoes.
             let previous = self.overlay.insert(node.id.0, destination);
-            let cyclic_now = cyclic_vertex_count(&self.crossing_csr());
-            if cyclic_now > self.cyclic_base {
+            let crossing = self.crossing_csr();
+            let cyclic_now = cyclic_vertex_count(&crossing);
+            let cyclic_edge_now = cyclic_edge_count(&crossing);
+            if cyclic_now > self.cyclic_base || cyclic_edge_now > self.cyclic_edge_base {
                 Self::undo(&mut self.overlay, node.id.0, previous);
                 continue;
             }
@@ -5163,6 +5210,7 @@ impl<'a> SymbolPass<'a> {
                 let delta = self.best - total;
                 self.best = total;
                 self.cyclic_base = cyclic_now;
+                self.cyclic_edge_base = cyclic_edge_now;
                 self.vis_base = vis_now;
                 if node.polarity == Polarity::Production {
                     if let Some(slot) = self.sloc.get_mut(&source_file) {
@@ -9626,6 +9674,82 @@ mod tests {
             accepted,
             "hoisting toward an enclosing folder must stay legal even when a \
              dependant outside it gains the dependency"
+        );
+    }
+
+    /// The `GOOGLE_DEFAULT_CONTENT_TYPE` shape: the symbol's own file still
+    /// uses it, and the destination already imports from that file. Carrying
+    /// the symbol across closes a circular import between the two files.
+    #[test]
+    fn should_veto_moving_a_symbol_its_own_file_still_uses() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "google_default_content_type", 2, Polarity::Production),
+                node(1, "decode_google", 2, Polarity::Production),
+                node(2, "run_batch", 3, Polarity::Production),
+                node(3, "batch_resident", 3, Polarity::Production),
+            ],
+            // the origin's own use of the symbol, plus the destination's two
+            // existing imports out of that same origin file.
+            vec![type_ref(1, 0), type_ref(2, 0), type_ref(2, 1)],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "lib", ScopeLevel::Folder, Some(0)),
+                container(2, "lib/codec.ts", ScopeLevel::File, Some(1)),
+                container(3, "lib/batch.ts", ScopeLevel::File, Some(1)),
+            ],
+        );
+        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            !accepted && relocated.is_empty(),
+            "a symbol its own file still uses must not cross into a file that \
+             already imports from that file; relocations {relocated:?}"
+        );
+    }
+
+    /// A cycle closed between two files already sitting inside a larger cycle
+    /// leaves the cyclic *vertex* count untouched, so only a cyclic *edge*
+    /// measure can see it.
+    #[test]
+    fn should_veto_a_move_closing_a_cycle_among_already_cyclic_files() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "shared_helper", 2, Polarity::Production),
+                node(1, "first_resident", 2, Polarity::Production),
+                node(2, "second_resident", 2, Polarity::Production),
+                node(3, "cycle_carrier", 2, Polarity::Production),
+                node(4, "middle_resident", 3, Polarity::Production),
+                node(5, "last_resident", 4, Polarity::Production),
+            ],
+            vec![
+                // the subject's own file supplies it with two dependencies,
+                // both of which would become crossing edges after the move.
+                type_ref(0, 1),
+                type_ref(0, 2),
+                // the priced link that nominates the middle file.
+                type_ref(0, 4),
+                // first -> middle -> last -> first, so all three files already
+                // share one strongly connected component.
+                type_ref(3, 4),
+                type_ref(4, 5),
+                type_ref(5, 3),
+            ],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "lib", ScopeLevel::Folder, Some(0)),
+                container(2, "lib/first.ts", ScopeLevel::File, Some(1)),
+                container(3, "lib/middle.ts", ScopeLevel::File, Some(1)),
+                container(4, "lib/last.ts", ScopeLevel::File, Some(1)),
+            ],
+        );
+        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            !accepted && relocated.is_empty(),
+            "a move closing a fresh cycle inside an existing component must be \
+             refused even though the cyclic vertex count cannot see it; \
+             relocations {relocated:?}"
         );
     }
 

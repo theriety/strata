@@ -157,7 +157,7 @@ fn emit_module_edges(
         emit_inheritance(declaration, source, &imported, module_local, edges);
         let called = emit_calls(declaration, source, &imported, module_local, edges);
         emit_annotations(declaration, source, &imported, module_local, edges);
-        emit_references(declaration, source, &imported, &called, edges);
+        emit_references(declaration, source, &imported, module_local, &called, edges);
         emit_dynamic(
             declaration,
             source,
@@ -314,12 +314,21 @@ fn emit_annotations(
 
 /// Emits hard value-import edges for names a declaration references.
 ///
+/// These edges model **dependency**, not the import list: a name resolved
+/// inside the declaration's own module is as real a dependency as one pulled
+/// across a module boundary, and the engine relocates symbols against exactly
+/// that graph. So a referenced name is resolved first through the imports, then
+/// through the same-module declarations — the order [`emit_calls`] already
+/// uses.
+///
 /// `called` carries the targets already linked by [`emit_calls`]; a referenced
-/// import that was also invoked is skipped here so it surfaces only as a call.
+/// name that was also invoked is skipped here so it surfaces only as a call. A
+/// declaration naming itself depends on nothing and emits no edge.
 fn emit_references(
     declaration: &Declaration,
     source: NodeId,
     imported: &HashMap<SmolStr, NodeId>,
+    module_local: Option<&HashMap<SmolStr, NodeId>>,
     called: &HashSet<NodeId>,
     edges: &mut Vec<Edge>,
 ) {
@@ -330,21 +339,24 @@ fn emit_references(
         if bases.contains(name) || annotations.contains(name) {
             continue;
         }
-        // Only an imported reference is a cross-module value dependency; a bare
-        // same-module name reference carries no import to model here.
-        if let Some(&target) = imported.get(name) {
-            if called.contains(&target) || !seen.insert(target) {
-                continue;
-            }
-            push_edge(
-                edges,
-                source,
-                target,
-                EdgeKind::ValueImport,
-                Hardness::Hard,
-                CONFIDENCE_STATIC,
-            );
+        let Some(target) = imported
+            .get(name)
+            .copied()
+            .or_else(|| module_local.and_then(|table| table.get(name)).copied())
+        else {
+            continue;
+        };
+        if target == source || called.contains(&target) || !seen.insert(target) {
+            continue;
         }
+        push_edge(
+            edges,
+            source,
+            target,
+            EdgeKind::ValueImport,
+            Hardness::Hard,
+            CONFIDENCE_STATIC,
+        );
     }
 }
 
@@ -994,6 +1006,43 @@ mod tests {
                 .iter()
                 .all(|edge| edge.kind != EdgeKind::ValueImport),
             "an invoked import must not also be a value-import"
+        );
+    }
+
+    #[test]
+    fn should_emit_a_value_edge_for_a_same_module_reference() {
+        let mut module = module_at("pkg/codec.py");
+        module.declarations.push(reader("encode", &["LIMIT"]));
+        module.declarations.push(leaf("LIMIT"));
+
+        let fragment = bind(&[module], Path::new("repo")).expect("bind succeeds");
+
+        let values: Vec<&Edge> = fragment
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::ValueImport)
+            .collect();
+        assert_eq!(
+            values.len(),
+            1,
+            "a same-module value reference is a dependency the graph must carry"
+        );
+        assert_eq!(
+            values.first().map(|edge| edge.hardness),
+            Some(Hardness::Hard)
+        );
+    }
+
+    #[test]
+    fn should_not_emit_a_self_edge_for_a_recursive_declaration() {
+        let mut module = module_at("pkg/walk.py");
+        module.declarations.push(reader("walk", &["walk"]));
+
+        let fragment = bind(&[module], Path::new("repo")).expect("bind succeeds");
+
+        assert!(
+            fragment.edges.is_empty(),
+            "a declaration naming itself depends on nothing"
         );
     }
 

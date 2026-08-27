@@ -146,6 +146,11 @@ fn emit_module_edges(
     edges: &mut Vec<Edge>,
 ) {
     let module_local = local.get(&module.path);
+    let local_types: HashMap<SmolStr, bool> = module
+        .declarations
+        .iter()
+        .map(|declaration| (declaration.name.clone(), declaration.is_type))
+        .collect();
     let imported = resolve_imports(module, resolver, exports);
 
     for declaration in &module.declarations {
@@ -154,7 +159,15 @@ fn emit_module_edges(
         };
         emit_inheritance(declaration, source, &imported, module_local, edges);
         let called = emit_calls(declaration, source, &imported, module_local, edges);
-        emit_references(declaration, source, &imported, &called, edges);
+        emit_references(
+            declaration,
+            source,
+            &imported,
+            module_local,
+            &local_types,
+            &called,
+            edges,
+        );
         emit_dynamic_imports(declaration, source, &module.path, resolver, exports, edges);
     }
 }
@@ -248,12 +261,23 @@ fn emit_calls(
 
 /// Emits value-import / type-reference edges for names a declaration references.
 ///
+/// These edges model **dependency**, not the import list: a name resolved
+/// inside the declaration's own module is as real a dependency as one pulled
+/// across a module boundary, and the engine relocates symbols against exactly
+/// that graph. So a referenced name is resolved first through the imports, then
+/// through the same-module declarations — the order [`emit_calls`] already
+/// uses. The edge kind follows the *target*: a type target is a soft
+/// [`EdgeKind::TypeReference`], anything else a hard [`EdgeKind::ValueImport`].
+///
 /// `called` carries the targets already linked by [`emit_calls`]; a referenced
-/// import that was also invoked is skipped here so it surfaces only as a call.
+/// name that was also invoked is skipped here so it surfaces only as a call. A
+/// declaration naming itself depends on nothing and emits no edge.
 fn emit_references(
     declaration: &crate::parse::Declaration,
     source: NodeId,
     imported: &HashMap<SmolStr, (NodeId, bool)>,
+    module_local: Option<&HashMap<SmolStr, NodeId>>,
+    local_types: &HashMap<SmolStr, bool>,
     called: &HashSet<NodeId>,
     edges: &mut Vec<Edge>,
 ) {
@@ -265,17 +289,22 @@ fn emit_references(
         if supertypes.contains(name) {
             continue;
         }
-        if let Some(&(target, type_only)) = imported.get(name) {
-            if called.contains(&target) || !seen.insert(target) {
-                continue;
-            }
-            let (kind, hardness) = if type_only {
-                (EdgeKind::TypeReference, Hardness::Soft)
-            } else {
-                (EdgeKind::ValueImport, Hardness::Hard)
-            };
-            push_edge(edges, source, target, kind, hardness, CONFIDENCE_STATIC);
+        let resolved = imported.get(name).copied().or_else(|| {
+            let target = module_local.and_then(|table| table.get(name)).copied()?;
+            Some((target, local_types.get(name).copied().unwrap_or(false)))
+        });
+        let Some((target, is_type)) = resolved else {
+            continue;
+        };
+        if target == source || called.contains(&target) || !seen.insert(target) {
+            continue;
         }
+        let (kind, hardness) = if is_type {
+            (EdgeKind::TypeReference, Hardness::Soft)
+        } else {
+            (EdgeKind::ValueImport, Hardness::Hard)
+        };
+        push_edge(edges, source, target, kind, hardness, CONFIDENCE_STATIC);
     }
 }
 
@@ -872,6 +901,112 @@ mod tests {
                 .iter()
                 .all(|edge| edge.kind != EdgeKind::ValueImport),
             "an invoked import must not also be a value-import"
+        );
+    }
+
+    /// Builds an exported declaration that references names without calling them.
+    fn referencer(name: &str, is_type: bool, referenced: &[&str]) -> crate::parse::Declaration {
+        crate::parse::Declaration {
+            name: SmolStr::new(name),
+            is_type,
+            exported: true,
+            sloc: 1,
+            supertypes: Vec::new(),
+            referenced: referenced.iter().copied().map(SmolStr::new).collect(),
+            called: Vec::new(),
+            dynamic_imports: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn should_emit_a_value_edge_for_a_same_module_reference() {
+        let mut module = module_at("src/codec.ts");
+        module
+            .declarations
+            .push(referencer("encode", false, &["LIMIT"]));
+        module.declarations.push(referencer("LIMIT", false, &[]));
+
+        let fragment = bind(
+            &[module],
+            Path::new("repo"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("bind succeeds");
+
+        let values: Vec<&Edge> = fragment
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::ValueImport)
+            .collect();
+        assert_eq!(
+            values.len(),
+            1,
+            "a same-module value reference is a dependency the graph must carry"
+        );
+        assert_eq!(
+            values.first().map(|edge| edge.hardness),
+            Some(Hardness::Hard)
+        );
+    }
+
+    #[test]
+    fn should_emit_a_type_edge_for_a_same_module_type_reference() {
+        let mut module = module_at("src/tools.ts");
+        module
+            .declarations
+            .push(referencer("build", false, &["Request"]));
+        module.declarations.push(referencer("Request", true, &[]));
+
+        let fragment = bind(
+            &[module],
+            Path::new("repo"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("bind succeeds");
+
+        let types: Vec<&Edge> = fragment
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::TypeReference)
+            .collect();
+        assert_eq!(
+            types.len(),
+            1,
+            "a same-module type reference is a dependency the graph must carry"
+        );
+        assert_eq!(
+            types.first().map(|edge| edge.hardness),
+            Some(Hardness::Soft)
+        );
+        assert!(
+            fragment
+                .edges
+                .iter()
+                .all(|edge| edge.kind != EdgeKind::ValueImport),
+            "a type target must not also surface as a value-import"
+        );
+    }
+
+    #[test]
+    fn should_not_emit_a_self_edge_for_a_recursive_declaration() {
+        let mut module = module_at("src/walk.ts");
+        module
+            .declarations
+            .push(referencer("walk", false, &["walk"]));
+
+        let fragment = bind(
+            &[module],
+            Path::new("repo"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("bind succeeds");
+
+        assert!(
+            fragment.edges.is_empty(),
+            "a declaration naming itself depends on nothing"
         );
     }
 

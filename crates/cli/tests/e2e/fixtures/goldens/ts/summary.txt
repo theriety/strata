@@ -1,10 +1,10 @@
 ================================================================================
  dataset   : ts
- census    : 4 symbols · 2 edges · 2 files (typescript)
+ census    : 4 symbols · 4 edges · 2 files (typescript)
 --------------------------------------------------------------------------------
  reading rules
 --------------------------------------------------------------------------------
- scores    : four decimals, lower is better            -0.0639 → -0.0639
+ scores    : four decimals, lower is better            -0.0853 → -0.0853
  gain      : improvement over that mode's own starting point, measured in
              the same units as the score              +0.0000
  modes     : anchored keeps today's good placements as fixed points while
@@ -38,12 +38,12 @@
 ================================================================================
  candidate count : 2  (anchored mode returned 1 · greenfield mode returned 1)
 
- candidate 1   anchored/1     score  -0.0639   gain +0.0000   best score
- candidate 2   greenfield/1   score  0.1361   gain +0.0000   same shape, own baseline
+ candidate 1   anchored/1     score  -0.0853   gain +0.0000   best score
+ candidate 2   greenfield/1   score  0.1147   gain +0.0000   same shape, own baseline
 
  comparability: these two gains have different starting points — anchored baselines the current
-                 tree at -0.0639; greenfield re-prices paths and drops anchor credit, baselining
-                 the same tree at 0.1361. Each gain is measured against its own mode's baseline —
+                 tree at -0.0853; greenfield re-prices paths and drops anchor credit, baselining
+                 the same tree at 0.1147. Each gain is measured against its own mode's baseline —
                  never compare across modes.
 
  note  fewer than the requested candidates survived; the solution space converged.
@@ -70,12 +70,12 @@ nothing relocates — every container keeps its files.
  §5  Score delta — current → candidate 1
 ================================================================================
  term               current       proposal    delta
- cut                 0.1250         0.1250        +0.0000
+ cut                 0.1036         0.1036        +0.0000
  imbalance           0.0111         0.0111        +0.0000
  naming             -0.0000        -0.0000        +0.0000
  path               -0.2000        -0.2000        +0.0000
  anchor              0.0000         0.0000        +0.0000
- score              -0.0639        -0.0639        +0.0000   (gain +0.0000)
+ score              -0.0853        -0.0853        +0.0000   (gain +0.0000)
 
  the five terms combine into the total score; lower is better.
 
