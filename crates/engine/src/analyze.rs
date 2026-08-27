@@ -3864,11 +3864,13 @@ fn score_candidate(
         .filter_map(|edge| {
             let source = placement(edge.source.0)?;
             let target = placement(edge.target.0)?;
-            let lca = lca_level(&parent_of, &level_of, source, target);
+            let lca_level = lca_container(&parent_of, source, target)
+                .and_then(|id| level_of.get(&id.0).copied())
+                .unwrap_or(ScopeLevel::PackageGroup);
             Some(ScoredEdge {
                 kind: edge.kind,
                 confidence: edge.confidence,
-                lca_level: lca,
+                lca_level,
             })
         })
         .collect();
@@ -4013,17 +4015,16 @@ fn cohesion_inputs(
     (groups.into_values().collect(), path_cohesion)
 }
 
-/// Returns the level of the lowest common ancestor of two containers.
+/// Returns the lowest common ancestor container of two containers.
 ///
 /// Walks the ancestor chain of `left` into a set, then ascends `right` until a
 /// shared ancestor is found; the highest endpoints share is the package-group root
 /// of an empty intersection, so disjoint subtrees cross at the coarsest level.
-fn lca_level(
+fn lca_container(
     parent_of: &BTreeMap<u32, Option<ContainerId>>,
-    level_of: &BTreeMap<u32, ScopeLevel>,
     left: ContainerId,
     right: ContainerId,
-) -> ScopeLevel {
+) -> Option<ContainerId> {
     let mut ancestors = std::collections::BTreeSet::new();
     let mut up_left = Some(left);
     while let Some(id) = up_left {
@@ -4036,14 +4037,11 @@ fn lca_level(
     let mut up_right = Some(right);
     while let Some(id) = up_right {
         if ancestors.contains(&id.0) {
-            return level_of
-                .get(&id.0)
-                .copied()
-                .unwrap_or(ScopeLevel::PackageGroup);
+            return Some(id);
         }
         up_right = parent_of.get(&id.0).copied().flatten();
     }
-    ScopeLevel::PackageGroup
+    None
 }
 
 /// Computes the per-container child subtree sizes (in production SLOC) for the
@@ -4671,6 +4669,146 @@ fn solve_cycles(
 /// orchestrator. Determinism is structural: symbols sweep in ascending id
 /// order, destinations rank by summed two-way priced pull with ties broken
 /// toward the lower file id, and every tie elsewhere resolves to staying.
+/// Refuses a symbol relocation that would force something depending on the
+/// symbol to depend on a folder it does not already depend on (FIX13).
+///
+/// The objective cannot see this. A type two sibling adapters share costs the
+/// same in a neutral `adapters/types/` file as buried inside
+/// `adapters/anthropic/`: both homes cross at `adapters` and sit at the same
+/// depth, so `cut_cost` and every other term rate them identically. What
+/// separates them is direction — folding the type into one sharer makes the
+/// other sharer reach through territory it has no business in — and no term
+/// prices direction. So the refusal is static and upstream of scoring, exactly
+/// as the source/test boundary is (FIX11 D-3), rather than a term the other six
+/// can outvote.
+///
+/// Measured on `~/Repositories/ai`, across both modes: 609 suggested moves
+/// became 547, and the 67 that buried one production module's symbol inside
+/// another — `openai -> anthropic`, `google -> openai` — became 0. Moves
+/// inventing any inbound module edge fell 129 -> 52; every survivor has a
+/// `spec/` module as the reaching party, which FIX11 zero-prices by design.
+struct ReachGuard {
+    /// The folders that already depend on each node, read off the base
+    /// placement: the parties a relocation could newly inconvenience.
+    dependant_folders: BTreeMap<u32, Vec<ContainerId>>,
+    /// Owning folder of each file container — the grain a dependency between
+    /// modules is actually written at, so a move inside one folder rearranges
+    /// nothing a dependant can see.
+    owner: BTreeMap<ContainerId, ContainerId>,
+    /// Folder-to-folder dependencies the base placement already carries. A
+    /// pair absent here is a coupling the move would invent.
+    owner_edges: BTreeSet<(u32, u32)>,
+    /// Slash-keyed folder identities. The internal tree keeps one flat folder
+    /// per real directory and only the render boundary nests them (see
+    /// [`nest_folder_segments`]), so directory ancestry lives in this key
+    /// rather than in the parent chain.
+    folder_key: BTreeMap<u32, SmolStr>,
+}
+
+impl ReachGuard {
+    /// Reads the base placement once into the folder-grain view the veto asks
+    /// its questions of.
+    ///
+    /// `touches_zone` is the caller's test-zone predicate, applied to the same
+    /// edges on the same terms as the incidence map, so no grain disagrees
+    /// about which edges bind placement.
+    fn new(
+        assembled: &CandidateTree,
+        base: &BTreeMap<u32, ContainerId>,
+        edges: &[Edge],
+        weights: &KindWeights,
+        touches_zone: &dyn Fn(u32) -> bool,
+    ) -> Self {
+        let containers = assembled.tree.containers();
+        let folder_key = containers
+            .iter()
+            .filter(|container| container.level == ScopeLevel::Folder)
+            .map(|container| (container.id.0, container.name.clone()))
+            .collect();
+        let owner: BTreeMap<ContainerId, ContainerId> = containers
+            .iter()
+            .filter(|container| container.level == ScopeLevel::File)
+            .filter_map(|container| Some((container.id, container.parent?)))
+            .collect();
+        let home = |node: u32| base.get(&node).and_then(|file| owner.get(file)).copied();
+
+        let mut dependant_folders: BTreeMap<u32, Vec<ContainerId>> = BTreeMap::new();
+        let mut owner_edges: BTreeSet<(u32, u32)> = BTreeSet::new();
+        for edge in edges {
+            let weight = weights.edge_weight(edge.kind, edge.confidence);
+            if weight <= 0.0 || touches_zone(edge.source.0) || touches_zone(edge.target.0) {
+                continue;
+            }
+            let Some(dependant) = home(edge.source.0) else {
+                continue;
+            };
+            dependant_folders
+                .entry(edge.target.0)
+                .or_default()
+                .push(dependant);
+            if let Some(target) = home(edge.target.0)
+                && dependant != target
+            {
+                owner_edges.insert((dependant.0, target.0));
+            }
+        }
+        Self {
+            dependant_folders,
+            owner,
+            owner_edges,
+            folder_key,
+        }
+    }
+
+    /// Reports whether moving `node` from `source_file` to `destination` would
+    /// invent a folder-to-folder dependency for one of its dependants.
+    ///
+    /// A move *up* — into a folder that already contains the origin — is
+    /// exempt: hoisting a symbol toward its dependants' common ground is the
+    /// direction this guard exists to protect, and refusing it would block the
+    /// genuine consolidations measured alongside the burials.
+    ///
+    /// Only inbound reach counts. The destination gaining dependencies of its
+    /// own is the symbol's own coupling travelling with it, which the objective
+    /// already prices; what it cannot price is a third party being handed a new
+    /// neighbour it never asked for.
+    fn invents_a_reach(
+        &self,
+        node: u32,
+        source_file: ContainerId,
+        destination: ContainerId,
+    ) -> bool {
+        let (Some(&from), Some(&into)) =
+            (self.owner.get(&source_file), self.owner.get(&destination))
+        else {
+            return false;
+        };
+        if from == into || self.encloses(into, from) {
+            return false;
+        }
+        self.dependant_folders
+            .get(&node)
+            .into_iter()
+            .flatten()
+            .any(|&home| home != into && !self.owner_edges.contains(&(home.0, into.0)))
+    }
+
+    /// Reports whether the real directory `ancestor` names contains the one
+    /// `descendant` names — the hoist exemption in [`Self::invents_a_reach`].
+    ///
+    /// A folder is not its own ancestor: a move inside one folder never reaches
+    /// this test.
+    fn encloses(&self, ancestor: ContainerId, descendant: ContainerId) -> bool {
+        let (Some(outer), Some(inner)) = (
+            self.folder_key.get(&ancestor.0),
+            self.folder_key.get(&descendant.0),
+        ) else {
+            return false;
+        };
+        inner.starts_with(outer.as_str()) && inner.as_bytes().get(outer.len()) == Some(&b'/')
+    }
+}
+
 struct SymbolPass<'a> {
     snapshot: &'a Snapshot,
     coefficients: &'a Coefficients,
@@ -4689,6 +4827,19 @@ struct SymbolPass<'a> {
     sloc: BTreeMap<ContainerId, u32>,
     /// Per-file production occupancy, maintained alongside [`Self::sloc`].
     residents: BTreeMap<ContainerId, u32>,
+    /// Per-file count of the production symbols the assembly placed there
+    /// that have not yet left — arrivals never raise it (FIX12-A). The
+    /// "no empty shells" guard reads this rather than [`Self::residents`],
+    /// so an unrelated symbol moving *in* can never license draining the
+    /// file's own last resident out.
+    native: BTreeMap<ContainerId, u32>,
+    /// Refuses relocations that would hand a third party a folder it never
+    /// depended on (FIX13).
+    reach: ReachGuard,
+    /// Nodes already relocated in this pass. A symbol moves at most once per
+    /// candidate (FIX12-C), so no reader is ever told two contradictory
+    /// destinations for the same name.
+    moved: BTreeSet<u32>,
     /// Dense vertex per candidate FILE, for the crossing graph.
     file_vertices: BTreeMap<ContainerId, u32>,
     /// Working copy of the node table whose containers track the overlay,
@@ -4757,6 +4908,7 @@ impl<'a> SymbolPass<'a> {
                 .or_default()
                 .push((edge.source.0, weight));
         }
+        let reach = ReachGuard::new(assembled, base, edges, weights, &touches_zone);
         let file_vertices: BTreeMap<ContainerId, u32> = assembled
             .tree
             .containers()
@@ -4765,6 +4917,7 @@ impl<'a> SymbolPass<'a> {
             .enumerate()
             .map(|(index, container)| (container.id, u32::try_from(index).unwrap_or(u32::MAX)))
             .collect();
+        let native = residents.clone();
         let mut pass = Self {
             snapshot,
             coefficients,
@@ -4776,8 +4929,11 @@ impl<'a> SymbolPass<'a> {
             nodes,
             edges,
             incident,
+            reach,
             sloc,
             residents,
+            native,
+            moved: BTreeSet::new(),
             file_vertices,
             visibility_nodes: nodes.to_vec(),
             overlay: BTreeMap::new(),
@@ -4805,6 +4961,39 @@ impl<'a> SymbolPass<'a> {
                 break;
             }
         }
+    }
+
+    /// Ranks candidate destination files for `node` by summed two-way priced
+    /// pull from their *base-placed* residents (FIX12-B); strongest first, ties
+    /// toward the lower id, capped at [`SYMBOL_TARGETS`].
+    ///
+    /// Reading the overlay here would let a symbol chase a neighbour that moved
+    /// earlier in the same pass, nominating a destination justified by nothing
+    /// but another suggestion.
+    fn nominate(&self, node: u32, source_file: ContainerId) -> Vec<ContainerId> {
+        let mut pull: BTreeMap<ContainerId, f64> = BTreeMap::new();
+        for &(neighbour, weight) in self.incident.get(&node).into_iter().flatten() {
+            let Some(place) = self.base.get(&neighbour).copied() else {
+                continue;
+            };
+            if place == source_file {
+                continue;
+            }
+            *pull.entry(place).or_insert(0.0) += weight;
+        }
+        let mut ranked: Vec<(ContainerId, f64)> = pull.into_iter().collect();
+        ranked.sort_by(|left, right| {
+            right
+                .1
+                .partial_cmp(&left.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(left.0.cmp(&right.0))
+        });
+        ranked
+            .into_iter()
+            .take(SYMBOL_TARGETS)
+            .map(|(destination, _)| destination)
+            .collect()
     }
 
     /// Placement of one node: the overlay wins, the assembly fills the rest.
@@ -4893,35 +5082,19 @@ impl<'a> SymbolPass<'a> {
     /// veto family; records an accepted relocation and returns whether the
     /// sweep made progress.
     fn try_relocate(&mut self, node: &Node) -> bool {
-        let Some(&source_file) = self.base.get(&node.id.0) else {
+        // One move per symbol per candidate (FIX12-C): a second relocation
+        // would narrate the same name twice with contradictory destinations.
+        if self.moved.contains(&node.id.0) {
+            return false;
+        }
+        let Some(source_file) = self.effective(node.id.0) else {
             return false;
         };
-        // Rank destination files by summed two-way priced pull from their
-        // effective residents; strongest first, ties toward the lower id.
-        let mut pull: BTreeMap<ContainerId, f64> = BTreeMap::new();
-        if let Some(links) = self.incident.get(&node.id.0) {
-            for &(neighbour, weight) in links {
-                let Some(place) = self.effective(neighbour) else {
-                    continue;
-                };
-                if place == source_file {
-                    continue;
-                }
-                *pull.entry(place).or_insert(0.0) += weight;
-            }
-        }
-        let mut ranked: Vec<(ContainerId, f64)> = pull.into_iter().collect();
-        ranked.sort_by(|left, right| {
-            right
-                .1
-                .partial_cmp(&left.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(left.0.cmp(&right.0))
-        });
-        for (destination, _) in ranked.into_iter().take(SYMBOL_TARGETS) {
-            // No empty shells: the origin keeps at least one production
-            // resident.
-            if self.residents.get(&source_file).copied().unwrap_or(0) <= 1 {
+        for destination in self.nominate(node.id.0, source_file) {
+            // No empty shells: the origin keeps at least one of the
+            // production symbols the assembly placed there. Counted over
+            // `native`, so an arrival cannot unlock the drain (FIX12-A).
+            if self.native.get(&source_file).copied().unwrap_or(0) <= 1 {
                 break;
             }
             // FIX11 source/test boundary: a relocation whose origin and
@@ -4947,6 +5120,14 @@ impl<'a> SymbolPass<'a> {
                     .get(&destination)
                     .copied()
                     .unwrap_or(false)
+            {
+                continue;
+            }
+            // FIX13: never hand one of the symbol's dependants a folder it
+            // does not already depend on (see `ReachGuard`).
+            if self
+                .reach
+                .invents_a_reach(node.id.0, source_file, destination)
             {
                 continue;
             }
@@ -4992,7 +5173,13 @@ impl<'a> SymbolPass<'a> {
                         *slot = slot.saturating_sub(1);
                     }
                     *self.residents.entry(destination).or_insert(0) += 1;
+                    // A departure lowers the origin's native count; the
+                    // arrival deliberately does not raise the destination's.
+                    if let Some(slot) = self.native.get_mut(&source_file) {
+                        *slot = slot.saturating_sub(1);
+                    }
                 }
+                self.moved.insert(node.id.0);
                 self.relocations.push(SymbolRelocation {
                     node: node.id.0,
                     from_file: source_file,
@@ -7872,8 +8059,12 @@ mod tests {
         );
         let mut config = config_with_k(2);
         // headroom for the genuine consolidation: `ai/core` absorbs the
-        // sole-anchored satellite without exceeding the cap.
-        config.capacity.folder = 3;
+        // sole-anchored satellite without exceeding the cap. Three is one file
+        // short of that promise — the merged candidate it accepted carried
+        // `capacity: 1.3333` and a total of `1.5075`, four times worse than the
+        // split it was supposed to beat. Five is the smallest budget under
+        // which the merge is genuinely legal, and it then scores `0.125`.
+        config.capacity.folder = 5;
 
         let modes = analyze(&snapshot, &config)
             .map(|result| result.modes)
@@ -9358,6 +9549,152 @@ mod tests {
         );
     }
 
+    /// The FIX13 shape: a type two sibling adapters share must not be buried
+    /// inside either of them. Both homes cross at `adapters` and sit at the
+    /// same depth, so every priced term rates them identically — the refusal
+    /// has to be structural.
+    #[test]
+    fn should_veto_burying_a_shared_symbol_inside_one_of_its_consumers() {
+        let (accepted, relocated) = relocates_first_symbol(&shared_adapter_type_snapshot());
+
+        assert!(
+            !accepted && relocated.is_empty(),
+            "a symbol two sibling folders share must not fold into either; \
+             relocations {relocated:?}"
+        );
+    }
+
+    /// The veto prices *shared* placement, never motion. One consumer means no
+    /// third party is handed a new neighbour, so co-location stays legal —
+    /// without this the rule would simply forbid symbols from moving.
+    #[test]
+    fn should_still_relocate_a_symbol_with_a_single_consumer() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "computer_use_config", 5, Polarity::Production),
+                node(1, "co_resident", 5, Polarity::Production),
+                node(2, "format_anthropic_tools", 6, Polarity::Production),
+            ],
+            vec![type_ref(2, 0)],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "adapters", ScopeLevel::Domain, Some(0)),
+                container(2, "types", ScopeLevel::Folder, Some(1)),
+                container(3, "anthropic", ScopeLevel::Folder, Some(1)),
+                container(4, "unused", ScopeLevel::Folder, Some(1)),
+                container(5, "types/tools.ts", ScopeLevel::File, Some(2)),
+                container(6, "anthropic/tools.ts", ScopeLevel::File, Some(3)),
+            ],
+        );
+        let (accepted, _) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            accepted,
+            "a sole consumer's home is unimpeachable; the veto must not \
+             forbid plain co-location"
+        );
+    }
+
+    /// A hoist is the direction the veto exists to protect. Moving a symbol
+    /// *up* into a folder that already encloses its origin is exempt even
+    /// though a dependant outside gains a dependency on that folder — on
+    /// `~/Repositories/ai` five genuine consolidations ride this exemption.
+    #[test]
+    fn should_still_hoist_a_symbol_toward_a_folder_enclosing_its_home() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "schema_analyst_config", 6, Polarity::Production),
+                node(1, "co_resident", 6, Polarity::Production),
+                node(2, "shared_schema_helper", 5, Polarity::Production),
+                node(3, "outside_consumer", 7, Polarity::Production),
+            ],
+            vec![type_ref(2, 0), type_ref(3, 0)],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "generators", ScopeLevel::Domain, Some(0)),
+                container(2, "gen", ScopeLevel::Folder, Some(1)),
+                container(3, "gen/analysts", ScopeLevel::Folder, Some(1)),
+                container(4, "nav", ScopeLevel::Folder, Some(1)),
+                container(5, "gen/schemas.ts", ScopeLevel::File, Some(2)),
+                container(6, "gen/analysts/schemas.ts", ScopeLevel::File, Some(3)),
+                container(7, "nav/use.ts", ScopeLevel::File, Some(4)),
+            ],
+        );
+        let (accepted, _) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            accepted,
+            "hoisting toward an enclosing folder must stay legal even when a \
+             dependant outside it gains the dependency"
+        );
+    }
+
+    /// Runs a greenfield [`SymbolPass`] over `snapshot` and offers it the
+    /// first node, reporting whether the relocation was accepted and which
+    /// nodes moved.
+    ///
+    /// Strict-J is held aside at infinity so that a J-cost rejection can never
+    /// masquerade as a veto: any destination surviving the gate chain is then
+    /// deterministically accepted, making a refusal attributable to the gates
+    /// alone.
+    fn relocates_first_symbol(snapshot: &Snapshot) -> (bool, Vec<u32>) {
+        let tests = TestPolicy::defaults();
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        let ir = snapshot.ir();
+        let assembled = solver.assemble(&solver.real_partition);
+        let mut pass = SymbolPass::new(
+            snapshot,
+            &solver.coefficients,
+            &solver.weights,
+            solver.caps.folder,
+            solver.file_cap,
+            &assembled,
+            &ir.nodes,
+            &ir.edges,
+        );
+        pass.best = f64::INFINITY;
+        let accepted = ir
+            .nodes
+            .first()
+            .is_some_and(|subject| pass.try_relocate(subject));
+        (
+            accepted,
+            pass.relocations.iter().map(|entry| entry.node).collect(),
+        )
+    }
+
+    /// The real `ComputerUseConfig` shape: a shared type in a neutral folder,
+    /// one consumer in each of two sibling adapter folders, plus a co-resident
+    /// so the origin never empties.
+    fn shared_adapter_type_snapshot() -> Snapshot {
+        snapshot(
+            vec![
+                node(0, "computer_use_config", 5, Polarity::Production),
+                node(1, "co_resident", 5, Polarity::Production),
+                node(2, "format_anthropic_tools", 6, Polarity::Production),
+                node(3, "format_openai_tools", 7, Polarity::Production),
+            ],
+            vec![type_ref(2, 0), type_ref(3, 0)],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "adapters", ScopeLevel::Domain, Some(0)),
+                container(2, "types", ScopeLevel::Folder, Some(1)),
+                container(3, "anthropic", ScopeLevel::Folder, Some(1)),
+                container(4, "openai", ScopeLevel::Folder, Some(1)),
+                container(5, "types/tools.ts", ScopeLevel::File, Some(2)),
+                container(6, "anthropic/tools.ts", ScopeLevel::File, Some(3)),
+                container(7, "openai/tools.ts", ScopeLevel::File, Some(4)),
+            ],
+        )
+    }
+
     /// A production symbol misfiled INSIDE the test zone stays there: the
     /// outward crossing is barred the same as the inward one.
     #[test]
@@ -9763,6 +10100,259 @@ mod tests {
             parts.cluster_of(unit),
             parts.cluster_of(subject),
             "the cap veto binds even against a unique twin"
+        );
+    }
+
+    /// The FIX12 churn fixture: a lone-resident base file whose only symbol is
+    /// the shared parent of three sibling configs. `analyst_config` is pulled
+    /// into the base file, `generator_config` is pulled out toward a sibling,
+    /// and `navigator_config` is pulled after whichever file its parent lands
+    /// in. Reproduces the `~/Repositories/ai` shape that suggested moving a
+    /// navigator config into the text-embedder file.
+    fn churn_snapshot() -> Snapshot {
+        snapshot(
+            vec![
+                node(0, "analyst_config", 6, Polarity::Production),
+                node(1, "analyst_mate", 6, Polarity::Production),
+                node(2, "generator_config", 5, Polarity::Production),
+                node(3, "embedder_config", 8, Polarity::Production),
+                node(4, "embedder_mate", 8, Polarity::Production),
+                node(5, "navigator_config", 10, Polarity::Production),
+                node(6, "display_config", 10, Polarity::Production),
+                node(7, "analyst_extra", 6, Polarity::Production),
+                // Filler pairs, so the repo-wide balance terms are not
+                // dominated by a single seven-symbol neighbourhood.
+                node(8, "shared_one", 13, Polarity::Production),
+                node(9, "shared_two", 13, Polarity::Production),
+                node(10, "shared_three", 14, Polarity::Production),
+                node(11, "shared_four", 14, Polarity::Production),
+                node(12, "shared_five", 15, Polarity::Production),
+                node(13, "shared_six", 15, Polarity::Production),
+                node(14, "shared_seven", 16, Polarity::Production),
+                node(15, "shared_eight", 16, Polarity::Production),
+            ],
+            vec![
+                inherits(0, 2), // every sibling config extends the shared
+                inherits(3, 2), // base, so the base is pulled three ways at
+                inherits(4, 2), // once and has no home among them; the
+                inherits(5, 2), // embedder file pulls hardest, two ways.
+                edge(1, 0),     // co-residents bind their own files, so the
+                edge(4, 3),     // only unforced symbol is the lone base.
+                edge(7, 1),     // keeps the analyst file off the shell floor.
+                edge(9, 8),
+                edge(11, 10),
+                edge(13, 12),
+                edge(15, 14),
+            ],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "generators", ScopeLevel::Folder, Some(0)),
+                container(2, "analysts", ScopeLevel::Folder, Some(0)),
+                container(3, "embedders", ScopeLevel::Folder, Some(0)),
+                container(4, "navigators", ScopeLevel::Folder, Some(0)),
+                container(5, "generators/schemas.ts", ScopeLevel::File, Some(1)),
+                container(6, "analysts/schemas.ts", ScopeLevel::File, Some(2)),
+                container(7, "analysts/analyst.ts", ScopeLevel::File, Some(2)),
+                container(8, "embedders/schemas.ts", ScopeLevel::File, Some(3)),
+                container(9, "embedders/embedder.ts", ScopeLevel::File, Some(3)),
+                container(10, "navigators/schemas.ts", ScopeLevel::File, Some(4)),
+                container(11, "navigators/navigator.ts", ScopeLevel::File, Some(4)),
+                container(12, "shared", ScopeLevel::Folder, Some(0)),
+                container(13, "shared/one.ts", ScopeLevel::File, Some(12)),
+                container(14, "shared/two.ts", ScopeLevel::File, Some(12)),
+                container(15, "shared/three.ts", ScopeLevel::File, Some(12)),
+                container(16, "shared/four.ts", ScopeLevel::File, Some(12)),
+            ],
+        )
+    }
+
+    /// Production residents per file in the layout the pass starts from.
+    fn native_residents(
+        snapshot: &Snapshot,
+        assembled: &CandidateTree,
+    ) -> BTreeMap<ContainerId, u32> {
+        let mut counts: BTreeMap<ContainerId, u32> = BTreeMap::new();
+        for node in &snapshot.ir().nodes {
+            if node.polarity != Polarity::Production {
+                continue;
+            }
+            if let Some(&file) = assembled.placement.get(&node.id.0) {
+                *counts.entry(file).or_insert(0) += 1;
+            }
+        }
+        counts
+    }
+
+    /// FIX12 defect 1 — the no-empty-shells veto reads a ledger that an
+    /// ARRIVAL increments, so a symbol moving in can unlock the origin's last
+    /// native resident to leave. The file survives with a foreign occupant and
+    /// its own content gone: a file move wearing a symbol costume, which the
+    /// pass's own doctrine bars.
+    #[test]
+    fn should_not_let_an_arrival_unlock_a_lone_resident() {
+        let snapshot = churn_snapshot();
+        let tests = TestPolicy::defaults();
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        let assembled = solver.assemble(&solver.real_partition);
+        let natives = native_residents(&snapshot, &assembled);
+        let outcome = solver.symbol_polish(&solver.real_partition);
+
+        let drained: Vec<String> = outcome
+            .relocations
+            .iter()
+            .filter(|relocation| natives.get(&relocation.from_file).copied().unwrap_or(0) <= 1)
+            .map(|relocation| {
+                format!(
+                    "node {} out of file {}",
+                    relocation.node, relocation.from_file.0
+                )
+            })
+            .collect();
+        assert!(
+            drained.is_empty(),
+            "a file holding one production symbol at pass start keeps it; an \
+             arrival must not unlock the departure. Drained {drained:?}"
+        );
+    }
+
+    /// FIX12 defect 2 — destinations rank by each neighbour's EFFECTIVE
+    /// placement, so a symbol chases a neighbour that moved earlier in the
+    /// same pass. The resulting suggestion names a destination that nothing
+    /// about the symbol justifies against the layout the user actually has.
+    #[test]
+    fn should_not_nominate_a_destination_only_a_mid_pass_move_created() {
+        let snapshot = churn_snapshot();
+        let tests = TestPolicy::defaults();
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        let assembled = solver.assemble(&solver.real_partition);
+        let ir = snapshot.ir();
+        let outcome = solver.symbol_polish(&solver.real_partition);
+
+        // Priced neighbours, resolved through the layout as it stands today.
+        let base_neighbour_files = |subject: u32| -> BTreeSet<ContainerId> {
+            let mut files = BTreeSet::new();
+            for edge in &ir.edges {
+                if solver.weights.edge_weight(edge.kind, edge.confidence) <= 0.0 {
+                    continue;
+                }
+                let neighbour = if edge.source.0 == subject {
+                    edge.target.0
+                } else if edge.target.0 == subject {
+                    edge.source.0
+                } else {
+                    continue;
+                };
+                if let Some(&file) = assembled.placement.get(&neighbour) {
+                    files.insert(file);
+                }
+            }
+            files
+        };
+
+        let unjustified: Vec<String> = outcome
+            .relocations
+            .iter()
+            .filter(|relocation| {
+                !base_neighbour_files(relocation.node).contains(&relocation.to_file)
+            })
+            .map(|relocation| {
+                format!(
+                    "node {} into file {}",
+                    relocation.node, relocation.to_file.0
+                )
+            })
+            .collect();
+        assert!(
+            unjustified.is_empty(),
+            "every destination must hold a priced neighbour under TODAY's \
+             layout; a destination created by an earlier move this pass \
+             cannot justify the suggestion. Unjustified {unjustified:?}"
+        );
+    }
+
+    /// FIX12 defect 3 — the origin is read from the BASE placement even after
+    /// the overlay has already moved the symbol, so a second sweep can relocate
+    /// it again and narrate a second, contradictory destination for the very
+    /// same symbol and origin.
+    #[test]
+    fn should_not_narrate_a_symbol_moving_twice() {
+        let snapshot = churn_snapshot();
+        let tests = TestPolicy::defaults();
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        let outcome = solver.symbol_polish(&solver.real_partition);
+
+        let mut seen: BTreeSet<u32> = BTreeSet::new();
+        let repeated: Vec<u32> = outcome
+            .relocations
+            .iter()
+            .filter(|relocation| !seen.insert(relocation.node))
+            .map(|relocation| relocation.node)
+            .collect();
+        assert!(
+            repeated.is_empty(),
+            "a symbol relocates at most once per pass; twice means the second \
+             move was priced against a home the symbol had already left. \
+             Repeated {repeated:?}"
+        );
+
+        // The same defect at the narrated face: one symbol, one destination.
+        // This half passes on this fixture — the DTO path narrates a candidate
+        // layout that reaches only the first hop — and stands as the guard for
+        // the real-repo duplicates (`summariseItem` narrated into both
+        // `src/batch/types.ts` and `src/batch/adapters/types.ts`).
+        let mut narrated = AnalyzeConfig::default();
+        narrated.analysis.candidates = 1;
+        let contradictions: Vec<String> = analyze(&snapshot, &narrated)
+            .ok()
+            .map(|result| {
+                [&result.modes.anchored, &result.modes.greenfield]
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|mode| &mode.candidates)
+                    .flat_map(|candidate| {
+                        let mut pairs: BTreeSet<(String, String)> = BTreeSet::new();
+                        candidate
+                            .symbol_moves
+                            .iter()
+                            .filter(|entry| {
+                                !pairs.insert((entry.symbol.clone(), entry.from_path.clone()))
+                            })
+                            .map(|entry| {
+                                format!(
+                                    "{}: {} -> {}",
+                                    entry.symbol, entry.from_path, entry.to_path
+                                )
+                            })
+                            .collect::<Vec<String>>()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            contradictions.is_empty(),
+            "no candidate may narrate one symbol leaving one origin for two \
+             destinations; got {contradictions:?}"
         );
     }
 }
