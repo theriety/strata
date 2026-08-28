@@ -29,7 +29,7 @@ use strata_core::shatter::{BreakSet, EdgeRef, EdgeWeights, SccView, shatter};
 use strata_core::visibility::derive_visibility;
 use strata_ir::{
     Container, ContainerId, ContainerTree, Edge, Hardness, IntermediateRepresentation, Node,
-    NodeId, Polarity, ScopeLevel, Snapshot,
+    NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
 };
 
 use crate::config::{AnalyzeConfig, TestsConfig};
@@ -4710,18 +4710,20 @@ fn solve_cycles(
 /// orchestrator. Determinism is structural: symbols sweep in ascending id
 /// order, destinations rank by summed two-way priced pull with ties broken
 /// toward the lower file id, and every tie elsewhere resolves to staying.
-/// Refuses a symbol relocation that would force something depending on the
-/// symbol to depend on a folder it does not already depend on (FIX13).
+/// Refuses a symbol relocation that would either force an existing dependant
+/// to reach a new folder or give the destination folder a new outbound
+/// dependency (FIX13).
 ///
 /// The objective cannot see this. A type two sibling adapters share costs the
 /// same in a neutral `adapters/types/` file as buried inside
 /// `adapters/anthropic/`: both homes cross at `adapters` and sit at the same
 /// depth, so `cut_cost` and every other term rate them identically. What
-/// separates them is direction — folding the type into one sharer makes the
-/// other sharer reach through territory it has no business in — and no term
-/// prices direction. So the refusal is static and upstream of scoring, exactly
-/// as the source/test boundary is (FIX11 D-3), rather than a term the other six
-/// can outvote.
+/// separates them is direction: folding the type into one sharer can make the
+/// other sharer reach through new territory, while moving runtime behavior can
+/// make its destination reach a new dependency. No term prices either
+/// directional change. Both refusals therefore read immutable pass-start
+/// folder edges upstream of scoring, exactly as the source/test boundary does
+/// (FIX11 D-3), rather than becoming terms the other six can outvote.
 ///
 /// Measured on `~/Repositories/ai`, across both modes: 609 suggested moves
 /// became 547, and the 67 that buried one production module's symbol inside
@@ -4739,6 +4741,12 @@ struct ReachGuard {
     /// Folder-to-folder dependencies the base placement already carries. A
     /// pair absent here is a coupling the move would invent.
     owner_edges: BTreeSet<(u32, u32)>,
+    /// Folder-to-folder dependencies carried by every structural edge at pass
+    /// start. Unlike `owner_edges`, this envelope is admission policy rather
+    /// than priced incidence, so zero-priced edges still constrain arrivals.
+    outbound_owner_edges: BTreeSet<(u32, u32)>,
+    /// Pass-start target folders reached by each node's outbound edges.
+    outbound_targets: BTreeMap<u32, Vec<ContainerId>>,
     /// Slash-keyed folder identities. The internal tree keeps one flat folder
     /// per real directory and only the render boundary nests them (see
     /// [`nest_folder_segments`]), so directory ancestry lives in this key
@@ -4775,7 +4783,22 @@ impl ReachGuard {
 
         let mut dependant_folders: BTreeMap<u32, Vec<ContainerId>> = BTreeMap::new();
         let mut owner_edges: BTreeSet<(u32, u32)> = BTreeSet::new();
+        let mut outbound_owner_edges: BTreeSet<(u32, u32)> = BTreeSet::new();
+        let mut outbound_targets: BTreeMap<u32, Vec<ContainerId>> = BTreeMap::new();
         for edge in edges {
+            if edge.source != edge.target
+                && !touches_zone(edge.source.0)
+                && !touches_zone(edge.target.0)
+                && let (Some(source), Some(target)) = (home(edge.source.0), home(edge.target.0))
+            {
+                outbound_targets
+                    .entry(edge.source.0)
+                    .or_default()
+                    .push(target);
+                if source != target {
+                    outbound_owner_edges.insert((source.0, target.0));
+                }
+            }
             let weight = weights.edge_weight(edge.kind, edge.confidence);
             if weight <= 0.0 || touches_zone(edge.source.0) || touches_zone(edge.target.0) {
                 continue;
@@ -4797,8 +4820,25 @@ impl ReachGuard {
             dependant_folders,
             owner,
             owner_edges,
+            outbound_owner_edges,
+            outbound_targets,
             folder_key,
         }
+    }
+
+    /// Reports whether an arrival would give its destination folder an
+    /// outbound dependency absent from the pass-start folder graph.
+    fn invents_an_outbound_reach(&self, node: u32, destination: ContainerId) -> bool {
+        let Some(&into) = self.owner.get(&destination) else {
+            return false;
+        };
+        self.outbound_targets
+            .get(&node)
+            .into_iter()
+            .flatten()
+            .any(|&target| {
+                target != into && !self.outbound_owner_edges.contains(&(into.0, target.0))
+            })
     }
 
     /// Reports whether moving `node` from `source_file` to `destination` would
@@ -4809,10 +4849,10 @@ impl ReachGuard {
     /// direction this guard exists to protect, and refusing it would block the
     /// genuine consolidations measured alongside the burials.
     ///
-    /// Only inbound reach counts. The destination gaining dependencies of its
-    /// own is the symbol's own coupling travelling with it, which the objective
-    /// already prices; what it cannot price is a third party being handed a new
-    /// neighbour it never asked for.
+    /// This check covers inbound reach only: it protects third parties from a
+    /// new neighbour. [`Self::invents_an_outbound_reach`] independently checks
+    /// the destination's outbound envelope, without applying this method's
+    /// ancestry exemption.
     fn invents_a_reach(
         &self,
         node: u32,
@@ -4937,6 +4977,8 @@ struct SymbolPass<'a> {
     /// Refuses relocations that would hand a third party a folder it never
     /// depended on (FIX13).
     reach: ReachGuard,
+    /// Files containing at least one type and no runtime symbol at pass start.
+    type_only_files: BTreeSet<ContainerId>,
     /// Refuses relocations that would close a path back to a dependant's
     /// pass-start file after an earlier move drained that dependant away.
     pass_start: PassStartGuard,
@@ -5013,6 +5055,19 @@ impl<'a> SymbolPass<'a> {
                 .push((edge.source.0, weight));
         }
         let reach = ReachGuard::new(assembled, base, edges, weights, &touches_zone);
+        let mut file_roles: BTreeMap<ContainerId, (bool, bool)> = BTreeMap::new();
+        for node in nodes {
+            let Some(&file) = base.get(&node.id.0) else {
+                continue;
+            };
+            let role = file_roles.entry(file).or_default();
+            role.0 |= node.kind == NodeKind::Type;
+            role.1 |= node.kind == NodeKind::Symbol;
+        }
+        let type_only_files = file_roles
+            .into_iter()
+            .filter_map(|(file, (has_type, has_symbol))| (has_type && !has_symbol).then_some(file))
+            .collect();
         let pass_start = PassStartGuard::new(base, edges);
         let file_vertices: BTreeMap<ContainerId, u32> = assembled
             .tree
@@ -5035,6 +5090,7 @@ impl<'a> SymbolPass<'a> {
             edges,
             incident,
             reach,
+            type_only_files,
             pass_start,
             sloc,
             residents,
@@ -5236,6 +5292,12 @@ impl<'a> SymbolPass<'a> {
                 .reach
                 .invents_a_reach(node.id.0, source_file, destination)
             {
+                continue;
+            }
+            if node.kind == NodeKind::Symbol && self.type_only_files.contains(&destination) {
+                continue;
+            }
+            if self.reach.invents_an_outbound_reach(node.id.0, destination) {
                 continue;
             }
             if self.pass_start.blocks(node.id.0, destination) {
@@ -9798,6 +9860,182 @@ mod tests {
             !accepted && relocated.is_empty(),
             "a symbol two sibling folders share must not fold into either; \
              relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_veto_moving_a_runtime_symbol_into_a_type_only_file() {
+        let mut record_type = node(2, "record_type", 4, Polarity::Production);
+        record_type.kind = NodeKind::Type;
+        let snapshot = snapshot(
+            vec![
+                node(0, "build_record", 3, Polarity::Production),
+                node(1, "origin_resident", 3, Polarity::Production),
+                record_type,
+            ],
+            vec![type_ref(0, 2)],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "runtime", ScopeLevel::Folder, Some(0)),
+                container(2, "model", ScopeLevel::Folder, Some(0)),
+                container(3, "runtime/build.ts", ScopeLevel::File, Some(1)),
+                container(4, "model/types.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+
+        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            !accepted && relocated.is_empty(),
+            "a runtime symbol must not enter a pass-start type-only file; \
+             relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_veto_giving_the_destination_folder_a_new_outbound_dependency() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "assemble_record", 4, Polarity::Production),
+                node(1, "origin_resident", 4, Polarity::Production),
+                node(2, "destination_resident", 5, Polarity::Production),
+                node(3, "external_service", 6, Polarity::Production),
+            ],
+            vec![edge(2, 0), edge(2, 0), edge(0, 3)],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "origin", ScopeLevel::Folder, Some(0)),
+                container(2, "destination", ScopeLevel::Folder, Some(0)),
+                container(3, "external", ScopeLevel::Folder, Some(0)),
+                container(4, "origin/assemble.ts", ScopeLevel::File, Some(1)),
+                container(5, "destination/records.ts", ScopeLevel::File, Some(2)),
+                container(6, "external/service.ts", ScopeLevel::File, Some(3)),
+            ],
+        );
+
+        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            !accepted && relocated.is_empty(),
+            "a relocation must not give its destination folder a new outbound \
+             dependency; relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_allow_moving_a_runtime_symbol_into_a_mixed_file() {
+        let mut record_type = node(3, "record_type", 4, Polarity::Production);
+        record_type.kind = NodeKind::Type;
+        let snapshot = snapshot(
+            vec![
+                node(0, "build_record", 3, Polarity::Production),
+                node(1, "origin_resident", 3, Polarity::Production),
+                node(2, "runtime_resident", 4, Polarity::Production),
+                record_type,
+            ],
+            vec![type_ref(0, 3)],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "origin", ScopeLevel::Folder, Some(0)),
+                container(2, "records", ScopeLevel::Folder, Some(0)),
+                container(3, "origin/build.ts", ScopeLevel::File, Some(1)),
+                container(4, "records/model.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+
+        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            accepted && relocated == [0],
+            "a runtime symbol may enter a destination that already contains \
+             runtime code; relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_allow_moving_a_type_into_a_type_only_file() {
+        let mut subject_type = node(0, "input_type", 3, Polarity::Production);
+        subject_type.kind = NodeKind::Type;
+        let mut destination_type = node(2, "record_type", 4, Polarity::Production);
+        destination_type.kind = NodeKind::Type;
+        let snapshot = snapshot(
+            vec![
+                subject_type,
+                node(1, "origin_resident", 3, Polarity::Production),
+                destination_type,
+            ],
+            vec![type_ref(0, 2)],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "origin", ScopeLevel::Folder, Some(0)),
+                container(2, "model", ScopeLevel::Folder, Some(0)),
+                container(3, "origin/input.ts", ScopeLevel::File, Some(1)),
+                container(4, "model/types.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+
+        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            accepted && relocated == [0],
+            "a type may enter a pass-start type-only file; relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_allow_a_move_when_the_destination_already_reaches_the_target_folder() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "assemble_record", 4, Polarity::Production),
+                node(1, "origin_resident", 4, Polarity::Production),
+                node(2, "destination_resident", 5, Polarity::Production),
+                node(3, "external_service", 6, Polarity::Production),
+            ],
+            vec![edge(2, 0), edge(2, 0), edge(0, 3), edge(2, 3)],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "origin", ScopeLevel::Folder, Some(0)),
+                container(2, "destination", ScopeLevel::Folder, Some(0)),
+                container(3, "external", ScopeLevel::Folder, Some(0)),
+                container(4, "origin/assemble.ts", ScopeLevel::File, Some(1)),
+                container(5, "destination/records.ts", ScopeLevel::File, Some(2)),
+                container(6, "external/service.ts", ScopeLevel::File, Some(3)),
+            ],
+        );
+
+        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            accepted && relocated == [0],
+            "an existing destination-to-target folder dependency keeps the \
+             relocation eligible; relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_ignore_a_self_recursive_edge_when_checking_outbound_dependencies() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "assemble_record", 3, Polarity::Production),
+                node(1, "origin_resident", 3, Polarity::Production),
+                node(2, "destination_resident", 4, Polarity::Production),
+            ],
+            vec![type_ref(0, 2), edge(0, 0)],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "origin", ScopeLevel::Folder, Some(0)),
+                container(2, "destination", ScopeLevel::Folder, Some(0)),
+                container(3, "origin/assemble.ts", ScopeLevel::File, Some(1)),
+                container(4, "destination/records.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+
+        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            accepted && relocated == [0],
+            "a self-recursive edge must not invent an outbound folder \
+             dependency; relocations {relocated:?}"
         );
     }
 
