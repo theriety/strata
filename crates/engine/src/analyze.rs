@@ -1224,16 +1224,18 @@ impl<'a> PipelineSolver<'a> {
     /// strictly lowers the full objective. Capacity (files per
     /// folder) and quotient cyclicity stay hard vetoes, never penalties — but
     /// the cyclicity veto is relative, not absolute: a move is barred when it
-    /// *grows* the number of folders caught in quotient cycles, never for
-    /// cyclicity the current layout already has. Misplaced files routinely
-    /// entangle real folder graphs in cycles no single move can dissolve; an
-    /// absolute veto would price every move at infinity on such a base and
-    /// freeze the pass wholesale. On an acyclic base the two vetoes agree.
+    /// *grows* either the number of folders caught in quotient cycles or the
+    /// edges held inside those cycles, never for cyclicity the current layout
+    /// already has. Misplaced files routinely entangle real folder graphs in
+    /// cycles no single move can dissolve; an absolute veto would price every
+    /// move at infinity on such a base and freeze the pass wholesale. On an
+    /// acyclic base the two vetoes agree.
     /// At most [`POLISH_SWEEPS`] passes, stopping early once a sweep applies
     /// no move. Returns the final score so `solve` never re-evaluates.
     fn polish(&self, parts: &mut Partition) -> f64 {
         let mut best = self.evaluate(parts);
-        let mut cyclic_base = cyclic_vertex_count(&parts.quotient(&self.condensation.dag));
+        let initial_quotient = parts.quotient(&self.condensation.dag);
+        let mut cyclic_base = CycleCounts::from_graph(&initial_quotient);
         // live per-folder FILE counts: clusters size in SCCs, caps in files.
         let mut file_count: Vec<u32> = vec![0; parts.cluster_count()];
         for (scc, members) in self.condensation.members.iter().enumerate() {
@@ -1315,11 +1317,12 @@ impl<'a> PipelineSolver<'a> {
                     if !parts.move_node(scc32, target) {
                         continue;
                     }
-                    let cyclic_now = cyclic_vertex_count(&parts.quotient(&self.condensation.dag));
-                    let total = if cyclic_now <= cyclic_base {
-                        self.evaluate(parts)
-                    } else {
+                    let tentative_quotient = parts.quotient(&self.condensation.dag);
+                    let cyclic_now = CycleCounts::from_graph(&tentative_quotient);
+                    let total = if cyclic_now.exceeds(cyclic_base) {
                         f64::INFINITY
+                    } else {
+                        self.evaluate(parts)
                     };
                     if total < best {
                         best = total;
@@ -3819,56 +3822,55 @@ struct ContainerSpec<'name> {
     synthetic: bool,
 }
 
-/// Counts the vertices of `graph` sitting inside a cyclic strongly connected
-/// component — the quotient's cyclicity mass the polish veto compares before
-/// and after a move. Zero exactly when the graph is a DAG (the quotient
-/// carries no self-loops, so every singleton component is acyclic).
-fn cyclic_vertex_count(graph: &Csr) -> usize {
-    condense(graph)
-        .members
-        .iter()
-        .filter(|members| members.len() > 1)
-        .map(Vec::len)
-        .sum()
+/// cycle mass used as a component-wise admission budget
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct CycleCounts {
+    vertices: usize,
+    edges: usize,
 }
 
-/// Counts the edges of `graph` whose endpoints share a cyclic strongly
-/// connected component — the cyclicity the vertex count cannot see.
-///
-/// [`cyclic_vertex_count`] measures which vertices are entangled, not how
-/// densely: a fresh cycle closed between two files already inside one component
-/// adds no vertex, so the vertex measure reads it as free. Counting the edges
-/// held inside a component catches exactly that move.
-fn cyclic_edge_count(graph: &Csr) -> usize {
-    let condensation = condense(graph);
-    let cyclic: Vec<bool> = condensation
-        .members
-        .iter()
-        .map(|members| members.len() > 1)
-        .collect();
-    let mut total = 0;
-    for source in 0..graph.vertex_count() {
-        let Ok(source) = u32::try_from(source) else {
-            continue;
-        };
-        let Some(&component) = condensation.membership.get(source as usize) else {
-            continue;
-        };
-        if !cyclic.get(component.0 as usize).copied().unwrap_or(false) {
-            continue;
-        }
-        total += graph
-            .neighbors(source)
+impl CycleCounts {
+    fn from_graph(graph: &Csr) -> Self {
+        let condensation = condense(graph);
+        let cyclic: Vec<bool> = condensation
+            .members
             .iter()
-            .filter(|&&target| {
-                condensation
-                    .membership
-                    .get(target as usize)
-                    .is_some_and(|owner| *owner == component)
-            })
-            .count();
+            .map(|members| members.len() > 1)
+            .collect();
+        let vertices = condensation
+            .members
+            .iter()
+            .filter(|members| members.len() > 1)
+            .map(Vec::len)
+            .sum();
+        let mut edges = 0;
+        for source in 0..graph.vertex_count() {
+            let Ok(source) = u32::try_from(source) else {
+                continue;
+            };
+            let Some(&component) = condensation.membership.get(source as usize) else {
+                continue;
+            };
+            if !cyclic.get(component.0 as usize).copied().unwrap_or(false) {
+                continue;
+            }
+            edges += graph
+                .neighbors(source)
+                .iter()
+                .filter(|&&target| {
+                    condensation
+                        .membership
+                        .get(target as usize)
+                        .is_some_and(|owner| *owner == component)
+                })
+                .count();
+        }
+        Self { vertices, edges }
     }
-    total
+
+    fn exceeds(self, baseline: Self) -> bool {
+        self.vertices > baseline.vertices || self.edges > baseline.edges
+    }
 }
 
 /// Builds the scorer's [`ScoreCandidate`] view from a node-placement function over
@@ -4848,6 +4850,66 @@ impl ReachGuard {
     }
 }
 
+/// preserves dependency evidence from the layout a symbol pass started with
+struct PassStartGuard {
+    claimant_files: BTreeMap<u32, BTreeSet<ContainerId>>,
+    reachable: BTreeSet<(ContainerId, ContainerId)>,
+}
+
+impl PassStartGuard {
+    fn new(base: &BTreeMap<u32, ContainerId>, edges: &[Edge]) -> Self {
+        let mut claimant_files: BTreeMap<u32, BTreeSet<ContainerId>> = BTreeMap::new();
+        let mut successors: BTreeMap<ContainerId, BTreeSet<ContainerId>> = BTreeMap::new();
+        let files: BTreeSet<ContainerId> = base.values().copied().collect();
+
+        for edge in edges {
+            let (Some(source), Some(target)) = (base.get(&edge.source.0), base.get(&edge.target.0))
+            else {
+                continue;
+            };
+            if source == target {
+                if edge.source != edge.target {
+                    claimant_files
+                        .entry(edge.target.0)
+                        .or_default()
+                        .insert(*source);
+                }
+                continue;
+            }
+            successors.entry(*source).or_default().insert(*target);
+        }
+
+        let mut reachable = BTreeSet::new();
+        for start in files {
+            let mut pending: Vec<ContainerId> = successors
+                .get(&start)
+                .into_iter()
+                .flatten()
+                .copied()
+                .collect();
+            while let Some(file) = pending.pop() {
+                if !reachable.insert((start, file)) {
+                    continue;
+                }
+                pending.extend(successors.get(&file).into_iter().flatten().copied());
+            }
+        }
+
+        Self {
+            claimant_files,
+            reachable,
+        }
+    }
+
+    fn blocks(&self, node: u32, destination: ContainerId) -> bool {
+        self.claimant_files
+            .get(&node)
+            .into_iter()
+            .flatten()
+            .any(|claimant| self.reachable.contains(&(destination, *claimant)))
+    }
+}
+
 struct SymbolPass<'a> {
     snapshot: &'a Snapshot,
     coefficients: &'a Coefficients,
@@ -4875,6 +4937,9 @@ struct SymbolPass<'a> {
     /// Refuses relocations that would hand a third party a folder it never
     /// depended on (FIX13).
     reach: ReachGuard,
+    /// Refuses relocations that would close a path back to a dependant's
+    /// pass-start file after an earlier move drained that dependant away.
+    pass_start: PassStartGuard,
     /// Nodes already relocated in this pass. A symbol moves at most once per
     /// candidate (FIX12-C), so no reader is ever told two contradictory
     /// destinations for the same name.
@@ -4889,11 +4954,8 @@ struct SymbolPass<'a> {
     /// Running best objective value; acceptance must beat it by more than
     /// [`SYMBOL_MIN_IMPROVEMENT`].
     best: f64,
-    /// Cycle baseline: relocation may never raise the cycle count.
-    cyclic_base: usize,
-    /// Cyclic-edge baseline, catching a cycle closed inside a component the
-    /// vertex count already counts (see [`cyclic_edge_count`]).
-    cyclic_edge_base: usize,
+    /// Cycle baseline: relocation may raise neither cyclic dimension.
+    cyclic_base: CycleCounts,
     /// Visibility baseline: relocation may never raise the finding count.
     vis_base: usize,
     relocations: Vec<SymbolRelocation>,
@@ -4951,6 +5013,7 @@ impl<'a> SymbolPass<'a> {
                 .push((edge.source.0, weight));
         }
         let reach = ReachGuard::new(assembled, base, edges, weights, &touches_zone);
+        let pass_start = PassStartGuard::new(base, edges);
         let file_vertices: BTreeMap<ContainerId, u32> = assembled
             .tree
             .containers()
@@ -4972,6 +5035,7 @@ impl<'a> SymbolPass<'a> {
             edges,
             incident,
             reach,
+            pass_start,
             sloc,
             residents,
             native,
@@ -4980,15 +5044,13 @@ impl<'a> SymbolPass<'a> {
             visibility_nodes: nodes.to_vec(),
             overlay: BTreeMap::new(),
             best: 0.0,
-            cyclic_base: 0,
-            cyclic_edge_base: 0,
+            cyclic_base: CycleCounts::default(),
             vis_base: 0,
             relocations: Vec::new(),
         };
         pass.best = pass.score_with(&pass.overlay);
         let crossing = pass.crossing_csr();
-        pass.cyclic_base = cyclic_vertex_count(&crossing);
-        pass.cyclic_edge_base = cyclic_edge_count(&crossing);
+        pass.cyclic_base = CycleCounts::from_graph(&crossing);
         pass.vis_base = pass.refresh_visibility();
         pass
     }
@@ -5176,6 +5238,9 @@ impl<'a> SymbolPass<'a> {
             {
                 continue;
             }
+            if self.pass_start.blocks(node.id.0, destination) {
+                continue;
+            }
             // SLOC cap on the destination, priced in production SLOC.
             let destination_sloc = self.sloc.get(&destination).copied().unwrap_or(0);
             let moving_sloc =
@@ -5189,9 +5254,8 @@ impl<'a> SymbolPass<'a> {
             // Tentatively relocate, then run the structural vetoes.
             let previous = self.overlay.insert(node.id.0, destination);
             let crossing = self.crossing_csr();
-            let cyclic_now = cyclic_vertex_count(&crossing);
-            let cyclic_edge_now = cyclic_edge_count(&crossing);
-            if cyclic_now > self.cyclic_base || cyclic_edge_now > self.cyclic_edge_base {
+            let cyclic_now = CycleCounts::from_graph(&crossing);
+            if cyclic_now.exceeds(self.cyclic_base) {
                 Self::undo(&mut self.overlay, node.id.0, previous);
                 continue;
             }
@@ -5210,7 +5274,6 @@ impl<'a> SymbolPass<'a> {
                 let delta = self.best - total;
                 self.best = total;
                 self.cyclic_base = cyclic_now;
-                self.cyclic_edge_base = cyclic_edge_now;
                 self.vis_base = vis_now;
                 if node.polarity == Polarity::Production {
                     if let Some(slot) = self.sloc.get_mut(&source_file) {
@@ -7487,6 +7550,132 @@ mod tests {
     }
 
     #[test]
+    fn should_reject_file_polish_that_only_increases_cyclic_edges() {
+        let snapshot = file_polish_edge_budget_snapshot();
+        let tests = TestPolicy::defaults();
+        let mut config = AnalyzeConfig::default();
+        config.capacity.folder = 4;
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        let subject_vertex = solver.index_of.get(&5).copied().unwrap_or(u32::MAX);
+        let subject_scc = solver
+            .condensation
+            .membership
+            .get(subject_vertex as usize)
+            .copied()
+            .map_or(u32::MAX, |scc| scc.0);
+        let mut parts = solver.real_partition.clone();
+        let original = parts.cluster_of(subject_scc);
+
+        solver.polish(&mut parts);
+
+        assert_eq!(
+            parts.cluster_of(subject_scc),
+            original,
+            "file polish must refuse an edge-only increase inside an existing quotient cycle"
+        );
+    }
+
+    #[test]
+    fn file_polish_edge_budget_witness_is_invisible_to_vertex_only_comparison() {
+        let snapshot = file_polish_edge_budget_snapshot();
+        let tests = TestPolicy::defaults();
+        let mut config = AnalyzeConfig::default();
+        config.capacity.folder = 4;
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        let subject_vertex = solver.index_of.get(&5).copied().unwrap_or(u32::MAX);
+        let subject_scc = solver
+            .condensation
+            .membership
+            .get(subject_vertex as usize)
+            .copied()
+            .map_or(u32::MAX, |scc| scc.0);
+        let mut parts = solver.real_partition.clone();
+        let source = parts.cluster_of(subject_scc);
+        let before = parts.quotient(&solver.condensation.dag);
+        let destination = solver
+            .index_of
+            .get(&8)
+            .and_then(|vertex| solver.condensation.membership.get(*vertex as usize))
+            .and_then(|scc| parts.cluster_of(scc.0));
+        assert!(
+            source.zip(destination).is_some_and(|(from, target)| {
+                solver
+                    .pull_targets(&parts, subject_scc, from)
+                    .contains(&target)
+                    && !solver.absorbs_a_foreign_anchor(&parts, subject_scc, from, target)
+                    && !solver.strands_a_comparable_anchor(&parts, subject_scc, from, target)
+                    && !solver.flees_into_the_synthetic_bucket(&parts, subject_scc, from, target)
+            }),
+            "the control must reach file-polish evaluation"
+        );
+        let score_before = solver.evaluate(&parts);
+        assert!(destination.is_some_and(|target| parts.move_node(subject_scc, target)));
+        let after = parts.quotient(&solver.condensation.dag);
+        let before_counts = CycleCounts::from_graph(&before);
+        let after_counts = CycleCounts::from_graph(&after);
+
+        assert_eq!(after_counts.vertices, before_counts.vertices);
+        assert!(
+            after_counts.edges > before_counts.edges,
+            "the control must add only an internal edge to the existing cyclic component"
+        );
+        assert!(
+            solver.evaluate(&parts) < score_before,
+            "a vertex-only polish must accept the witness move"
+        );
+    }
+
+    fn file_polish_edge_budget_snapshot() -> Snapshot {
+        snapshot(
+            vec![
+                node(0, "subject", 5, Polarity::Production),
+                node(1, "a_to_b", 6, Polarity::Production),
+                node(2, "a_claimant", 7, Polarity::Production),
+                node(3, "b_first", 8, Polarity::Production),
+                node(4, "b_second", 9, Polarity::Production),
+                node(5, "b_to_c", 10, Polarity::Production),
+                node(6, "c_target", 11, Polarity::Production),
+                node(7, "c_to_a", 12, Polarity::Production),
+            ],
+            vec![
+                edge(3, 1),
+                edge(2, 6),
+                edge(7, 4),
+                edge(3, 0),
+                edge(4, 0),
+                edge(1, 0),
+            ],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "lib", ScopeLevel::Domain, Some(0)),
+                container(2, "a", ScopeLevel::Folder, Some(1)),
+                container(3, "b", ScopeLevel::Folder, Some(1)),
+                container(4, "c", ScopeLevel::Folder, Some(1)),
+                container(5, "lib/a/subject.ts", ScopeLevel::File, Some(2)),
+                container(6, "lib/a/to-b.ts", ScopeLevel::File, Some(2)),
+                container(7, "lib/a/claimant.ts", ScopeLevel::File, Some(2)),
+                container(8, "lib/b/first.ts", ScopeLevel::File, Some(3)),
+                container(9, "lib/b/second.ts", ScopeLevel::File, Some(3)),
+                container(10, "lib/b/to-c.ts", ScopeLevel::File, Some(3)),
+                container(11, "lib/c/target.ts", ScopeLevel::File, Some(4)),
+                container(12, "lib/c/to-a.ts", ScopeLevel::File, Some(4)),
+            ],
+        )
+    }
+
+    #[test]
     fn should_read_laminar_home_keys_from_the_container_chain() {
         // the laminar tree keeps source-root-stripped, package-root-resolved
         // name keys; a file under `src/` still keys to the `ai` package and the
@@ -9708,6 +9897,97 @@ mod tests {
         );
     }
 
+    /// The pass-start claimant must survive sequential draining. Moving the
+    /// same-file user away first must not erase the dependency that bars the
+    /// referenced symbol from closing a destination-to-origin cycle.
+    #[test]
+    fn should_not_unlock_a_referenced_symbol_by_moving_its_claimant_first() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "claimant", 2, Polarity::Production),
+                node(1, "shared_value", 2, Polarity::Production),
+                node(2, "claimant_lure", 3, Polarity::Production),
+                node(3, "destination_user", 4, Polarity::Production),
+                node(4, "origin_resident", 2, Polarity::Production),
+            ],
+            vec![type_ref(0, 1), type_ref(0, 2), type_ref(3, 1)],
+            sequential_claimant_containers(),
+        );
+
+        let (claimant_moved, subject_moved, relocated) =
+            relocates_claimant_then_subject(&snapshot, 3);
+
+        assert!(claimant_moved, "the witness must drain the claimant first");
+        assert!(
+            !subject_moved && relocated == [0],
+            "pass-start evidence must still veto the referenced symbol; relocations {relocated:?}"
+        );
+    }
+
+    /// Baseline reachability is transitive: a destination reaching the
+    /// claimant's original file through an intermediate file is equally able
+    /// to close a cycle after the symbol moves.
+    #[test]
+    fn should_veto_a_drained_claim_through_a_transitive_baseline_path() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "claimant", 2, Polarity::Production),
+                node(1, "shared_value", 2, Polarity::Production),
+                node(2, "claimant_lure", 3, Polarity::Production),
+                node(3, "destination_resident", 4, Polarity::Production),
+                node(4, "middle_resident", 5, Polarity::Production),
+                node(5, "origin_resident", 2, Polarity::Production),
+            ],
+            vec![
+                type_ref(0, 1),
+                type_ref(0, 2),
+                type_ref(3, 4),
+                type_ref(4, 5),
+            ],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "lib", ScopeLevel::Folder, Some(0)),
+                container(2, "lib/origin.ts", ScopeLevel::File, Some(1)),
+                container(3, "lib/claimant-home.ts", ScopeLevel::File, Some(1)),
+                container(4, "lib/destination.ts", ScopeLevel::File, Some(1)),
+                container(5, "lib/middle.ts", ScopeLevel::File, Some(1)),
+            ],
+        );
+
+        let (claimant_moved, subject_moved, relocated) =
+            relocates_claimant_then_subject(&snapshot, 3);
+
+        assert!(claimant_moved, "the witness must drain the claimant first");
+        assert!(
+            !subject_moved && relocated == [0],
+            "destination -> middle -> origin must preserve the pass-start veto; relocations {relocated:?}"
+        );
+    }
+
+    /// A claimant is not a blanket immobility rule. Once it drains, a
+    /// destination with no pass-start path to the original file remains a
+    /// defensible home for the referenced symbol.
+    #[test]
+    fn should_allow_a_drained_claim_when_destination_cannot_reach_its_origin() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "shared_value", 2, Polarity::Production),
+                node(1, "claimant", 2, Polarity::Production),
+                node(2, "origin_resident", 2, Polarity::Production),
+                node(3, "destination_resident", 4, Polarity::Production),
+            ],
+            vec![type_ref(1, 0), type_ref(0, 3)],
+            sequential_claimant_containers(),
+        );
+
+        let (subject_moved, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            subject_moved && relocated == [0],
+            "an unreachable destination must remain admissible; relocations {relocated:?}"
+        );
+    }
+
     /// A cycle closed between two files already sitting inside a larger cycle
     /// leaves the cyclic *vertex* count untouched, so only a cyclic *edge*
     /// measure can see it.
@@ -9792,6 +10072,64 @@ mod tests {
             accepted,
             pass.relocations.iter().map(|entry| entry.node).collect(),
         )
+    }
+
+    fn relocates_claimant_then_subject(
+        snapshot: &Snapshot,
+        destination_lure: u32,
+    ) -> (bool, bool, Vec<u32>) {
+        let tests = TestPolicy::defaults();
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        let ir = snapshot.ir();
+        let assembled = solver.assemble(&solver.real_partition);
+        let mut pass = SymbolPass::new(
+            snapshot,
+            &solver.coefficients,
+            &solver.weights,
+            solver.caps.folder,
+            solver.file_cap,
+            &assembled,
+            &ir.nodes,
+            &ir.edges,
+        );
+        pass.incident
+            .entry(1)
+            .or_default()
+            .push((destination_lure, 5.0));
+        pass.best = f64::INFINITY;
+        let claimant_moved = ir
+            .nodes
+            .iter()
+            .find(|node| node.id == NodeId(0))
+            .is_some_and(|claimant| pass.try_relocate(claimant));
+        pass.best = f64::INFINITY;
+        // Hold visibility aside so the witness isolates cycle admission. The
+        // production visibility contract has its own focused relocation cases.
+        pass.vis_base = usize::MAX;
+        let subject_moved = ir
+            .nodes
+            .iter()
+            .find(|node| node.id == NodeId(1))
+            .is_some_and(|subject| pass.try_relocate(subject));
+        let relocated = pass.relocations.iter().map(|entry| entry.node).collect();
+        (claimant_moved, subject_moved, relocated)
+    }
+
+    fn sequential_claimant_containers() -> Vec<Container> {
+        vec![
+            container(0, "src", ScopeLevel::PackageGroup, None),
+            container(1, "lib", ScopeLevel::Folder, Some(0)),
+            container(2, "lib/origin.ts", ScopeLevel::File, Some(1)),
+            container(3, "lib/claimant-home.ts", ScopeLevel::File, Some(1)),
+            container(4, "lib/destination.ts", ScopeLevel::File, Some(1)),
+        ]
     }
 
     /// The real `ComputerUseConfig` shape: a shared type in a neutral folder,

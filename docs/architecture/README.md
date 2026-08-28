@@ -11,3 +11,6 @@ departed from spec.
 | --- | --- | --- |
 | [ADR-0001](decisions/0001-recommendations-only.md) | Recommendations only — strata never delivers or executes move scripts | Accepted |
 | [ADR-0002](decisions/0002-report-format-action-list.md) | Report format — suggested action list vocabulary for all suggestion faces | Accepted |
+| [ADR-0003](decisions/0003-reach-veto-for-shared-symbols.md) | A shared symbol is protected by a reach veto, not by a score term | Accepted |
+| [ADR-0004](decisions/0004-same-file-references-are-dependencies.md) | A same-file reference is a dependency edge | Accepted |
+| [ADR-0005](decisions/0005-pass-start-dependencies-govern-symbol-moves.md) | Pass-start dependencies govern symbol moves | Accepted |
