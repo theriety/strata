@@ -38,6 +38,7 @@ struct EdgeView {
 enum KindView {
     Symbol,
     Type,
+    FileBody,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -60,6 +61,7 @@ fn kind_view(kind: NodeKind) -> KindView {
     match kind {
         NodeKind::Symbol => KindView::Symbol,
         NodeKind::Type => KindView::Type,
+        NodeKind::FileBody => KindView::FileBody,
     }
 }
 

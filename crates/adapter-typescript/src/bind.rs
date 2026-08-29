@@ -1,9 +1,9 @@
 //! Module-graph resolution and IR-fragment emission.
 //!
 //! Binding turns the per-file [`ParsedModule`] summaries from [`crate::parse`]
-//! into a language-agnostic [`IrFragment`]: a dense node per top-level symbol, a
-//! laminar container tree over files/folders/domains/packages, typed dependency
-//! edges, and three-valued test polarity.
+//! into a language-agnostic [`IrFragment`]: a dense node per parsed program
+//! entity, a laminar container tree over files/folders/domains/packages, typed
+//! dependency edges, and three-valued test polarity.
 //!
 //! Module specifiers resolve in the order **relative path -> Node.js subpath
 //! import -> `tsconfig` `paths` alias -> package entry point**. References that
@@ -19,7 +19,7 @@ use strata_ir::{
     NodeKind, Polarity, ScopeLevel,
 };
 
-use crate::parse::ParsedModule;
+use crate::parse::{DeclarationKind, ParsedModule};
 
 /// Per-module, per-name lookup of the node a declaration was assigned.
 type ExportTable = HashMap<SmolStr, HashMap<SmolStr, NodeId>>;
@@ -48,7 +48,7 @@ pub fn bind(
 ) -> Result<IrFragment, BindOutcome> {
     let resolver = Resolver::new(modules, aliases.clone(), subpath_imports.clone());
 
-    // Assign a dense node id to every declaration, in module-then-source order.
+    // Assign a dense node id to every parsed entity, in module-then-parser order.
     let mut nodes = Vec::new();
     let mut exported = Vec::new();
     let mut exports: ExportTable = HashMap::new();
@@ -64,10 +64,10 @@ pub fn bind(
             nodes.push(Node {
                 id,
                 name: declaration.name.clone(),
-                kind: if declaration.is_type {
-                    NodeKind::Type
-                } else {
-                    NodeKind::Symbol
+                kind: match declaration.kind {
+                    DeclarationKind::Symbol => NodeKind::Symbol,
+                    DeclarationKind::Type => NodeKind::Type,
+                    DeclarationKind::FileBody => NodeKind::FileBody,
                 },
                 polarity: Polarity::Production,
                 container,
@@ -149,7 +149,12 @@ fn emit_module_edges(
     let local_types: HashMap<SmolStr, bool> = module
         .declarations
         .iter()
-        .map(|declaration| (declaration.name.clone(), declaration.is_type))
+        .map(|declaration| {
+            (
+                declaration.name.clone(),
+                declaration.kind == DeclarationKind::Type,
+            )
+        })
         .collect();
     let imported = resolve_imports(module, resolver, exports);
 
@@ -842,7 +847,7 @@ mod tests {
     fn caller(name: &str, called: &[&str]) -> crate::parse::Declaration {
         crate::parse::Declaration {
             name: SmolStr::new(name),
-            is_type: false,
+            kind: DeclarationKind::Symbol,
             exported: true,
             sloc: 1,
             supertypes: Vec::new(),
@@ -864,7 +869,7 @@ mod tests {
         let mut provider = module_at("src/target.ts");
         provider.declarations.push(crate::parse::Declaration {
             name: SmolStr::new("target"),
-            is_type: false,
+            kind: DeclarationKind::Symbol,
             exported: true,
             sloc: 1,
             supertypes: Vec::new(),
@@ -908,7 +913,11 @@ mod tests {
     fn referencer(name: &str, is_type: bool, referenced: &[&str]) -> crate::parse::Declaration {
         crate::parse::Declaration {
             name: SmolStr::new(name),
-            is_type,
+            kind: if is_type {
+                DeclarationKind::Type
+            } else {
+                DeclarationKind::Symbol
+            },
             exported: true,
             sloc: 1,
             supertypes: Vec::new(),
@@ -1021,7 +1030,7 @@ mod tests {
         let mut provider = module_at("src/widget.ts");
         provider.declarations.push(crate::parse::Declaration {
             name: SmolStr::new("Widget"),
-            is_type: false,
+            kind: DeclarationKind::Symbol,
             exported: true,
             sloc: 1,
             supertypes: Vec::new(),
@@ -1163,29 +1172,62 @@ mod tests {
     }
 
     #[test]
+    fn should_bind_an_executable_file_body_with_its_semantic_kind_and_sloc() {
+        let mut module = module_at("src/entry.ts");
+        module.declarations.push(crate::parse::Declaration {
+            name: SmolStr::new("<module>"),
+            kind: DeclarationKind::FileBody,
+            exported: false,
+            sloc: 2,
+            supertypes: Vec::new(),
+            referenced: Vec::new(),
+            called: Vec::new(),
+            dynamic_imports: Vec::new(),
+        });
+
+        let fragment = bind(
+            &[module],
+            Path::new("repo"),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("bind succeeds");
+        let body = fragment
+            .nodes
+            .iter()
+            .find(|node| node.name == "<module>")
+            .map(|node| (node.kind, node.effective_size));
+
+        assert_eq!(
+            body,
+            Some((NodeKind::FileBody, 2)),
+            "an executable file body must retain its semantic role and attributed SLOC; \
+             body {body:?}"
+        );
+    }
+
+    #[test]
     fn should_emit_an_edge_from_a_module_body_declaration_to_its_twin() {
-        // A vitest-style spec: the twin is used only inside describe/it
-        // callbacks, which aggregate into the synthetic `<module>` declaration.
-        let mut spec = module_at("src/batch/openai.spec.ts");
+        let mut spec = module_at("src/subject.spec.ts");
         spec.imports.push(crate::parse::StaticImport {
-            source: SmolStr::new("./openai"),
-            names: vec![SmolStr::new("makeLister")],
+            source: SmolStr::new("./subject"),
+            names: vec![SmolStr::new("executeSubject")],
             type_only: false,
         });
         spec.declarations.push(crate::parse::Declaration {
             name: SmolStr::new("<module>"),
-            is_type: false,
+            kind: DeclarationKind::FileBody,
             exported: false,
             sloc: 4,
             supertypes: Vec::new(),
-            referenced: vec![SmolStr::new("describe"), SmolStr::new("makeLister")],
-            called: vec![SmolStr::new("describe"), SmolStr::new("makeLister")],
+            referenced: vec![SmolStr::new("describe"), SmolStr::new("executeSubject")],
+            called: vec![SmolStr::new("describe"), SmolStr::new("executeSubject")],
             dynamic_imports: Vec::new(),
         });
-        let mut twin = module_at("src/batch/openai.ts");
+        let mut twin = module_at("src/subject.ts");
         twin.declarations.push(crate::parse::Declaration {
-            name: SmolStr::new("makeLister"),
-            is_type: false,
+            name: SmolStr::new("executeSubject"),
+            kind: DeclarationKind::Symbol,
             exported: true,
             sloc: 3,
             supertypes: Vec::new(),
@@ -1210,7 +1252,7 @@ mod tests {
         let target = fragment
             .nodes
             .iter()
-            .find(|node| node.name == "makeLister")
+            .find(|node| node.name == "executeSubject")
             .map(|node| node.id);
         let linked = match (body, target) {
             (Some(body), Some(target)) => fragment.edges.iter().any(|edge| {

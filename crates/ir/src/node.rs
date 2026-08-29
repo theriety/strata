@@ -1,4 +1,4 @@
-//! Graph nodes: symbols and types extracted by language adapters.
+//! Graph nodes: semantic program entities extracted by language adapters.
 
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
@@ -16,6 +16,8 @@ pub enum NodeKind {
     Symbol,
     /// A type-level entity (struct, enum, interface, alias).
     Type,
+    /// Executable file-scope content that has no independent declaration.
+    FileBody,
 }
 
 /// Three-valued test polarity (ad-3): production never depends on the other two.
@@ -47,14 +49,14 @@ pub enum ScopeLevel {
     PackageGroup,
 }
 
-/// A symbol or type extracted by a language adapter.
+/// A semantic program entity extracted by a language adapter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Node {
     /// Stable identifier within a snapshot.
     pub id: NodeId,
-    /// Source-declared name of the entity.
+    /// Source-declared name, or an adapter-assigned name for a synthetic entity.
     pub name: SmolStr,
-    /// Whether the node is a symbol or a type.
+    /// The program entity represented by this node.
     pub kind: NodeKind,
     /// Production / test-case / test-support classification.
     pub polarity: Polarity,

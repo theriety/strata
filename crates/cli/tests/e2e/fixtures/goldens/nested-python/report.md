@@ -30,16 +30,14 @@ No moves versus the current layout.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+0.2105`, score `0.3739`)
+### Candidate 1 (improvement `+0.2310`, score `0.3535`)
 
-- cut `0.2202`, imbalance `0.1686`, naming `-0.0150`, path `-0.0000`, anchor `0.0000`
+- cut `0.2091`, imbalance `0.1444`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
 **Moves**
 
 ```
 move — pulled by rectangle.py (w 2.0)
   1. app.py [nested-python → nested-python/geometry]
-move — follows app.py
-  2. tests/test_app.py [nested-python → nested-python/geometry]
 ```
 

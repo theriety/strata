@@ -19,13 +19,13 @@ use swc_ecma_visit::{Visit, VisitWith};
 
 use crate::sloc::production_sloc;
 
-/// A top-level declaration extracted from a module, with its production SLOC.
+/// A top-level program entity extracted from a module, with its production SLOC.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Declaration {
-    /// Source-declared name of the symbol or type.
+    /// Source-declared name, or a synthetic name for executable file-scope content.
     pub name: SmolStr,
-    /// Whether the declaration is a type-level entity (interface, alias, enum).
-    pub is_type: bool,
+    /// The program entity represented by this declaration.
+    pub kind: DeclarationKind,
     /// Whether the declaration is exported from the module.
     pub exported: bool,
     /// Production SLOC attributed to this declaration.
@@ -39,6 +39,17 @@ pub struct Declaration {
     pub called: Vec<SmolStr>,
     /// Literal specifiers of `import('...')` calls inside this declaration.
     pub dynamic_imports: Vec<SmolStr>,
+}
+
+/// The semantic role of a parsed top-level declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeclarationKind {
+    /// A value-level declaration.
+    Symbol,
+    /// A type-level declaration.
+    Type,
+    /// Executable file-scope content without an independent declaration.
+    FileBody,
 }
 
 /// A static import (`import { x } from '...'`) with literal specifier.
@@ -71,7 +82,7 @@ pub struct ReExport {
 pub struct ParsedModule {
     /// Repository-relative path of the source file.
     pub path: SmolStr,
-    /// Top-level declarations in source order.
+    /// Declared entities in source order, followed by any aggregated file body.
     pub declarations: Vec<Declaration>,
     /// Static imports with literal specifiers.
     pub imports: Vec<StaticImport>,
@@ -140,10 +151,8 @@ fn extract(path: &SmolStr, module: &Module, contents: &str, base: BytePos) -> Pa
     let mut declarations = Vec::new();
     let mut imports = Vec::new();
     let mut re_exports = Vec::new();
-    // Top-level statements that declare nothing — vitest/jest suites
-    // (`describe('...', () => ...)`) and side-effect calls alike. Nothing about
-    // them is minted as a symbol, yet their references couple this module to
-    // others, so they aggregate into one synthetic `<module>` declaration.
+    // Top-level executable statements that declare nothing still carry SLOC
+    // and dependencies, so they aggregate into one synthetic `<module>` entity.
     let mut module_statements: Vec<&swc_ecma_ast::Stmt> = Vec::new();
 
     for item in &module.body {
@@ -212,7 +221,7 @@ fn extract(path: &SmolStr, module: &Module, contents: &str, base: BytePos) -> Pa
         }
         declarations.push(Declaration {
             name: SmolStr::new("<module>"),
-            is_type: false,
+            kind: DeclarationKind::FileBody,
             exported: false,
             sloc,
             supertypes: Vec::new(),
@@ -284,7 +293,7 @@ fn push_default_decl(
             class.class.visit_with(&mut references);
             out.push(Declaration {
                 name,
-                is_type: false,
+                kind: DeclarationKind::Symbol,
                 exported: true,
                 sloc: slice_sloc(default.span(), contents, base),
                 supertypes: supertypes_of_class(&class.class),
@@ -302,7 +311,7 @@ fn push_default_decl(
             function.function.visit_with(&mut references);
             out.push(Declaration {
                 name,
-                is_type: false,
+                kind: DeclarationKind::Symbol,
                 exported: true,
                 sloc: slice_sloc(default.span(), contents, base),
                 supertypes: Vec::new(),
@@ -328,7 +337,7 @@ fn class_declaration(
     class.class.visit_with(&mut references);
     Declaration {
         name: SmolStr::new(class.ident.sym.as_str()),
-        is_type: false,
+        kind: DeclarationKind::Symbol,
         exported,
         sloc: slice_sloc(class.class.span(), contents, base),
         supertypes: supertypes_of_class(&class.class),
@@ -344,7 +353,7 @@ fn fn_declaration(function: &FnDecl, exported: bool, contents: &str, base: ByteP
     function.function.visit_with(&mut references);
     Declaration {
         name: SmolStr::new(function.ident.sym.as_str()),
-        is_type: false,
+        kind: DeclarationKind::Symbol,
         exported,
         sloc: slice_sloc(function.function.span(), contents, base),
         supertypes: Vec::new(),
@@ -372,7 +381,7 @@ fn var_declarations(
         }
         out.push(Declaration {
             name: SmolStr::new(binding.id.sym.as_str()),
-            is_type: false,
+            kind: DeclarationKind::Symbol,
             exported,
             sloc: slice_sloc(declarator.span(), contents, base),
             supertypes: Vec::new(),
@@ -396,7 +405,7 @@ fn interface_declaration(
     });
     Declaration {
         name: SmolStr::new(interface.id.sym.as_str()),
-        is_type: true,
+        kind: DeclarationKind::Type,
         exported,
         sloc: slice_sloc(interface.span, contents, base),
         supertypes: interface.extends.iter().filter_map(type_ref_name).collect(),
@@ -419,7 +428,7 @@ fn type_alias_declaration(
     });
     Declaration {
         name: SmolStr::new(alias.id.sym.as_str()),
-        is_type: true,
+        kind: DeclarationKind::Type,
         exported,
         sloc: slice_sloc(alias.span, contents, base),
         supertypes: Vec::new(),
@@ -438,7 +447,7 @@ fn enum_declaration(
 ) -> Declaration {
     Declaration {
         name: SmolStr::new(ts_enum.id.sym.as_str()),
-        is_type: true,
+        kind: DeclarationKind::Type,
         exported,
         sloc: slice_sloc(ts_enum.span, contents, base),
         supertypes: Vec::new(),

@@ -769,13 +769,21 @@ fn build_mode_result(
     // clears the bar — an infeasible tree whose every restructuring costs more
     // than it saves — the least-bad shape is still offered, because for a
     // cap-breached layout doing nothing is not on the table.
-    let mut offered: Vec<SolvedCandidate> = candidates
+    let valid: Vec<&SolvedCandidate> = candidates
+        .iter()
+        .filter(|solved| solver.relocation_identity.accepts(&solved.partition))
+        .collect();
+    let mut offered: Vec<SolvedCandidate> = valid
         .iter()
         .filter(|solved| solved.score <= current_breakdown.total)
-        .cloned()
+        .map(|solved| (*solved).clone())
         .collect();
     if offered.is_empty() {
-        offered = candidates.first().cloned().into_iter().collect();
+        offered = valid
+            .first()
+            .map(|solved| (*solved).clone())
+            .into_iter()
+            .collect();
     }
     let current_tree = &snapshot.ir().containers;
     let mut built = Vec::with_capacity(offered.len());
@@ -795,7 +803,7 @@ fn build_mode_result(
     }
 
     let current_standing = if capacity_clean {
-        let identity_won = candidates
+        let identity_won = valid
             .first()
             .is_some_and(|best| solver.identity.as_ref() == Some(&best.partition));
         if identity_won {
@@ -876,6 +884,207 @@ struct FileInfo {
     /// transparent source roots (`src`/`spec`) that tree already resolved,
     /// rather than re-electing from raw leading path segments.
     home: LaminarHome,
+    /// Opaque path prefix removed by the laminar render normalization.
+    namespace: SmolStr,
+}
+
+/// Preserves pass-start render namespaces and namespace-scoped leaf identity.
+struct RelocationIdentityGuard {
+    identities_by_scc: Vec<Vec<RenderIdentity>>,
+    allowed_namespaces: Vec<BTreeSet<SmolStr>>,
+}
+
+type RenderIdentity = (SmolStr, SmolStr);
+type IdentitySubgroup = (Vec<u32>, BTreeSet<RenderIdentity>);
+
+impl RelocationIdentityGuard {
+    fn new(
+        files: &[FileInfo],
+        condensation: &Condensation,
+        identity: &Partition,
+        relieved: &Partition,
+        roof_rebuild: Option<&Partition>,
+    ) -> Self {
+        let identities_by_scc: Vec<Vec<RenderIdentity>> = condensation
+            .members
+            .iter()
+            .map(|members| {
+                members
+                    .iter()
+                    .filter_map(|member| files.get(member.0 as usize))
+                    .map(|file| {
+                        (
+                            file.namespace.clone(),
+                            SmolStr::new(
+                                file.name.rsplit('/').next().unwrap_or(file.name.as_str()),
+                            ),
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut allowed_namespaces = Self::cluster_namespaces(identity, &identities_by_scc);
+        Self::append_fresh_cluster_namespaces(
+            &mut allowed_namespaces,
+            relieved,
+            &identities_by_scc,
+        );
+        if let Some(rebuilt) = roof_rebuild {
+            Self::append_fresh_cluster_namespaces(
+                &mut allowed_namespaces,
+                rebuilt,
+                &identities_by_scc,
+            );
+        }
+        Self {
+            identities_by_scc,
+            allowed_namespaces,
+        }
+    }
+
+    fn permits_join(&self, parts: &Partition, moving: u32, target: ClusterId) -> bool {
+        let Some(moving_identities) = self.identities_by_scc.get(moving as usize) else {
+            return false;
+        };
+        let Some(allowed) = self.allowed_namespaces.get(target.0 as usize) else {
+            return false;
+        };
+        if moving_identities
+            .iter()
+            .any(|(namespace, _)| !allowed.contains(namespace))
+        {
+            return false;
+        }
+        let mut occupied = BTreeSet::new();
+        for (scc, identities) in self.identities_by_scc.iter().enumerate() {
+            let scc = u32::try_from(scc).unwrap_or(u32::MAX);
+            if scc == moving || parts.cluster_of(scc) != Some(target) {
+                continue;
+            }
+            occupied.extend(identities.iter().cloned());
+        }
+        let unique: BTreeSet<&(SmolStr, SmolStr)> = moving_identities.iter().collect();
+        unique.len() == moving_identities.len()
+            && moving_identities
+                .iter()
+                .all(|identity| !occupied.contains(identity))
+    }
+
+    fn accepts(&self, parts: &Partition) -> bool {
+        let mut occupied: BTreeSet<(ClusterId, &SmolStr, &SmolStr)> = BTreeSet::new();
+        self.identities_by_scc
+            .iter()
+            .enumerate()
+            .all(|(scc, identities)| {
+                let Some(cluster) = parts.cluster_of(u32::try_from(scc).unwrap_or(u32::MAX)) else {
+                    return false;
+                };
+                let Some(allowed) = self.allowed_namespaces.get(cluster.0 as usize) else {
+                    return false;
+                };
+                identities.iter().all(|(namespace, leaf)| {
+                    allowed.contains(namespace) && occupied.insert((cluster, namespace, leaf))
+                })
+            })
+    }
+
+    fn collision_free_subgroups(&self, group: &[u32]) -> Vec<Vec<u32>> {
+        let mut subgroups: Vec<IdentitySubgroup> = Vec::new();
+        for &scc in group {
+            let Some(identities) = self.identities_by_scc.get(scc as usize) else {
+                continue;
+            };
+            let unique: BTreeSet<RenderIdentity> = identities.iter().cloned().collect();
+            if unique.len() != identities.len() {
+                continue;
+            }
+            if let Some((members, occupied)) = subgroups
+                .iter_mut()
+                .find(|(_, occupied)| occupied.is_disjoint(&unique))
+            {
+                members.push(scc);
+                occupied.extend(unique);
+            } else {
+                subgroups.push((vec![scc], unique));
+            }
+        }
+        subgroups.into_iter().map(|(members, _)| members).collect()
+    }
+
+    fn cluster_namespaces(
+        parts: &Partition,
+        identities_by_scc: &[Vec<RenderIdentity>],
+    ) -> Vec<BTreeSet<SmolStr>> {
+        let mut namespaces = vec![BTreeSet::new(); parts.cluster_count()];
+        Self::merge_cluster_namespaces(&mut namespaces, parts, identities_by_scc);
+        namespaces
+    }
+
+    fn append_fresh_cluster_namespaces(
+        namespaces: &mut Vec<BTreeSet<SmolStr>>,
+        parts: &Partition,
+        identities_by_scc: &[Vec<RenderIdentity>],
+    ) {
+        let first_fresh = namespaces.len();
+        namespaces.resize_with(parts.cluster_count(), BTreeSet::new);
+        for (scc, identities) in identities_by_scc.iter().enumerate() {
+            let Some(cluster) = parts.cluster_of(u32::try_from(scc).unwrap_or(u32::MAX)) else {
+                continue;
+            };
+            if cluster.0 as usize >= first_fresh
+                && let Some(allowed) = namespaces.get_mut(cluster.0 as usize)
+            {
+                allowed.extend(identities.iter().map(|(namespace, _)| namespace.clone()));
+            }
+        }
+    }
+
+    fn merge_cluster_namespaces(
+        namespaces: &mut [BTreeSet<SmolStr>],
+        parts: &Partition,
+        identities_by_scc: &[Vec<RenderIdentity>],
+    ) {
+        for (scc, identities) in identities_by_scc.iter().enumerate() {
+            let Some(cluster) = parts.cluster_of(u32::try_from(scc).unwrap_or(u32::MAX)) else {
+                continue;
+            };
+            let Some(allowed) = namespaces.get_mut(cluster.0 as usize) else {
+                continue;
+            };
+            allowed.extend(identities.iter().map(|(namespace, _)| namespace.clone()));
+        }
+    }
+}
+
+/// Derives the opaque path prefix removed from a file's rendered laminar home.
+fn render_namespace(path: &str, home: &LaminarHome) -> SmolStr {
+    let raw_directory = path.rsplit_once('/').map_or("", |(directory, _)| directory);
+    let relative_directory = if raw_directory == home.package {
+        ""
+    } else {
+        raw_directory
+            .strip_prefix(home.package.as_str())
+            .and_then(|suffix| suffix.strip_prefix('/'))
+            .unwrap_or(raw_directory)
+    };
+    let scope = if home.synthetic || home.folder == home.package {
+        ""
+    } else {
+        home.folder
+            .strip_prefix(home.package.as_str())
+            .and_then(|suffix| suffix.strip_prefix('/'))
+            .unwrap_or(home.folder.as_str())
+    };
+    if scope.is_empty() {
+        return SmolStr::new(relative_directory);
+    }
+    if relative_directory == scope {
+        return SmolStr::new("");
+    }
+    relative_directory
+        .strip_suffix(scope)
+        .and_then(|prefix| prefix.strip_suffix('/'))
+        .map_or_else(|| SmolStr::new(relative_directory), SmolStr::new)
 }
 
 /// The laminar container tree's already-resolved folder, domain, and package
@@ -994,6 +1203,8 @@ struct PipelineSolver<'a> {
     index_of: BTreeMap<u32, u32>,
     /// The SCC condensation of the weighted hard-edge file graph.
     condensation: Condensation,
+    /// Pass-start file identities used to reject unrenderable folder joins.
+    relocation_identity: RelocationIdentityGuard,
     /// The condensation DAG with every edge reversed, for pull ranking.
     reverse_dag: Csr,
     /// The per-level member caps.
@@ -1066,11 +1277,15 @@ fn file_inventory(ir: &IntermediateRepresentation) -> (Vec<FileInfo>, BTreeMap<u
         .containers()
         .iter()
         .filter(|container| container.level == ScopeLevel::File)
-        .map(|container| FileInfo {
-            container: container.id.0,
-            name: container.name.clone(),
-            production_sloc: 0,
-            home: laminar_home(&by_id, container.id.0),
+        .map(|container| {
+            let home = laminar_home(&by_id, container.id.0);
+            FileInfo {
+                container: container.id.0,
+                name: container.name.clone(),
+                production_sloc: 0,
+                namespace: render_namespace(&container.name, &home),
+                home,
+            }
         })
         .collect();
     files.sort_by_key(|file| file.container);
@@ -1163,6 +1378,13 @@ impl<'a> PipelineSolver<'a> {
             &mut folder_names,
             &mut folder_synthetic,
         );
+        let relocation_identity = RelocationIdentityGuard::new(
+            &relieved_files,
+            &condensation,
+            &identity_partition,
+            &search_partition,
+            roof_rebuild.as_ref(),
+        );
         let root_name = ir
             .containers
             .containers()
@@ -1184,6 +1406,7 @@ impl<'a> PipelineSolver<'a> {
             files: relieved_files,
             index_of,
             condensation,
+            relocation_identity,
             reverse_dag,
             caps,
             file_cap: config.capacity.file,
@@ -1257,6 +1480,9 @@ impl<'a> PipelineSolver<'a> {
                     u32::try_from(members.len()).unwrap_or(u32::MAX)
                 });
                 for target in self.pull_targets(parts, scc32, source) {
+                    if !self.relocation_identity.permits_join(parts, scc32, target) {
+                        continue;
+                    }
                     // FIX05 (WS-D anchored-inversion): a bridge is not a member of
                     // the thing it bridges. When an SCC's priced edges reach a
                     // folder besides the pair (current, target) — main.py importing
@@ -1485,6 +1711,9 @@ impl<'a> PipelineSolver<'a> {
                 .copied()
                 .unwrap_or(u32::MAX);
             if target_files.saturating_add(unit_files) > self.caps.folder {
+                continue;
+            }
+            if !self.relocation_identity.permits_join(parts, unit, target) {
                 continue;
             }
             if !parts.move_node(unit, target) {
@@ -1801,6 +2030,7 @@ impl<'a> PipelineSolver<'a> {
                 tree: ContainerTree::new(vec![root]),
                 placement: BTreeMap::new(),
                 zone_by_file: BTreeMap::new(),
+                namespace_by_file: BTreeMap::new(),
                 key_by_id: BTreeMap::new(),
             };
         }
@@ -1902,6 +2132,7 @@ impl<'a> PipelineSolver<'a> {
 
         let mut file_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
         let mut zone_by_file: BTreeMap<ContainerId, bool> = BTreeMap::new();
+        let mut namespace_by_file: BTreeMap<ContainerId, SmolStr> = BTreeMap::new();
         for (&folder, members) in members_of {
             let Some(&(domain, _, _)) = chain_of.get(&folder) else {
                 continue;
@@ -1940,6 +2171,7 @@ impl<'a> PipelineSolver<'a> {
                     synthetic: false,
                 });
                 file_ids.insert(vertex, id);
+                namespace_by_file.insert(id, file.namespace.clone());
                 zone_by_file.insert(
                     id,
                     self.test_zone
@@ -1954,6 +2186,7 @@ impl<'a> PipelineSolver<'a> {
             tree: ContainerTree::new(arena.containers),
             placement: self.placements(&file_ids),
             zone_by_file,
+            namespace_by_file,
             key_by_id,
         }
     }
@@ -2196,6 +2429,13 @@ impl<'a> PipelineSolver<'a> {
         // `solve` already priced its result into the ranking score, so the DTO
         // score here matches what ranked this candidate by construction.
         let symbols = self.symbol_polish(&solved.partition);
+        if !symbols.preserves_namespaces(&assembled) {
+            return Err(StrataError::SnapshotInvalid {
+                source: strata_ir::SnapshotError::Serialization {
+                    reason: "symbol relocation crossed a pass-start render namespace".to_owned(),
+                },
+            });
+        }
         let merged = |id: u32| {
             symbols
                 .overlay
@@ -2275,6 +2515,9 @@ impl<'a> PipelineSolver<'a> {
         let kind_of = |node: &Node| match node.kind {
             strata_ir::NodeKind::Symbol => SymbolKind::Symbol,
             strata_ir::NodeKind::Type => SymbolKind::Type,
+            strata_ir::NodeKind::FileBody => {
+                unreachable!("file-body nodes are immobile and cannot appear in symbol narration")
+            }
         };
 
         let by_node: BTreeMap<u32, &Node> = ir.nodes.iter().map(|node| (node.id.0, node)).collect();
@@ -2391,6 +2634,15 @@ struct SymbolOutcome {
     total: f64,
 }
 
+impl SymbolOutcome {
+    fn preserves_namespaces(&self, assembled: &CandidateTree) -> bool {
+        self.relocations.iter().all(|relocation| {
+            assembled.shares_namespace(relocation.from_file, relocation.to_file)
+                && self.overlay.get(&relocation.node) == Some(&relocation.to_file)
+        })
+    }
+}
+
 /// A reconstructed candidate tree plus the placement of every symbol node.
 struct CandidateTree {
     /// The candidate container tree: package groups over packages, domains, and
@@ -2403,6 +2655,8 @@ struct CandidateTree {
     /// marks cannot be consulted directly at symbol grain — they ride here,
     /// populated where files are emitted, so every grain shares one boundary.
     zone_by_file: BTreeMap<ContainerId, bool>,
+    /// Opaque pass-start render namespace of each emitted candidate file.
+    namespace_by_file: BTreeMap<ContainerId, SmolStr>,
     /// The undecorated elected key of each upper container whose display name
     /// `qualify_elected` had to disambiguate, keyed by container id — empty when
     /// no sibling name collided. The render boundary strips a folder's increment
@@ -2410,6 +2664,12 @@ struct CandidateTree {
     /// label, so a disambiguated domain never re-embeds a folder's key as a
     /// fabricated directory chain.
     key_by_id: BTreeMap<u32, SmolStr>,
+}
+
+impl CandidateTree {
+    fn shares_namespace(&self, first: ContainerId, second: ContainerId) -> bool {
+        self.namespace_by_file.get(&first) == self.namespace_by_file.get(&second)
+    }
 }
 
 /// Builds the weighted file-dependency graph: every symbol edge — at its
@@ -3042,6 +3302,7 @@ fn synthesize_roof_rebuild(
     names: &mut Vec<SmolStr>,
     synthetic: &mut Vec<bool>,
 ) -> Option<Partition> {
+    let relocation_identity = RelocationIdentityGuard::new(files, condensation, base, base, None);
     // which file vertices carry priced company at all — the bond evidence the
     // trigger reads. Zero-priced edges stay in the graph but bind nothing
     // (D-46), so a vertex whose every incident edge prices zero is exactly the
@@ -3123,6 +3384,7 @@ fn synthesize_roof_rebuild(
             .collect();
         let groups: Vec<Vec<u32>> = token_groups(&strangers, condensation, files)
             .into_iter()
+            .flat_map(|group| relocation_identity.collision_free_subgroups(&group))
             .filter(|group| {
                 group
                     .iter()
@@ -5062,7 +5324,7 @@ impl<'a> SymbolPass<'a> {
             };
             let role = file_roles.entry(file).or_default();
             role.0 |= node.kind == NodeKind::Type;
-            role.1 |= node.kind == NodeKind::Symbol;
+            role.1 |= node.kind != NodeKind::Type;
         }
         let type_only_files = file_roles
             .into_iter()
@@ -5245,6 +5507,9 @@ impl<'a> SymbolPass<'a> {
     /// veto family; records an accepted relocation and returns whether the
     /// sweep made progress.
     fn try_relocate(&mut self, node: &Node) -> bool {
+        if node.kind == NodeKind::FileBody {
+            return false;
+        }
         // One move per symbol per candidate (FIX12-C): a second relocation
         // would narrate the same name twice with contradictory destinations.
         if self.moved.contains(&node.id.0) {
@@ -5259,6 +5524,9 @@ impl<'a> SymbolPass<'a> {
             // `native`, so an arrival cannot unlock the drain (FIX12-A).
             if self.native.get(&source_file).copied().unwrap_or(0) <= 1 {
                 break;
+            }
+            if !self.assembled.shares_namespace(source_file, destination) {
+                continue;
             }
             // FIX11 source/test boundary: a relocation whose origin and
             // destination sit on opposite sides of the test zone is barred
@@ -6803,6 +7071,346 @@ mod tests {
         );
     }
 
+    /// Builds the neutral file-placement shape used by rendered-leaf
+    /// uniqueness regressions. Each claimant is pulled toward `destination`;
+    /// callers choose whether that folder already owns the same rendered leaf.
+    fn rendered_leaf_collision_snapshot(
+        include_second_claimant: bool,
+        first_claimant_is_file_body: bool,
+    ) -> Snapshot {
+        let mut nodes = vec![
+            homed(0, "first_left", 6, 10),
+            homed(1, "second_left", 7, 10),
+            homed(2, "first_return", 8, 10),
+            homed(3, "second_return", 9, 10),
+            homed(4, "compose_record", 10, 10),
+            homed(5, "first_right", 11, 10),
+            homed(6, "second_right", 12, 10),
+            homed(7, "third_right", 13, 10),
+            homed(8, "fourth_right", 14, 10),
+            homed(9, "record_format", 15, 10),
+            homed(10, "destination_helper", 16, 10),
+        ];
+        let mut edges = vec![
+            edge(0, 5),
+            edge(1, 6),
+            edge(7, 2),
+            edge(8, 3),
+            edge(4, 9),
+            edge(4, 10),
+            edge(9, 10),
+        ];
+        if first_claimant_is_file_body && let Some(claimant) = nodes.get_mut(4) {
+            claimant.kind = NodeKind::FileBody;
+        }
+        let mut containers = vec![
+            container(0, "app", ScopeLevel::PackageGroup, None),
+            container(1, "app", ScopeLevel::Package, Some(0)),
+            container(2, "app/area", ScopeLevel::Domain, Some(1)),
+            container(3, "app/area/origin", ScopeLevel::Folder, Some(2)),
+            container(4, "app/area/return", ScopeLevel::Folder, Some(2)),
+            container(5, "app/area/destination", ScopeLevel::Folder, Some(2)),
+            container(6, "src/area/origin/first.ts", ScopeLevel::File, Some(3)),
+            container(7, "src/area/origin/second.ts", ScopeLevel::File, Some(3)),
+            container(8, "src/area/origin/third.ts", ScopeLevel::File, Some(3)),
+            container(9, "src/area/origin/fourth.ts", ScopeLevel::File, Some(3)),
+            container(10, "src/area/origin/record.ts", ScopeLevel::File, Some(3)),
+            container(11, "src/area/return/first.ts", ScopeLevel::File, Some(4)),
+            container(12, "src/area/return/second.ts", ScopeLevel::File, Some(4)),
+            container(13, "src/area/return/third.ts", ScopeLevel::File, Some(4)),
+            container(14, "src/area/return/fourth.ts", ScopeLevel::File, Some(4)),
+            container(
+                15,
+                if include_second_claimant {
+                    "src/area/destination/format.ts"
+                } else {
+                    "src/area/destination/record.ts"
+                },
+                ScopeLevel::File,
+                Some(5),
+            ),
+            container(
+                16,
+                "src/area/destination/helper.ts",
+                ScopeLevel::File,
+                Some(5),
+            ),
+        ];
+        if include_second_claimant {
+            nodes.push(homed(11, "compose_second_record", 18, 10));
+            nodes.push(homed(12, "second_origin_resident", 19, 10));
+            edges.extend([edge(11, 9), edge(11, 10)]);
+            containers.push(container(
+                17,
+                "app/area/second-origin",
+                ScopeLevel::Folder,
+                Some(2),
+            ));
+            containers.push(container(
+                18,
+                "src/area/second-origin/record.ts",
+                ScopeLevel::File,
+                Some(17),
+            ));
+            containers.push(container(
+                19,
+                "src/area/second-origin/resident.ts",
+                ScopeLevel::File,
+                Some(17),
+            ));
+        }
+        snapshot(nodes, edges, containers)
+    }
+
+    /// Returns the destination narrated for `path` by the first greenfield
+    /// candidate, if that candidate relocates the file.
+    fn greenfield_file_destination(snapshot: &Snapshot, path: &str) -> Option<String> {
+        analyze(snapshot, &config_with_k(1))
+            .ok()
+            .and_then(|result| result.modes.greenfield)
+            .and_then(|mode| mode.candidates.into_iter().next())
+            .and_then(|candidate| {
+                candidate.delta_narration.into_iter().find_map(|entry| {
+                    entry
+                        .files
+                        .iter()
+                        .any(|file| file.path == path)
+                        .then_some(entry.to)
+                })
+            })
+    }
+
+    /// Builds a neutral file-placement witness whose raw paths either share or
+    /// cross transparent source-root namespaces while their laminar homes omit
+    /// those roots exactly as a real adapter snapshot does.
+    fn transparent_namespace_file_snapshot(crosses_namespace: bool) -> Snapshot {
+        let origin_namespace = "left";
+        let destination_namespace = if crosses_namespace { "right" } else { "left" };
+        let paths: Vec<SmolStr> = [
+            format!("{origin_namespace}/area/origin/first.ts"),
+            format!("{origin_namespace}/area/origin/second.ts"),
+            format!("{origin_namespace}/area/origin/third.ts"),
+            format!("{origin_namespace}/area/origin/fourth.ts"),
+            format!("{origin_namespace}/area/origin/record.ts"),
+            format!("{origin_namespace}/area/return/first.ts"),
+            format!("{origin_namespace}/area/return/second.ts"),
+            format!("{origin_namespace}/area/return/third.ts"),
+            format!("{origin_namespace}/area/return/fourth.ts"),
+            format!("{destination_namespace}/area/destination/format.ts"),
+            format!("{destination_namespace}/area/destination/helper.ts"),
+        ]
+        .into_iter()
+        .map(SmolStr::new)
+        .collect();
+        let layout = Layout {
+            package_roots: Vec::new(),
+            source_roots: vec![SmolStr::new("left"), SmolStr::new("right")],
+        };
+        let built = build_laminar_tree(&paths, "app", &layout);
+        let nodes = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                let id = u32::try_from(index).unwrap_or(u32::MAX);
+                node(
+                    id,
+                    path.rsplit('/').next().unwrap_or(path.as_str()),
+                    built
+                        .files
+                        .get(path)
+                        .map_or(u32::MAX, |container| container.0),
+                    Polarity::Production,
+                )
+            })
+            .collect();
+        snapshot(
+            nodes,
+            vec![
+                edge(0, 5),
+                edge(1, 6),
+                edge(7, 2),
+                edge(8, 3),
+                edge(4, 9),
+                edge(4, 10),
+                edge(9, 10),
+            ],
+            built.tree.containers().to_vec(),
+        )
+    }
+
+    #[test]
+    fn should_veto_a_file_move_across_transparent_namespaces() {
+        let snapshot = transparent_namespace_file_snapshot(true);
+        let destination = greenfield_file_destination(&snapshot, "left/area/origin/record.ts");
+
+        assert!(
+            destination
+                .as_deref()
+                .is_none_or(|to| !to.ends_with("destination")),
+            "a file must remain inside its pass-start transparent namespace; destination \
+             {destination:?}"
+        );
+    }
+
+    #[test]
+    fn should_allow_a_unique_file_move_within_its_transparent_namespace() {
+        let snapshot = transparent_namespace_file_snapshot(false);
+        let destination = greenfield_file_destination(&snapshot, "left/area/origin/record.ts");
+
+        assert!(
+            destination
+                .as_deref()
+                .is_some_and(|to| to.ends_with("destination")),
+            "a unique-basename file move inside one namespace must remain eligible; destination \
+             {destination:?}"
+        );
+    }
+
+    #[test]
+    fn should_veto_a_file_move_that_duplicates_an_existing_rendered_leaf() {
+        let snapshot = rendered_leaf_collision_snapshot(false, false);
+        let destination = greenfield_file_destination(&snapshot, "src/area/origin/record.ts");
+
+        assert!(
+            destination
+                .as_deref()
+                .is_none_or(|to| !to.ends_with("destination")),
+            "a folder already containing record.ts must reject another rendered record.ts; \
+             destination {destination:?}"
+        );
+    }
+
+    #[test]
+    fn should_veto_a_sequential_sibling_move_after_the_first_claims_the_rendered_leaf() {
+        let snapshot = rendered_leaf_collision_snapshot(true, false);
+        let first = greenfield_file_destination(&snapshot, "src/area/origin/record.ts");
+        let second = greenfield_file_destination(&snapshot, "src/area/second-origin/record.ts");
+        let arrivals = [first.as_deref(), second.as_deref()]
+            .into_iter()
+            .flatten()
+            .filter(|to| to.ends_with("destination"))
+            .count();
+
+        assert_eq!(
+            arrivals, 1,
+            "the first claimant may occupy a free rendered leaf, but every later claimant must \
+             be rejected; \
+             destinations {first:?} and {second:?}"
+        );
+    }
+
+    #[test]
+    fn should_allow_same_rendered_leaf_names_in_distinct_folders() {
+        let mut first = relief_file(0, "first");
+        first.name = SmolStr::new("src/left/record.ts");
+        let mut second = relief_file(1, "second");
+        second.name = SmolStr::new("src/right/record.ts");
+        let condensation = singleton_condensation(2);
+        let partition = Partition::from_assignment(vec![ClusterId(0), ClusterId(1)], 2);
+        let guard = RelocationIdentityGuard::new(
+            &[first, second],
+            &condensation,
+            &partition,
+            &partition,
+            None,
+        );
+
+        assert!(guard.accepts(&partition));
+    }
+
+    #[test]
+    fn should_allow_same_rendered_leaf_names_across_transparent_namespaces() {
+        let mut first = relief_file(0, "first");
+        first.name = SmolStr::new("left/area/record.ts");
+        first.namespace = SmolStr::new("left");
+        let mut second = relief_file(1, "second");
+        second.name = SmolStr::new("right/area/record.ts");
+        second.namespace = SmolStr::new("right");
+        let condensation = singleton_condensation(2);
+        let partition = Partition::from_assignment(vec![ClusterId(0), ClusterId(0)], 1);
+        let guard = RelocationIdentityGuard::new(
+            &[first, second],
+            &condensation,
+            &partition,
+            &partition,
+            None,
+        );
+
+        assert!(guard.accepts(&partition));
+    }
+
+    #[test]
+    fn should_preserve_transparent_namespaces_for_synthetic_package_workspaces() {
+        let paths = vec![
+            SmolStr::new("packages/unit/left/entry.ts"),
+            SmolStr::new("packages/unit/right/entry.ts"),
+        ];
+        let layout = Layout {
+            package_roots: vec![SmolStr::new("packages/unit")],
+            source_roots: vec![SmolStr::new("left"), SmolStr::new("right")],
+        };
+        let built = build_laminar_tree(&paths, "workspace", &layout);
+        let snapshot = snapshot(
+            paths
+                .iter()
+                .enumerate()
+                .map(|(index, path)| {
+                    node(
+                        u32::try_from(index).unwrap_or(u32::MAX),
+                        "entry",
+                        built
+                            .files
+                            .get(path)
+                            .map_or(u32::MAX, |container| container.0),
+                        Polarity::Production,
+                    )
+                })
+                .collect(),
+            Vec::new(),
+            built.tree.containers().to_vec(),
+        );
+
+        let (files, _) = file_inventory(snapshot.ir());
+        let namespaces: BTreeSet<&str> = files.iter().map(|file| file.namespace.as_str()).collect();
+
+        assert_eq!(namespaces, BTreeSet::from(["left", "right"]));
+    }
+
+    #[test]
+    fn should_treat_rendered_leaf_identity_as_case_sensitive() {
+        let mut lower = relief_file(0, "lower");
+        lower.name = SmolStr::new("left/area/record.ts");
+        lower.namespace = SmolStr::new("left");
+        let mut upper = relief_file(1, "upper");
+        upper.name = SmolStr::new("left/area/Record.ts");
+        upper.namespace = SmolStr::new("left");
+        let condensation = singleton_condensation(2);
+        let partition = Partition::from_assignment(vec![ClusterId(0), ClusterId(0)], 1);
+        let guard = RelocationIdentityGuard::new(
+            &[lower, upper],
+            &condensation,
+            &partition,
+            &partition,
+            None,
+        );
+
+        assert!(guard.accepts(&partition));
+    }
+
+    #[test]
+    fn should_move_a_file_body_only_with_its_whole_file() {
+        let snapshot = rendered_leaf_collision_snapshot(true, true);
+
+        let destination = greenfield_file_destination(&snapshot, "src/area/origin/record.ts");
+
+        assert!(
+            destination
+                .as_deref()
+                .is_some_and(|to| to.ends_with("destination")),
+            "file-body content must retain its file-grain mobility; destination {destination:?}"
+        );
+    }
+
     #[test]
     fn should_build_candidates_with_real_names_and_five_levels() {
         // two files under a real directory path, each holding a multi-line
@@ -7465,12 +8073,12 @@ mod tests {
                 container(1, "pa", ScopeLevel::Package, Some(0)),
                 container(2, "pa/d1", ScopeLevel::Domain, Some(1)),
                 container(3, "shared", ScopeLevel::Folder, Some(2)),
-                container(4, "src/d1/f1.ts", ScopeLevel::File, Some(3)),
-                container(5, "src/d1/f2.ts", ScopeLevel::File, Some(3)),
+                container(4, "src/shared/f1.ts", ScopeLevel::File, Some(3)),
+                container(5, "src/shared/f2.ts", ScopeLevel::File, Some(3)),
                 container(6, "pa/d2", ScopeLevel::Domain, Some(1)),
                 container(7, "shared", ScopeLevel::Folder, Some(6)),
-                container(8, "src/d2/g1.ts", ScopeLevel::File, Some(7)),
-                container(9, "src/d2/g2.ts", ScopeLevel::File, Some(7)),
+                container(8, "src/shared/g1.ts", ScopeLevel::File, Some(7)),
+                container(9, "src/shared/g2.ts", ScopeLevel::File, Some(7)),
             ],
         );
         let mut config = config_with_k(2);
@@ -7505,8 +8113,8 @@ mod tests {
                     }),
                     "every folder must carry its real or qualified key, got {folders:?}"
                 );
-                let first = folder_of(&folders, "src/d1/f1.ts");
-                let second = folder_of(&folders, "src/d2/g1.ts");
+                let first = folder_of(&folders, "src/shared/f1.ts");
+                let second = folder_of(&folders, "src/shared/g1.ts");
                 merged_seen |=
                     first == Some("shared (pa pa.d1)") && second == Some("shared (pa pa.d2)");
             }
@@ -8665,6 +9273,7 @@ mod tests {
             container: u32::try_from(index).unwrap_or(u32::MAX),
             name: SmolStr::new(format!("{stem}_{index:02}.py")),
             production_sloc: 10,
+            namespace: SmolStr::new(""),
             home: LaminarHome {
                 folder: SmolStr::new("hub"),
                 domain: SmolStr::new("hub"),
@@ -9119,6 +9728,123 @@ mod tests {
         );
     }
 
+    /// Builds the symbol-relocation shape with both files in either one or two
+    /// transparent source-root namespaces. Both roots normalize to the same
+    /// laminar homes, leaving namespace identity as the only changed premise.
+    fn transparent_namespace_symbol_snapshot(crosses_namespace: bool) -> Snapshot {
+        let origin_namespace = "left";
+        let destination_namespace = if crosses_namespace { "right" } else { "left" };
+        let origin_path = SmolStr::new(format!("{origin_namespace}/area/keep/a.ts"));
+        let destination_path = SmolStr::new(format!("{destination_namespace}/area/sink/b.ts"));
+        let paths = vec![origin_path.clone(), destination_path.clone()];
+        let layout = Layout {
+            package_roots: Vec::new(),
+            source_roots: vec![SmolStr::new("left"), SmolStr::new("right")],
+        };
+        let built = build_laminar_tree(&paths, "app", &layout);
+        let origin_container = built
+            .files
+            .get(&origin_path)
+            .map_or(u32::MAX, |container| container.0);
+        let destination_container = built
+            .files
+            .get(&destination_path)
+            .map_or(u32::MAX, |container| container.0);
+        snapshot(
+            vec![
+                node(0, "subject", origin_container, Polarity::Production),
+                node(1, "mate", origin_container, Polarity::Production),
+                node(
+                    2,
+                    "first_consumer",
+                    destination_container,
+                    Polarity::Production,
+                ),
+                node(
+                    3,
+                    "second_consumer",
+                    destination_container,
+                    Polarity::Production,
+                ),
+                node(4, "base", destination_container, Polarity::Production),
+            ],
+            vec![inherits(2, 0), inherits(3, 0), edge(4, 2), edge(4, 3)],
+            built.tree.containers().to_vec(),
+        )
+    }
+
+    fn greenfield_symbol_moves(snapshot: &Snapshot) -> Vec<SymbolMove> {
+        analyze(snapshot, &config_with_k(1))
+            .ok()
+            .and_then(|result| result.modes.greenfield)
+            .and_then(|mode| mode.candidates.into_iter().next())
+            .map(|candidate| candidate.symbol_moves)
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn should_veto_a_symbol_move_across_transparent_namespaces() {
+        let snapshot = transparent_namespace_symbol_snapshot(true);
+        let moves = greenfield_symbol_moves(&snapshot);
+
+        assert!(
+            moves.iter().all(|entry| entry.symbol != "subject"),
+            "a symbol must remain inside its pass-start transparent namespace; got {moves:?}"
+        );
+    }
+
+    #[test]
+    fn should_allow_a_symbol_move_within_its_transparent_namespace() {
+        let snapshot = transparent_namespace_symbol_snapshot(false);
+        let moves = greenfield_symbol_moves(&snapshot);
+
+        assert!(
+            moves.iter().any(|entry| {
+                entry.symbol == "subject"
+                    && entry.from_path == "left/area/keep/a.ts"
+                    && entry.to_path == "left/area/sink/b.ts"
+            }),
+            "an ordinary symbol move inside one namespace must remain eligible; got {moves:?}"
+        );
+    }
+
+    #[test]
+    fn should_reject_a_cross_namespace_symbol_in_the_final_overlay() {
+        let snapshot = transparent_namespace_symbol_snapshot(true);
+        let tests = TestPolicy::defaults();
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.objective.greenfield(),
+            false,
+            &tests,
+        );
+        let assembled = solver.assemble(&solver.real_partition);
+        let source = assembled
+            .placement
+            .get(&0)
+            .copied()
+            .unwrap_or(ContainerId(u32::MAX));
+        let destination = assembled
+            .placement
+            .get(&2)
+            .copied()
+            .unwrap_or(ContainerId(u32::MAX));
+        let outcome = SymbolOutcome {
+            overlay: BTreeMap::from([(0, destination)]),
+            relocations: vec![SymbolRelocation {
+                node: 0,
+                from_file: source,
+                to_file: destination,
+                delta: 1.0,
+            }],
+            total: 0.0,
+        };
+
+        assert!(!outcome.preserves_namespaces(&assembled));
+    }
+
     /// The FIX04 doctrine at symbol grain: zero-priced edges nominate nothing,
     /// so a symbol connected only through re-exports is never relocated, no
     /// matter how many of them point across folders.
@@ -9258,6 +9984,7 @@ mod tests {
             container,
             name: SmolStr::new(path),
             production_sloc: sloc,
+            namespace: SmolStr::new(""),
             home: LaminarHome {
                 folder: SmolStr::new(""),
                 domain: SmolStr::new(""),
@@ -9341,6 +10068,45 @@ mod tests {
             rebuilt.is_none(),
             "no token group of two forms among the strangers, and the bonded \
              residual is a lone file, so the folder must stay put"
+        );
+    }
+
+    #[test]
+    fn should_keep_a_collision_free_roof_subgroup_when_one_leaf_is_duplicated() {
+        let graph = Csr::from_weighted_edges(5, &[(3_u32, 4_u32, 1.0_f32)]);
+        let condensation = singleton_condensation(5);
+        let base = Partition::from_assignment(vec![ClusterId(0); 5], 1);
+        let files = vec![
+            file_info(0, "left/record.ts", 1),
+            file_info(1, "right/record.ts", 1),
+            file_info(2, "record-helper.ts", 1),
+            file_info(3, "anchor.ts", 1),
+            file_info(4, "resident.ts", 1),
+        ];
+        let mut names = vec![SmolStr::new("misc")];
+        let mut synthetic = vec![false];
+
+        let rebuilt = synthesize_roof_rebuild(
+            &files,
+            &condensation,
+            &graph,
+            &[false; 5],
+            &base,
+            &mut names,
+            &mut synthetic,
+        );
+        let guard =
+            RelocationIdentityGuard::new(&files, &condensation, &base, &base, rebuilt.as_ref());
+
+        let retained = rebuilt.as_ref().is_some_and(|partition| {
+            partition.cluster_of(0) == partition.cluster_of(2)
+                && partition.cluster_of(0) != partition.cluster_of(1)
+                && guard.accepts(partition)
+        });
+        assert!(
+            retained,
+            "roof synthesis must retain the unique record-helper subgroup while separating the \
+             duplicate record leaf; partition {rebuilt:?}"
         );
     }
 
@@ -9864,6 +10630,35 @@ mod tests {
     }
 
     #[test]
+    fn should_veto_relocating_an_executable_file_body_independently() {
+        let mut file_body = node(0, "<module>", 3, Polarity::Production);
+        file_body.kind = NodeKind::FileBody;
+        let snapshot = snapshot(
+            vec![
+                file_body,
+                node(1, "origin_resident", 3, Polarity::Production),
+                node(2, "destination_resident", 4, Polarity::Production),
+            ],
+            vec![edge(2, 0), edge(2, 0)],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "origin", ScopeLevel::Folder, Some(0)),
+                container(2, "destination", ScopeLevel::Folder, Some(0)),
+                container(3, "origin/entry.ts", ScopeLevel::File, Some(1)),
+                container(4, "destination/consumer.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+
+        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            !accepted && relocated.is_empty(),
+            "an executable file body must remain attached to its source file; \
+             relocations {relocated:?}"
+        );
+    }
+
+    #[test]
     fn should_veto_moving_a_runtime_symbol_into_a_type_only_file() {
         let mut record_type = node(2, "record_type", 4, Polarity::Production);
         record_type.kind = NodeKind::Type;
@@ -9949,6 +10744,38 @@ mod tests {
             accepted && relocated == [0],
             "a runtime symbol may enter a destination that already contains \
              runtime code; relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_treat_a_file_body_as_runtime_when_classifying_a_destination() {
+        let mut file_body = node(2, "<module>", 4, Polarity::Production);
+        file_body.kind = NodeKind::FileBody;
+        let mut record_type = node(3, "record_type", 4, Polarity::Production);
+        record_type.kind = NodeKind::Type;
+        let snapshot = snapshot(
+            vec![
+                node(0, "build_record", 3, Polarity::Production),
+                node(1, "origin_resident", 3, Polarity::Production),
+                file_body,
+                record_type,
+            ],
+            vec![type_ref(0, 3)],
+            vec![
+                container(0, "src", ScopeLevel::PackageGroup, None),
+                container(1, "origin", ScopeLevel::Folder, Some(0)),
+                container(2, "records", ScopeLevel::Folder, Some(0)),
+                container(3, "origin/build.ts", ScopeLevel::File, Some(1)),
+                container(4, "records/model.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+
+        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            accepted && relocated == [0],
+            "a file body makes a typed destination mixed rather than type-only; \
+             relocations {relocated:?}"
         );
     }
 

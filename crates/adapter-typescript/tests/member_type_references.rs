@@ -1,6 +1,6 @@
 use smol_str::SmolStr;
 use strata_adapter_typescript::TypeScriptAdapter;
-use strata_ir::{Adapter, EdgeKind, Hardness, IrFragment, NodeId, SourceFile};
+use strata_ir::{Adapter, EdgeKind, Hardness, IrFragment, NodeId, NodeKind, SourceFile};
 
 fn bind_inline(contents: &str) -> Result<IrFragment, String> {
     let adapter = TypeScriptAdapter::new(".");
@@ -46,6 +46,24 @@ fn edges_from(
                 )
         })
         .collect()
+}
+
+#[test]
+fn should_preserve_a_top_level_call_as_file_body_evidence() -> Result<(), String> {
+    let fragment = bind_inline("function perform(): void {}\nperform();")?;
+    let body = fragment
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::FileBody)
+        .ok_or_else(|| "expected a semantic file-body node".to_owned())?;
+    let target = node_id(&fragment, "perform")?;
+    let call_survives = fragment
+        .edges
+        .iter()
+        .any(|edge| edge.source == body.id && edge.target == target && edge.kind == EdgeKind::Call);
+
+    assert_eq!((body.effective_size, call_survives), (1, true));
+    Ok(())
 }
 
 #[test]
