@@ -59,23 +59,23 @@
  in all). Every suggestion relocates whole files (12 in all).
 
  --------------------------------------------------------------------------------
- 1 · Move `ingest_00.py` into `relief-nest-py/hub/ingest`
+ 1 · Move `relief-nest-py/hub/ingest_00.py` into `relief-nest-py/hub/ingest`
 --------------------------------------------------------------------------------
  grain : whole files
 
- leaf           | before place         | after place
- `ingest_00.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
- `ingest_01.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
- `ingest_02.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
- `ingest_03.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
- `ingest_04.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
- `ingest_05.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
- `ingest_06.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
- `ingest_07.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
- `ingest_08.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
- `ingest_09.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
- `ingest_10.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
- `ingest_11.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ leaf                              | before place         | after place
+ `relief-nest-py/hub/ingest_00.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `relief-nest-py/hub/ingest_01.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `relief-nest-py/hub/ingest_02.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `relief-nest-py/hub/ingest_03.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `relief-nest-py/hub/ingest_04.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `relief-nest-py/hub/ingest_05.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `relief-nest-py/hub/ingest_06.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `relief-nest-py/hub/ingest_07.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `relief-nest-py/hub/ingest_08.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `relief-nest-py/hub/ingest_09.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `relief-nest-py/hub/ingest_10.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
+ `relief-nest-py/hub/ingest_11.py` | `relief-nest-py/hub` | `relief-nest-py/hub/ingest`
 
  caption  WHY relieves `relief-nest-py/hub`, which holds 24 against a cap of 20.
 
@@ -99,7 +99,7 @@
 
  capacity (1) — containers and files over their caps today:
 
- folder `hub` holds 24 against a cap of 20
+ folder `relief-nest-py/hub` holds 24 against a cap of 20
 
 ================================================================================
  §5  Score delta — current → candidate 1

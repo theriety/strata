@@ -703,7 +703,7 @@ fn should_deliver_the_greenfield_diff_for_the_nested_python_fixture() {
     // the greenfield (mu = beta = 0) delta performs exactly the repair the
     // normalized objective can justify: app.py — whose edges pay package-height
     // crossings while loose — joins the geometry chain it depends on, narrated
-    // as one grouped move under the count header with an explicit pull reason.
+    // as one grouped move under the count header with physical source and target.
     // Under the D-37 rescale the spec files' relocation no longer pays for
     // itself, so they stay put; the `follows` narration they used to exercise
     // lives on in the constellation-ts greenfield delta (see the varied-reasons
@@ -726,8 +726,10 @@ fn should_deliver_the_greenfield_diff_for_the_nested_python_fixture() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("pulled by rectangle.py"),
-        "the move names the geometry file that pulled it: {}",
+        outcome
+            .stdout
+            .contains("nested-python/app.py [nested-python → nested-python/geometry]"),
+        "the move names its dataset-qualified physical source and destination: {}",
         outcome.stdout
     );
 }
@@ -1334,7 +1336,7 @@ fn should_render_a_greenfield_candidate_tree_for_the_workspace_fixture() {
 fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
     // the narration contract is pinned on constellation-ts's greenfield delta:
     // four move groups over five files, each destination a real directory-
-    // derived cluster name (`constellation-ts/model`) reached through a
+    // derived cluster name (`constellation-ts/src/model`) reached through a
     // dependency-pull reason. workspace-rust no longer carries this contract —
     // its greenfield candidate now converges back to the identity layout, so
     // diffing it against current narrates `no moves`. Synthetic grab-bag
@@ -1352,7 +1354,7 @@ fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("→ constellation-ts/model]"),
+        outcome.stdout.contains("→ constellation-ts/src/model]"),
         "the pulled files merge into the real `model` cluster of the package: {}",
         outcome.stdout
     );

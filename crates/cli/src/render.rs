@@ -247,6 +247,7 @@ fn tail(name: &str, budget: usize) -> String {
 /// The basename is the default; when basenames collide inside one table the
 /// path suffix grows from the end until every colliding member is unique, and
 /// if duplicates survive that, every leaf falls back to its full relative path.
+#[cfg(test)]
 fn leaf_names(files: &[FileMove]) -> Vec<String> {
     let base = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
     let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
@@ -807,7 +808,7 @@ fn other_mode_name<'a>(result: &'a AnalyzeResult, featured_name: &str) -> &'a st
 /// Renders one numbered suggestion: title bar, grain label, the three-column
 /// change table (with explicit shortening honesty), and the captioned why.
 fn suggestion_block(number: usize, entry: &Move) -> Vec<String> {
-    let names = leaf_names(&entry.files);
+    let names: Vec<String> = entry.files.iter().map(|file| file.path.clone()).collect();
     let title_prefix = format!(" {number} · ");
     let (title, title_shortened) = fit_title(
         &title_prefix,
@@ -1913,6 +1914,45 @@ mod tests {
         assert_eq!(
             suggestion_title(MoveKind::Move, &names_of(&["x.ts"]), ""),
             "Move `x.ts` into `(root)`"
+        );
+    }
+
+    #[test]
+    fn should_render_dataset_qualified_physical_file_moves() {
+        let entry = Move {
+            kind: MoveKind::Move,
+            files: vec![FileMove {
+                path: "sample/src/area/origin/item.ts".to_owned(),
+                from: "sample/src/area/origin".to_owned(),
+            }],
+            to: "sample/src/area/destination".to_owned(),
+            reason: MoveReason::Clustering,
+        };
+
+        let rendered = suggestion_block(1, &entry).join("\n");
+        let names = entry
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>();
+        let (table, shortened) = change_table(&entry.files, &names, &entry.to);
+        let table = table.join("\n");
+
+        assert!(
+            rendered.contains(
+                "Move `sample/src/area/origin/item.ts` into `sample/src/area/destination`"
+            ),
+            "the title identifies the physical source file and destination: {rendered}"
+        );
+        assert!(
+            !shortened,
+            "the neutral fixture fits the output grid: {table}"
+        );
+        assert!(
+            table.contains("`sample/src/area/origin/item.ts`")
+                && table.contains("`sample/src/area/origin`")
+                && table.contains("`sample/src/area/destination`"),
+            "the table identifies the physical file, source, and destination: {table}"
         );
     }
 

@@ -90,7 +90,27 @@ pub(crate) fn narrate(
     facts: &FileFacts,
 ) -> Vec<Move> {
     let before = index_files(current);
-    let after = index_files(candidate);
+    let mut after = index_files(candidate);
+    for (file, logical) in &after.logical_parent_of {
+        let Some(namespace) = before.namespace_of.get(file) else {
+            continue;
+        };
+        let mut physical = namespace.clone();
+        physical.extend(logical.iter().cloned());
+        after.parent_of.insert(file.clone(), physical);
+    }
+    after.members_of.clear();
+    for (file, parent) in &after.parent_of {
+        after
+            .members_of
+            .entry(parent.clone())
+            .or_default()
+            .push(file.clone());
+    }
+    for members in after.members_of.values_mut() {
+        members.sort();
+    }
+    after.entry_count = folder_entry_counts(&after.parent_of);
 
     // the moved set: (file, origin, destination) with a changed folded parent.
     let mut moved: Vec<(&String, &Vec<String>, &Vec<String>)> = Vec::new();
@@ -165,8 +185,55 @@ struct GroupAccumulator<'a> {
 struct FilePlacements {
     /// Each file path's folded parent path.
     parent_of: BTreeMap<String, Vec<String>>,
+    /// Each file's logical destination before physical namespace qualification.
+    logical_parent_of: BTreeMap<String, Vec<String>>,
+    /// Dataset and transparent physical-root segments retained across a move.
+    namespace_of: BTreeMap<String, Vec<String>>,
     /// The (sorted) member file paths of each folded folder path.
     members_of: BTreeMap<Vec<String>, Vec<String>>,
+    /// Direct files plus distinct direct child folders at each physical path.
+    entry_count: BTreeMap<Vec<String>, u32>,
+}
+
+fn folder_entry_counts(parent_of: &BTreeMap<String, Vec<String>>) -> BTreeMap<Vec<String>, u32> {
+    let mut counts = BTreeMap::new();
+    let mut children: BTreeMap<Vec<String>, BTreeSet<String>> = BTreeMap::new();
+    for folder in parent_of.values() {
+        *counts.entry(folder.clone()).or_default() += 1;
+        for depth in 1..folder.len() {
+            let (Some(parent), Some(child)) = (folder.get(..depth), folder.get(depth)) else {
+                continue;
+            };
+            children
+                .entry(parent.to_vec())
+                .or_default()
+                .insert(child.clone());
+        }
+    }
+    for (folder, names) in children {
+        *counts.entry(folder).or_default() += u32::try_from(names.len()).unwrap_or(u32::MAX);
+    }
+    counts
+}
+
+/// Projects a repository-relative path beneath its package-group root.
+///
+/// Nested package roots can be present at the end of `root` and the beginning
+/// of `relative`. The longest boundary overlap is emitted once; every other
+/// segment keeps its original order.
+pub(crate) fn project_physical_path(root: &str, relative: &[String]) -> Vec<String> {
+    let root: Vec<String> = root
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+        .collect();
+    let overlap = (0..=root.len().min(relative.len()))
+        .rev()
+        .find(|&length| root.get(root.len().saturating_sub(length)..) == relative.get(..length))
+        .unwrap_or(0);
+    let mut projected = root;
+    projected.extend(relative.iter().skip(overlap).cloned());
+    projected
 }
 
 /// Indexes a tree's file containers by their real folder key.
@@ -186,6 +253,8 @@ fn index_files(tree: &ContainerTree) -> FilePlacements {
         .collect();
 
     let mut parent_of = BTreeMap::new();
+    let mut logical_parent_of = BTreeMap::new();
+    let mut namespace_of = BTreeMap::new();
     let mut members_of: BTreeMap<Vec<String>, Vec<String>> = BTreeMap::new();
     for container in containers {
         if container.level != ScopeLevel::File {
@@ -193,7 +262,7 @@ fn index_files(tree: &ContainerTree) -> FilePlacements {
         }
         let folder = container.parent.and_then(|parent| by_id.get(&parent.0));
         let folder_key = folder.map_or("", |folder| folder.name.as_str());
-        let mut segments: Vec<String> = folder_key
+        let mut logical_segments: Vec<String> = folder_key
             .split('/')
             .filter(|segment| !segment.is_empty())
             .map(str::to_owned)
@@ -202,20 +271,74 @@ fn index_files(tree: &ContainerTree) -> FilePlacements {
         // root-level file's move target is its package, not an invented
         // `.../workspace` path: drop the trailing synthetic segment.
         if folder.is_some_and(|folder| folder.synthetic) {
-            segments.pop();
+            logical_segments.pop();
         }
-        parent_of.insert(container.name.to_string(), segments.clone());
-        members_of
-            .entry(segments)
-            .or_default()
-            .push(container.name.to_string());
+        let mut ancestor = Some(container);
+        let mut dataset = None;
+        while let Some(current) = ancestor {
+            if current.level == ScopeLevel::PackageGroup {
+                dataset = Some(current.name.as_str());
+            }
+            ancestor = current
+                .parent
+                .and_then(|parent| by_id.get(&parent.0).copied());
+        }
+        let dataset = dataset.unwrap_or("");
+        let dataset_segments: Vec<&str> = dataset
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        if logical_segments.len() >= dataset_segments.len()
+            && logical_segments
+                .iter()
+                .map(String::as_str)
+                .zip(dataset_segments.iter().copied())
+                .all(|(left, right)| left == right)
+        {
+            logical_segments.drain(..dataset_segments.len());
+        }
+        let raw_segments: Vec<String> = container
+            .name
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_owned)
+            .collect();
+        let physical_file_segments = project_physical_path(dataset, &raw_segments);
+        let raw_directory = physical_file_segments
+            .get(..physical_file_segments.len().saturating_sub(1))
+            .unwrap_or_default();
+        let common_suffix = raw_directory
+            .iter()
+            .rev()
+            .zip(logical_segments.iter().rev())
+            .take_while(|(left, right)| **left == right.as_str())
+            .count();
+        let namespace_end = raw_directory.len().saturating_sub(common_suffix);
+        let namespace = raw_directory
+            .get(..namespace_end)
+            .unwrap_or_default()
+            .to_vec();
+        let mut segments = namespace.clone();
+        segments.extend(logical_segments);
+        let physical_file = physical_file_segments.join("/");
+        parent_of.insert(physical_file.clone(), segments.clone());
+        logical_parent_of.insert(
+            physical_file.clone(),
+            segments.get(namespace.len()..).unwrap_or_default().to_vec(),
+        );
+        namespace_of.insert(physical_file.clone(), namespace);
+        members_of.entry(segments).or_default().push(physical_file);
     }
     for members in members_of.values_mut() {
         members.sort();
     }
+    let entry_count = folder_entry_counts(&parent_of);
     FilePlacements {
         parent_of,
+        logical_parent_of,
+        namespace_of,
         members_of,
+        entry_count,
     }
 }
 
@@ -323,7 +446,12 @@ fn group_reason(ctx: &GroupContext<'_>) -> MoveReason {
         let Some(members) = ctx.before.members_of.get(*origin) else {
             continue;
         };
-        let size = u32::try_from(members.len()).unwrap_or(u32::MAX);
+        let size = ctx
+            .before
+            .entry_count
+            .get(*origin)
+            .copied()
+            .unwrap_or_else(|| u32::try_from(members.len()).unwrap_or(u32::MAX));
         if size <= ctx.facts.folder_cap {
             continue;
         }
@@ -520,10 +648,10 @@ mod tests {
 
         assert_eq!(moves.len(), 1);
         let entry = moves.first();
-        assert_eq!(entry.map(|m| m.to.clone()), Some("cts/core".to_owned()));
+        assert_eq!(entry.map(|m| m.to.clone()), Some("cts/src/core".to_owned()));
         assert_eq!(
             entry.map(|m| m.files.iter().map(|f| f.from.clone()).collect::<Vec<_>>()),
-            Some(strings(&["cts/util"]))
+            Some(strings(&["cts/src/util"]))
         );
     }
 
@@ -546,6 +674,143 @@ mod tests {
         );
         assert_eq!(entry.map(|m| m.to.clone()), Some("src/io".to_owned()));
         assert_eq!(entry.map(|m| m.kind), Some(MoveKind::Move));
+    }
+
+    #[test]
+    fn should_preserve_physical_namespaces_in_dataset_qualified_moves() {
+        let current = ContainerTree::new(vec![
+            container(0, "sample", ScopeLevel::PackageGroup, None),
+            container(1, "area", ScopeLevel::Domain, Some(0)),
+            container(2, "area/origin", ScopeLevel::Folder, Some(1)),
+            container(3, "area/destination", ScopeLevel::Folder, Some(1)),
+            container(4, "src/area/origin/item.ts", ScopeLevel::File, Some(2)),
+            container(
+                5,
+                "spec/area/origin/item.spec.ts",
+                ScopeLevel::File,
+                Some(2),
+            ),
+            container(
+                6,
+                "src/area/destination/anchor.ts",
+                ScopeLevel::File,
+                Some(3),
+            ),
+            container(
+                7,
+                "spec/area/destination/anchor.spec.ts",
+                ScopeLevel::File,
+                Some(3),
+            ),
+        ]);
+        let candidate = ContainerTree::new(vec![
+            container(0, "sample", ScopeLevel::PackageGroup, None),
+            container(1, "area", ScopeLevel::Domain, Some(0)),
+            container(2, "area/origin", ScopeLevel::Folder, Some(1)),
+            container(3, "area/destination", ScopeLevel::Folder, Some(1)),
+            container(4, "src/area/origin/item.ts", ScopeLevel::File, Some(3)),
+            container(
+                5,
+                "spec/area/origin/item.spec.ts",
+                ScopeLevel::File,
+                Some(3),
+            ),
+            container(
+                6,
+                "src/area/destination/anchor.ts",
+                ScopeLevel::File,
+                Some(3),
+            ),
+            container(
+                7,
+                "spec/area/destination/anchor.spec.ts",
+                ScopeLevel::File,
+                Some(3),
+            ),
+        ]);
+
+        let moves = narrate(&current, &candidate, &plain_facts());
+
+        assert_eq!(moves.len(), 2, "physical namespaces narrate separately");
+        let physical_moves: Vec<(String, String, String)> = moves
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .files
+                    .first()
+                    .map(|file| (file.path.clone(), file.from.clone(), entry.to.clone()))
+            })
+            .collect();
+        assert_eq!(
+            physical_moves,
+            vec![
+                (
+                    "sample/spec/area/origin/item.spec.ts".to_owned(),
+                    "sample/spec/area/origin".to_owned(),
+                    "sample/spec/area/destination".to_owned(),
+                ),
+                (
+                    "sample/src/area/origin/item.ts".to_owned(),
+                    "sample/src/area/origin".to_owned(),
+                    "sample/src/area/destination".to_owned(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn should_order_nested_package_and_transparent_roots_once_in_narration() {
+        let current = ContainerTree::new(vec![
+            container(0, "workspace/packages/unit", ScopeLevel::PackageGroup, None),
+            container(1, "area", ScopeLevel::Folder, Some(0)),
+            container(2, "target", ScopeLevel::Folder, Some(0)),
+            container(
+                3,
+                "packages/unit/left/area/item.ts",
+                ScopeLevel::File,
+                Some(1),
+            ),
+            container(
+                4,
+                "packages/unit/left/target/anchor.ts",
+                ScopeLevel::File,
+                Some(2),
+            ),
+        ]);
+        let candidate = ContainerTree::new(vec![
+            container(0, "workspace/packages/unit", ScopeLevel::PackageGroup, None),
+            container(1, "area", ScopeLevel::Folder, Some(0)),
+            container(2, "target", ScopeLevel::Folder, Some(0)),
+            container(
+                3,
+                "packages/unit/left/area/item.ts",
+                ScopeLevel::File,
+                Some(2),
+            ),
+            container(
+                4,
+                "packages/unit/left/target/anchor.ts",
+                ScopeLevel::File,
+                Some(2),
+            ),
+        ]);
+
+        let moves = narrate(&current, &candidate, &plain_facts());
+        let moved = moves.first().and_then(|entry| {
+            entry
+                .files
+                .first()
+                .map(|file| (file.path.as_str(), file.from.as_str(), entry.to.as_str()))
+        });
+
+        assert_eq!(
+            moved,
+            Some((
+                "workspace/packages/unit/left/area/item.ts",
+                "workspace/packages/unit/left/area",
+                "workspace/packages/unit/left/target",
+            ))
+        );
     }
 
     #[test]
@@ -794,7 +1059,7 @@ mod tests {
         );
         assert_eq!(
             moves.first().map(|m| m.reason.to_string()),
-            Some("relieves over-cap folder src/core (4/3 files)".to_owned())
+            Some("relieves over-cap folder src/core (4/3 entries)".to_owned())
         );
     }
 

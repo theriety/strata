@@ -384,7 +384,7 @@ impl std::fmt::Display for MoveReason {
                 cap,
             } => write!(
                 f,
-                "relieves over-cap folder {container} ({count}/{cap} files)"
+                "relieves over-cap folder {container} ({count}/{cap} entries)"
             ),
             Self::PulledBy { partner, weight } => write!(
                 f,
@@ -605,7 +605,7 @@ mod tests {
                     count: 4,
                     cap: 3,
                 },
-                "relieves over-cap folder app/src/core (4/3 files)",
+                "relieves over-cap folder app/src/core (4/3 entries)",
             ),
             (
                 MoveReason::PulledBy {

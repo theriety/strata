@@ -12,7 +12,7 @@ Score `1.4728`.
 
 ### Violations
 
-- **Capacity** (Violation) at relief-nest-py, hub: folder `hub` holds 24 against a cap of 20
+- **Capacity** (Violation) at relief-nest-py, hub: folder `relief-nest-py/hub` holds 24 against a cap of 20
 
 ## Anchored candidates
 
@@ -27,19 +27,19 @@ _Current layout violates capacity caps; best candidate resolves 1 of 1 capacity 
 **Moves**
 
 ```
-move — relieves over-cap folder relief-nest-py/hub (24/20 files)
-  1. hub/ingest_00.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  2. hub/ingest_01.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  3. hub/ingest_02.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  4. hub/ingest_03.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  5. hub/ingest_04.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  6. hub/ingest_05.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  7. hub/ingest_06.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  8. hub/ingest_07.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  9. hub/ingest_08.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  10. hub/ingest_09.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  11. hub/ingest_10.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  12. hub/ingest_11.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+move — relieves over-cap folder relief-nest-py/hub (24/20 entries)
+  1. relief-nest-py/hub/ingest_00.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  2. relief-nest-py/hub/ingest_01.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  3. relief-nest-py/hub/ingest_02.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  4. relief-nest-py/hub/ingest_03.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  5. relief-nest-py/hub/ingest_04.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  6. relief-nest-py/hub/ingest_05.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  7. relief-nest-py/hub/ingest_06.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  8. relief-nest-py/hub/ingest_07.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  9. relief-nest-py/hub/ingest_08.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  10. relief-nest-py/hub/ingest_09.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  11. relief-nest-py/hub/ingest_10.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  12. relief-nest-py/hub/ingest_11.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
 ```
 
 ## Greenfield candidates
@@ -55,18 +55,18 @@ _Current layout violates capacity caps; best candidate resolves 1 of 1 capacity 
 **Moves**
 
 ```
-move — relieves over-cap folder relief-nest-py/hub (24/20 files)
-  1. hub/ingest_00.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  2. hub/ingest_01.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  3. hub/ingest_02.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  4. hub/ingest_03.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  5. hub/ingest_04.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  6. hub/ingest_05.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  7. hub/ingest_06.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  8. hub/ingest_07.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  9. hub/ingest_08.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  10. hub/ingest_09.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  11. hub/ingest_10.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
-  12. hub/ingest_11.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+move — relieves over-cap folder relief-nest-py/hub (24/20 entries)
+  1. relief-nest-py/hub/ingest_00.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  2. relief-nest-py/hub/ingest_01.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  3. relief-nest-py/hub/ingest_02.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  4. relief-nest-py/hub/ingest_03.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  5. relief-nest-py/hub/ingest_04.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  6. relief-nest-py/hub/ingest_05.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  7. relief-nest-py/hub/ingest_06.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  8. relief-nest-py/hub/ingest_07.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  9. relief-nest-py/hub/ingest_08.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  10. relief-nest-py/hub/ingest_09.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  11. relief-nest-py/hub/ingest_10.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
+  12. relief-nest-py/hub/ingest_11.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
 ```
 

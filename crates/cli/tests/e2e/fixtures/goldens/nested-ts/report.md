@@ -38,8 +38,8 @@ _Fewer than the requested candidates survived; the solution space converged._
 
 ```
 move — pulled by rectangle.ts (w 2.0)
-  1. src/app.ts [nested-ts → nested-ts/geometry]
+  1. nested-ts/src/app.ts [nested-ts/src → nested-ts/src/geometry]
 move — follows app.ts
-  2. src/__tests__/app.spec.ts [nested-ts/__tests__ → nested-ts/geometry]
+  2. nested-ts/src/__tests__/app.spec.ts [nested-ts/src/__tests__ → nested-ts/src/geometry]
 ```
 

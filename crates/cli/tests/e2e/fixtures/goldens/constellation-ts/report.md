@@ -38,13 +38,13 @@ _Fewer than the requested candidates survived; the solution space converged._
 
 ```
 split — pulled by beta.ts (w 1.0)
-  1. src/util/clamp.ts [constellation-ts/util → constellation-ts/core]
+  1. constellation-ts/src/util/clamp.ts [constellation-ts/src/util → constellation-ts/src/core]
 merge — pulled by matrix.ts (w 1.0)
-  2. src/io/parser.ts [constellation-ts/io → constellation-ts/model]
-  3. src/util/hash.ts [constellation-ts/util → constellation-ts/model]
+  2. constellation-ts/src/io/parser.ts [constellation-ts/src/io → constellation-ts/src/model]
+  3. constellation-ts/src/util/hash.ts [constellation-ts/src/util → constellation-ts/src/model]
 move — pulled by canvas.ts (w 1.0)
-  4. src/core/epsilon.ts [constellation-ts/core → constellation-ts/render]
+  4. constellation-ts/src/core/epsilon.ts [constellation-ts/src/core → constellation-ts/src/render]
 split — follows canvas.ts
-  5. src/util/canvas.spec.ts [constellation-ts/util → constellation-ts/render]
+  5. constellation-ts/src/util/canvas.spec.ts [constellation-ts/src/util → constellation-ts/src/render]
 ```
 

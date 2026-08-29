@@ -38,6 +38,6 @@ _Fewer than the requested candidates survived; the solution space converged._
 
 ```
 move — pulled by rectangle.py (w 2.0)
-  1. app.py [nested-python → nested-python/geometry]
+  1. nested-python/app.py [nested-python → nested-python/geometry]
 ```
 

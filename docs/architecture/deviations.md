@@ -362,6 +362,7 @@
 - **QUAL-P3-2 bundled**: `walk_capacity` upper levels now measure real binding members deeply instead of direct children only — Domain counts descendant file-binding folders, Package descendant binding domains, PackageGroup descendant binding packages; interior directory chains count once (only folders directly holding files), so nesting can neither launder binding out of a finding nor price one chain segment per path level
 - **Known residual (measured, not fixed)**: on the relief fixture the relieved halves still bleed their chain-head SCCs ({00,01} of each 12-chain) into the root/main cluster during polish. Attribution: each accept trades one crossing for another (cut identical to 17 digits), γ·pressure inert (1.0→1.0 — every container within budget), anchor inert; the entire gain is `imbalance` −0.0096/file. The relief witness therefore stays red on its `keep_together` pins while `capacity_relief`, `separate`, and `size_band` pass. Fixing requires either pricing home-coherence loss (the dead β/path term) or an imbalance-semantics change — both out of FIX03 scope, routed to the ladder
 - **Severity**: major
+- **Update (2026-08-29)**: The recursive/transitive Folder measure is superseded by immediate physical entries (immediate files plus distinct immediate child folders). Capacity remains in the objective with the same coefficient; non-Folder measures are unchanged.
 
 ### D-45: The "breaks N capacity findings" count excludes borderline severity; the engine owns the count
 - **When**: WS-D defect burn-down FIX10 (2026-08-23)

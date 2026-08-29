@@ -26,7 +26,7 @@ _Fewer than the requested candidates survived; the solution space converged._
 
 ```
 move — follows openai.ts
-  1. src/specs/openai.spec.ts [twin-follow-ts/specs → twin-follow-ts/api]
+  1. twin-follow-ts/src/specs/openai.spec.ts [twin-follow-ts/src/specs → twin-follow-ts/src/api]
 ```
 
 ## Greenfield candidates
@@ -41,6 +41,6 @@ _Fewer than the requested candidates survived; the solution space converged._
 
 ```
 move — follows openai.ts
-  1. src/specs/openai.spec.ts [twin-follow-ts/specs → twin-follow-ts/api]
+  1. twin-follow-ts/src/specs/openai.spec.ts [twin-follow-ts/src/specs → twin-follow-ts/src/api]
 ```
 

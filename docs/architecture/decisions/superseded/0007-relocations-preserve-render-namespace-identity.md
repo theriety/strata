@@ -1,3 +1,9 @@
+> **Status:** Superseded
+>
+> **Superseded by:** [ADR-0008 — Physical layout governs relocation and capacity](../0008-physical-layout-governs-relocation-and-capacity.md)
+>
+> **What changed:** Partial supersession: physical move presentation now preserves complete dataset-qualified paths, Folder capacity uses immediate physical entries, and symbol relocation cannot descend into a deeper physical directory; the opaque pass-start namespace boundary and non-relocatable `FileBody` rules remain effective under ADR-0008.
+
 # ADR-0007: Relocations preserve render namespace identity
 
 - **Status:** Accepted

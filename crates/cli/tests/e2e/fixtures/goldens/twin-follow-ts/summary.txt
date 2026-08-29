@@ -55,14 +55,14 @@
  all). Every suggestion relocates whole files (1 in all).
 
  --------------------------------------------------------------------------------
- 1 · Move `openai.spec.ts` into `twin-follow-ts/api`
+ 1 · Move `twin-follow-ts/src/specs/openai.spec.ts` into `twin-follow-ts/src/api`
 --------------------------------------------------------------------------------
  grain : whole files
 
- leaf             | before place           | after place
- `openai.spec.ts` | `twin-follow-ts/specs` | `twin-follow-ts/api`
+ leaf                                      | before place               | after place
+ `twin-follow-ts/src/specs/openai.spec.ts` | `twin-follow-ts/src/specs` | `twin-follow-ts/src/api`
 
- caption  WHY follows `src/api/openai.ts`, which this plan places nearby.
+ caption  WHY follows `twin-follow-ts/src/api/openai.ts`, which this plan places nearby.
 
  The other 1 files are absent because nothing about them changes.
 
@@ -71,8 +71,8 @@
 ================================================================================
  2 containers change as 1 files relocate; the 2 largest:
 
- `twin-follow-ts/api`    +1f
- `twin-follow-ts/specs`  -1f
+ `twin-follow-ts/src/api`    +1f
+ `twin-follow-ts/src/specs`  -1f
 
  the tally balances: every file that leaves a container arrives in one, so the changes sum to zero.
 
