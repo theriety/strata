@@ -195,7 +195,7 @@ fn analyze_e2e_smoke(fixture_name: &str) {
                     problems.push("found no files".to_owned());
                 }
                 if result
-                    .modes
+                    .profiles
                     .anchored
                     .as_ref()
                     .is_none_or(|mode| mode.candidates.is_empty())
@@ -203,7 +203,7 @@ fn analyze_e2e_smoke(fixture_name: &str) {
                     problems.push("anchored produced no candidate".to_owned());
                 }
                 if result
-                    .modes
+                    .profiles
                     .greenfield
                     .as_ref()
                     .is_none_or(|mode| mode.candidates.is_empty())
@@ -237,7 +237,11 @@ fn beta_witness_path_term_is_signed_zero_on_unchanged_layout() {
         Ok(snapshot) => match analyze(&snapshot, &config) {
             Err(error) => problems.push(format!("analyze failed: {error}")),
             Ok(result) => {
-                let current_path_term = result.current.score_breakdown.path;
+                let current_path_term = result
+                    .profiles
+                    .anchored
+                    .as_ref()
+                    .map_or(0.0, |profile| profile.current.score_breakdown.path);
                 if current_path_term >= 0.0 {
                     problems.push(format!(
                         "scoreBreakdown.path reads {current_path_term:+} on the unchanged \
@@ -249,7 +253,7 @@ fn beta_witness_path_term_is_signed_zero_on_unchanged_layout() {
                 // The same invariant holds for any anchored candidate that
                 // proposes no moves at all: identical layout, identical credit.
                 let unchanged_terms = result
-                    .modes
+                    .profiles
                     .anchored
                     .as_ref()
                     .into_iter()

@@ -5,11 +5,10 @@
  reading rules
 --------------------------------------------------------------------------------
  scores    : four decimals, lower is better            -0.1905 → -0.1905
- gain      : improvement over that mode's own starting point, measured in
+ gain      : improvement over that parameter profile's own starting point, measured in
              the same units as the score              +0.0000
- modes     : anchored keeps today's good placements as fixed points while
-             improving the rest; greenfield ignores current paths entirely
-             and rebuilds from imports alone
+ profiles  : anchored and greenfield are complete parameter profiles; by default
+             anchored prices path and anchor terms while greenfield sets them to zero
  leaf      : one relocatable unit — a source file plus the symbols it
              carries; moving it moves both. A table's leaf is whichever unit
              that suggestion acts on: usually the whole file, sometimes one
@@ -17,9 +16,8 @@
  weight    : strength of the import relationship the move satisfies —
              roughly how many import connections it honors; a bigger number
              is more valuable to honor
- comparability: candidate scores are comparable only within one mode of one
-             project — greenfield drops the path and anchor terms and
-             re-baselines. When two candidates share one structure, decide
+ comparability: candidate scores are comparable only within one parameter profile
+             of one project. When two candidates share one structure, decide
              between them by intent, never by raw score.
  rounding  : columns round independently to four decimals; totals compute unrounded
  truncation: always explicit (… +N more); nothing is cut silently
@@ -36,21 +34,39 @@
 ================================================================================
  §1  The candidates this run produced
 ================================================================================
- candidate count : 2  (anchored mode returned 1 · greenfield mode returned 1)
+ candidate count : 2  (anchored profile returned 1 · greenfield profile returned 1)
+ anchored parameter profile (effective):
+   search    candidates 3 · seed 42
+   capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
+   objective imbalance 0.1 · naming 0.3 · path 0.2 · anchor 1.0 · capacity 4.0
+   weights   value-import 1.0 · inheritance 1.5 · call 1.0 · type-reference 0.3 · re-export 0.0
+             same-file-symbol 1.0 · same-file-type 3.0
+   solver    ilp-threshold 300 · timeout-seconds 60
+   diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
+   tests     helper-cap 250 · patterns 0 · builtins true
+ greenfield parameter profile (effective):
+   search    candidates 3 · seed 42
+   capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
+   objective imbalance 0.1 · naming 0.3 · path 0.0 · anchor 0.0 · capacity 4.0
+   weights   value-import 1.0 · inheritance 1.5 · call 1.0 · type-reference 0.3 · re-export 0.0
+             same-file-symbol 1.0 · same-file-type 3.0
+   solver    ilp-threshold 300 · timeout-seconds 60
+   diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
+   tests     helper-cap 250 · patterns 0 · builtins true
 
  candidate 1   anchored/1     score  -0.1905   gain +0.0000   best score
  candidate 2   greenfield/1   score  0.0095   gain +0.0000   same shape, own baseline
 
- comparability: these two gains have different starting points — anchored baselines the current
-                 tree at -0.1905; greenfield re-prices paths and drops anchor credit, baselining
-                 the same tree at 0.0095. Each gain is measured against its own mode's baseline —
-                 never compare across modes.
+ comparability: these two gains have different starting points — anchored prices the current tree
+                 at -0.1905 using its effective coefficients; greenfield prices the same tree at
+                 0.0095 using its own effective coefficients. Each gain is measured against its own
+                 parameter profile's baseline — never compare across parameter profiles.
 
  note  fewer than the requested candidates survived; the solution space converged.
 
- note  both modes record today's layout as infeasible — it breaks 2 capacity findings (§4), so
-       keeping everything as-is is not a result this run offers. Candidate 1 still leaves 2 of them
-       above their caps (2 at file level, where only conditional splits can help).
+ note  both parameter profiles record today's layout as infeasible — it breaks 2 capacity findings
+       (§4), so keeping everything as-is is not a result this run offers. Candidate 1 still leaves
+       2 of them above their caps (2 at file level, where only conditional splits can help).
 
 ================================================================================
  §2  What would change — candidate 1 (anchored)
@@ -65,14 +81,21 @@ nothing relocates — every container keeps its files.
 ================================================================================
  §4  Findings this run raised
 ================================================================================
+ shared findings:
+
  cycles (0) — cuts that would break them, priced by weight:
 
 
- capacity (3) — containers and files over their caps today:
+ capacity (2) — containers and files over their caps today:
 
- file `huge.py` holds 300 against a cap of 250
- file `pkg/nested/deep/huge_nested.py` holds 300 against a cap of 250
- file `borderline.py` holds 250 against a cap of 250
+ [violation] file `huge.py` holds 300 against a cap of 250
+ [violation] file `pkg/nested/deep/huge_nested.py` holds 300 against a cap of 250
+
+ anchored-only findings:
+ none
+
+ greenfield-only findings:
+ none
 
 ================================================================================
  §5  Score delta — current → candidate 1
@@ -94,7 +117,8 @@ nothing relocates — every container keeps its files.
 ================================================================================
  §6  Recommendation
 ================================================================================
- keep       not offered — both modes mark today's layout infeasible under its own caps (§4).
+ keep       not offered — both parameter profiles mark today's layout infeasible under their own
+            caps (§4).
  in part    partial plans are not rescored; apply §2 in its given order, one change at a time.
 
 ================================================================================

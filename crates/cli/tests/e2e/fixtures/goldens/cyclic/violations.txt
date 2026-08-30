@@ -1,1 +1,1 @@
-cycle [violation] alpha_step, beta_step :: 2-symbol cycle; break beta_step -> alpha_step (w=1.0, exact)
+cycle [violation] alpha.py, beta.py :: 2-symbol cycle; symbols form one placement unit and must remain in one file unless a suggested dependency edge is broken; break beta_step -> alpha_step (w=1.0, exact)

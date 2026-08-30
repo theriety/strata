@@ -11,11 +11,13 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use strata_ir::ScopeLevel;
 
+use crate::config::ProfileConfig;
+
 /// The schema version stamped into every [`AnalyzeResult`] this crate produces.
 ///
 /// Readers of a saved result reject any other version rather than misreading a
 /// future shape.
-pub const RESULT_SCHEMA_VERSION: u32 = 3;
+pub const RESULT_SCHEMA_VERSION: u32 = 4;
 
 /// The top-level analysis result: the snapshot hash, the current tree with its
 /// violations, and the per-mode candidate sets.
@@ -35,10 +37,10 @@ pub struct AnalyzeResult {
     pub snapshot_hash: String,
     /// A coarse census of the analyzed graph.
     pub summary: Summary,
-    /// The current layout, its score, and its violations.
+    /// The shared current layout and findings identical across executed profiles.
     pub current: CurrentTree,
-    /// The per-mode candidate sets.
-    pub modes: Modes,
+    /// The independently configured parameter-profile results.
+    pub profiles: Profiles,
 }
 
 /// A coarse census of the analyzed snapshot.
@@ -55,19 +57,28 @@ pub struct Summary {
     pub files_by_language: BTreeMap<String, u32>,
 }
 
-/// The current layout, mapped onto the level hierarchy, with its score and
-/// violations.
+/// The shared current layout and findings identical across executed profiles.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CurrentTree {
     /// Today's layout as a nested container tree.
     pub tree: ContainerNode,
-    /// The objective `J` of the current tree (the anchor term is zero here).
+    /// Findings whose complete serialized content is identical in both profiles.
+    pub shared_findings: Vec<Violation>,
+}
+
+/// One profile's scoring and findings for the current layout.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileCurrent {
+    /// The objective `J` of the current tree under this profile.
     pub score: f64,
     /// The per-term decomposition of `score`.
     pub score_breakdown: ScoreBreakdown,
-    /// The structural violations of the current layout.
-    pub violations: Vec<Violation>,
+    /// Findings applicable only to this profile after exact sharing.
+    pub unique_findings: Vec<Violation>,
+    /// Where the current layout stands relative to this profile's candidates.
+    pub standing: CurrentStanding,
     /// How many of those violations are capacity findings that hard-breach
     /// their caps (`Severity::Violation` only). Borderline observations stay
     /// listed in `violations` but never count as breaks — the same predicate
@@ -77,36 +88,39 @@ pub struct CurrentTree {
     pub capacity_breaks: u32,
 }
 
-/// The per-mode candidate sets; a mode that was not requested is `None`.
+/// Results for selected parameter profiles; an unselected profile is omitted.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Modes {
-    /// The anchored-mode result, when anchored was requested.
+pub struct Profiles {
+    /// The anchored parameter-profile result, when selected.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub anchored: Option<ModeResult>,
-    /// The greenfield-mode result, when greenfield was requested.
+    pub anchored: Option<ProfileResult>,
+    /// The greenfield parameter-profile result, when selected.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub greenfield: Option<ModeResult>,
+    pub greenfield: Option<ProfileResult>,
 }
 
-/// One mode's candidate set: up to `k` candidates, their pairwise distances,
-/// the convergence flag, and where the current layout stands against them.
+/// One parameter profile's effective inputs, current state, and candidate set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ModeResult {
+pub struct ProfileResult {
+    /// Complete effective parameters used for this profile.
+    pub parameters: ProfileConfig,
+    /// This profile's current score, standing, and unique findings.
+    pub current: ProfileCurrent,
     /// The returned candidates, best score first.
     pub candidates: Vec<Candidate>,
     /// The variation-of-information matrix over the candidates.
     pub pairwise_distance: Vec<Vec<f64>>,
     /// `true` when fewer than `k` candidates survived diversification.
     pub solution_space_converged: bool,
-    /// The current layout's objective `J` under THIS mode's coefficients.
-    pub current_score: f64,
-    /// The per-term decomposition of `current_score`.
-    pub current_score_breakdown: ScoreBreakdown,
-    /// Where the current layout stands relative to the candidates.
-    pub current_standing: CurrentStanding,
 }
+
+/// Compatibility alias for source consumers migrating from schema version 3.
+pub type Modes = Profiles;
+
+/// Compatibility alias for source consumers migrating from schema version 3.
+pub type ModeResult = ProfileResult;
 
 /// What a candidate leaves unresolved of the current capacity breaches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -487,6 +501,42 @@ pub struct EdgeBreak {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn should_serialize_schema_version_four_without_modes() {
+        let result = AnalyzeResult {
+            schema_version: RESULT_SCHEMA_VERSION,
+            snapshot_hash: "snapshot".to_owned(),
+            summary: Summary {
+                symbols: 0,
+                edges: 0,
+                files: 0,
+                files_by_language: BTreeMap::new(),
+            },
+            current: CurrentTree {
+                tree: ContainerNode {
+                    name: "workspace".to_owned(),
+                    level: Level::PackageGroup,
+                    children: Some(Vec::new()),
+                    symbols: None,
+                    production_sloc: None,
+                },
+                shared_findings: Vec::new(),
+            },
+            profiles: Profiles::default(),
+        };
+
+        let json = serde_json::to_value(result).unwrap_or_default();
+
+        assert_eq!(
+            json.pointer("/schemaVersion")
+                .and_then(serde_json::Value::as_u64),
+            Some(4)
+        );
+        assert!(json.get("profiles").is_some());
+        assert!(json.get("modes").is_none());
+        assert!(json.pointer("/current/sharedFindings").is_some());
+    }
 
     #[test]
     fn should_serialize_a_breakdown_as_camel_case() {

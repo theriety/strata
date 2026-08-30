@@ -1,4 +1,7 @@
 # a deliberately tiny file cap so any real module trips a capacity violation,
 # proving the repo-local config was discovered via --root.
-[capacity]
+[profiles.anchored.capacity]
+file = 1
+
+[profiles.greenfield.capacity]
 file = 1

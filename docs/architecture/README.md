@@ -11,7 +11,7 @@ departed from spec.
 | --- | --- | --- |
 | [ADR-0001](decisions/0001-recommendations-only.md) | Recommendations only — strata never delivers or executes move scripts | Accepted |
 | [ADR-0002](decisions/0002-report-format-action-list.md) | Report format — suggested action list vocabulary for all suggestion faces | Accepted |
-| [ADR-0004](decisions/0004-same-file-references-are-dependencies.md) | A same-file reference is a dependency edge | Accepted |
 | [ADR-0005](decisions/0005-pass-start-dependencies-govern-symbol-moves.md) | Pass-start dependencies govern symbol moves | Accepted |
 | [ADR-0006](decisions/0006-symbol-destination-guardrails.md) | Symbol destinations obey pass-start guardrails | Accepted |
 | [ADR-0008](decisions/0008-physical-layout-governs-relocation-and-capacity.md) | Physical layout governs relocation and capacity | Accepted |
+| [ADR-0009](decisions/0009-complete-analysis-parameter-profiles.md) | Complete analysis parameter profiles | Accepted |

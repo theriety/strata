@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use strata_engine::{Severity, StrataError, Violation, ViolationKind, analyze, snapshot_from_root};
 
-use crate::commands::{ConfigOverrides, resolve_config};
+use crate::commands::{ConfigOverrides, findings, resolve_config};
 use crate::render::{write_json, write_violation_table};
 
 /// The output format of the violations face.
@@ -140,16 +140,16 @@ pub fn run(args: &ViolationsArgs, out: &mut impl Write) -> Result<Outcome, Strat
     let config = resolve_config(&args.config, overrides)?;
     let snapshot = snapshot_from_root(&args.root, &config)?;
     let result = analyze(&snapshot, &config)?;
+    let findings = findings(&result);
 
     match args.format {
         ViolationFormat::Table => {
-            write_violation_table(&result.current.violations, out)
-                .map_err(|error| write_error(&error))?;
+            write_violation_table(&findings, out).map_err(|error| write_error(&error))?;
         }
         ViolationFormat::Json => write_json(&result, out).map_err(|error| write_error(&error))?,
     }
 
-    Ok(gate(&result.current.violations, &args.fail_on))
+    Ok(gate(&findings, &args.fail_on))
 }
 
 /// Decides the gate outcome: a hard (non-borderline) violation matching a listed

@@ -12,16 +12,16 @@ include = ["**/*"]
 exclude = ["**/.git/**", "**/node_modules/**", "**/target/**", "**/.venv/**"]
 
 [analysis]
-# Restructuring mode: anchored | greenfield | both.
-mode = "both"
-# Diverse candidates to return per mode (k).
-candidates = 3
-# Deterministic base seed: same snapshot + config + seed => identical output.
-seed = 42
+# Complete parameter profiles to execute against the same discovered snapshot.
+profiles = ["anchored", "greenfield"]
 # Parallelism hint; 0 = all logical cores and never affects results.
 jobs = 0
 
-[capacity]
+[profiles.anchored]
+candidates = 3
+seed = 42
+
+[profiles.anchored.capacity]
 # Production SLOC per file (non-blank, non-comment).
 file = 250
 # File nodes per folder.
@@ -33,7 +33,7 @@ package = 15
 # Packages per package group.
 package-group = 12
 
-[objective]
+[profiles.anchored.objective]
 # lambda: sibling size-imbalance penalty weight.
 imbalance = 0.1
 # alpha: naming-token cohesion bonus weight (both modes).
@@ -42,8 +42,9 @@ naming = 0.3
 path = 0.2
 # mu: move-distance anchoring penalty weight (anchored only).
 anchor = 1.0
+capacity = 4.0
 
-[weights]
+[profiles.anchored.weights]
 # Weight of a runtime value import.
 value-import = 1.0
 # Weight of a subtype / implements relationship.
@@ -54,14 +55,16 @@ call = 1.0
 type-reference = 0.3
 # Weight of a re-export (zero — flattened during normalization).
 re-export = 0.0
+same-file-symbol = 1.0
+same-file-type = 3.0
 
-[solver]
+[profiles.anchored.solver]
 # Maximum SCC size that attempts the exact ILP.
 ilp-threshold = 300
 # Per-SCC exact-solve budget, in seconds, before the heuristic fallback.
 timeout-seconds = 60
 
-[diversity]
+[profiles.anchored.diversity]
 # Restart pool multiplier: pool size = this x k.
 seeds-per-candidate = 10
 # Maximum relative score gap for a candidate to remain in the keep-band.
@@ -69,7 +72,7 @@ score-tolerance = 0.05
 # Minimum pairwise variation-of-information between returned candidates.
 min-distance = 0.05
 
-[tests]
+[profiles.anchored.tests]
 # File cap (in production SLOC) for test-support files; test-case files exempt.
 helper-cap = 250
 # Extra glob patterns marking test files beyond the built-in detection.
@@ -77,7 +80,49 @@ helper-cap = 250
 # pattern matches against the basename. Invalid or empty patterns are
 # rejected with a `tests.patterns[i]` error.
 # patterns = ["*.spec.*", "apps/web/__tests__/**"]
+patterns = []
 # Keep the built-in per-language detection (TS `.spec.` / `.test.` / `__tests__`,
 # Rust `tests/` + `#[cfg(test)]`, Python mirrors). Disabling it makes only
 # `patterns` decide; with an empty list nothing is a test file.
+builtins = true
+
+[profiles.greenfield]
+candidates = 3
+seed = 42
+
+[profiles.greenfield.capacity]
+file = 250
+folder = 20
+domain = 16
+package = 15
+package-group = 12
+
+[profiles.greenfield.objective]
+imbalance = 0.1
+naming = 0.3
+path = 0.0
+anchor = 0.0
+capacity = 4.0
+
+[profiles.greenfield.weights]
+value-import = 1.0
+inheritance = 1.5
+call = 1.0
+type-reference = 0.3
+re-export = 0.0
+same-file-symbol = 1.0
+same-file-type = 3.0
+
+[profiles.greenfield.solver]
+ilp-threshold = 300
+timeout-seconds = 60
+
+[profiles.greenfield.diversity]
+seeds-per-candidate = 10
+score-tolerance = 0.05
+min-distance = 0.05
+
+[profiles.greenfield.tests]
+helper-cap = 250
+patterns = []
 builtins = true

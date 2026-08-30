@@ -50,7 +50,7 @@ strata report  --input analysis.json --output report.md
 
 ### Recommended structures
 
-Add `--show-suggestions` to print the best candidate's proposed structure for each mode directly in the summary face:
+Add `--show-suggestions` to print the best candidate's proposed structure for each selected parameter profile directly in the summary face:
 
 ```sh
 strata analyze --root path/to/repo --show-suggestions
@@ -64,13 +64,13 @@ The flag is a no-op for `--format json`, which already serializes every candidat
 |------|---------|
 | `--root <path>` | Repository root to analyze (default `.`). |
 | `--config <path>` | Config file (default `./strata.toml`; built-in defaults apply when absent). |
-| `--mode <anchored\|greenfield\|both>` | Stay close to the current layout, propose an unbiased ideal, or both. |
-| `-k, --candidates <n>` | Number of candidate structures to produce per mode. |
-| `--seed <n>` | Deterministic seed for reproducible candidates. |
+| `--mode <anchored\|greenfield\|both>` | Select which parameter profile or profiles to execute. |
+| `-k, --candidates <n>` | Override the candidate count for every selected parameter profile. |
+| `--seed <n>` | Override the deterministic seed for every selected parameter profile. |
 | `--jobs <n>` | Parallelism for parsing and shattering (`0` = all cores; never affects results). |
 | `--format <summary\|json>` | Force the output face (defaults to summary on a TTY, JSON when piped). |
 | `--output <path>` | Write the result to a file instead of stdout. |
-| `--show-suggestions` | Print the best candidate's recommended structure per mode (summary face only). |
+| `--show-suggestions` | Print the best candidate's recommended structure per selected parameter profile (summary face only). |
 
 ## Commands
 
@@ -93,7 +93,7 @@ Run `strata <command> --help` for the full flag list of any subcommand.
 | Flag | Meaning |
 |------|---------|
 | `--input <path>` | `AnalyzeResult` JSON from a previous `analyze`. |
-| `--mode <name>` | Mode to draw a candidate from (`anchored` or `greenfield`). |
+| `--mode <name>` | Parameter profile to draw a candidate from (`anchored` or `greenfield`). |
 | `--candidate <n>` | 1-based candidate index; omit to list the available candidates. |
 | `--current` | Draw the current (as-is) structure instead of a candidate. |
 | `--symbols` | List each file's symbols with their derived visibility. |
@@ -143,17 +143,105 @@ Every command reads `strata.toml` from the analysis root (override with `--confi
 
 | Section | Controls |
 |---------|----------|
-| `[adapters]` | Which `languages` to run, plus `include`/`exclude` source globs. |
-| `[analysis]` | Default `mode`, `candidates` (k), `seed`, and `jobs`. |
-| `[capacity]` | Hard size caps: production SLOC per `file` and member counts per container level. |
-| `[objective]` | Objective-term weights: `imbalance`, `naming`, `path`, and `anchor`. |
-| `[weights]` | Per-edge-kind weights (`value-import`, `inheritance`, `call`, `type-reference`, `re-export`). |
-| `[solver]` | `ilp-threshold` (max SCC size for the exact ILP) and `timeout-seconds`. |
-| `[diversity]` | Candidate diversification: `seeds-per-candidate`, `score-tolerance`, `min-distance`. |
-| `[tests]` | `helper-cap` for test-support files; `patterns` globs extending built-in test detection; `builtins` toggle for that detection. |
+| `[adapters]` | Which `languages` to run, `include`/`exclude` source globs, and physical source-root handling. |
+| `[analysis]` | Selected parameter profiles and process-wide `jobs`. |
+| `[profiles.anchored]` | Anchored candidate count, seed, capacities, objective, dependency weights, solver, diversity, and test policy. |
+| `[profiles.greenfield]` | The same complete parameter set for greenfield, independently configurable. |
 
 The checked-in [`strata.toml`](strata.toml) documents every key alongside its default value.
 
+Each profile owns the complete analysis policy. Both run against the same discovered snapshot; only adapter discovery and process-wide parallelism are global. The built-in defaults differ only in greenfield's `path = 0.0` and `anchor = 0.0`. Explicit nonzero greenfield values are honored.
+
+```toml
+[analysis]
+profiles = ["anchored", "greenfield"]
+jobs = 0
+
+[profiles.anchored]
+candidates = 3
+seed = 42
+
+[profiles.anchored.capacity]
+file = 250
+folder = 20
+domain = 16
+package = 15
+package-group = 12
+
+[profiles.anchored.objective]
+imbalance = 0.1
+naming = 0.3
+path = 0.2
+anchor = 1.0
+capacity = 4.0
+
+[profiles.anchored.weights]
+value-import = 1.0
+inheritance = 1.5
+call = 1.0
+type-reference = 0.3
+re-export = 0.0
+same-file-symbol = 1.0
+same-file-type = 3.0
+
+[profiles.anchored.solver]
+ilp-threshold = 300
+timeout-seconds = 60
+
+[profiles.anchored.diversity]
+seeds-per-candidate = 10
+score-tolerance = 0.05
+min-distance = 0.05
+
+[profiles.anchored.tests]
+helper-cap = 250
+patterns = []
+builtins = true
+
+[profiles.greenfield]
+candidates = 3
+seed = 42
+
+[profiles.greenfield.capacity]
+file = 250
+folder = 20
+domain = 16
+package = 15
+package-group = 12
+
+[profiles.greenfield.objective]
+imbalance = 0.1
+naming = 0.3
+path = 0.0
+anchor = 0.0
+capacity = 4.0
+
+[profiles.greenfield.weights]
+value-import = 1.0
+inheritance = 1.5
+call = 1.0
+type-reference = 0.3
+re-export = 0.0
+same-file-symbol = 1.0
+same-file-type = 3.0
+
+[profiles.greenfield.solver]
+ilp-threshold = 300
+timeout-seconds = 60
+
+[profiles.greenfield.diversity]
+seeds-per-candidate = 10
+score-tolerance = 0.05
+min-distance = 0.05
+
+[profiles.greenfield.tests]
+helper-cap = 250
+patterns = []
+builtins = true
+```
+
+The former `analysis.mode`, `analysis.candidates`, `analysis.seed`, and top-level analysis-policy sections are invalid. `--mode` remains a CLI compatibility selector: it chooses which parameter profiles execute but does not define their parameters.
+
 ## How it works
 
-`strata` assembles a language-agnostic IR snapshot from per-language adapters, then runs a pure, deterministic decomposition pipeline (condense cycles, layer, cluster, score, diversify) over it — the engine never sees source code, only the snapshot. See [docs/architecture/overview.md](docs/architecture/overview.md) for the crate layout, the eleven-phase pipeline, the IR snapshot contract, and how the anchored and greenfield modes differ.
+`strata` assembles a language-agnostic IR snapshot from per-language adapters, then runs a pure, deterministic decomposition pipeline (condense cycles, layer, cluster, score, diversify) over it — the engine never sees source code, only the snapshot. See [docs/architecture/overview.md](docs/architecture/overview.md) for the crate layout, the eleven-phase pipeline, the IR snapshot contract, and how the anchored and greenfield parameter profiles differ.

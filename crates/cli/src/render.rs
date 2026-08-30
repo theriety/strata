@@ -18,7 +18,8 @@ use std::io::{self, Write};
 
 use strata_engine::{
     AnalyzeResult, Candidate, ContainerNode, CurrentStanding, FileMove, Level, ModeResult, Move,
-    MoveKind, MoveReason, ScoreBreakdown, Severity, SymbolMove, Violation, ViolationKind,
+    MoveKind, MoveReason, ProfileConfig, ScoreBreakdown, Severity, SymbolKind, SymbolMove,
+    Violation, ViolationKind,
 };
 
 /// The output format the `analyze` command renders in.
@@ -335,7 +336,7 @@ fn shrink_longest_quoted(title: &str) -> Option<String> {
         .enumerate()
         .map(|(position, part)| {
             if position == widest_position {
-                nq(&shrunk)
+                shrunk.clone()
             } else {
                 (*part).to_owned()
             }
@@ -446,14 +447,14 @@ fn header_lines(result: &AnalyzeResult, project: &str) -> Vec<String> {
 /// headline figures riding their fixed positions.
 fn reading_rules(result: &AnalyzeResult) -> Vec<String> {
     let mut lines = Vec::new();
-    if let Some((_, candidate)) = featured_candidate(result) {
+    if let Some((_, profile, candidate)) = featured_entry(result) {
         lines.push(format!(
             " scores    : four decimals, lower is better            {} → {}",
-            f4(result.current.score),
+            f4(profile.current.score),
             f4(candidate.score)
         ));
         lines.push(
-            " gain      : improvement over that mode's own starting point, measured in".to_owned(),
+            " gain      : improvement over that parameter profile's own starting point, measured in".to_owned(),
         );
         lines.push(format!(
             "             the same units as the score              {}",
@@ -462,14 +463,15 @@ fn reading_rules(result: &AnalyzeResult) -> Vec<String> {
     } else {
         lines.push(" scores    : four decimals, lower is better".to_owned());
         lines.push(
-            " gain      : improvement over that mode's own starting point, measured in".to_owned(),
+            " gain      : improvement over that parameter profile's own starting point, measured in".to_owned(),
         );
         lines.push("             the same units as the score".to_owned());
     }
     lines.extend([
-        " modes     : anchored keeps today's good placements as fixed points while".to_owned(),
-        "             improving the rest; greenfield ignores current paths entirely".to_owned(),
-        "             and rebuilds from imports alone".to_owned(),
+        " profiles  : anchored and greenfield are complete parameter profiles; by default"
+            .to_owned(),
+        "             anchored prices path and anchor terms while greenfield sets them to zero"
+            .to_owned(),
         " leaf      : one relocatable unit — a source file plus the symbols it".to_owned(),
         "             carries; moving it moves both. A table's leaf is whichever unit".to_owned(),
         "             that suggestion acts on: usually the whole file, sometimes one".to_owned(),
@@ -477,9 +479,9 @@ fn reading_rules(result: &AnalyzeResult) -> Vec<String> {
         " weight    : strength of the import relationship the move satisfies —".to_owned(),
         "             roughly how many import connections it honors; a bigger number".to_owned(),
         "             is more valuable to honor".to_owned(),
-        " comparability: candidate scores are comparable only within one mode of one".to_owned(),
-        "             project — greenfield drops the path and anchor terms and".to_owned(),
-        "             re-baselines. When two candidates share one structure, decide".to_owned(),
+        " comparability: candidate scores are comparable only within one parameter profile"
+            .to_owned(),
+        "             of one project. When two candidates share one structure, decide".to_owned(),
         "             between them by intent, never by raw score.".to_owned(),
         " rounding  : columns round independently to four decimals; totals compute unrounded"
             .to_owned(),
@@ -500,24 +502,30 @@ fn reading_rules(result: &AnalyzeResult) -> Vec<String> {
 /// The modes present in `result`, in their fixed report order.
 fn present_modes(result: &AnalyzeResult) -> Vec<(&'static str, &ModeResult)> {
     let mut modes = Vec::new();
-    if let Some(mode) = &result.modes.anchored {
+    if let Some(mode) = &result.profiles.anchored {
         modes.push(("anchored", mode));
     }
-    if let Some(mode) = &result.modes.greenfield {
+    if let Some(mode) = &result.profiles.greenfield {
         modes.push(("greenfield", mode));
     }
     modes
 }
 
+fn featured_entry(result: &AnalyzeResult) -> Option<(&'static str, &ModeResult, &Candidate)> {
+    present_modes(result)
+        .into_iter()
+        .find_map(|(name, profile)| {
+            profile
+                .candidates
+                .first()
+                .map(|candidate| (name, profile, candidate))
+        })
+}
+
 /// The recommended candidate: the best of anchored when present, else of
 /// greenfield. Candidates arrive best-score-first, so the head is the pick.
 fn featured_candidate(result: &AnalyzeResult) -> Option<(&'static str, &Candidate)> {
-    for (name, mode) in present_modes(result) {
-        if let Some(candidate) = mode.candidates.first() {
-            return Some((name, candidate));
-        }
-    }
-    None
+    featured_entry(result).map(|(name, _, candidate)| (name, candidate))
 }
 
 /// The `§2` title tail naming the itemized candidate.
@@ -536,6 +544,59 @@ fn delta_title(result: &AnalyzeResult) -> String {
     }
 }
 
+/// Renders every effective value in one selected parameter profile.
+pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<String> {
+    vec![
+        format!(" {name} parameter profile (effective):"),
+        format!("   search    candidates {} · seed {}", p.candidates, p.seed),
+        format!(
+            "   capacity  file {} · folder {} · domain {} · package {} · package-group {}",
+            p.capacity.file,
+            p.capacity.folder,
+            p.capacity.domain,
+            p.capacity.package,
+            p.capacity.package_group
+        ),
+        format!(
+            "   objective imbalance {} · naming {} · path {} · anchor {} · capacity {}",
+            weight(p.objective.imbalance),
+            weight(p.objective.naming),
+            weight(p.objective.path),
+            weight(p.objective.anchor),
+            weight(p.objective.capacity)
+        ),
+        format!(
+            "   weights   value-import {} · inheritance {} · call {} · type-reference {} · re-export {}",
+            weight(p.weights.value_import),
+            weight(p.weights.inheritance),
+            weight(p.weights.call),
+            weight(p.weights.type_reference),
+            weight(p.weights.re_export)
+        ),
+        format!(
+            "             same-file-symbol {} · same-file-type {}",
+            weight(p.weights.same_file_symbol),
+            weight(p.weights.same_file_type)
+        ),
+        format!(
+            "   solver    ilp-threshold {} · timeout-seconds {}",
+            p.solver.ilp_threshold, p.solver.timeout_seconds
+        ),
+        format!(
+            "   diversity seeds-per-candidate {} · score-tolerance {} · min-distance {}",
+            p.diversity.seeds_per_candidate,
+            weight(p.diversity.score_tolerance),
+            weight(p.diversity.min_distance)
+        ),
+        format!(
+            "   tests     helper-cap {} · patterns {} · builtins {}",
+            p.tests.helper_cap,
+            p.tests.patterns.len(),
+            p.tests.builtins
+        ),
+    ]
+}
+
 /// The `§1` candidate list: the printed claim line, every candidate named and
 /// scored, the comparability note beside the list, and the run's notices.
 fn candidates_section(result: &AnalyzeResult) -> Vec<String> {
@@ -547,10 +608,13 @@ fn candidates_section(result: &AnalyzeResult) -> Vec<String> {
 
     let clauses = modes
         .iter()
-        .map(|(name, mode)| format!("{name} mode returned {}", mode.candidates.len()))
+        .map(|(name, mode)| format!("{name} profile returned {}", mode.candidates.len()))
         .collect::<Vec<_>>()
         .join(" · ");
     let mut lines = vec![format!(" candidate count : {total}  ({clauses})")];
+    for (name, profile) in &modes {
+        lines.extend(effective_parameter_lines(name, &profile.parameters));
+    }
     lines.push(String::new());
 
     let tags: Vec<(String, &Candidate, &'static str)> = modes
@@ -603,12 +667,12 @@ fn candidates_section(result: &AnalyzeResult) -> Vec<String> {
     lines.push(String::new());
     if let [(anchored_name, anchored), (greenfield_name, greenfield)] = modes.as_slice() {
         let text = format!(
-            "these two gains have different starting points — {anchored_name} baselines the \
-             current tree at {}; {greenfield_name} re-prices paths and drops anchor credit, \
-             baselining the same tree at {}. Each gain is measured against its own mode's \
-             baseline — never compare across modes.",
-            f4(anchored.current_score),
-            f4(greenfield.current_score),
+            "these two gains have different starting points — {anchored_name} prices the \
+             current tree at {} using its effective coefficients; {greenfield_name} prices the \
+             same tree at {} using its own effective coefficients. Each gain is measured against \
+             its own parameter profile's baseline — never compare across parameter profiles.",
+            f4(anchored.current.score),
+            f4(greenfield.current.score),
         );
         lines.extend(labeled_block(" comparability: ", 17, 17, &text));
     } else {
@@ -616,7 +680,7 @@ fn candidates_section(result: &AnalyzeResult) -> Vec<String> {
             " comparability: ",
             17,
             17,
-            "candidate scores are comparable only within one mode of one project.",
+            "candidate scores are comparable only within one parameter profile of one project.",
         ));
     }
 
@@ -652,17 +716,20 @@ fn is_head_of_mode(modes: &[(&'static str, &ModeResult)], name: &str, index: u32
 fn infeasibility_note(result: &AnalyzeResult) -> Option<String> {
     let infeasible: Vec<&str> = present_modes(result)
         .into_iter()
-        .filter(|(_, mode)| mode.current_standing == CurrentStanding::Infeasible)
+        .filter(|(_, mode)| mode.current.standing == CurrentStanding::Infeasible)
         .map(|(name, _)| name)
         .collect();
     let first = *infeasible.first()?;
     let subject = match infeasible.len() {
-        1 => format!("the {first} mode records"),
-        _ => "both modes record".to_owned(),
+        1 => format!("the {first} parameter profile records"),
+        _ => "both parameter profiles record".to_owned(),
     };
     // The engine owns the count: hard capacity breaches only (borderline
     // observations stay listed in §4 but never count as breaks).
-    let findings = result.current.capacity_breaks;
+    let findings = present_modes(result)
+        .into_iter()
+        .find(|(name, _)| *name == first)
+        .map_or(0, |(_, profile)| profile.current.capacity_breaks);
     let plural = if findings == 1 { "" } else { "s" };
     let mut note = format!(
         "{subject} today's layout as infeasible — it breaks {findings} capacity \
@@ -913,8 +980,13 @@ fn change_table(files: &[FileMove], names: &[String], to: &str) -> (Vec<String>,
 /// imports must be re-pointed. Full repo-relative paths — symbol moves name no
 /// folder to abbreviate against.
 fn symbol_move_line(entry: &SymbolMove) -> String {
+    let kind = if entry.kind == SymbolKind::Type {
+        " type"
+    } else {
+        ""
+    };
     format!(
-        " - move `{}` from {} to {} (delta {:+.4}, {} import(s) to re-point)",
+        " - move{kind} `{}` from {} to {} (delta {:+.4}, {} import(s) to re-point)",
         entry.symbol, entry.from_path, entry.to_path, entry.delta, entry.broken_imports
     )
 }
@@ -1008,7 +1080,25 @@ fn blast_rows(moves: &[Move]) -> Vec<(String, i64)> {
 /// The `§4` findings: cycles with priced cuts, capacity breaches, then any
 /// further finding classes the run raised — nothing is dropped silently.
 fn findings_section(result: &AnalyzeResult) -> Vec<String> {
-    let violations = &result.current.violations;
+    let mut lines = finding_group("shared findings", &result.current.shared_findings);
+    for (name, profile) in present_modes(result) {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.extend(finding_group(
+            &format!("{name}-only findings"),
+            &profile.current.unique_findings,
+        ));
+    }
+    lines
+}
+
+fn finding_group(label: &str, violations: &[Violation]) -> Vec<String> {
+    let mut lines = vec![format!(" {label}:")];
+    if violations.is_empty() {
+        lines.push(" none".to_owned());
+        return lines;
+    }
     let cycles: Vec<&Violation> = violations
         .iter()
         .filter(|violation| violation.kind == ViolationKind::Cycle)
@@ -1018,13 +1108,14 @@ fn findings_section(result: &AnalyzeResult) -> Vec<String> {
         .filter(|violation| violation.kind == ViolationKind::Capacity)
         .collect();
 
-    let mut lines = vec![
+    lines.extend([
+        String::new(),
         format!(
             " cycles ({}) — cuts that would break them, priced by weight:",
             cycles.len()
         ),
         String::new(),
-    ];
+    ]);
     for (index, violation) in cycles.iter().enumerate() {
         let mut wrapped = wrap(&cycle_finding_text(violation), 3, 5);
         if let Some(first) = wrapped.first_mut() {
@@ -1043,7 +1134,11 @@ fn findings_section(result: &AnalyzeResult) -> Vec<String> {
     ));
     lines.push(String::new());
     for violation in &capacity {
-        lines.extend(wrap(&violation.detail, 1, 3));
+        let severity = match violation.severity {
+            Severity::Borderline => "borderline",
+            Severity::Violation => "violation",
+        };
+        lines.extend(wrap(&format!("[{severity}] {}", violation.detail), 1, 3));
     }
 
     for (kind, lead) in [
@@ -1084,15 +1179,23 @@ fn cycle_finding_text(violation: &Violation) -> String {
         .collect::<Vec<_>>()
         .join("/");
     let size = violation.location.len();
+    let mut detail = if violation.detail.is_empty() {
+        format!("{size}-symbol cycle")
+    } else {
+        violation.detail.clone()
+    };
     let Some(breaks) = &violation.break_suggestions else {
-        return format!("{members} — {size}-symbol cycle");
+        return format!("{members} — {detail}");
     };
     let Some(first) = breaks.first() else {
-        return format!("{members} — {size}-symbol cycle");
+        return format!("{members} — {detail}");
     };
+    if let Some(index) = detail.find("; break ") {
+        detail.truncate(index);
+    }
     let method = if first.exact { "exact" } else { "heuristic" };
     let mut text = format!(
-        "{members} — {size}-symbol cycle; break {} -> {} (w={:.1}, {method})",
+        "{members} — {detail}; break {} -> {} (w={:.1}, {method})",
         nq(&first.source),
         nq(&first.target),
         first.weight
@@ -1130,15 +1233,13 @@ const TERMS: [(&str, Term); 5] = [
 /// capacity term prints only when a run actually prices one, keeping every
 /// zero-capacity page byte-shaped like the approved artifact.
 fn score_delta_section(result: &AnalyzeResult) -> Vec<String> {
-    let (proposal_breakdown, proposal_score, gain) = match featured_candidate(result) {
-        Some((_, candidate)) => (
-            candidate.score_breakdown,
-            candidate.score,
-            Some(candidate.improvement),
-        ),
-        None => (result.current.score_breakdown, result.current.score, None),
+    let Some((_, profile, featured)) = featured_entry(result) else {
+        return vec![" no candidate this run produced.".to_owned()];
     };
-    let current = &result.current.score_breakdown;
+    let proposal_breakdown = featured.score_breakdown;
+    let proposal_score = featured.score;
+    let gain = Some(featured.improvement);
+    let current = &profile.current.score_breakdown;
 
     let mut lines = vec![format!(
         " {:<15}{:>11}    {:>11}    delta",
@@ -1168,9 +1269,9 @@ fn score_delta_section(result: &AnalyzeResult) -> Vec<String> {
     lines.push(format!(
         " {:<15}{:>11}    {:>11}    {:>11}{gain_note}",
         "score",
-        f4(result.current.score),
+        f4(profile.current.score),
         f4(proposal_score),
-        sf(round4(proposal_score - result.current.score)),
+        sf(round4(proposal_score - profile.current.score)),
     ));
     lines.push(String::new());
     lines.push(if capacity_live {
@@ -1219,8 +1320,8 @@ fn recommendation_section(result: &AnalyzeResult) -> Vec<String> {
         let current = modes
             .iter()
             .find(|(name, _)| *name == featured_name)
-            .map_or(&result.current.score_breakdown, |(_, mode)| {
-                &mode.current_score_breakdown
+            .map_or(&candidate.score_breakdown, |(_, mode)| {
+                &mode.current.score_breakdown
             });
         adopt.push_str(&driver_sentence(current, candidate));
         lines.extend(labeled_block(&format!(" {:<11}", "adopt"), 12, 12, &adopt));
@@ -1241,7 +1342,7 @@ fn recommendation_section(result: &AnalyzeResult) -> Vec<String> {
                  between {pair} by intent, never across baselines.",
                 f4(other.score),
                 sf(other.improvement),
-                f4(other_mode.current_score),
+                f4(other_mode.current.score),
             );
             lines.extend(labeled_block(
                 &format!(" {:<11}", "second"),
@@ -1254,15 +1355,15 @@ fn recommendation_section(result: &AnalyzeResult) -> Vec<String> {
 
     let infeasible: Vec<&str> = modes
         .iter()
-        .filter(|(_, mode)| mode.current_standing == CurrentStanding::Infeasible)
+        .filter(|(_, mode)| mode.current.standing == CurrentStanding::Infeasible)
         .map(|(name, _)| *name)
         .collect();
     let keep = if let [single] = infeasible.as_slice() {
         format!(
-            "not offered — the {single} mode marks today's layout infeasible under its own caps (§4)."
+            "not offered — the {single} parameter profile marks today's layout infeasible under its own caps (§4)."
         )
     } else if infeasible.len() > 1 {
-        "not offered — both modes mark today's layout infeasible under its own caps (§4)."
+        "not offered — both parameter profiles mark today's layout infeasible under their own caps (§4)."
             .to_owned()
     } else {
         match featured {
@@ -1272,7 +1373,7 @@ fn recommendation_section(result: &AnalyzeResult) -> Vec<String> {
                     .find(|(name, _)| {
                         featured.is_some_and(|(featured_name, _)| featured_name == *name)
                     })
-                    .map_or(0.0, |(_, mode)| mode.current_score);
+                    .map_or(0.0, |(_, mode)| mode.current.score);
                 format!(
                     "keeping today's layout remains possible — it scores {} against this \
                      proposal's {}.",
@@ -1534,7 +1635,8 @@ fn severity_tag(severity: Severity) -> &'static str {
 mod tests {
     use strata_engine::{
         CapacityRemainder, ContainerNode, CurrentTree, EdgeBreak, FileMove, Modes, MoveReason,
-        ScoreBreakdown, Summary, SymbolPlacement,
+        ProfileConfig, ProfileCurrent, ScoreBreakdown, Summary, SymbolKind, SymbolMove,
+        SymbolPlacement,
     };
 
     use super::*;
@@ -1562,12 +1664,24 @@ mod tests {
             },
             current: CurrentTree {
                 tree: file_node("lib", 2),
-                score: 1.5,
-                score_breakdown: zero_breakdown(),
-                capacity_breaks,
-                violations,
+                shared_findings: Vec::new(),
             },
-            modes: Modes::default(),
+            profiles: Modes {
+                anchored: Some(ModeResult {
+                    parameters: ProfileConfig::default(),
+                    current: ProfileCurrent {
+                        score: 1.5,
+                        score_breakdown: zero_breakdown(),
+                        unique_findings: violations,
+                        standing: CurrentStanding::Outscored,
+                        capacity_breaks,
+                    },
+                    candidates: Vec::new(),
+                    pairwise_distance: Vec::new(),
+                    solution_space_converged: false,
+                }),
+                greenfield: None,
+            },
         }
     }
 
@@ -1575,8 +1689,16 @@ mod tests {
     /// `proposed` container, for exercising the candidate faces.
     fn result_with_candidate() -> AnalyzeResult {
         let mut result = result_with(Vec::new());
-        result.modes = Modes {
+        result.profiles = Modes {
             anchored: Some(ModeResult {
+                parameters: ProfileConfig::default(),
+                current: ProfileCurrent {
+                    score: 1.5,
+                    score_breakdown: zero_breakdown(),
+                    unique_findings: Vec::new(),
+                    standing: CurrentStanding::Outscored,
+                    capacity_breaks: 0,
+                },
                 candidates: vec![Candidate {
                     index: 1,
                     score: 0.25,
@@ -1596,9 +1718,6 @@ mod tests {
                 }],
                 pairwise_distance: Vec::new(),
                 solution_space_converged: true,
-                current_score: 1.5,
-                current_score_breakdown: zero_breakdown(),
-                current_standing: CurrentStanding::Outscored,
             }),
             greenfield: None,
         };
@@ -1761,6 +1880,39 @@ mod tests {
         assert_eq!(tail("short", 10), "short");
         assert_eq!(tail("abcdefghij", 5), "…ghij");
         assert_eq!(tail("abc", 3), "abc");
+    }
+
+    #[test]
+    fn should_preserve_single_quote_pairs_when_shortening_a_multi_path_title() {
+        let long = "segment/".repeat(12);
+        let entry = Move {
+            kind: MoveKind::Merge,
+            files: vec![
+                FileMove {
+                    path: format!("root/{long}first.ts"),
+                    from: "root/origin".to_owned(),
+                },
+                FileMove {
+                    path: format!("root/{long}second.ts"),
+                    from: "root/origin".to_owned(),
+                },
+            ],
+            to: format!("root/{long}destination"),
+            reason: MoveReason::Clustering,
+        };
+
+        let rendered = suggestion_block(1, &entry);
+        let title = rendered.get(1).map_or("", String::as_str);
+        let quoted = title.split('`').skip(1).step_by(2).collect::<Vec<_>>();
+
+        assert!(title.chars().count() <= 100, "{title}");
+        assert_eq!(title.matches('`').count(), 6, "{title}");
+        assert!(!title.contains("``"), "{title}");
+        assert!(!title.contains("……"), "{title}");
+        assert!(
+            quoted.iter().all(|path| path.starts_with('…')),
+            "{quoted:?}: {title}"
+        );
     }
 
     #[test]
@@ -2047,6 +2199,115 @@ mod tests {
     }
 
     #[test]
+    fn should_explain_cycle_location_and_placement_consequence() {
+        let violation = Violation {
+            kind: ViolationKind::Cycle,
+            severity: Severity::Violation,
+            location: vec!["src/core/left.ts".to_owned(), "src/core/right.ts".to_owned()],
+            detail: "`left`/`right` form one placement unit and must remain in one file unless a suggested dependency edge is broken".to_owned(),
+            break_suggestions: Some(vec![EdgeBreak {
+                source: "right".to_owned(),
+                target: "left".to_owned(),
+                weight: 1.0,
+                exact: true,
+            }]),
+            capacity: None,
+        };
+
+        let rendered = cycle_finding_text(&violation);
+
+        assert!(rendered.contains("src/core/left.ts"));
+        assert!(rendered.contains("src/core/right.ts"));
+        assert!(rendered.contains("one placement unit"));
+        assert!(rendered.contains("must remain in one file"));
+        assert!(rendered.contains("break `right` -> `left` (w=1.0, exact)"));
+    }
+
+    #[test]
+    fn should_render_the_cheapest_cycle_cut_once() {
+        let violation = Violation {
+            kind: ViolationKind::Cycle,
+            severity: Severity::Violation,
+            location: vec!["left.ts".to_owned(), "right.ts".to_owned()],
+            detail: "2-symbol cycle; symbols must remain in one file; break right -> left (w=1.0, exact)".to_owned(),
+            break_suggestions: Some(vec![EdgeBreak {
+                source: "right".to_owned(),
+                target: "left".to_owned(),
+                weight: 1.0,
+                exact: true,
+            }]),
+            capacity: None,
+        };
+
+        let rendered = cycle_finding_text(&violation);
+
+        assert_eq!(rendered.matches("break ").count(), 1, "{rendered}");
+    }
+
+    #[test]
+    fn should_describe_nonzero_greenfield_coefficients_without_fixed_zero_claims() {
+        let mut result = result_with_candidate();
+        let mut greenfield = result
+            .profiles
+            .anchored
+            .clone()
+            .unwrap_or_else(|| unreachable!());
+        greenfield.parameters.objective.path = 0.7;
+        greenfield.parameters.objective.anchor = 0.8;
+        result.profiles.greenfield = Some(greenfield);
+        let mut output = Vec::new();
+
+        let rendered_ok = render(&result, Format::Summary, "fixture", &mut output).is_ok();
+        let rendered = String::from_utf8_lossy(&output);
+
+        assert!(rendered_ok);
+        assert!(rendered.contains("path 0.7 · anchor 0.8"), "{rendered}");
+        assert!(!rendered.contains("drops anchor credit"), "{rendered}");
+        assert!(
+            rendered.contains("using its own effective coefficients"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn should_prefix_type_moves_without_prefixing_runtime_moves() {
+        let make = |kind| SymbolMove {
+            symbol: "WorkInput".to_owned(),
+            kind,
+            from_path: "src/task/run.rs".to_owned(),
+            to_path: "src/task/types.rs".to_owned(),
+            delta: -0.002,
+            broken_imports: 4,
+        };
+
+        assert!(symbol_move_line(&make(SymbolKind::Type)).starts_with(" - move type `WorkInput`"));
+        assert!(symbol_move_line(&make(SymbolKind::Symbol)).starts_with(" - move `WorkInput`"));
+    }
+
+    #[test]
+    fn should_render_every_effective_parameter_group_for_a_profile() {
+        let rendered = effective_parameter_lines("anchored", &ProfileConfig::default()).join("\n");
+
+        for expected in [
+            "anchored parameter profile (effective)",
+            "search    candidates",
+            "capacity  file",
+            "objective imbalance",
+            "weights   value-import",
+            "same-file-symbol",
+            "same-file-type",
+            "solver    ilp-threshold",
+            "diversity seeds-per-candidate",
+            "tests     helper-cap",
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "missing {expected}: {rendered}"
+            );
+        }
+    }
+
+    #[test]
     fn should_build_change_tables_with_quoted_headers_cells_and_elision_honesty() {
         let files = vec![
             FileMove {
@@ -2118,7 +2379,15 @@ mod tests {
     #[test]
     fn should_annotate_the_featured_row_and_other_mode_heads() {
         let mut result = result_with_candidate();
-        result.modes.greenfield = Some(ModeResult {
+        result.profiles.greenfield = Some(ModeResult {
+            parameters: ProfileConfig::greenfield(),
+            current: ProfileCurrent {
+                score: 1.75,
+                score_breakdown: zero_breakdown(),
+                unique_findings: Vec::new(),
+                standing: CurrentStanding::Outscored,
+                capacity_breaks: 0,
+            },
             candidates: vec![Candidate {
                 index: 1,
                 score: 0.5,
@@ -2138,9 +2407,6 @@ mod tests {
             }],
             pairwise_distance: Vec::new(),
             solution_space_converged: false,
-            current_score: 1.75,
-            current_score_breakdown: zero_breakdown(),
-            current_standing: CurrentStanding::Outscored,
         });
 
         let lines = report_lines(&result, "fixture");
@@ -2169,7 +2435,7 @@ mod tests {
     fn should_label_grain_on_every_suggestion_block() {
         let mut result = result_with_candidate();
         if let Some(candidate) = result
-            .modes
+            .profiles
             .anchored
             .as_mut()
             .and_then(|mode| mode.candidates.first_mut())
@@ -2198,7 +2464,7 @@ mod tests {
         let mut result = result_with_candidate();
         result.summary.files = 900;
         if let Some(candidate) = result
-            .modes
+            .profiles
             .anchored
             .as_mut()
             .and_then(|mode| mode.candidates.first_mut())
@@ -2251,12 +2517,12 @@ mod tests {
     #[test]
     fn should_render_the_recommendation_band_with_driver_and_flat_cut_clauses() {
         let mut result = result_with_candidate();
-        if let Some(mode) = result.modes.anchored.as_mut() {
-            mode.current_score_breakdown.imbalance = 1.0;
-            mode.current_score_breakdown.cut = 0.1000;
+        if let Some(mode) = result.profiles.anchored.as_mut() {
+            mode.current.score_breakdown.imbalance = 1.0;
+            mode.current.score_breakdown.cut = 0.1000;
         }
         if let Some(candidate) = result
-            .modes
+            .profiles
             .anchored
             .as_mut()
             .and_then(|mode| mode.candidates.first_mut())
@@ -2271,7 +2537,10 @@ mod tests {
             candidate.score_breakdown.imbalance = 0.5;
             candidate.score_breakdown.cut = 0.0999;
         }
-        result.modes.greenfield.clone_from(&result.modes.anchored);
+        result
+            .profiles
+            .greenfield
+            .clone_from(&result.profiles.anchored);
 
         let text = report_lines(&result, "fixture").join("\n");
 
@@ -2292,17 +2561,17 @@ mod tests {
     #[test]
     fn should_declare_keeping_not_offered_when_a_mode_is_infeasible() {
         let mut result = result_with_candidate();
-        result.current.violations = vec![
+        result.current.shared_findings = vec![
             capacity_violation("big_folder"),
             capacity_violation("huge_file"),
         ];
         // the helper seeded the field before these violations existed
-        result.current.capacity_breaks = 2;
-        if let Some(mode) = result.modes.anchored.as_mut() {
-            mode.current_standing = CurrentStanding::Infeasible;
+        if let Some(mode) = result.profiles.anchored.as_mut() {
+            mode.current.capacity_breaks = 2;
+            mode.current.standing = CurrentStanding::Infeasible;
         }
         if let Some(candidate) = result
-            .modes
+            .profiles
             .anchored
             .as_mut()
             .and_then(|mode| mode.candidates.first_mut())
@@ -2316,38 +2585,43 @@ mod tests {
         let text = report_lines(&result, "fixture").join("\n");
 
         assert!(
-            text.contains(
-                "the anchored mode records today's layout as infeasible — it breaks 2 capacity findings"
-            ),
+            text.contains("the anchored parameter profile records today's layout as infeasible"),
+            "{text}"
+        );
+        assert!(
+            text.contains("it breaks 2 capacity") && text.contains("findings (§4)"),
             "{text}"
         );
         assert!(
             text.contains("still leaves") && text.contains("above their caps"),
             "the remainder is stated directly: {text}"
         );
-        assert!(text.contains("not offered — the anchored mode marks"));
+        assert!(text.contains("not offered — the anchored parameter profile marks"));
     }
 
     #[test]
     fn should_render_a_shared_infeasibility_note_for_both_modes() {
         let mut result = result_with_candidate();
-        result.modes.greenfield = result.modes.anchored.clone();
-        result.current.violations = vec![capacity_violation("big_folder")];
+        result.profiles.greenfield = result.profiles.anchored.clone();
+        result.current.shared_findings = vec![capacity_violation("big_folder")];
         // the helper seeded the field before this violation existed
-        result.current.capacity_breaks = 1;
-        if let Some(mode) = result.modes.anchored.as_mut() {
-            mode.current_standing = CurrentStanding::Infeasible;
+        if let Some(mode) = result.profiles.anchored.as_mut() {
+            mode.current.capacity_breaks = 1;
+            mode.current.standing = CurrentStanding::Infeasible;
         }
-        if let Some(mode) = result.modes.greenfield.as_mut() {
-            mode.current_standing = CurrentStanding::Infeasible;
+        if let Some(mode) = result.profiles.greenfield.as_mut() {
+            mode.current.capacity_breaks = 1;
+            mode.current.standing = CurrentStanding::Infeasible;
         }
 
         let text = report_lines(&result, "fixture").join("\n");
 
         assert!(
-            text.contains(
-                "both modes record today's layout as infeasible — it breaks 1 capacity finding "
-            ),
+            text.contains("both parameter profiles record today's layout as infeasible"),
+            "{text}"
+        );
+        assert!(
+            text.contains("it breaks 1 capacity finding") && text.contains("(§4)"),
             "{text}"
         );
         assert_eq!(
@@ -2363,7 +2637,7 @@ mod tests {
         // Two hard breaches plus a borderline observation: the note counts the
         // breaks from the engine's `capacity_breaks`, while §4 still lists all
         // three findings with their severity tags.
-        result.current.violations = vec![
+        result.current.shared_findings = vec![
             capacity_violation("big_folder"),
             capacity_violation("huge_file"),
             {
@@ -2373,15 +2647,15 @@ mod tests {
             },
         ];
         // what the engine reports for exactly this shape (borderline excluded)
-        result.current.capacity_breaks = 2;
-        if let Some(mode) = result.modes.anchored.as_mut() {
-            mode.current_standing = CurrentStanding::Infeasible;
+        if let Some(mode) = result.profiles.anchored.as_mut() {
+            mode.current.capacity_breaks = 2;
+            mode.current.standing = CurrentStanding::Infeasible;
         }
 
         let text = report_lines(&result, "fixture").join("\n");
 
         assert!(
-            text.contains("it breaks 2 capacity findings"),
+            text.contains("it breaks 2 capacity") && text.contains("findings (§4)"),
             "borderline observations never count as breaks: {text}"
         );
     }
@@ -2394,7 +2668,9 @@ mod tests {
         assert!(!quiet_text.contains("penalty"), "{quiet_text}");
 
         let mut live = result_with_candidate();
-        live.current.score_breakdown.capacity = 0.5;
+        if let Some(profile) = live.profiles.anchored.as_mut() {
+            profile.current.score_breakdown.capacity = 0.5;
+        }
         let live_text = report_lines(&live, "fixture").join("\n");
 
         assert!(live_text.contains("the terms combine into the total score"));
@@ -2410,7 +2686,7 @@ mod tests {
         assert!(converged.contains("the solution space converged"));
 
         let mut diverged = result_with_candidate();
-        if let Some(mode) = diverged.modes.anchored.as_mut() {
+        if let Some(mode) = diverged.profiles.anchored.as_mut() {
             mode.solution_space_converged = false;
         }
         let diverged_text = report_lines(&diverged, "fixture").join("\n");
@@ -2421,7 +2697,7 @@ mod tests {
     fn should_carry_no_control_characters_and_no_off_page_tokens() {
         let mut result = result_with_candidate();
         if let Some(candidate) = result
-            .modes
+            .profiles
             .anchored
             .as_mut()
             .and_then(|mode| mode.candidates.first_mut())

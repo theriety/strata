@@ -16,7 +16,7 @@ use std::path::Path;
 
 use strata_engine::{
     AnalyzeConfig, AnalyzeResult, Candidate, ModeResult, RESULT_SCHEMA_VERSION, StrataError,
-    load_config,
+    Violation, load_config,
 };
 
 /// Loads the effective config: the file at `config_path` if it exists, else the
@@ -42,6 +42,18 @@ pub fn resolve_config(
     Ok(config)
 }
 
+/// Returns shared findings first, followed by profile-specific findings.
+pub fn findings(result: &AnalyzeResult) -> Vec<Violation> {
+    let mut findings = result.current.shared_findings.clone();
+    if let Some(profile) = &result.profiles.anchored {
+        findings.extend(profile.current.unique_findings.iter().cloned());
+    }
+    if let Some(profile) = &result.profiles.greenfield {
+        findings.extend(profile.current.unique_findings.iter().cloned());
+    }
+    findings
+}
+
 /// The CLI-flag overrides layered over a loaded config.
 ///
 /// Each `Some` value overrides the file (or default) value for that key; `None`
@@ -62,17 +74,17 @@ pub struct ConfigOverrides {
 impl ConfigOverrides {
     /// Applies each present override onto `config`.
     fn apply(self, config: &mut AnalyzeConfig) {
+        if let Some(mode) = self.mode {
+            config.select_mode(mode);
+        }
         if let Some(seed) = self.seed {
-            config.analysis.seed = seed;
+            config.override_seed(seed);
         }
         if let Some(candidates) = self.candidates {
-            config.analysis.candidates = candidates;
+            config.override_candidates(candidates);
         }
         if let Some(jobs) = self.jobs {
             config.analysis.jobs = jobs;
-        }
-        if let Some(mode) = self.mode {
-            config.analysis.mode = mode;
         }
     }
 }
@@ -89,20 +101,29 @@ pub fn read_result(path: &Path) -> Result<AnalyzeResult, StrataError> {
         path: path.to_path_buf(),
         reason: error.to_string(),
     })?;
-    let result: AnalyzeResult =
+    let value: serde_json::Value =
         serde_json::from_str(&text).map_err(|error| StrataError::InputUnreadable {
             path: path.to_path_buf(),
             reason: error.to_string(),
         })?;
-    if result.schema_version != RESULT_SCHEMA_VERSION {
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|version| u32::try_from(version).ok())
+        .unwrap_or_default();
+    if schema_version != RESULT_SCHEMA_VERSION {
         return Err(StrataError::InputUnreadable {
             path: path.to_path_buf(),
             reason: format!(
-                "unsupported result schemaVersion {}; expected {RESULT_SCHEMA_VERSION}",
-                result.schema_version
+                "unsupported result schemaVersion {schema_version}; expected {RESULT_SCHEMA_VERSION}"
             ),
         });
     }
+    let result: AnalyzeResult =
+        serde_json::from_value(value).map_err(|error| StrataError::InputUnreadable {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        })?;
     Ok(result)
 }
 
@@ -116,8 +137,8 @@ pub fn mode_result<'a>(
     mode: &str,
 ) -> Result<&'a ModeResult, StrataError> {
     let found = match mode {
-        "anchored" => result.modes.anchored.as_ref(),
-        "greenfield" => result.modes.greenfield.as_ref(),
+        "anchored" => result.profiles.anchored.as_ref(),
+        "greenfield" => result.profiles.greenfield.as_ref(),
         _ => None,
     };
     found.ok_or_else(|| StrataError::CandidateNotFound {
@@ -149,6 +170,8 @@ pub fn candidate_at<'a>(
 
 #[cfg(test)]
 mod tests {
+    use strata_engine::ProfileName;
+
     use strata_engine::Mode;
 
     use super::*;
@@ -156,16 +179,20 @@ mod tests {
     #[test]
     fn should_keep_loaded_values_when_no_override_is_present() {
         let mut config = AnalyzeConfig::default();
-        config.analysis.seed = 7;
+        config.profiles.anchored.seed = 7;
+        config.profiles.greenfield.seed = 8;
 
         ConfigOverrides::default().apply(&mut config);
 
-        assert_eq!(config.analysis.seed, 7);
+        assert_eq!(config.profiles.anchored.seed, 7);
+        assert_eq!(config.profiles.greenfield.seed, 8);
     }
 
     #[test]
-    fn should_override_each_present_flag() {
+    fn should_override_only_the_selected_profile() {
         let mut config = AnalyzeConfig::default();
+        config.profiles.greenfield.seed = 8;
+        config.profiles.greenfield.candidates = 2;
 
         ConfigOverrides {
             seed: Some(99),
@@ -175,10 +202,46 @@ mod tests {
         }
         .apply(&mut config);
 
-        assert_eq!(config.analysis.seed, 99);
-        assert_eq!(config.analysis.candidates, 5);
+        assert_eq!(config.profiles.anchored.seed, 99);
+        assert_eq!(config.profiles.greenfield.seed, 8);
+        assert_eq!(config.profiles.anchored.candidates, 5);
+        assert_eq!(config.profiles.greenfield.candidates, 2);
         assert_eq!(config.analysis.jobs, 2);
-        assert_eq!(config.analysis.mode, Mode::Anchored);
+        assert_eq!(config.analysis.profiles, vec![ProfileName::Anchored]);
+    }
+
+    #[test]
+    fn should_override_both_selected_profiles() {
+        let mut config = AnalyzeConfig::default();
+
+        ConfigOverrides {
+            seed: Some(99),
+            candidates: Some(5),
+            mode: Some(Mode::Both),
+            ..ConfigOverrides::default()
+        }
+        .apply(&mut config);
+
+        assert_eq!(config.profiles.anchored.seed, 99);
+        assert_eq!(config.profiles.greenfield.seed, 99);
+        assert_eq!(config.profiles.anchored.candidates, 5);
+        assert_eq!(config.profiles.greenfield.candidates, 5);
+    }
+
+    #[test]
+    fn should_leave_anchored_unchanged_for_a_greenfield_override() {
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.seed = 7;
+
+        ConfigOverrides {
+            seed: Some(99),
+            mode: Some(Mode::Greenfield),
+            ..ConfigOverrides::default()
+        }
+        .apply(&mut config);
+
+        assert_eq!(config.profiles.anchored.seed, 7);
+        assert_eq!(config.profiles.greenfield.seed, 99);
     }
 
     #[test]
@@ -209,19 +272,9 @@ mod tests {
                     symbols: Some(Vec::new()),
                     production_sloc: Some(0),
                 },
-                score: 0.0,
-                score_breakdown: strata_engine::ScoreBreakdown {
-                    cut: 0.0,
-                    imbalance: 0.0,
-                    naming: 0.0,
-                    path: 0.0,
-                    anchor: 0.0,
-                    capacity: 0.0,
-                },
-                capacity_breaks: 0,
-                violations: Vec::new(),
+                shared_findings: Vec::new(),
             },
-            modes: strata_engine::Modes::default(),
+            profiles: strata_engine::Profiles::default(),
         };
 
         let found = mode_result(&result, "anchored");

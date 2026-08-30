@@ -161,6 +161,9 @@ pub struct ScoredEdge {
     pub kind: EdgeKind,
     /// The binder confidence `c(e)` in `0.0..=1.0`.
     pub confidence: f64,
+    /// Pass-start affinity multiplier. This is independent of confidence:
+    /// affinity is placement policy, while confidence remains binder evidence.
+    pub affinity: f64,
     /// The level of the endpoints' lowest common ancestor in the candidate tree.
     pub lca_level: ScopeLevel,
 }
@@ -317,7 +320,7 @@ fn cut_cost(edges: &[ScoredEdge], weights: &KindWeights) -> f64 {
     let mut weighted_height = 0.0;
     let mut total_weight = 0.0;
     for edge in edges {
-        let weight = weights.edge_weight(edge.kind, edge.confidence);
+        let weight = weights.edge_weight(edge.kind, edge.confidence) * edge.affinity;
         weighted_height += weight * height_penalty(edge.lca_level);
         total_weight += weight;
     }
@@ -454,6 +457,7 @@ mod tests {
             edges: vec![ScoredEdge {
                 kind: EdgeKind::Inheritance,
                 confidence: 0.5,
+                affinity: 1.0,
                 lca_level: ScopeLevel::Package,
             }],
             ..empty_candidate()
@@ -480,6 +484,7 @@ mod tests {
             edges: vec![ScoredEdge {
                 kind: EdgeKind::Call,
                 confidence: 1.0,
+                affinity: 1.0,
                 lca_level: ScopeLevel::Domain,
             }],
             ..empty_candidate()
@@ -489,6 +494,7 @@ mod tests {
             grown.edges.push(ScoredEdge {
                 kind: EdgeKind::Call,
                 confidence: 1.0,
+                affinity: 1.0,
                 lca_level: ScopeLevel::Domain,
             });
         }
@@ -514,11 +520,56 @@ mod tests {
     }
 
     #[test]
+    fn should_apply_affinity_as_nonuniform_edge_price() {
+        let ordinary = Candidate {
+            edges: vec![
+                ScoredEdge {
+                    kind: EdgeKind::TypeReference,
+                    confidence: 1.0,
+                    affinity: 1.0,
+                    lca_level: ScopeLevel::Folder,
+                },
+                ScoredEdge {
+                    kind: EdgeKind::TypeReference,
+                    confidence: 1.0,
+                    affinity: 1.0,
+                    lca_level: ScopeLevel::File,
+                },
+            ],
+            ..empty_candidate()
+        };
+        let mut type_affinity = ordinary.clone();
+        if let Some(edge) = type_affinity.edges.first_mut() {
+            edge.affinity = 3.0;
+        }
+
+        let ordinary_cut = score(
+            &ordinary,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        )
+        .cut;
+        let affinity_cut = score(
+            &type_affinity,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        )
+        .cut;
+
+        assert!(
+            affinity_cut > ordinary_cut,
+            "a higher-priced same-file type edge must influence the normalized cut: \
+             {affinity_cut} <= {ordinary_cut}"
+        );
+    }
+
+    #[test]
     fn should_charge_nothing_for_a_re_export_cut() {
         let candidate = Candidate {
             edges: vec![ScoredEdge {
                 kind: EdgeKind::ReExport,
                 confidence: 1.0,
+                affinity: 1.0,
                 lca_level: ScopeLevel::PackageGroup,
             }],
             ..empty_candidate()
@@ -539,6 +590,7 @@ mod tests {
             edges: vec![ScoredEdge {
                 kind: EdgeKind::Call,
                 confidence: 1.0,
+                affinity: 1.0,
                 lca_level: ScopeLevel::File,
             }],
             ..empty_candidate()
@@ -547,6 +599,7 @@ mod tests {
             edges: vec![ScoredEdge {
                 kind: EdgeKind::Call,
                 confidence: 1.0,
+                affinity: 1.0,
                 lca_level: ScopeLevel::Package,
             }],
             ..empty_candidate()
@@ -749,6 +802,7 @@ mod tests {
             edges: vec![ScoredEdge {
                 kind: EdgeKind::ValueImport,
                 confidence: 1.0,
+                affinity: 1.0,
                 lca_level: ScopeLevel::Folder,
             }],
             containers: vec![ContainerSizes {

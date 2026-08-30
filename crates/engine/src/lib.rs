@@ -29,13 +29,14 @@ pub use strata_ir as ir;
 pub use crate::analyze::{BORDERLINE_CAPACITY_MARGIN, analyze};
 pub use crate::config::{
     AdaptersConfig, AnalysisConfig, AnalyzeConfig, CapacityConfig, DiversityConfig, Mode,
-    ObjectiveConfig, SolverConfig, TestsConfig, WeightsConfig, load_config,
+    ObjectiveConfig, ProfileConfig, ProfileName, ProfilesConfig, SolverConfig, TestsConfig,
+    WeightsConfig, load_config,
 };
 pub use crate::error::StrataError;
 pub use crate::result::{
     AnalyzeResult, Candidate, CapacityBreach, CapacityRemainder, ConditionalSplit, ContainerNode,
     CurrentStanding, CurrentTree, EdgeBreak, FileMove, Level, ModeResult, Modes, Move, MoveKind,
-    MoveReason, RESULT_SCHEMA_VERSION, ScoreBreakdown, Severity, Summary, SymbolKind, SymbolMove,
-    SymbolPlacement, Violation, ViolationKind,
+    MoveReason, ProfileCurrent, ProfileResult, Profiles, RESULT_SCHEMA_VERSION, ScoreBreakdown,
+    Severity, Summary, SymbolKind, SymbolMove, SymbolPlacement, Violation, ViolationKind,
 };
 pub use crate::snapshot::snapshot_from_root;

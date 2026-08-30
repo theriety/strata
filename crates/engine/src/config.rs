@@ -23,18 +23,15 @@ use strata_core::shatter::SolverLimits;
 
 use crate::error::StrataError;
 
-/// The restructuring mode a run targets.
-///
-/// A mode is purely an objective-coefficient preset (there is no mode-specific
-/// algorithm); [`Mode::Both`] requests both presets in one pass.
+/// CLI compatibility selector for the parameter profiles a run executes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
-    /// Stay close to the current layout: every objective term active.
+    /// Execute only the anchored parameter profile.
     Anchored,
-    /// Propose an unbiased ideal: the move-distance and path terms vanish.
+    /// Execute only the greenfield parameter profile.
     Greenfield,
-    /// Produce both the anchored and greenfield results in one run.
+    /// Execute both parameter profiles against one discovered snapshot.
     Both,
 }
 
@@ -97,17 +94,22 @@ impl Default for AdaptersConfig {
     }
 }
 
-/// Run-level analysis settings: which modes, how many candidates, the seed, and
-/// the parallelism hint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// A named parameter profile available to an analysis run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProfileName {
+    /// The profile whose defaults favor preserving today's layout.
+    Anchored,
+    /// The profile whose defaults ignore today's path and placement.
+    Greenfield,
+}
+
+/// Process-wide analysis settings shared by every selected profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct AnalysisConfig {
-    /// Which restructuring mode(s) to produce.
-    pub mode: Mode,
-    /// Number of diverse candidates to return per mode (`k`).
-    pub candidates: u32,
-    /// The deterministic base seed.
-    pub seed: u64,
+    /// Parameter profiles to execute against the discovered snapshot.
+    pub profiles: Vec<ProfileName>,
     /// Parallelism hint; `0` means all logical cores and never affects results.
     pub jobs: u32,
 }
@@ -115,9 +117,7 @@ pub struct AnalysisConfig {
 impl Default for AnalysisConfig {
     fn default() -> Self {
         Self {
-            mode: Mode::Both,
-            candidates: 3,
-            seed: 42,
+            profiles: vec![ProfileName::Anchored, ProfileName::Greenfield],
             jobs: 0,
         }
     }
@@ -187,9 +187,9 @@ impl Default for ObjectiveConfig {
 }
 
 impl ObjectiveConfig {
-    /// Converts the config into the anchored-mode [`Coefficients`].
+    /// Converts this profile's objective values into scorer coefficients.
     #[must_use]
-    pub const fn anchored(&self) -> Coefficients {
+    pub const fn coefficients(&self) -> Coefficients {
         Coefficients {
             lambda: self.imbalance,
             alpha: self.naming,
@@ -199,21 +199,16 @@ impl ObjectiveConfig {
         }
     }
 
-    /// Converts the config into the greenfield-mode [`Coefficients`].
-    ///
-    /// Greenfield is layout-blind (AD-2): the current-path bonus and anchoring
-    /// penalty are forced to zero regardless of what the config says. Capacity
-    /// binds in both modes — relief is owed no matter how far it sits from
-    /// today's layout.
+    /// Compatibility alias for callers that previously selected coefficients by mode.
+    #[must_use]
+    pub const fn anchored(&self) -> Coefficients {
+        self.coefficients()
+    }
+
+    /// Compatibility alias that now honors explicit greenfield path and anchor values.
     #[must_use]
     pub const fn greenfield(&self) -> Coefficients {
-        Coefficients {
-            lambda: self.imbalance,
-            alpha: self.naming,
-            beta: 0.0,
-            mu: 0.0,
-            gamma: self.capacity,
-        }
+        self.coefficients()
     }
 }
 
@@ -234,6 +229,12 @@ pub struct WeightsConfig {
     /// Weight of a re-export (zero — flattened during normalization).
     #[serde(rename = "re-export")]
     pub re_export: f64,
+    /// Multiplier for pass-start same-file edges between runtime symbols.
+    #[serde(rename = "same-file-symbol")]
+    pub same_file_symbol: f64,
+    /// Multiplier for pass-start same-file edges touching a type.
+    #[serde(rename = "same-file-type")]
+    pub same_file_type: f64,
 }
 
 impl Default for WeightsConfig {
@@ -244,7 +245,130 @@ impl Default for WeightsConfig {
             call: 1.0,
             type_reference: 0.3,
             re_export: 0.0,
+            same_file_symbol: 1.0,
+            same_file_type: 3.0,
         }
+    }
+}
+
+/// One complete, independently configurable analysis parameter profile.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProfileConfig {
+    /// Number of diverse candidates to return (`k`).
+    pub candidates: u32,
+    /// Deterministic base seed.
+    pub seed: u64,
+    /// Per-level capacity caps.
+    pub capacity: CapacityConfig,
+    /// Objective coefficients.
+    pub objective: ObjectiveConfig,
+    /// Dependency and same-file affinity weights.
+    pub weights: WeightsConfig,
+    /// MFAS solver budget.
+    pub solver: SolverConfig,
+    /// Diversification parameters.
+    pub diversity: DiversityConfig,
+    /// Test-file detection and capping policy.
+    pub tests: TestsConfig,
+}
+
+impl Default for ProfileConfig {
+    fn default() -> Self {
+        Self {
+            candidates: 3,
+            seed: 42,
+            capacity: CapacityConfig::default(),
+            objective: ObjectiveConfig::default(),
+            weights: WeightsConfig::default(),
+            solver: SolverConfig::default(),
+            diversity: DiversityConfig::default(),
+            tests: TestsConfig::default(),
+        }
+    }
+}
+
+impl ProfileConfig {
+    /// Returns the greenfield defaults without overriding explicit values later.
+    #[must_use]
+    pub fn greenfield() -> Self {
+        Self {
+            objective: ObjectiveConfig {
+                path: 0.0,
+                anchor: 0.0,
+                ..ObjectiveConfig::default()
+            },
+            ..Self::default()
+        }
+    }
+}
+
+/// The complete built-in parameter-profile catalog.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProfilesConfig {
+    /// Parameters used by the anchored profile.
+    pub anchored: ProfileConfig,
+    /// Parameters used by the greenfield profile.
+    pub greenfield: ProfileConfig,
+}
+
+impl Default for ProfilesConfig {
+    fn default() -> Self {
+        Self {
+            anchored: ProfileConfig::default(),
+            greenfield: ProfileConfig::greenfield(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ProfilesConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ProfileOverrides {
+            anchored: Option<serde_json::Value>,
+            greenfield: Option<serde_json::Value>,
+        }
+
+        let overrides = ProfileOverrides::deserialize(deserializer)?;
+        Ok(Self {
+            anchored: merge_profile(ProfileConfig::default(), overrides.anchored)
+                .map_err(serde::de::Error::custom)?,
+            greenfield: merge_profile(ProfileConfig::greenfield(), overrides.greenfield)
+                .map_err(serde::de::Error::custom)?,
+        })
+    }
+}
+
+fn merge_profile(
+    defaults: ProfileConfig,
+    overrides: Option<serde_json::Value>,
+) -> Result<ProfileConfig, serde_json::Error> {
+    let mut merged = serde_json::to_value(defaults)?;
+    if let Some(overrides) = overrides {
+        merge_value(&mut merged, overrides);
+    }
+    serde_json::from_value(merged)
+}
+
+fn merge_value(target: &mut serde_json::Value, overrides: serde_json::Value) {
+    match overrides {
+        serde_json::Value::Object(overrides) if target.is_object() => {
+            if let Some(target) = target.as_object_mut() {
+                for (key, value) in overrides {
+                    match target.get_mut(&key) {
+                        Some(target_value) => merge_value(target_value, value),
+                        None => {
+                            target.insert(key, value);
+                        }
+                    }
+                }
+            }
+        }
+        value => *target = value,
     }
 }
 
@@ -362,20 +486,10 @@ impl Default for TestsConfig {
 pub struct AnalyzeConfig {
     /// Enabled adapters and source-discovery globs.
     pub adapters: AdaptersConfig,
-    /// Run-level analysis settings (mode, candidate count, seed).
+    /// Process-wide execution settings and selected parameter profiles.
     pub analysis: AnalysisConfig,
-    /// The per-level capacity caps.
-    pub capacity: CapacityConfig,
-    /// The objective coefficients.
-    pub objective: ObjectiveConfig,
-    /// The per-kind edge weights.
-    pub weights: WeightsConfig,
-    /// The MFAS solver budget.
-    pub solver: SolverConfig,
-    /// The diversification parameters.
-    pub diversity: DiversityConfig,
-    /// Test-file detection and capping settings.
-    pub tests: TestsConfig,
+    /// Complete independently configurable analysis parameter profiles.
+    pub profiles: ProfilesConfig,
 }
 
 impl AnalyzeConfig {
@@ -401,77 +515,28 @@ impl AnalyzeConfig {
     /// Returns [`StrataError::ConfigInvalid`] naming the offending key and its
     /// expected range.
     pub fn validate(&self) -> Result<(), StrataError> {
-        positive("capacity.file", self.capacity.file)?;
-        positive("capacity.folder", self.capacity.folder)?;
-        positive("capacity.domain", self.capacity.domain)?;
-        positive("capacity.package", self.capacity.package)?;
-        positive("capacity.package-group", self.capacity.package_group)?;
-        within_ceiling("capacity.folder", self.capacity.folder)?;
-        within_ceiling("capacity.domain", self.capacity.domain)?;
-        within_ceiling("capacity.package", self.capacity.package)?;
-        positive("tests.helper-cap", self.tests.helper_cap)?;
-        for (index, pattern) in self.tests.patterns.iter().enumerate() {
-            if pattern.is_empty() {
-                return Err(StrataError::ConfigInvalid {
-                    key: Some(format!("tests.patterns[{index}]")),
-                    reason: "a pattern must not be empty".to_owned(),
-                });
-            }
-            glob::Pattern::new(pattern).map_err(|error| StrataError::ConfigInvalid {
-                key: Some(format!("tests.patterns[{index}]")),
-                reason: error.to_string(),
-            })?;
-        }
-        positive("solver.ilp-threshold", self.solver.ilp_threshold)?;
-        at_most(
-            "solver.ilp-threshold",
-            self.solver.ilp_threshold,
-            ILP_THRESHOLD_CEILING,
-        )?;
-
         // `jobs` takes no floor: zero is the documented "use every logical core"
         // sentinel. It still takes a ceiling, because the value is handed
         // straight to the thread-pool builder.
         at_most("analysis.jobs", self.analysis.jobs, JOBS_CEILING)?;
-        positive("analysis.candidates", self.analysis.candidates)?;
-        at_most(
-            "analysis.candidates",
-            self.analysis.candidates,
-            CANDIDATES_CEILING,
-        )?;
+        if self.analysis.profiles.is_empty() {
+            return Err(StrataError::ConfigInvalid {
+                key: Some("analysis.profiles".to_owned()),
+                reason: "at least one parameter profile must be selected".to_owned(),
+            });
+        }
+        let mut selected = self.analysis.profiles.clone();
+        selected.sort_unstable();
+        selected.dedup();
+        if selected.len() != self.analysis.profiles.len() {
+            return Err(StrataError::ConfigInvalid {
+                key: Some("analysis.profiles".to_owned()),
+                reason: "parameter profile names must be unique".to_owned(),
+            });
+        }
 
-        non_negative_finite("objective.imbalance", self.objective.imbalance)?;
-        non_negative_finite("objective.naming", self.objective.naming)?;
-        non_negative_finite("objective.path", self.objective.path)?;
-        non_negative_finite("objective.anchor", self.objective.anchor)?;
-        non_negative_finite("objective.capacity", self.objective.capacity)?;
-
-        non_negative_finite("weights.value-import", self.weights.value_import)?;
-        non_negative_finite("weights.inheritance", self.weights.inheritance)?;
-        non_negative_finite("weights.call", self.weights.call)?;
-        non_negative_finite("weights.type-reference", self.weights.type_reference)?;
-        non_negative_finite("weights.re-export", self.weights.re_export)?;
-
-        non_negative_finite("diversity.score-tolerance", self.diversity.score_tolerance)?;
-        non_negative_finite("diversity.min-distance", self.diversity.min_distance)?;
-        positive(
-            "diversity.seeds-per-candidate",
-            self.diversity.seeds_per_candidate,
-        )?;
-        at_most(
-            "diversity.seeds-per-candidate",
-            self.diversity.seeds_per_candidate,
-            SEEDS_PER_CANDIDATE_CEILING,
-        )?;
-        // Both factors can be individually legal and still multiply into an
-        // unbounded restart pool, so the product carries its own bound.
-        at_most(
-            "analysis.candidates * diversity.seeds-per-candidate",
-            self.analysis
-                .candidates
-                .saturating_mul(self.diversity.seeds_per_candidate),
-            RESTART_POOL_CEILING,
-        )?;
+        Self::validate_profile("profiles.anchored", &self.profiles.anchored)?;
+        Self::validate_profile("profiles.greenfield", &self.profiles.greenfield)?;
 
         if self.adapters.languages.is_empty() {
             return Err(StrataError::ConfigInvalid {
@@ -491,6 +556,125 @@ impl AnalyzeConfig {
         }
 
         Ok(())
+    }
+
+    /// Replaces the selected parameter profiles using the CLI compatibility selector.
+    pub fn select_mode(&mut self, mode: Mode) {
+        self.analysis.profiles = match mode {
+            Mode::Anchored => vec![ProfileName::Anchored],
+            Mode::Greenfield => vec![ProfileName::Greenfield],
+            Mode::Both => vec![ProfileName::Anchored, ProfileName::Greenfield],
+        };
+    }
+
+    /// Applies a generic candidate-count override to every selected profile.
+    pub fn override_candidates(&mut self, candidates: u32) {
+        if self.analysis.profiles.contains(&ProfileName::Anchored) {
+            self.profiles.anchored.candidates = candidates;
+        }
+        if self.analysis.profiles.contains(&ProfileName::Greenfield) {
+            self.profiles.greenfield.candidates = candidates;
+        }
+    }
+
+    /// Applies a generic seed override to every selected profile.
+    pub fn override_seed(&mut self, seed: u64) {
+        if self.analysis.profiles.contains(&ProfileName::Anchored) {
+            self.profiles.anchored.seed = seed;
+        }
+        if self.analysis.profiles.contains(&ProfileName::Greenfield) {
+            self.profiles.greenfield.seed = seed;
+        }
+    }
+
+    /// Returns the configuration for a named parameter profile.
+    #[must_use]
+    pub const fn profile(&self, name: ProfileName) -> &ProfileConfig {
+        match name {
+            ProfileName::Anchored => &self.profiles.anchored,
+            ProfileName::Greenfield => &self.profiles.greenfield,
+        }
+    }
+
+    fn validate_profile(prefix: &str, profile: &ProfileConfig) -> Result<(), StrataError> {
+        let key = |suffix: &str| format!("{prefix}.{suffix}");
+        positive(&key("capacity.file"), profile.capacity.file)?;
+        positive(&key("capacity.folder"), profile.capacity.folder)?;
+        positive(&key("capacity.domain"), profile.capacity.domain)?;
+        positive(&key("capacity.package"), profile.capacity.package)?;
+        positive(
+            &key("capacity.package-group"),
+            profile.capacity.package_group,
+        )?;
+        within_ceiling(&key("capacity.folder"), profile.capacity.folder)?;
+        within_ceiling(&key("capacity.domain"), profile.capacity.domain)?;
+        within_ceiling(&key("capacity.package"), profile.capacity.package)?;
+        positive(&key("tests.helper-cap"), profile.tests.helper_cap)?;
+        for (index, pattern) in profile.tests.patterns.iter().enumerate() {
+            if pattern.is_empty() {
+                return Err(StrataError::ConfigInvalid {
+                    key: Some(format!("{prefix}.tests.patterns[{index}]")),
+                    reason: "a pattern must not be empty".to_owned(),
+                });
+            }
+            glob::Pattern::new(pattern).map_err(|error| StrataError::ConfigInvalid {
+                key: Some(format!("{prefix}.tests.patterns[{index}]")),
+                reason: error.to_string(),
+            })?;
+        }
+        positive(&key("solver.ilp-threshold"), profile.solver.ilp_threshold)?;
+        at_most(
+            &key("solver.ilp-threshold"),
+            profile.solver.ilp_threshold,
+            ILP_THRESHOLD_CEILING,
+        )?;
+        positive(&key("candidates"), profile.candidates)?;
+        at_most(&key("candidates"), profile.candidates, CANDIDATES_CEILING)?;
+        non_negative_finite(&key("objective.imbalance"), profile.objective.imbalance)?;
+        non_negative_finite(&key("objective.naming"), profile.objective.naming)?;
+        non_negative_finite(&key("objective.path"), profile.objective.path)?;
+        non_negative_finite(&key("objective.anchor"), profile.objective.anchor)?;
+        non_negative_finite(&key("objective.capacity"), profile.objective.capacity)?;
+        non_negative_finite(&key("weights.value-import"), profile.weights.value_import)?;
+        non_negative_finite(&key("weights.inheritance"), profile.weights.inheritance)?;
+        non_negative_finite(&key("weights.call"), profile.weights.call)?;
+        non_negative_finite(
+            &key("weights.type-reference"),
+            profile.weights.type_reference,
+        )?;
+        non_negative_finite(&key("weights.re-export"), profile.weights.re_export)?;
+        at_least_one_finite(
+            &key("weights.same-file-symbol"),
+            profile.weights.same_file_symbol,
+        )?;
+        at_least_one_finite(
+            &key("weights.same-file-type"),
+            profile.weights.same_file_type,
+        )?;
+        non_negative_finite(
+            &key("diversity.score-tolerance"),
+            profile.diversity.score_tolerance,
+        )?;
+        non_negative_finite(
+            &key("diversity.min-distance"),
+            profile.diversity.min_distance,
+        )?;
+        positive(
+            &key("diversity.seeds-per-candidate"),
+            profile.diversity.seeds_per_candidate,
+        )?;
+        at_most(
+            &key("diversity.seeds-per-candidate"),
+            profile.diversity.seeds_per_candidate,
+            SEEDS_PER_CANDIDATE_CEILING,
+        )?;
+        at_most(
+            &format!("{prefix}.candidates * {prefix}.diversity.seeds-per-candidate"),
+            profile
+                .candidates
+                .saturating_mul(profile.diversity.seeds_per_candidate),
+            RESTART_POOL_CEILING,
+        )
     }
 }
 
@@ -512,6 +696,12 @@ pub fn load_config(path: impl AsRef<Path>) -> Result<AnalyzeConfig, StrataError>
         path: path.to_path_buf(),
         reason: error.to_string(),
     })?;
+    let document: toml::Value =
+        toml::from_str(&text).map_err(|error| StrataError::ConfigInvalid {
+            key: None,
+            reason: error.message().to_owned(),
+        })?;
+    reject_legacy_keys(&document)?;
     let config: AnalyzeConfig =
         toml::from_str(&text).map_err(|error| StrataError::ConfigInvalid {
             key: None,
@@ -519,6 +709,41 @@ pub fn load_config(path: impl AsRef<Path>) -> Result<AnalyzeConfig, StrataError>
         })?;
     config.validate()?;
     Ok(config)
+}
+
+/// Rejects removed configuration locations before typed deserialization so the
+/// diagnostic retains the complete offending TOML key.
+fn reject_legacy_keys(document: &toml::Value) -> Result<(), StrataError> {
+    const ANALYSIS_KEYS: [&str; 3] = ["mode", "candidates", "seed"];
+    const TOP_LEVEL_KEYS: [&str; 6] = [
+        "capacity",
+        "objective",
+        "weights",
+        "solver",
+        "diversity",
+        "tests",
+    ];
+
+    if let Some(analysis) = document.get("analysis").and_then(toml::Value::as_table) {
+        for field in ANALYSIS_KEYS {
+            if analysis.contains_key(field) {
+                return Err(unknown_legacy_key(format!("analysis.{field}"), field));
+            }
+        }
+    }
+    for field in TOP_LEVEL_KEYS {
+        if document.get(field).is_some() {
+            return Err(unknown_legacy_key(field.to_owned(), field));
+        }
+    }
+    Ok(())
+}
+
+fn unknown_legacy_key(key: String, field: &str) -> StrataError {
+    StrataError::ConfigInvalid {
+        key: Some(key),
+        reason: format!("unknown field `{field}`"),
+    }
 }
 
 /// The inclusive ceiling for the folder, domain, and package member-count caps.
@@ -604,6 +829,18 @@ fn non_negative_finite(key: &str, value: f64) -> Result<(), StrataError> {
     }
 }
 
+/// Returns `Ok` when `value` is finite and at least one.
+fn at_least_one_finite(key: &str, value: f64) -> Result<(), StrataError> {
+    if value.is_finite() && value >= 1.0 {
+        Ok(())
+    } else {
+        Err(StrataError::ConfigInvalid {
+            key: Some(key.to_owned()),
+            reason: "must be a finite number at least 1".to_owned(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -612,39 +849,44 @@ mod tests {
     fn should_default_to_the_config_less_baseline() {
         let config = AnalyzeConfig::default();
 
-        assert_eq!(config.analysis.mode, Mode::Both);
-        assert_eq!(config.analysis.candidates, 3);
-        assert_eq!(config.analysis.seed, 42);
-        assert_eq!(config.capacity.file, 250);
-        assert_eq!(config.capacity.folder, 20);
-        assert_eq!(config.capacity.domain, 16);
-        assert_eq!(config.capacity.package, 15);
-        assert_eq!(config.solver.ilp_threshold, 300);
-        assert_eq!(config.diversity.seeds_per_candidate, 10);
+        assert_eq!(
+            config.analysis.profiles,
+            vec![ProfileName::Anchored, ProfileName::Greenfield]
+        );
+        assert_eq!(config.profiles.anchored.candidates, 3);
+        assert_eq!(config.profiles.anchored.seed, 42);
+        assert_eq!(config.profiles.anchored.capacity.file, 250);
+        assert_eq!(config.profiles.anchored.capacity.folder, 20);
+        assert_eq!(config.profiles.anchored.capacity.domain, 16);
+        assert_eq!(config.profiles.anchored.capacity.package, 15);
+        assert_eq!(config.profiles.anchored.solver.ilp_threshold, 300);
+        assert_eq!(config.profiles.anchored.diversity.seeds_per_candidate, 10);
+        assert!(config.profiles.greenfield.objective.path.abs() < f64::EPSILON);
+        assert!(config.profiles.greenfield.objective.anchor.abs() < f64::EPSILON);
     }
 
     #[test]
     fn should_parse_a_partial_toml_filling_omitted_keys_with_defaults() {
-        let toml = "[analysis]\nmode = \"anchored\"\ncandidates = 5\n";
+        let toml = "[analysis]\nprofiles = [\"anchored\"]\n[profiles.anchored]\ncandidates = 5\n";
 
         let config: AnalyzeConfig =
             toml::from_str(toml).unwrap_or_else(|_| AnalyzeConfig::default());
 
-        assert_eq!(config.analysis.mode, Mode::Anchored);
-        assert_eq!(config.analysis.candidates, 5);
+        assert_eq!(config.analysis.profiles, vec![ProfileName::Anchored]);
+        assert_eq!(config.profiles.anchored.candidates, 5);
         // an omitted key keeps its default.
-        assert_eq!(config.capacity.file, 250);
+        assert_eq!(config.profiles.anchored.capacity.file, 250);
     }
 
     #[test]
     fn should_round_trip_renamed_kebab_keys() {
-        let toml = "[capacity]\npackage-group = 7\n[weights]\nvalue-import = 2.0\n";
+        let toml = "[profiles.anchored.capacity]\npackage-group = 7\n[profiles.anchored.weights]\nvalue-import = 2.0\n";
 
         let config: AnalyzeConfig =
             toml::from_str(toml).unwrap_or_else(|_| AnalyzeConfig::default());
 
-        assert_eq!(config.capacity.package_group, 7);
-        assert!((config.weights.value_import - 2.0).abs() < f64::EPSILON);
+        assert_eq!(config.profiles.anchored.capacity.package_group, 7);
+        assert!((config.profiles.anchored.weights.value_import - 2.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -656,77 +898,270 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// A complete neutral profile document used by migration contract tests.
+    fn complete_profiles_toml() -> &'static str {
+        r#"
+[analysis]
+profiles = ["anchored", "greenfield"]
+jobs = 0
+
+[profiles.anchored]
+candidates = 3
+seed = 42
+[profiles.anchored.capacity]
+file = 250
+folder = 20
+domain = 16
+package = 15
+package-group = 12
+[profiles.anchored.objective]
+imbalance = 0.1
+naming = 0.3
+path = 0.2
+anchor = 1.0
+capacity = 4.0
+[profiles.anchored.weights]
+value-import = 1.0
+inheritance = 1.5
+call = 1.0
+type-reference = 0.3
+re-export = 0.0
+same-file-symbol = 1.0
+same-file-type = 3.0
+[profiles.anchored.solver]
+ilp-threshold = 300
+timeout-seconds = 60
+[profiles.anchored.diversity]
+seeds-per-candidate = 10
+score-tolerance = 0.05
+min-distance = 0.05
+[profiles.anchored.tests]
+helper-cap = 250
+patterns = []
+builtins = true
+
+[profiles.greenfield]
+candidates = 5
+seed = 84
+[profiles.greenfield.capacity]
+file = 240
+folder = 18
+domain = 14
+package = 13
+package-group = 11
+[profiles.greenfield.objective]
+imbalance = 0.2
+naming = 0.4
+path = 0.7
+anchor = 0.8
+capacity = 5.0
+[profiles.greenfield.weights]
+value-import = 1.1
+inheritance = 1.6
+call = 1.2
+type-reference = 0.4
+re-export = 0.1
+same-file-symbol = 1.0
+same-file-type = 1.0
+[profiles.greenfield.solver]
+ilp-threshold = 301
+timeout-seconds = 61
+[profiles.greenfield.diversity]
+seeds-per-candidate = 11
+score-tolerance = 0.06
+min-distance = 0.06
+[profiles.greenfield.tests]
+helper-cap = 240
+patterns = ["checks/**"]
+builtins = false
+"#
+    }
+
+    #[test]
+    fn should_parse_complete_independent_parameter_profiles() {
+        let parsed: Result<AnalyzeConfig, _> = toml::from_str(complete_profiles_toml());
+
+        assert!(
+            parsed.is_ok(),
+            "complete profile documents must parse: {parsed:?}"
+        );
+    }
+
+    #[test]
+    fn should_honor_explicit_nonzero_greenfield_path_and_anchor_values() {
+        let serialized = toml::from_str::<AnalyzeConfig>(complete_profiles_toml())
+            .ok()
+            .and_then(|config| serde_json::to_value(config).ok());
+
+        assert_eq!(
+            serialized
+                .as_ref()
+                .and_then(|value| value.pointer("/profiles/greenfield/objective/path"))
+                .and_then(serde_json::Value::as_f64),
+            Some(0.7)
+        );
+        assert_eq!(
+            serialized
+                .as_ref()
+                .and_then(|value| value.pointer("/profiles/greenfield/objective/anchor"))
+                .and_then(serde_json::Value::as_f64),
+            Some(0.8)
+        );
+    }
+
+    #[test]
+    fn should_keep_greenfield_objective_defaults_when_its_profile_is_partial() {
+        let config = toml::from_str::<AnalyzeConfig>(
+            "[profiles.greenfield]\ncandidates = 5\n[profiles.greenfield.objective]\nnaming = 0.8\n",
+        )
+        .unwrap_or_default();
+
+        assert_eq!(config.profiles.greenfield.candidates, 5);
+        assert!((config.profiles.greenfield.objective.naming - 0.8).abs() < f64::EPSILON);
+        assert!(config.profiles.greenfield.objective.path.abs() < f64::EPSILON);
+        assert!(config.profiles.greenfield.objective.anchor.abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn should_name_every_removed_legacy_key_in_its_diagnostic() {
+        let legacy_documents = [
+            ("[analysis]\nmode = \"both\"\n", "analysis.mode", "mode"),
+            (
+                "[analysis]\ncandidates = 3\n",
+                "analysis.candidates",
+                "candidates",
+            ),
+            ("[analysis]\nseed = 42\n", "analysis.seed", "seed"),
+            ("[capacity]\nfile = 250\n", "capacity", "capacity"),
+            ("[objective]\npath = 0.2\n", "objective", "objective"),
+            ("[weights]\ncall = 1.0\n", "weights", "weights"),
+            ("[solver]\nilp-threshold = 300\n", "solver", "solver"),
+            (
+                "[diversity]\nseeds-per-candidate = 10\n",
+                "diversity",
+                "diversity",
+            ),
+            ("[tests]\nhelper-cap = 250\n", "tests", "tests"),
+        ];
+        let path = std::env::temp_dir().join(format!(
+            "strata-legacy-profile-config-{}.toml",
+            std::process::id()
+        ));
+
+        for (document, expected_key, legacy_field) in legacy_documents {
+            assert!(
+                std::fs::write(&path, document).is_ok(),
+                "write isolated legacy config fixture"
+            );
+            let diagnostic = load_config(&path);
+            assert!(
+                matches!(
+                    diagnostic,
+                    Err(StrataError::ConfigInvalid { key: Some(ref key), ref reason })
+                        if key == expected_key
+                            && reason == &format!("unknown field `{legacy_field}`")
+                ),
+                "expected exact diagnostic key={expected_key:?}, reason={:?}; got {diagnostic:?}",
+                format!("unknown field `{legacy_field}`")
+            );
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn should_reject_a_zero_cap_with_its_key_path() {
         let config = AnalyzeConfig {
-            capacity: CapacityConfig {
-                file: 0,
-                ..CapacityConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    capacity: CapacityConfig {
+                        file: 0,
+                        ..CapacityConfig::default()
+                    },
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
 
         assert!(matches!(
             config.validate(),
-            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "capacity.file"
+            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.capacity.file"
         ));
     }
 
     #[test]
     fn should_parse_tests_patterns_and_builtins_from_toml() {
-        let toml =
-            "[tests]\npatterns = [\"*.spec.*\", \"apps/web/__tests__/**\"]\nbuiltins = false\n";
+        let toml = "[profiles.anchored.tests]\npatterns = [\"*.spec.*\", \"apps/web/__tests__/**\"]\nbuiltins = false\n";
 
         let config: AnalyzeConfig =
             toml::from_str(toml).unwrap_or_else(|_| AnalyzeConfig::default());
 
         assert_eq!(
-            config.tests.patterns,
+            config.profiles.anchored.tests.patterns,
             vec!["*.spec.*", "apps/web/__tests__/**"]
         );
-        assert!(!config.tests.builtins);
+        assert!(!config.profiles.anchored.tests.builtins);
         // an omitted key keeps its default.
-        assert_eq!(config.tests.helper_cap, 250);
+        assert_eq!(config.profiles.anchored.tests.helper_cap, 250);
     }
 
     #[test]
     fn should_reject_an_empty_tests_pattern_with_its_index() {
         let config = AnalyzeConfig {
-            tests: TestsConfig {
-                patterns: vec!["*.spec.*".to_owned(), String::new()],
-                ..TestsConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    tests: TestsConfig {
+                        patterns: vec!["*.spec.*".to_owned(), String::new()],
+                        ..TestsConfig::default()
+                    },
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
 
         assert!(matches!(
             config.validate(),
-            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "tests.patterns[1]"
+            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.tests.patterns[1]"
         ));
     }
 
     #[test]
     fn should_reject_an_invalid_tests_glob_with_its_index() {
         let config = AnalyzeConfig {
-            tests: TestsConfig {
-                patterns: vec!["[".to_owned()],
-                ..TestsConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    tests: TestsConfig {
+                        patterns: vec!["[".to_owned()],
+                        ..TestsConfig::default()
+                    },
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
 
         assert!(matches!(
             config.validate(),
-            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "tests.patterns[0]"
+            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.tests.patterns[0]"
         ));
     }
 
     #[test]
     fn should_reject_a_folder_cap_above_the_ceiling() {
         let config = AnalyzeConfig {
-            capacity: CapacityConfig {
-                folder: 257,
-                ..CapacityConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    capacity: CapacityConfig {
+                        folder: 257,
+                        ..CapacityConfig::default()
+                    },
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
@@ -734,16 +1169,22 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(StrataError::ConfigInvalid { key: Some(key), reason })
-                if key == "capacity.folder" && reason.contains("256") && reason.contains("257")
+                if key == "profiles.anchored.capacity.folder" && reason.contains("256") && reason.contains("257")
         ));
     }
 
     #[test]
     fn should_reject_a_domain_cap_above_the_ceiling() {
         let config = AnalyzeConfig {
-            capacity: CapacityConfig {
-                domain: 300,
-                ..CapacityConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    capacity: CapacityConfig {
+                        domain: 300,
+                        ..CapacityConfig::default()
+                    },
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
@@ -751,7 +1192,7 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(StrataError::ConfigInvalid { key: Some(key), reason })
-                if key == "capacity.domain" && reason.contains("256") && reason.contains("300")
+                if key == "profiles.anchored.capacity.domain" && reason.contains("256") && reason.contains("300")
         ));
     }
 
@@ -759,9 +1200,15 @@ mod tests {
     fn should_reject_a_package_cap_above_the_ceiling() {
         // u32::MAX is the classic hostile value: the error must format it, not wrap.
         let config = AnalyzeConfig {
-            capacity: CapacityConfig {
-                package: u32::MAX,
-                ..CapacityConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    capacity: CapacityConfig {
+                        package: u32::MAX,
+                        ..CapacityConfig::default()
+                    },
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
@@ -769,7 +1216,7 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(StrataError::ConfigInvalid { key: Some(key), reason })
-                if key == "capacity.package" && reason.contains("256") && reason.contains("4294967295")
+                if key == "profiles.anchored.capacity.package" && reason.contains("256") && reason.contains("4294967295")
         ));
     }
 
@@ -777,11 +1224,17 @@ mod tests {
     fn should_accept_caps_at_the_ceiling() {
         // 256 is inclusive: the bound rejects only what lies beyond it.
         let config = AnalyzeConfig {
-            capacity: CapacityConfig {
-                folder: 256,
-                domain: 256,
-                package: 256,
-                ..CapacityConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    capacity: CapacityConfig {
+                        folder: 256,
+                        domain: 256,
+                        package: 256,
+                        ..CapacityConfig::default()
+                    },
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
@@ -792,16 +1245,22 @@ mod tests {
     #[test]
     fn should_reject_a_negative_coefficient() {
         let config = AnalyzeConfig {
-            objective: ObjectiveConfig {
-                naming: -1.0,
-                ..ObjectiveConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    objective: ObjectiveConfig {
+                        naming: -1.0,
+                        ..ObjectiveConfig::default()
+                    },
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
 
         assert!(matches!(
             config.validate(),
-            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "objective.naming"
+            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.objective.naming"
         ));
     }
 
@@ -862,9 +1321,7 @@ mod tests {
     }
 
     #[test]
-    fn should_zero_path_and_anchor_in_greenfield_coefficients() {
-        // greenfield is layout-blind: beta and mu are forced to zero even when
-        // the config sets them.
+    fn should_honor_explicit_path_and_anchor_in_greenfield_coefficients() {
         let objective = ObjectiveConfig {
             imbalance: 0.4,
             naming: 0.5,
@@ -877,8 +1334,8 @@ mod tests {
 
         assert!((coefficients.lambda - 0.4).abs() < f64::EPSILON);
         assert!((coefficients.alpha - 0.5).abs() < f64::EPSILON);
-        assert!(coefficients.beta.abs() < f64::EPSILON);
-        assert!(coefficients.mu.abs() < f64::EPSILON);
+        assert!((coefficients.beta - 0.6).abs() < f64::EPSILON);
+        assert!((coefficients.mu - 0.7).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -889,6 +1346,8 @@ mod tests {
             call: 4.0,
             type_reference: 5.0,
             re_export: 6.0,
+            same_file_symbol: 1.0,
+            same_file_type: 3.0,
         };
 
         let table = weights.kind_weights();
@@ -932,41 +1391,53 @@ mod tests {
     #[test]
     fn should_reject_a_candidate_count_above_the_ceiling() {
         let config = AnalyzeConfig {
-            analysis: AnalysisConfig {
-                candidates: CANDIDATES_CEILING + 1,
-                ..AnalysisConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    candidates: CANDIDATES_CEILING + 1,
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
 
         assert!(matches!(
             config.validate(),
-            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "analysis.candidates"
+            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.candidates"
         ));
     }
 
     #[test]
     fn should_reject_a_zero_candidate_count() {
         let config = AnalyzeConfig {
-            analysis: AnalysisConfig {
-                candidates: 0,
-                ..AnalysisConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    candidates: 0,
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
 
         assert!(matches!(
             config.validate(),
-            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "analysis.candidates"
+            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.candidates"
         ));
     }
 
     #[test]
     fn should_reject_a_seed_multiplier_above_the_ceiling() {
         let config = AnalyzeConfig {
-            diversity: DiversityConfig {
-                seeds_per_candidate: SEEDS_PER_CANDIDATE_CEILING + 1,
-                ..DiversityConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    diversity: DiversityConfig {
+                        seeds_per_candidate: SEEDS_PER_CANDIDATE_CEILING + 1,
+                        ..DiversityConfig::default()
+                    },
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
@@ -974,7 +1445,7 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(StrataError::ConfigInvalid { key: Some(key), .. })
-                if key == "diversity.seeds-per-candidate"
+                if key == "profiles.anchored.diversity.seeds-per-candidate"
         ));
     }
 
@@ -982,13 +1453,16 @@ mod tests {
     fn should_reject_a_restart_pool_whose_factors_are_each_legal() {
         // 32 and 32 both pass their own ceilings; their product does not.
         let config = AnalyzeConfig {
-            analysis: AnalysisConfig {
-                candidates: 32,
-                ..AnalysisConfig::default()
-            },
-            diversity: DiversityConfig {
-                seeds_per_candidate: 32,
-                ..DiversityConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    candidates: 32,
+                    diversity: DiversityConfig {
+                        seeds_per_candidate: 32,
+                        ..DiversityConfig::default()
+                    },
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
@@ -996,16 +1470,22 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(StrataError::ConfigInvalid { key: Some(key), .. })
-                if key == "analysis.candidates * diversity.seeds-per-candidate"
+                if key == "profiles.anchored.candidates * profiles.anchored.diversity.seeds-per-candidate"
         ));
     }
 
     #[test]
     fn should_reject_an_ilp_threshold_above_the_ceiling() {
         let config = AnalyzeConfig {
-            solver: SolverConfig {
-                ilp_threshold: ILP_THRESHOLD_CEILING + 1,
-                ..SolverConfig::default()
+            profiles: ProfilesConfig {
+                anchored: ProfileConfig {
+                    solver: SolverConfig {
+                        ilp_threshold: ILP_THRESHOLD_CEILING + 1,
+                        ..SolverConfig::default()
+                    },
+                    ..ProfileConfig::default()
+                },
+                ..ProfilesConfig::default()
             },
             ..AnalyzeConfig::default()
         };
@@ -1013,7 +1493,46 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(StrataError::ConfigInvalid { key: Some(key), .. })
-                if key == "solver.ilp-threshold"
+                if key == "profiles.anchored.solver.ilp-threshold"
+        ));
+    }
+
+    #[test]
+    fn should_apply_generic_overrides_to_every_selected_profile() {
+        let mut config = AnalyzeConfig::default();
+
+        config.override_candidates(7);
+        config.override_seed(99);
+
+        assert_eq!(config.profiles.anchored.candidates, 7);
+        assert_eq!(config.profiles.greenfield.candidates, 7);
+        assert_eq!(config.profiles.anchored.seed, 99);
+        assert_eq!(config.profiles.greenfield.seed, 99);
+    }
+
+    #[test]
+    fn should_leave_unselected_profiles_unchanged_during_generic_overrides() {
+        let mut config = AnalyzeConfig::default();
+        config.select_mode(Mode::Greenfield);
+
+        config.override_candidates(7);
+        config.override_seed(99);
+
+        assert_eq!(config.profiles.anchored.candidates, 3);
+        assert_eq!(config.profiles.anchored.seed, 42);
+        assert_eq!(config.profiles.greenfield.candidates, 7);
+        assert_eq!(config.profiles.greenfield.seed, 99);
+    }
+
+    #[test]
+    fn should_reject_same_file_weights_below_one() {
+        let mut config = AnalyzeConfig::default();
+        config.profiles.greenfield.weights.same_file_type = 0.9;
+
+        assert!(matches!(
+            config.validate(),
+            Err(StrataError::ConfigInvalid { key: Some(key), .. })
+                if key == "profiles.greenfield.weights.same-file-type"
         ));
     }
 

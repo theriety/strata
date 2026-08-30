@@ -13,14 +13,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_engine::config::{AnalyzeConfig, Mode};
+use strata_engine::config::{AnalyzeConfig, ProfileName};
 use strata_engine::core::condense::condense;
 use strata_engine::core::graph::csr::Csr;
 use strata_engine::ir::Snapshot;
 use strata_engine::ir::{Polarity, ScopeLevel};
 use strata_engine::result::{ContainerNode, Level, MoveReason, ViolationKind};
 use strata_engine::{analyze, snapshot_from_root};
-use strata_eval::target::{ConfigSource, RunMode};
+use strata_eval::target::{ConfigSource, RunMode, TargetSpec};
 use strata_eval::{eval_fixture_root, load_target};
 
 /// Every committed fixture, in corpus order.
@@ -89,6 +89,23 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+fn config_for(spec: &TargetSpec) -> AnalyzeConfig {
+    let mut config = AnalyzeConfig::default();
+    config.analysis.profiles = match spec.run.mode {
+        RunMode::Both => vec![ProfileName::Anchored, ProfileName::Greenfield],
+        RunMode::Anchored => vec![ProfileName::Anchored],
+        RunMode::Greenfield => vec![ProfileName::Greenfield],
+    };
+    for profile in [
+        &mut config.profiles.anchored,
+        &mut config.profiles.greenfield,
+    ] {
+        profile.candidates = spec.run.candidates;
+        profile.seed = spec.run.seed;
+    }
+    config
+}
+
 /// Mirrors the harness invocation (`both` modes, k candidates, the target seed,
 /// built-in defaults) and prints the fixture's attribution row plus details.
 fn probe_fixture(name: &str) -> Result<(), String> {
@@ -96,14 +113,7 @@ fn probe_fixture(name: &str) -> Result<(), String> {
     if !matches!(spec.run.config, ConfigSource::Defaults) {
         return Err(format!("{name}: fixture-local configs are not probed"));
     }
-    let mut config = AnalyzeConfig::default();
-    config.analysis.mode = match spec.run.mode {
-        RunMode::Both => Mode::Both,
-        RunMode::Anchored => Mode::Anchored,
-        RunMode::Greenfield => Mode::Greenfield,
-    };
-    config.analysis.candidates = spec.run.candidates;
-    config.analysis.seed = spec.run.seed;
+    let config = config_for(&spec);
 
     let root = eval_fixture_root(name);
     let snapshot =
@@ -139,12 +149,19 @@ fn probe_fixture(name: &str) -> Result<(), String> {
     // and split preconditions are the observable trace of its SCC layer.
     let cycles = result
         .current
-        .violations
+        .shared_findings
         .iter()
+        .chain(
+            result
+                .profiles
+                .anchored
+                .iter()
+                .flat_map(|profile| &profile.current.unique_findings),
+        )
         .filter(|violation| matches!(violation.kind, ViolationKind::Cycle))
         .count();
 
-    let Some(anchored) = result.modes.anchored.as_ref() else {
+    let Some(anchored) = result.profiles.anchored.as_ref() else {
         return Err(format!("{name}: anchored mode absent"));
     };
     let Some(best) = anchored.candidates.first() else {
@@ -155,7 +172,7 @@ fn probe_fixture(name: &str) -> Result<(), String> {
         "  crosscheck: engine_cycle_findings={cycles} best_conditional_splits={} replica_multi_file_sccs={} standing={:?} pool_converged={}",
         best.conditional_splits.len(),
         accounting.multi_sccs,
-        anchored.current_standing,
+        anchored.current.standing,
         anchored.solution_space_converged,
     );
     for candidate in &anchored.candidates {
@@ -465,7 +482,7 @@ fn condensation_members(
         .iter()
         .map(|node| (node.id.0, node.container.0))
         .collect();
-    let weights = config.weights.kind_weights();
+    let weights = config.profiles.anchored.weights.kind_weights();
     let mut crossings: Vec<(u32, u32, f32)> = Vec::new();
     for edge in &ir.edges {
         let resolved = (

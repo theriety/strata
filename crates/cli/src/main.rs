@@ -60,7 +60,7 @@ enum FormatChoice {
     Json,
 }
 
-/// The restructuring-mode choice.
+/// The parameter-profile selector exposed through the compatibility `--mode` flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum ModeChoice {
     /// Stay close to the current layout.
@@ -91,10 +91,10 @@ struct AnalyzeCli {
     /// apply when absent).
     #[arg(long)]
     config: Option<PathBuf>,
-    /// Restructuring mode.
+    /// Parameter profile(s) to execute.
     #[arg(long)]
     mode: Option<ModeChoice>,
-    /// Candidates per mode.
+    /// Candidates per selected parameter profile.
     #[arg(short = 'k', long)]
     candidates: Option<u32>,
     /// Where to write the result (stdout when absent).

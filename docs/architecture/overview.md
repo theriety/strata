@@ -133,28 +133,59 @@ flowchart LR
 | 10 | Score | Evaluate the objective J(T) with a per-term breakdown | `crates/core/src/score.rs` |
 | 11 | Diversify & Report | Multi-start variation-of-information selection, then render | `crates/core/src/diversify.rs`, `crates/cli/src/render.rs` |
 
-The candidate-generation hot loop in `analyze` runs the restructuring subset — Condense → Layer → Cluster → Score → Diversify — once per seed. Shatter, Pack, Derive Visibility, and Project Tests live in `strata-core` and feed cycle-break suggestions, conditional file splits, and the structural violations surfaced by the `violations`, `tree`, and `diff` commands.
+The candidate-generation hot loop in `analyze` runs the restructuring subset — Condense → Layer → Cluster → Score → Diversify — once per profile seed. Shatter, Pack, Derive Visibility, and Project Tests live in `strata-core` and feed cycle-break suggestions, conditional file splits, and the structural violations surfaced by the `violations`, `tree`, and `diff` commands.
 
 The pipeline honors a fixed constraint priority — **acyclicity > test polarity > capacity > cohesion > anchoring**. The first three are hard vetoes during clustering and refinement, never penalty terms; only cohesion and anchoring are scored. Cycle-breaking uses an exact ILP via the bundled [HiGHS](https://highs.dev/) solver for small strongly-connected components (configurable `ilp-threshold`, default 300 nodes) with lazy cycle constraints, falling back to the Eades–Lin–Smyth heuristic above the threshold or on timeout; every break set records whether it was solved exactly.
 
-## Anchored and greenfield modes
+## Anchored and greenfield parameter profiles
 
-There is no mode-specific algorithm. A mode is purely a preset of objective coefficients (`crates/core/src/score.rs`, `crates/engine/src/config.rs`), so the *same* pipeline produces both results by changing only which weights are active in J(T):
+There is no profile-specific algorithm. Anchored and greenfield are complete parameter profiles (`crates/engine/src/config.rs`) executed over the same discovered snapshot. Each owns its candidate count, seed, capacities, objective coefficients, dependency and same-file weights, solver budget, diversification policy, and test policy. Adapter discovery and the process-wide `jobs` hint remain global.
+
+Both profiles evaluate the same objective form:
 
 ```text
 J(T) = Σ w(e)·c(e)·h(lca) + λ·imbalance − α·naming − β·path + μ·d(T, T0)
 ```
 
-- **Anchored** keeps every term active. The move-distance penalty `μ·d(T, T0)` and the path-cohesion bonus `β·path` reward staying close to today's layout, so candidates are reachable refactors that preserve existing groupings.
-- **Greenfield** zeroes `μ` and `β`. With anchoring and path similarity removed, the current layout cannot leak back in; only naming-token cohesion (`α`) and sibling imbalance (`λ`) shape the result, yielding an unbiased ideal that is invariant under folder renames.
+- **Anchored defaults** keep every term active. The move-distance penalty `μ·d(T, T0)` and path-cohesion bonus `β·path` reward staying close to today's layout.
+- **Greenfield defaults** set `μ` and `β` to zero. Explicit nonzero values are valid, so greenfield remains independently configurable instead of forcibly disabling either term.
 
-`Mode::Both` produces both result sets in a single analysis pass. The current layout is always scored with anchored coefficients to give a baseline J(T0) for comparison.
+The CLI's `--mode` flag is a compatibility selector for which parameter profiles execute. It does not supply or alter their policy. Generic `--candidates` and `--seed` overrides apply to every selected profile.
+
+Dependency edges are classified once from immutable analysis-start placement. An edge whose endpoints begin in different files keeps its ordinary dependency-kind price. A same-file edge touching a type uses the profile's `same-file-type` multiplier; every other same-file edge uses `same-file-symbol`. The defaults are `3.0` and `1.0`, respectively, so a type's primary same-file consumer has stronger affinity than weaker external type references without changing runtime-symbol affinity.
+
+## Analysis result contract
+
+Result schema version 4 separates facts shared by the executed profiles from profile-specific evaluation:
+
+```text
+AnalyzeResult
+├── schemaVersion, snapshotHash, summary
+├── current
+│   ├── tree
+│   └── sharedFindings
+└── profiles
+    ├── anchored
+    │   ├── parameters
+    │   ├── current
+    │   │   ├── score, scoreBreakdown, standing, capacityBreaks
+    │   │   └── uniqueFindings
+    │   └── candidates, pairwiseDistance, solutionSpaceConverged
+    └── greenfield
+        └── same shape
+```
+
+A finding is shared only when its complete serialized content is identical in both executed profiles. Each profile's `uniqueFindings` excludes that exact intersection. A single-profile run leaves `sharedFindings` empty, while deterministic sorting and deduplication keep JSON and human output stable. Profile gains are compared only with that profile's current score.
+
+Capacity findings are profile-dependent because caps belong to profiles. A physical folder measures direct files plus immediate child folders; descendants below those children do not inflate it. Measures at or below the cap produce no finding, values above the cap through 110% are `Borderline`, and larger values are `Violation`.
+
+Cycle findings resolve every member to repository-relative paths and explain the placement consequence: the members form one placement unit and must remain in one file unless the suggested dependency edge is broken. The cheapest cut and its exact-or-heuristic method remain profile-specific when dependency weights change its serialized content.
 
 ## Main components
 
 - **`Snapshot` / `IntermediateRepresentation`** (`crates/ir/src/snapshot.rs`): the validated, content-addressed contract between adapters and the engine — the single source of truth the analysis runs on.
 - **`Adapter` trait** (`crates/ir/src/adapter.rs`): the two-phase `parse`/`bind` interface every language adapter implements, isolating all language knowledge from the engine.
-- **`analyze`** (`crates/engine/src/analyze.rs`): the pure entry point that drives the pipeline per mode and per seed and returns an `AnalyzeResult`.
+- **`analyze`** (`crates/engine/src/analyze.rs`): the pure entry point that drives the pipeline per parameter profile and seed and returns an `AnalyzeResult`.
 - **`snapshot_from_root`** (`crates/engine/src/snapshot.rs`): source discovery, adapter dispatch by file extension, fragment merging, and re-export normalization.
 - **`AnalyzeConfig` / `load_config`** (`crates/engine/src/config.rs`): the `strata.toml` schema and validation, mapping config sections to objective weights, capacities, and solver budgets.
 - **`StrataError`** (`crates/engine/src/error.rs`): the typed error surface with stable remedy codes that the CLI maps to exit code `1`.

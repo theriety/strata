@@ -1,3 +1,2 @@
 capacity [violation] over-capacity, huge.py :: file `huge.py` holds 300 against a cap of 250
 capacity [violation] over-capacity, pkg, nested, deep, huge_nested.py :: file `pkg/nested/deep/huge_nested.py` holds 300 against a cap of 250
-capacity [borderline] over-capacity, borderline.py :: file `borderline.py` holds 250 against a cap of 250

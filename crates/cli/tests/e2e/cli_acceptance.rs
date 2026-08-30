@@ -195,8 +195,8 @@ fn should_deliver_the_analyze_summary_for_the_rust_fixture() {
         "the printed claim names every candidate both modes returned"
     );
     assert!(
-        outcome.stdout.contains("anchored mode returned 1")
-            && outcome.stdout.contains("greenfield mode returned 1"),
+        outcome.stdout.contains("anchored profile returned 1")
+            && outcome.stdout.contains("greenfield profile returned 1"),
         "each mode's contribution to the claim is stated"
     );
     assert!(
@@ -367,7 +367,7 @@ fn should_print_the_convergence_notice_exactly_when_the_flag_is_set() {
             serde_json::from_str(&json.stdout).unwrap_or(serde_json::Value::Null);
         for mode in ["anchored", "greenfield"] {
             let flag = parsed
-                .pointer(&format!("/modes/{mode}/solutionSpaceConverged"))
+                .pointer(&format!("/profiles/{mode}/solutionSpaceConverged"))
                 .and_then(serde_json::Value::as_bool);
             assert_eq!(
                 flag,
@@ -657,22 +657,22 @@ fn should_deliver_a_well_formed_report_for_the_rust_fixture() {
         "the title heading leads"
     );
     assert!(
-        outcome.stdout.contains("## Current layout"),
-        "the current-layout section is present"
+        outcome.stdout.contains("## Shared findings"),
+        "the shared findings section is present"
     );
     assert!(
-        outcome.stdout.contains("## Anchored candidates"),
+        outcome.stdout.contains("## Anchored parameter profile"),
         "the anchored section is present"
     );
     assert!(
-        outcome.stdout.contains("## Greenfield candidates"),
+        outcome.stdout.contains("## Greenfield parameter profile"),
         "the greenfield section is present"
     );
     // the objective J(T) is surfaced per layout as a fixed-precision score line; the
     // exact score bytes are pinned by the `report.md` golden, so here we assert only
     // the structural invariant that the current-layout score line is present.
     assert!(
-        outcome.stdout.contains("\nScore `"),
+        outcome.stdout.contains("Current score `"),
         "the current layout reports its objective J(T) as a score line: {}",
         outcome.stdout
     );
@@ -952,8 +952,8 @@ fn should_print_top_level_help_and_exit_zero() {
 fn should_deliver_a_well_formed_violations_json_face_for_a_violation_carrying_fixture() {
     // the json face of the gate is the serialized AnalyzeResult: it must parse and
     // carry the same capacity findings the table face lists. over-capacity emits
-    // two hard capacity findings (one nested) and a borderline one, so the
-    // violations json array holds exactly those three capacity entries — proving
+    // two hard capacity findings (one nested); the exactly-at-cap file is clean,
+    // so the violations json array holds exactly those two capacity entries — proving
     // the gate's machine-readable surface is well-formed and complete.
     let root = fixture("over-capacity");
     let root_str = root.to_str().unwrap_or_default();
@@ -972,7 +972,7 @@ fn should_deliver_a_well_formed_violations_json_face_for_a_violation_carrying_fi
     let parsed: serde_json::Value =
         serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
     let kinds: Vec<&str> = parsed
-        .pointer("/current/violations")
+        .pointer("/current/sharedFindings")
         .and_then(serde_json::Value::as_array)
         .map(|entries| {
             entries
@@ -983,8 +983,8 @@ fn should_deliver_a_well_formed_violations_json_face_for_a_violation_carrying_fi
         .unwrap_or_default();
     assert_eq!(
         kinds,
-        vec!["capacity", "capacity", "capacity"],
-        "the violations json carries all capacity findings (two hard + borderline): {}",
+        vec!["capacity", "capacity"],
+        "the violations json carries both hard capacity findings: {}",
         outcome.stdout
     );
 }
@@ -1088,7 +1088,7 @@ fn should_populate_break_suggestions_with_real_names_weights_and_exactness() {
         serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
 
     let cycles: Vec<&serde_json::Value> = parsed
-        .pointer("/current/violations")
+        .pointer("/current/sharedFindings")
         .and_then(serde_json::Value::as_array)
         .map(|entries| {
             entries
@@ -1125,16 +1125,24 @@ fn should_populate_break_suggestions_with_real_names_weights_and_exactness() {
             !suggestions.is_empty(),
             "a cycle carries at least one break suggestion: {cycle}"
         );
+        assert!(
+            members.iter().all(|member| {
+                std::path::Path::new(member)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("py"))
+            }),
+            "cycle locations are repository-relative file paths: {members:?}"
+        );
         for suggestion in &suggestions {
             let source = suggestion.get("source").and_then(serde_json::Value::as_str);
             let target = suggestion.get("target").and_then(serde_json::Value::as_str);
             assert!(
-                source.is_some_and(|name| members.iter().any(|member| member == name)),
-                "a break's source is a cycle member: {suggestion}"
+                source.is_some_and(|name| !name.is_empty()),
+                "a break names its source symbol: {suggestion}"
             );
             assert!(
-                target.is_some_and(|name| members.iter().any(|member| member == name)),
-                "a break's target is a cycle member: {suggestion}"
+                target.is_some_and(|name| !name.is_empty()),
+                "a break names its target symbol: {suggestion}"
             );
             assert!(
                 suggestion
@@ -1153,8 +1161,11 @@ fn should_populate_break_suggestions_with_real_names_weights_and_exactness() {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
         assert!(
-            detail.contains("-symbol cycle; break ") && detail.contains("exact"),
-            "the detail leads with the first break: {detail}"
+            detail.contains("-symbol cycle;")
+                && detail.contains("must remain in one file")
+                && detail.contains("; break ")
+                && detail.contains("exact"),
+            "the detail states the placement consequence and first break: {detail}"
         );
     }
 }
@@ -1183,7 +1194,7 @@ fn should_keep_conditional_splits_empty_for_an_under_cap_scc() {
     let mut candidates_seen = 0;
     for mode in ["anchored", "greenfield"] {
         let candidates = parsed
-            .pointer(&format!("/modes/{mode}/candidates"))
+            .pointer(&format!("/profiles/{mode}/candidates"))
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
@@ -1406,7 +1417,7 @@ fn should_report_a_vi_distance_line_for_a_same_mode_candidate_pair() {
     let mut parsed: serde_json::Value =
         serde_json::from_str(&contents).unwrap_or(serde_json::Value::Null);
     let grafted = parsed
-        .pointer_mut("/modes/anchored")
+        .pointer_mut("/profiles/anchored")
         .is_some_and(|anchored| {
             let cloned = anchored
                 .pointer("/candidates/0")
@@ -1431,7 +1442,7 @@ fn should_report_a_vi_distance_line_for_a_same_mode_candidate_pair() {
             }
         })
         && parsed
-            .pointer_mut("/modes/anchored/pairwiseDistance")
+            .pointer_mut("/profiles/anchored/pairwiseDistance")
             .is_some_and(|matrix| {
                 *matrix = serde_json::json!([[0.0, 0.7], [0.7, 0.0]]);
                 true
@@ -1681,12 +1692,13 @@ fn should_omit_the_anchored_section_for_a_greenfield_only_run() {
 
     assert_eq!(outcome.code, 0, "a greenfield-only run exits 0");
     assert!(
-        outcome.stdout.contains("greenfield mode returned"),
+        outcome.stdout.contains("greenfield profile returned"),
         "the greenfield claim is present: {}",
         outcome.stdout
     );
     assert!(
-        !outcome.stdout.contains("anchored mode returned") && !outcome.stdout.contains("anchored/"),
+        !outcome.stdout.contains("anchored profile returned")
+            && !outcome.stdout.contains("anchored/"),
         "a greenfield-only run omits the anchored candidates"
     );
 }
@@ -1856,12 +1868,8 @@ fn should_report_borderline_capacity_without_gating() {
         "capacity",
     ]);
 
-    assert_eq!(outcome.code, 0, "a borderline finding never gates");
-    assert!(
-        outcome.stdout.contains("capacity [borderline]"),
-        "the borderline finding is still reported: {}",
-        outcome.stdout
-    );
+    assert_eq!(outcome.code, 0, "an exactly-at-cap file never gates");
+    assert_eq!(outcome.stdout.trim(), "no violations");
 }
 
 #[test]
@@ -2054,7 +2062,7 @@ fn should_reject_a_result_with_an_unsupported_schema_version() {
 
     for version in ["999", "1"] {
         let stamped = contents.replace(
-            "\"schemaVersion\":3",
+            "\"schemaVersion\":4",
             &format!("\"schemaVersion\":{version}"),
         );
         assert_ne!(contents, stamped, "the version stamp was found and bumped");
@@ -2170,7 +2178,7 @@ fn should_default_to_json_when_stdout_is_piped() {
         parsed
             .pointer("/schemaVersion")
             .and_then(serde_json::Value::as_u64),
-        Some(3),
+        Some(4),
         "piped output is json with the schema stamp: {}",
         outcome.stdout
     );
@@ -2241,7 +2249,11 @@ fn should_honor_config_precedence_flags_over_toml_over_defaults() {
     let root_str = root.to_str().unwrap_or_default();
     let toml = std::env::temp_dir().join(format!("strata-accept-precedence-{}.toml", nanos()));
     let toml_str = toml.to_str().unwrap_or_default();
-    let written = std::fs::write(&toml, b"[analysis]\ncandidates = 1\n").is_ok();
+    let written = std::fs::write(
+        &toml,
+        b"[profiles.anchored]\ncandidates = 1\n[profiles.greenfield]\ncandidates = 1\n",
+    )
+    .is_ok();
 
     let defaults = run(&[
         "analyze",
@@ -2291,7 +2303,11 @@ fn should_flip_a_borderline_finding_to_a_gating_violation_via_a_config_cap() {
     let root_str = root.to_str().unwrap_or_default();
     let toml = std::env::temp_dir().join(format!("strata-accept-lowcap-{}.toml", nanos()));
     let toml_str = toml.to_str().unwrap_or_default();
-    let written = std::fs::write(&toml, b"[capacity]\nfile = 150\n").is_ok();
+    let written = std::fs::write(
+        &toml,
+        b"[profiles.anchored.capacity]\nfile = 150\n[profiles.greenfield.capacity]\nfile = 150\n",
+    )
+    .is_ok();
 
     let outcome = run(&[
         "violations",
@@ -2342,11 +2358,11 @@ fn should_report_improvement_as_current_score_minus_score_in_every_mode() {
     let mut candidates_seen = 0;
     for mode in ["anchored", "greenfield"] {
         let current_score = parsed
-            .pointer(&format!("/modes/{mode}/currentScore"))
+            .pointer(&format!("/profiles/{mode}/current/score"))
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(f64::NAN);
         let candidates = parsed
-            .pointer(&format!("/modes/{mode}/candidates"))
+            .pointer(&format!("/profiles/{mode}/candidates"))
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
@@ -2405,19 +2421,19 @@ fn should_emit_the_identity_candidate_when_the_current_layout_is_optimal() {
         serde_json::from_str(&json.stdout).unwrap_or(serde_json::Value::Null);
     assert_eq!(
         parsed
-            .pointer("/modes/anchored/currentStanding")
+            .pointer("/profiles/anchored/current/standing")
             .and_then(serde_json::Value::as_str),
         Some("optimal"),
         "the clean tiny fixture stands optimal: {}",
         json.stdout
     );
     assert_eq!(
-        parsed.pointer("/modes/anchored/candidates/0/tree"),
+        parsed.pointer("/profiles/anchored/candidates/0/tree"),
         parsed.pointer("/current/tree"),
         "candidate 1 is the current tree verbatim"
     );
     assert_eq!(
-        parsed.pointer("/modes/anchored/candidates/0/deltaNarration"),
+        parsed.pointer("/profiles/anchored/candidates/0/deltaNarration"),
         Some(&serde_json::json!([])),
         "the identity candidate narrates no moves"
     );
@@ -2471,7 +2487,7 @@ fn should_mark_a_cap_violating_layout_infeasible_with_the_resolution_notice() {
     for mode in ["anchored", "greenfield"] {
         assert_eq!(
             parsed
-                .pointer(&format!("/modes/{mode}/currentStanding"))
+                .pointer(&format!("/profiles/{mode}/current/standing"))
                 .and_then(serde_json::Value::as_str),
             Some("infeasible"),
             "{mode} stands infeasible over a hard cap violation: {}",
@@ -2555,7 +2571,7 @@ fn should_never_duplicate_a_segment_in_a_capacity_violation_location() {
         let parsed: serde_json::Value =
             serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
         let violations = parsed
-            .pointer("/current/violations")
+            .pointer("/current/sharedFindings")
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
@@ -2633,7 +2649,7 @@ fn should_home_a_test_heavy_cluster_under_its_production_directory() {
     let parsed: serde_json::Value =
         serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
     let tree = parsed
-        .pointer("/modes/greenfield/candidates/0/tree")
+        .pointer("/profiles/greenfield/candidates/0/tree")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     let mut trail = Vec::new();
@@ -2667,7 +2683,7 @@ fn should_discover_the_root_local_config_without_an_explicit_flag() {
     let parsed: serde_json::Value =
         serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
     let has_capacity_violation = parsed
-        .pointer("/current/violations")
+        .pointer("/current/sharedFindings")
         .and_then(serde_json::Value::as_array)
         .is_some_and(|violations| {
             violations.iter().any(|violation| {
@@ -2708,7 +2724,7 @@ fn should_warn_on_stderr_when_an_explicit_config_is_missing() {
     let parsed: serde_json::Value =
         serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
     let has_capacity_violation = parsed
-        .pointer("/current/violations")
+        .pointer("/current/sharedFindings")
         .and_then(serde_json::Value::as_array)
         .is_some_and(|violations| {
             violations.iter().any(|violation| {
@@ -2790,7 +2806,7 @@ fn should_vary_narration_reasons_and_mark_followed_subjects() {
 
     let _ = std::fs::remove_file(&result);
     let narration = parsed
-        .pointer("/modes/greenfield/candidates/0/deltaNarration")
+        .pointer("/profiles/greenfield/candidates/0/deltaNarration")
         .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -2834,7 +2850,7 @@ fn should_honor_objective_and_weights_config_keys() {
             .ok()
             .and_then(|parsed| {
                 parsed
-                    .pointer("/modes/anchored/currentScore")
+                    .pointer("/profiles/anchored/current/score")
                     .and_then(serde_json::Value::as_f64)
             })
             .unwrap_or(f64::NAN)
@@ -2842,9 +2858,16 @@ fn should_honor_objective_and_weights_config_keys() {
     let objective_toml =
         std::env::temp_dir().join(format!("strata-accept-objective-{}.toml", nanos()));
     let weights_toml = std::env::temp_dir().join(format!("strata-accept-weights-{}.toml", nanos()));
-    let objective_written =
-        std::fs::write(&objective_toml, b"[objective]\nimbalance = 0.0\n").is_ok();
-    let weights_written = std::fs::write(&weights_toml, b"[weights]\nvalue-import = 2.0\n").is_ok();
+    let objective_written = std::fs::write(
+        &objective_toml,
+        b"[profiles.anchored.objective]\nimbalance = 0.0\n",
+    )
+    .is_ok();
+    let weights_written = std::fs::write(
+        &weights_toml,
+        b"[profiles.anchored.weights]\nvalue-import = 2.0\n",
+    )
+    .is_ok();
 
     let baseline = current_score(PURE_DEFAULTS);
     let objective = current_score(objective_toml.to_str().unwrap_or_default());
@@ -2872,7 +2895,11 @@ fn should_reject_a_zero_seeds_per_candidate_from_config() {
     let root_str = root.to_str().unwrap_or_default();
     let toml = std::env::temp_dir().join(format!("strata-accept-seeds-{}.toml", nanos()));
     let toml_str = toml.to_str().unwrap_or_default();
-    let written = std::fs::write(&toml, b"[diversity]\nseeds-per-candidate = 0\n").is_ok();
+    let written = std::fs::write(
+        &toml,
+        b"[profiles.anchored.diversity]\nseeds-per-candidate = 0\n",
+    )
+    .is_ok();
 
     let outcome = run(&[
         "analyze", "--root", root_str, "--config", toml_str, "--format", "summary",
@@ -2917,7 +2944,7 @@ fn should_populate_conditional_splits_for_an_over_cap_scc() {
     assert_eq!(outcome.code, 0, "analyze exits 0");
     let parsed: serde_json::Value = serde_json::from_str(&outcome.stdout).unwrap_or_default();
     let suggestions = parsed
-        .pointer("/current/violations")
+        .pointer("/current/sharedFindings")
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
@@ -2930,7 +2957,7 @@ fn should_populate_conditional_splits_for_an_over_cap_scc() {
     );
     for mode in ["anchored", "greenfield"] {
         let candidates = parsed
-            .pointer(&format!("/modes/{mode}/candidates"))
+            .pointer(&format!("/profiles/{mode}/candidates"))
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
@@ -2992,14 +3019,14 @@ fn should_outscore_the_current_layout_on_the_constellation_fixture() {
     // outscored.
     assert_eq!(
         parsed
-            .pointer("/modes/greenfield/currentStanding")
+            .pointer("/profiles/greenfield/current/standing")
             .and_then(serde_json::Value::as_str),
         Some("outscored"),
         "greenfield marks the misplaced layout outscored"
     );
     for mode in ["anchored", "greenfield"] {
         let candidates = parsed
-            .pointer(&format!("/modes/{mode}/candidates"))
+            .pointer(&format!("/profiles/{mode}/candidates"))
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();

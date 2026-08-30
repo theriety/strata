@@ -32,20 +32,52 @@ use strata_ir::{
     NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
 };
 
-use crate::config::{AnalyzeConfig, TestsConfig};
+use crate::config::{AnalyzeConfig, CapacityConfig, ProfileConfig, ProfileName, TestsConfig};
 use crate::error::StrataError;
 use crate::narrate::{FileFacts, narrate, project_physical_path, tokenize};
 use crate::result::{
     AnalyzeResult, Candidate, CapacityBreach, CapacityRemainder, ConditionalSplit, ContainerNode,
-    CurrentStanding, CurrentTree, EdgeBreak, Level, ModeResult, Modes, RESULT_SCHEMA_VERSION,
-    ScoreBreakdown, Severity, Summary, SymbolKind, SymbolMove, SymbolPlacement, Violation,
-    ViolationKind,
+    CurrentStanding, CurrentTree, EdgeBreak, Level, ProfileCurrent, ProfileResult, Profiles,
+    RESULT_SCHEMA_VERSION, ScoreBreakdown, Severity, Summary, SymbolKind, SymbolMove,
+    SymbolPlacement, Violation, ViolationKind,
 };
 use crate::snapshot::Language;
 
 /// The capacity borderline band: a finding within ±10% of a cap is borderline
 /// and never gates CI (reference `BORDERLINE_CAPACITY_MARGIN`).
 pub const BORDERLINE_CAPACITY_MARGIN: f64 = 0.1;
+
+trait ProfileSource {
+    fn profile(&self) -> &ProfileConfig;
+}
+
+impl ProfileSource for ProfileConfig {
+    fn profile(&self) -> &ProfileConfig {
+        self
+    }
+}
+
+impl ProfileSource for AnalyzeConfig {
+    fn profile(&self) -> &ProfileConfig {
+        &self.profiles.anchored
+    }
+}
+
+trait CapacitySource {
+    fn capacity(&self) -> &CapacityConfig;
+}
+
+impl CapacitySource for CapacityConfig {
+    fn capacity(&self) -> &CapacityConfig {
+        self
+    }
+}
+
+impl CapacitySource for AnalyzeConfig {
+    fn capacity(&self) -> &CapacityConfig {
+        &self.profiles.anchored.capacity
+    }
+}
 
 /// The compiled `[tests]` policy deciding which files count as tests for the
 /// clustering tie-cut and the subject-following shadow pass.
@@ -171,58 +203,48 @@ fn analyze_inner(
         &|node| Some(node.container),
         &BTreeMap::new(),
     )?;
-    let weights = config.weights.kind_weights();
-    let tests = TestPolicy::new(&config.tests)?;
-    let cycles = solve_cycles(snapshot, config, &weights);
-    let violations = collect_violations(snapshot, config, &current_node, &cycles);
-    let current_breakdown = score_current(
-        snapshot,
-        &config.objective.anchored(),
-        &weights,
-        config.capacity.folder,
-    );
+    let selected = &config.analysis.profiles;
+    let mut anchored_findings = Vec::new();
+    let mut greenfield_findings = Vec::new();
+    let mut anchored = None;
+    let mut greenfield = None;
 
-    // identity seeding is anchored-only (AD-2) and requires a cap-clean current
-    // tree: a layout that already breaches a capacity cap is not a legal
-    // candidate, so it may only serve as the delta baseline. Borderline
-    // observations are within tolerance and never gate — the same predicate
-    // the DTO reports as `capacity_breaks`.
-    let capacity_breaks = hard_capacity_breaks(&violations);
-    let capacity_clean = capacity_breaks == 0;
+    if selected.contains(&ProfileName::Anchored) {
+        let profile = &config.profiles.anchored;
+        anchored_findings = profile_findings(snapshot, &current_node, profile);
+        anchored = Some(build_profile_result(snapshot, profile, &anchored_findings)?);
+    }
+    if selected.contains(&ProfileName::Greenfield) {
+        let profile = &config.profiles.greenfield;
+        greenfield_findings = profile_findings(snapshot, &current_node, profile);
+        greenfield = Some(build_profile_result(
+            snapshot,
+            profile,
+            &greenfield_findings,
+        )?);
+    }
 
-    // conditional splits are layout-invariant (an SCC co-clusters everywhere),
-    // so they are computed once and shared verbatim by every candidate.
-    let splits = conditional_splits(&cycles, snapshot, config.capacity.file);
-
-    let mode = config.analysis.mode;
-    let anchored = mode
-        .includes_anchored()
-        .then(|| {
-            build_mode_result(
-                snapshot,
-                config,
-                &config.objective.anchored(),
-                capacity_clean,
-                capacity_clean,
-                &splits,
-                &tests,
-            )
-        })
-        .transpose()?;
-    let greenfield = mode
-        .includes_greenfield()
-        .then(|| {
-            build_mode_result(
-                snapshot,
-                config,
-                &config.objective.greenfield(),
-                false,
-                capacity_clean,
-                &splits,
-                &tests,
-            )
-        })
-        .transpose()?;
+    let shared_findings = if anchored.is_some() && greenfield.is_some() {
+        anchored_findings
+            .iter()
+            .filter(|finding| greenfield_findings.contains(finding))
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    if let Some(result) = anchored.as_mut() {
+        result.current.unique_findings = anchored_findings
+            .into_iter()
+            .filter(|finding| !shared_findings.contains(finding))
+            .collect();
+    }
+    if let Some(result) = greenfield.as_mut() {
+        result.current.unique_findings = greenfield_findings
+            .into_iter()
+            .filter(|finding| !shared_findings.contains(finding))
+            .collect();
+    }
 
     Ok(AnalyzeResult {
         schema_version: RESULT_SCHEMA_VERSION,
@@ -230,16 +252,23 @@ fn analyze_inner(
         summary: summarize(snapshot),
         current: CurrentTree {
             tree: current_node,
-            score: current_breakdown.total,
-            score_breakdown: current_breakdown.into(),
-            capacity_breaks,
-            violations,
+            shared_findings,
         },
-        modes: Modes {
+        profiles: Profiles {
             anchored,
             greenfield,
         },
     })
+}
+
+fn profile_findings(
+    snapshot: &Snapshot,
+    tree: &ContainerNode,
+    profile: &ProfileConfig,
+) -> Vec<Violation> {
+    let weights = profile.weights.kind_weights();
+    let cycles = solve_cycles(snapshot, profile, &weights);
+    collect_violations(snapshot, &profile.capacity, tree, &cycles)
 }
 
 /// Counts the capacity findings that hard-breach their caps: `Severity::Violation`
@@ -293,7 +322,7 @@ fn summarize(snapshot: &Snapshot) -> Summary {
 /// configured caps.
 fn collect_violations(
     snapshot: &Snapshot,
-    config: &AnalyzeConfig,
+    capacity: &CapacityConfig,
     tree: &ContainerNode,
     cycles: &[SccSolution],
 ) -> Vec<Violation> {
@@ -301,9 +330,21 @@ fn collect_violations(
     violations.extend(cycle_violations(snapshot, cycles));
     violations.extend(polarity_violations(snapshot));
     violations.extend(visibility_violations(snapshot));
-    violations.extend(snapshot_capacity_violations(snapshot, tree, config));
-    sort_violations(&mut violations);
+    violations.extend(snapshot_capacity_violations(snapshot, tree, capacity));
+    sort_and_dedup_violations(&mut violations);
     violations
+}
+
+/// Sorts findings by their complete serialized identity and removes exact
+/// duplicates before shared/profile-specific partitioning.
+fn sort_and_dedup_violations(violations: &mut Vec<Violation>) {
+    sort_violations(violations);
+    violations.dedup_by(|left, right| violation_identity(left) == violation_identity(right));
+}
+
+/// Returns the stable schema identity used to order and deduplicate findings.
+fn violation_identity(violation: &Violation) -> String {
+    serde_json::to_string(violation).unwrap_or_else(|_| format!("{violation:?}"))
 }
 
 /// Sorts violations into the engine-defined total order — hard violations
@@ -316,6 +357,7 @@ fn sort_violations(violations: &mut [Violation]) {
             .then_with(|| kind_rank(left.kind).cmp(&kind_rank(right.kind)))
             .then_with(|| left.location.cmp(&right.location))
             .then_with(|| left.detail.cmp(&right.detail))
+            .then_with(|| violation_identity(left).cmp(&violation_identity(right)))
     });
 }
 
@@ -341,15 +383,32 @@ fn kind_rank(kind: ViolationKind) -> u8 {
 /// as a cycle violation, carrying the MFAS break set as suggestions.
 fn cycle_violations(snapshot: &Snapshot, cycles: &[SccSolution]) -> Vec<Violation> {
     let names = node_names(snapshot);
+    let nodes: BTreeMap<u32, &Node> = snapshot
+        .ir()
+        .nodes
+        .iter()
+        .map(|node| (node.id.0, node))
+        .collect();
+    let files: BTreeMap<u32, String> = snapshot
+        .ir()
+        .containers
+        .containers()
+        .iter()
+        .filter(|container| container.level == ScopeLevel::File)
+        .map(|container| (container.id.0, container.name.to_string()))
+        .collect();
 
     cycles
         .iter()
         .map(|solution| {
-            let location = solution
+            let location: Vec<String> = solution
                 .members
                 .iter()
-                .filter_map(|node| names.get(&node.0).cloned())
-                .collect::<Vec<_>>();
+                .filter_map(|node| nodes.get(&node.0))
+                .filter_map(|node| files.get(&node.container.0).cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
             let breaks = edge_breaks(solution, &names);
             Violation {
                 kind: ViolationKind::Cycle,
@@ -393,12 +452,13 @@ fn edge_breaks(solution: &SccSolution, names: &BTreeMap<u32, String>) -> Vec<Edg
 
 /// Renders a cycle violation's detail line, leading with the cheapest break.
 fn cycle_detail(size: usize, breaks: &[EdgeBreak]) -> String {
+    const CONSEQUENCE: &str = "symbols form one placement unit and must remain in one file unless a suggested dependency edge is broken";
     let Some(first) = breaks.first() else {
-        return format!("{size}-symbol cycle");
+        return format!("{size}-symbol cycle; {CONSEQUENCE}");
     };
     let method = if first.exact { "exact" } else { "heuristic" };
     let mut detail = format!(
-        "{size}-symbol cycle; break {} -> {} (w={:.1}, {method})",
+        "{size}-symbol cycle; {CONSEQUENCE}; break {} -> {} (w={:.1}, {method})",
         first.source, first.target, first.weight
     );
     if breaks.len() > 1 {
@@ -507,16 +567,16 @@ fn visibility_violations(snapshot: &Snapshot) -> Vec<Violation> {
 fn snapshot_capacity_violations(
     snapshot: &Snapshot,
     tree: &ContainerNode,
-    config: &AnalyzeConfig,
+    capacity: &CapacityConfig,
 ) -> Vec<Violation> {
-    let mut findings: Vec<Violation> = walk_all_capacity(tree, config)
+    let mut findings: Vec<Violation> = walk_all_capacity(tree, capacity)
         .into_iter()
         .filter(|(level, _)| *level != Level::Folder)
         .map(|(_, violation)| violation)
         .collect();
     findings.extend(physical_folder_findings(
         &physical_folder_entries(&snapshot.ir().containers, None),
-        config.capacity.folder,
+        capacity.folder,
     ));
     findings
 }
@@ -525,7 +585,7 @@ fn snapshot_capacity_violations(
 /// analysis augments it with the snapshot's physical folder projection above.
 #[cfg(test)]
 fn capacity_violations(tree: &ContainerNode, config: &AnalyzeConfig) -> Vec<Violation> {
-    walk_all_capacity(tree, config)
+    walk_all_capacity(tree, &config.profiles.anchored.capacity)
         .into_iter()
         .map(|(_, violation)| violation)
         .collect()
@@ -627,16 +687,15 @@ fn physical_folder_findings(entries: &BTreeMap<Vec<String>, u32>, cap: u32) -> V
     entries
         .iter()
         .filter_map(|(path, &measure)| {
-            let cap_f = f64::from(cap);
-            let measure_f = f64::from(measure);
-            if measure_f < cap_f * (1.0 - BORDERLINE_CAPACITY_MARGIN) {
+            if measure <= cap {
                 return None;
             }
-            let severity = if measure_f > cap_f * (1.0 + BORDERLINE_CAPACITY_MARGIN) {
-                Severity::Violation
-            } else {
-                Severity::Borderline
-            };
+            let severity =
+                if f64::from(measure) > f64::from(cap) * (1.0 + BORDERLINE_CAPACITY_MARGIN) {
+                    Severity::Violation
+                } else {
+                    Severity::Borderline
+                };
             let qualified = path.join("/");
             Some(Violation {
                 kind: ViolationKind::Capacity,
@@ -655,11 +714,15 @@ fn physical_folder_findings(entries: &BTreeMap<Vec<String>, u32>, cap: u32) -> V
 }
 
 /// Walks the DTO tree, returning each capacity finding with the level it hit.
-fn walk_all_capacity(tree: &ContainerNode, config: &AnalyzeConfig) -> Vec<(Level, Violation)> {
+fn walk_all_capacity(
+    tree: &ContainerNode,
+    source: &impl CapacitySource,
+) -> Vec<(Level, Violation)> {
+    let capacity = source.capacity();
     let mut findings = Vec::new();
     let mut path = Vec::new();
     append_display_segments(&mut path, tree);
-    walk_capacity(tree, &path, config, &mut findings);
+    walk_capacity(tree, &path, capacity, &mut findings);
     findings
 }
 
@@ -667,12 +730,12 @@ fn walk_all_capacity(tree: &ContainerNode, config: &AnalyzeConfig) -> Vec<(Level
 fn walk_capacity(
     node: &ContainerNode,
     path: &[String],
-    config: &AnalyzeConfig,
+    capacity: &CapacityConfig,
     findings: &mut Vec<(Level, Violation)>,
 ) {
     let (measure, cap) = match node.level {
-        Level::File => (node.production_sloc.unwrap_or(0), config.capacity.file),
-        Level::Folder => (file_child_count(node), config.capacity.folder),
+        Level::File => (node.production_sloc.unwrap_or(0), capacity.file),
+        Level::Folder => (file_child_count(node), capacity.folder),
         // QUAL-P3-2: upper levels count their real structural members deeply —
         // a domain every file-binding folder beneath it, a package every
         // binding domain, a package group every binding package — so nesting
@@ -681,17 +744,11 @@ fn walk_capacity(
         // directory chain (`a/b/c`) is one real place, never three. The folder
         // arm is used only by DTO-focused tests; production folder findings
         // come from the package-aware physical projection.
-        Level::Domain => (
-            count_bound_members(node, Level::Folder).0,
-            config.capacity.domain,
-        ),
-        Level::Package => (
-            count_bound_members(node, Level::Domain).0,
-            config.capacity.package,
-        ),
+        Level::Domain => (count_bound_members(node, Level::Folder).0, capacity.domain),
+        Level::Package => (count_bound_members(node, Level::Domain).0, capacity.package),
         Level::PackageGroup => (
             count_bound_members(node, Level::Package).0,
-            config.capacity.package_group,
+            capacity.package_group,
         ),
     };
 
@@ -703,7 +760,7 @@ fn walk_capacity(
         for child in children {
             let mut child_path = path.to_vec();
             append_display_segments(&mut child_path, child);
-            walk_capacity(child, &child_path, config, findings);
+            walk_capacity(child, &child_path, capacity, findings);
         }
     }
 }
@@ -779,15 +836,11 @@ fn capacity_finding(
     measure: u32,
     cap: u32,
 ) -> Option<Violation> {
-    let cap_f = f64::from(cap);
-    let measure_f = f64::from(measure);
-    let lower = cap_f * (1.0 - BORDERLINE_CAPACITY_MARGIN);
-
-    // below the borderline band entirely: not a finding.
-    if measure_f < lower {
+    if measure <= cap {
         return None;
     }
-    // a hard breach is strictly over the cap; the band around the cap is borderline.
+    let cap_f = f64::from(cap);
+    let measure_f = f64::from(measure);
     let upper = cap_f * (1.0 + BORDERLINE_CAPACITY_MARGIN);
     let severity = if measure_f > upper {
         Severity::Violation
@@ -832,11 +885,23 @@ fn level_word(level: Level) -> &'static str {
 /// level of its endpoints in the current tree), the file-level container sizes,
 /// and a zero move distance, so its objective is the genuine `J(T0)` baseline the
 /// candidates are measured against.
+#[cfg(test)]
 fn score_current(
     snapshot: &Snapshot,
     coefficients: &Coefficients,
     weights: &KindWeights,
     folder_budget: u32,
+) -> CoreBreakdown {
+    score_current_with_affinity(snapshot, coefficients, weights, folder_budget, 1.0, 3.0)
+}
+
+fn score_current_with_affinity(
+    snapshot: &Snapshot,
+    coefficients: &Coefficients,
+    weights: &KindWeights,
+    folder_budget: u32,
+    same_file_symbol: f64,
+    same_file_type: f64,
 ) -> CoreBreakdown {
     let ir = snapshot.ir();
     let (files, _) = file_inventory(ir);
@@ -856,6 +921,8 @@ fn score_current(
         &namespaces,
         0.0,
         folder_budget,
+        same_file_symbol,
+        same_file_type,
     );
     score(&candidate, coefficients, weights)
 }
@@ -866,7 +933,7 @@ fn score_current(
 /// search runs the full multilevel scheme per seed (multi-start), scores each
 /// assembled five-level layout under the mode's objective, and diversifies to up
 /// to `k` genuinely different candidates by max-min variation of information.
-/// When `seed_identity` is set (anchored mode on a cap-clean tree) the pool also
+/// On a cap-clean tree the pool also
 /// carries the identity layout — "change nothing", scored at the true current
 /// tree — so a suggested restructuring can never silently lose to the current
 /// layout. Each surviving partition is reconstructed into a candidate
@@ -878,27 +945,32 @@ fn score_current(
 /// # Errors
 ///
 /// Returns [`StrataError::SnapshotInvalid`] if a candidate tree cannot be rendered.
-fn build_mode_result(
+fn build_profile_result(
     snapshot: &Snapshot,
-    config: &AnalyzeConfig,
-    coefficients: &Coefficients,
-    seed_identity: bool,
-    capacity_clean: bool,
-    splits: &[ConditionalSplit],
-    tests: &TestPolicy,
-) -> Result<ModeResult, StrataError> {
-    let solver = PipelineSolver::new(snapshot, config, *coefficients, seed_identity, tests);
-    let mode_config = mode_config(config);
+    profile: &ProfileConfig,
+    findings: &[Violation],
+) -> Result<ProfileResult, StrataError> {
+    let coefficients = profile.objective.coefficients();
+    let tests = TestPolicy::new(&profile.tests)?;
+    let capacity_breaks = hard_capacity_breaks(findings);
+    let capacity_clean = capacity_breaks == 0;
+    let cycles = solve_cycles(snapshot, profile, &profile.weights.kind_weights());
+    let splits = conditional_splits(&cycles, snapshot, profile.capacity.file);
+    let seed_identity = capacity_clean;
+    let solver = PipelineSolver::new(snapshot, profile, coefficients, seed_identity, &tests);
+    let mode_config = mode_config(profile);
     let CoreModeResult {
         candidates,
         solution_space_converged,
     } = diversify(&solver, &mode_config);
 
-    let current_breakdown = score_current(
+    let current_breakdown = score_current_with_affinity(
         snapshot,
-        coefficients,
-        &config.weights.kind_weights(),
-        config.capacity.folder,
+        &coefficients,
+        &profile.weights.kind_weights(),
+        profile.capacity.folder,
+        profile.weights.same_file_symbol,
+        profile.weights.same_file_type,
     );
     // A suggestion must at least tie keeping today's layout: the diversifier's
     // tolerance band measures against the pool's own best, so a diverse shape can
@@ -933,13 +1005,14 @@ fn build_mode_result(
             current_tree,
             solved,
             u32::try_from(index + 1).unwrap_or(u32::MAX),
-            splits,
+            &splits,
         )?;
         candidate.improvement = current_breakdown.total - candidate.score;
         // an infeasible standing must say what each candidate actually fixes,
         // so its tree is re-checked against the same caps as the current one.
-        candidate.capacity_remainder = (!capacity_clean)
-            .then(|| solver.capacity_remainder(&solved.partition, &candidate.tree, config));
+        candidate.capacity_remainder = (!capacity_clean).then(|| {
+            solver.capacity_remainder(&solved.partition, &candidate.tree, &profile.capacity)
+        });
         built.push(candidate);
     }
 
@@ -957,13 +1030,18 @@ fn build_mode_result(
     };
 
     let pairwise_distance = pairwise_distances(&offered);
-    Ok(ModeResult {
+    Ok(ProfileResult {
+        parameters: profile.clone(),
+        current: ProfileCurrent {
+            score: current_breakdown.total,
+            score_breakdown: current_breakdown.into(),
+            unique_findings: findings.to_vec(),
+            standing: current_standing,
+            capacity_breaks,
+        },
         candidates: built,
         pairwise_distance,
         solution_space_converged,
-        current_score: current_breakdown.total,
-        current_score_breakdown: current_breakdown.into(),
-        current_standing,
     })
 }
 
@@ -981,13 +1059,13 @@ fn pairwise_distances(candidates: &[SolvedCandidate]) -> Vec<Vec<f64>> {
 }
 
 /// Translates the engine config into the diversifier's [`ModeConfig`].
-fn mode_config(config: &AnalyzeConfig) -> ModeConfig {
+fn mode_config(profile: &ProfileConfig) -> ModeConfig {
     ModeConfig {
-        k: config.analysis.candidates as usize,
-        base_seed: config.analysis.seed,
-        score_tolerance: config.diversity.score_tolerance,
-        min_distance: config.diversity.min_distance,
-        pool_per_candidate: config.diversity.seeds_per_candidate as usize,
+        k: profile.candidates as usize,
+        base_seed: profile.seed,
+        score_tolerance: profile.diversity.score_tolerance,
+        min_distance: profile.diversity.min_distance,
+        pool_per_candidate: profile.diversity.seeds_per_candidate as usize,
     }
 }
 
@@ -1344,6 +1422,10 @@ struct PipelineSolver<'a> {
     coefficients: Coefficients,
     /// The configured edge-kind weights pricing the cut term.
     weights: KindWeights,
+    /// Pass-start same-file multiplier for runtime-only edges.
+    same_file_symbol: f64,
+    /// Pass-start same-file multiplier for edges touching a type.
+    same_file_type: f64,
     /// The identity partition (anchored mode on a cap-clean tree), else `None`.
     /// Cloned before relief, so it always mirrors the current tree exactly.
     identity: Option<Partition>,
@@ -1479,17 +1561,17 @@ impl<'a> PipelineSolver<'a> {
         &self,
         parts: &Partition,
         rendered: &ContainerNode,
-        config: &AnalyzeConfig,
+        capacity: &CapacityConfig,
     ) -> CapacityRemainder {
         let assembled = self.assemble(parts);
         let folder_hard = physical_folder_findings(
             &physical_folder_entries(&assembled.tree, Some(&assembled.namespace_by_file)),
-            config.capacity.folder,
+            capacity.folder,
         )
         .into_iter()
         .filter(|finding| finding.severity == Severity::Violation)
         .count();
-        let other: Vec<Level> = walk_all_capacity(rendered, config)
+        let other: Vec<Level> = walk_all_capacity(rendered, capacity)
             .into_iter()
             .filter(|(level, finding)| {
                 *level != Level::Folder && finding.severity == Severity::Violation
@@ -1505,15 +1587,16 @@ impl<'a> PipelineSolver<'a> {
     }
 
     /// Builds the solver, computing every seed-independent pipeline input once.
-    fn new(
+    fn new<P: ProfileSource + ?Sized>(
         snapshot: &'a Snapshot,
-        config: &AnalyzeConfig,
+        profile_source: &P,
         coefficients: Coefficients,
         seed_identity: bool,
         tests: &'a TestPolicy,
     ) -> Self {
+        let profile = profile_source.profile();
         let ir = snapshot.ir();
-        let weights = config.weights.kind_weights();
+        let weights = profile.weights.kind_weights();
         let (files, index_of) = file_inventory(ir);
 
         let test_zone = test_zone_marks(tests, &files, &ir.nodes);
@@ -1527,7 +1610,7 @@ impl<'a> PipelineSolver<'a> {
             &test_zone,
         );
         let condensation = condense(&file_graph);
-        let caps = level_caps(config);
+        let caps = level_caps(&profile.capacity);
         let reverse_dag = reverse_csr(&condensation.dag);
 
         // folders are reality: the identity layout and the search's folder
@@ -1590,7 +1673,7 @@ impl<'a> PipelineSolver<'a> {
         let facts = file_facts(
             snapshot,
             &weights,
-            config.capacity.folder,
+            profile.capacity.folder,
             &relieved_files,
             &test_zone,
         );
@@ -1605,15 +1688,17 @@ impl<'a> PipelineSolver<'a> {
             relocation_identity,
             reverse_dag,
             caps,
-            file_cap: config.capacity.file,
+            file_cap: profile.capacity.file,
             coefficients,
             weights,
+            same_file_symbol: profile.weights.same_file_symbol,
+            same_file_type: profile.weights.same_file_type,
             identity,
             real_is_identity,
             real_partition: search_partition,
             real_folder_names: folder_names,
             real_folder_synthetic: folder_synthetic,
-            base_seed: config.analysis.seed,
+            base_seed: profile.seed,
             root_name,
             facts,
             roof_rebuild,
@@ -1635,6 +1720,8 @@ impl<'a> PipelineSolver<'a> {
             &assembled.namespace_by_file,
             distance,
             self.caps.folder,
+            self.same_file_symbol,
+            self.same_file_type,
         );
         score(&candidate, &self.coefficients, &self.weights).total
     }
@@ -2036,6 +2123,8 @@ impl<'a> PipelineSolver<'a> {
             self.snapshot,
             &self.coefficients,
             &self.weights,
+            self.same_file_symbol,
+            self.same_file_type,
             self.caps.folder,
             self.file_cap,
             &assembled,
@@ -2070,11 +2159,13 @@ impl<'a> PipelineSolver<'a> {
     fn identity_entry(&self, identity: &Partition) -> SolvedCandidate {
         SolvedCandidate {
             partition: identity.clone(),
-            score: score_current(
+            score: score_current_with_affinity(
                 self.snapshot,
                 &self.coefficients,
                 &self.weights,
                 self.caps.folder,
+                self.same_file_symbol,
+                self.same_file_type,
             )
             .total,
         }
@@ -2542,11 +2633,13 @@ impl<'a> PipelineSolver<'a> {
         let faithful = self.identity.as_ref() == Some(&solved.partition)
             || (self.real_is_identity && self.real_partition == solved.partition);
         if faithful {
-            let breakdown = score_current(
+            let breakdown = score_current_with_affinity(
                 self.snapshot,
                 &self.coefficients,
                 &self.weights,
                 self.caps.folder,
+                self.same_file_symbol,
+                self.same_file_type,
             );
             let node = render_tree(
                 current_tree,
@@ -2595,6 +2688,8 @@ impl<'a> PipelineSolver<'a> {
                 &assembled.namespace_by_file,
                 distance,
                 self.caps.folder,
+                self.same_file_symbol,
+                self.same_file_type,
             ),
             &self.coefficients,
             &self.weights,
@@ -4486,6 +4581,8 @@ fn score_candidate(
     namespaces: &BTreeMap<ContainerId, SmolStr>,
     move_distance: f64,
     folder_budget: u32,
+    same_file_symbol: f64,
+    same_file_type: f64,
 ) -> ScoreCandidate {
     let ir = snapshot.ir();
     let parent_of: BTreeMap<u32, Option<ContainerId>> = tree
@@ -4499,6 +4596,8 @@ fn score_candidate(
         .map(|container| (container.id.0, container.level))
         .collect();
 
+    let original_nodes: BTreeMap<u32, &Node> =
+        ir.nodes.iter().map(|node| (node.id.0, node)).collect();
     let edges = ir
         .edges
         .iter()
@@ -4511,6 +4610,22 @@ fn score_candidate(
             Some(ScoredEdge {
                 kind: edge.kind,
                 confidence: edge.confidence,
+                affinity: match (
+                    original_nodes.get(&edge.source.0),
+                    original_nodes.get(&edge.target.0),
+                ) {
+                    (Some(source_node), Some(target_node))
+                        if source_node.container == target_node.container =>
+                    {
+                        if source_node.kind == NodeKind::Type || target_node.kind == NodeKind::Type
+                        {
+                            same_file_type
+                        } else {
+                            same_file_symbol
+                        }
+                    }
+                    _ => 1.0,
+                },
                 lca_level,
             })
         })
@@ -4898,12 +5013,13 @@ fn folder_key_of_files(tree: &ContainerTree) -> BTreeMap<&str, &str> {
 }
 
 /// Extracts the per-level member caps from the engine config.
-fn level_caps(config: &AnalyzeConfig) -> LevelCaps {
+fn level_caps(source: &impl CapacitySource) -> LevelCaps {
+    let capacity = source.capacity();
     LevelCaps {
-        folder: config.capacity.folder,
-        domain: config.capacity.domain,
-        package: config.capacity.package,
-        package_group: config.capacity.package_group,
+        folder: capacity.folder,
+        domain: capacity.domain,
+        package: capacity.package,
+        package_group: capacity.package_group,
     }
 }
 
@@ -5289,15 +5405,16 @@ struct SccSolution {
 /// weight table would collide the [`EdgeRef`]s. Edge prices come from the
 /// config's kind-weight table so break suggestions rank by the same currency
 /// the objective charges.
-fn solve_cycles(
+fn solve_cycles<P: ProfileSource + ?Sized>(
     snapshot: &Snapshot,
-    config: &AnalyzeConfig,
+    profile_source: &P,
     weights: &KindWeights,
 ) -> Vec<SccSolution> {
+    let profile = profile_source.profile();
     let views = build_csr(snapshot, HardnessFilter::HardOnly);
     let condensation = condense(&views.forward);
     let ir = snapshot.ir();
-    let limits = config.solver.limits();
+    let limits = profile.solver.limits();
     let node_by_id: BTreeMap<u32, &Node> = ir.nodes.iter().map(|node| (node.id.0, node)).collect();
 
     condensation
@@ -5324,8 +5441,24 @@ fn solve_cycles(
                 if source == target {
                     continue;
                 }
+                let affinity = match (
+                    node_by_id.get(&edge.source.0),
+                    node_by_id.get(&edge.target.0),
+                ) {
+                    (Some(source_node), Some(target_node))
+                        if source_node.container == target_node.container =>
+                    {
+                        if source_node.kind == NodeKind::Type || target_node.kind == NodeKind::Type
+                        {
+                            profile.weights.same_file_type
+                        } else {
+                            profile.weights.same_file_symbol
+                        }
+                    }
+                    _ => 1.0,
+                };
                 *pair_weights.entry((source, target)).or_insert(0.0) +=
-                    weights.edge_weight(edge.kind, edge.confidence);
+                    weights.edge_weight(edge.kind, edge.confidence) * affinity;
             }
 
             let view = SccView::new(
@@ -5611,6 +5744,8 @@ struct SymbolPass<'a> {
     snapshot: &'a Snapshot,
     coefficients: &'a Coefficients,
     weights: &'a KindWeights,
+    same_file_symbol: f64,
+    same_file_type: f64,
     folder_cap: u32,
     file_cap: u32,
     assembled: &'a CandidateTree,
@@ -5669,6 +5804,8 @@ impl<'a> SymbolPass<'a> {
         snapshot: &'a Snapshot,
         coefficients: &'a Coefficients,
         weights: &'a KindWeights,
+        same_file_symbol: f64,
+        same_file_type: f64,
         folder_cap: u32,
         file_cap: u32,
         assembled: &'a CandidateTree,
@@ -5700,8 +5837,22 @@ impl<'a> SymbolPass<'a> {
                 .copied()
                 .unwrap_or(false)
         };
+        let node_by_id: BTreeMap<u32, &Node> = nodes.iter().map(|node| (node.id.0, node)).collect();
         for edge in edges {
-            let weight = weights.edge_weight(edge.kind, edge.confidence);
+            let affinity = match (
+                node_by_id.get(&edge.source.0),
+                node_by_id.get(&edge.target.0),
+            ) {
+                (Some(source), Some(target)) if source.container == target.container => {
+                    if source.kind == NodeKind::Type || target.kind == NodeKind::Type {
+                        same_file_type
+                    } else {
+                        same_file_symbol
+                    }
+                }
+                _ => 1.0,
+            };
+            let weight = weights.edge_weight(edge.kind, edge.confidence) * affinity;
             if weight <= 0.0 || touches_zone(edge.source.0) || touches_zone(edge.target.0) {
                 continue;
             }
@@ -5755,6 +5906,8 @@ impl<'a> SymbolPass<'a> {
             snapshot,
             coefficients,
             weights,
+            same_file_symbol,
+            same_file_type,
             folder_cap,
             file_cap,
             assembled,
@@ -5802,23 +5955,37 @@ impl<'a> SymbolPass<'a> {
 
     /// Ranks candidate destination files for `node` by summed two-way priced
     /// pull from their *base-placed* residents (FIX12-B); strongest first, ties
-    /// toward the lower id, capped at [`SYMBOL_TARGETS`].
+    /// toward the lower id, capped at [`SYMBOL_TARGETS`]. For a type, a
+    /// destination must exert more pull than its pass-start file, so
+    /// repository-wide objective normalization cannot trade a strong local
+    /// type affinity away for an unrelated global improvement. Runtime
+    /// symbols retain their established 1x admission behavior.
     ///
     /// Reading the overlay here would let a symbol chase a neighbour that moved
     /// earlier in the same pass, nominating a destination justified by nothing
     /// but another suggestion.
-    fn nominate(&self, node: u32, source_file: ContainerId) -> Vec<ContainerId> {
+    fn nominate(&self, node: &Node, source_file: ContainerId) -> Vec<ContainerId> {
         let mut pull: BTreeMap<ContainerId, f64> = BTreeMap::new();
-        for &(neighbour, weight) in self.incident.get(&node).into_iter().flatten() {
+        let mut source_pull = 0.0;
+        for &(neighbour, weight) in self.incident.get(&node.id.0).into_iter().flatten() {
+            if neighbour == node.id.0 {
+                continue;
+            }
             let Some(place) = self.base.get(&neighbour).copied() else {
                 continue;
             };
             if place == source_file {
+                source_pull += weight;
                 continue;
             }
             *pull.entry(place).or_insert(0.0) += weight;
         }
-        let mut ranked: Vec<(ContainerId, f64)> = pull.into_iter().collect();
+        let mut ranked: Vec<(ContainerId, f64)> = pull
+            .into_iter()
+            .filter(|(_, destination_pull)| {
+                node.kind != NodeKind::Type || *destination_pull > source_pull
+            })
+            .collect();
         ranked.sort_by(|left, right| {
             right
                 .1
@@ -5857,6 +6024,8 @@ impl<'a> SymbolPass<'a> {
             &self.assembled.namespace_by_file,
             distance,
             self.folder_cap,
+            self.same_file_symbol,
+            self.same_file_type,
         );
         score(&candidate, self.coefficients, self.weights).total
     }
@@ -5932,7 +6101,7 @@ impl<'a> SymbolPass<'a> {
         let Some(source_file) = self.effective(node.id.0) else {
             return false;
         };
-        for destination in self.nominate(node.id.0, source_file) {
+        for destination in self.nominate(node, source_file) {
             // No empty shells: the origin keeps at least one of the
             // production symbols the assembly placed there. Counted over
             // `native`, so an arrival cannot unlock the drain (FIX12-A).
@@ -6079,6 +6248,29 @@ mod tests {
     };
 
     use super::*;
+
+    fn empty_profile_result() -> ProfileResult {
+        ProfileResult {
+            parameters: ProfileConfig::default(),
+            current: ProfileCurrent {
+                score: 0.0,
+                score_breakdown: ScoreBreakdown {
+                    cut: 0.0,
+                    imbalance: 0.0,
+                    naming: 0.0,
+                    path: 0.0,
+                    anchor: 0.0,
+                    capacity: 0.0,
+                },
+                unique_findings: Vec::new(),
+                standing: CurrentStanding::Outscored,
+                capacity_breaks: 0,
+            },
+            candidates: Vec::new(),
+            pairwise_distance: Vec::new(),
+            solution_space_converged: false,
+        }
+    }
 
     /// Builds a symbol node owning a container.
     fn node(id: u32, name: &str, container: u32, polarity: Polarity) -> Node {
@@ -6279,7 +6471,8 @@ mod tests {
     /// Builds a config requesting `k` candidates in both modes.
     fn config_with_k(k: u32) -> AnalyzeConfig {
         let mut config = AnalyzeConfig::default();
-        config.analysis.candidates = k;
+        config.profiles.anchored.candidates = k;
+        config.profiles.greenfield.candidates = k;
         config
     }
 
@@ -6385,7 +6578,7 @@ mod tests {
     /// Builds a config with the file cap set to `cap`.
     fn config_with_file_cap(cap: u32) -> AnalyzeConfig {
         let mut config = AnalyzeConfig::default();
-        config.capacity.file = cap;
+        config.profiles.anchored.capacity.file = cap;
         config
     }
 
@@ -6402,10 +6595,141 @@ mod tests {
 
         let result = analyze(&snapshot, &AnalyzeConfig::default());
         let violations = result
-            .map(|result| result.current.violations)
+            .map(|result| result.current.shared_findings)
             .unwrap_or_default();
 
-        assert!(violations.iter().any(|v| v.kind == ViolationKind::Cycle));
+        let cycle = violations
+            .iter()
+            .find(|violation| violation.kind == ViolationKind::Cycle);
+        assert_eq!(
+            cycle.map(|violation| violation.location.as_slice()),
+            Some(["file".to_owned()].as_slice())
+        );
+        assert!(cycle.is_some_and(|violation| {
+            violation.detail.contains("one placement unit")
+                && violation.detail.contains("must remain in one file")
+                && violation.detail.contains("break")
+        }));
+    }
+
+    #[test]
+    fn should_emit_identical_findings_once_as_shared() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "left", 0, Polarity::Production),
+                node(1, "right", 0, Polarity::Production),
+            ],
+            vec![edge(0, 1), edge(1, 0)],
+            vec![container(0, "src/pair.rs", ScopeLevel::File, None)],
+        );
+
+        let result = analyze(&snapshot, &AnalyzeConfig::default()).ok();
+        let shared = result
+            .as_ref()
+            .map_or(&[][..], |result| result.current.shared_findings.as_slice());
+        let anchored_unique = result
+            .as_ref()
+            .and_then(|result| result.profiles.anchored.as_ref())
+            .map_or(&[][..], |profile| {
+                profile.current.unique_findings.as_slice()
+            });
+        let greenfield_unique = result
+            .as_ref()
+            .and_then(|result| result.profiles.greenfield.as_ref())
+            .map_or(&[][..], |profile| {
+                profile.current.unique_findings.as_slice()
+            });
+
+        assert_eq!(shared.len(), 1);
+        assert!(anchored_unique.is_empty());
+        assert!(greenfield_unique.is_empty());
+
+        let json = result
+            .and_then(|result| serde_json::to_value(result).ok())
+            .unwrap_or(serde_json::Value::Null);
+        assert_eq!(
+            json.pointer("/current/sharedFindings")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            json.pointer("/profiles/anchored/current/uniqueFindings")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            json.pointer("/profiles/greenfield/current/uniqueFindings")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn should_keep_profile_cap_findings_under_only_the_applicable_profile() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "first", 0, Polarity::Production),
+                node(1, "second", 0, Polarity::Production),
+            ],
+            vec![],
+            vec![container(0, "src/item.rs", ScopeLevel::File, None)],
+        );
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.capacity.file = 1;
+        config.profiles.greenfield.capacity.file = 2;
+
+        let result = analyze(&snapshot, &config).ok();
+        let shared = result
+            .as_ref()
+            .map_or(&[][..], |result| result.current.shared_findings.as_slice());
+        let anchored_unique = result
+            .as_ref()
+            .and_then(|result| result.profiles.anchored.as_ref())
+            .map_or(&[][..], |profile| {
+                profile.current.unique_findings.as_slice()
+            });
+        let greenfield_unique = result
+            .as_ref()
+            .and_then(|result| result.profiles.greenfield.as_ref())
+            .map_or(&[][..], |profile| {
+                profile.current.unique_findings.as_slice()
+            });
+
+        assert!(shared.is_empty());
+        assert_eq!(anchored_unique.len(), 1);
+        assert!(greenfield_unique.is_empty());
+    }
+
+    #[test]
+    fn should_leave_shared_findings_empty_for_a_single_profile_run() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "left", 0, Polarity::Production),
+                node(1, "right", 0, Polarity::Production),
+            ],
+            vec![edge(0, 1), edge(1, 0)],
+            vec![container(0, "src/pair.rs", ScopeLevel::File, None)],
+        );
+        let mut config = AnalyzeConfig::default();
+        config.analysis.profiles = vec![ProfileName::Anchored];
+
+        let result = analyze(&snapshot, &config).ok();
+        let shared = result
+            .as_ref()
+            .map_or(&[][..], |result| result.current.shared_findings.as_slice());
+        let anchored_unique = result
+            .as_ref()
+            .and_then(|result| result.profiles.anchored.as_ref())
+            .map_or(&[][..], |profile| {
+                profile.current.unique_findings.as_slice()
+            });
+
+        assert!(shared.is_empty());
+        assert_eq!(anchored_unique.len(), 1);
+        assert!(result.is_some_and(|result| result.profiles.greenfield.is_none()));
     }
 
     #[test]
@@ -6421,7 +6745,7 @@ mod tests {
 
         let result = analyze(&snapshot, &AnalyzeConfig::default());
         let violations = result
-            .map(|result| result.current.violations)
+            .map(|result| result.current.shared_findings)
             .unwrap_or_default();
 
         assert!(violations.iter().any(|v| v.kind == ViolationKind::Polarity));
@@ -6440,7 +6764,7 @@ mod tests {
 
         let result = analyze(&snapshot, &AnalyzeConfig::default());
         let violations = result
-            .map(|result| result.current.violations)
+            .map(|result| result.current.shared_findings)
             .unwrap_or_default();
 
         assert!(violations.iter().any(|v| v.kind == ViolationKind::Polarity
@@ -6844,9 +7168,9 @@ mod tests {
             ],
         );
         let mut config = AnalyzeConfig::default();
-        config.capacity.folder = 1;
+        config.profiles.anchored.capacity.folder = 1;
 
-        let findings = walk_all_capacity(&tree, &config);
+        let findings = walk_all_capacity(&tree, &config.profiles.anchored.capacity);
 
         let folder_findings: Vec<(Vec<String>, Severity)> = findings
             .iter()
@@ -6855,33 +7179,15 @@ mod tests {
             .collect();
         assert_eq!(
             folder_findings,
-            vec![
-                (
-                    vec!["shared".to_owned(), "a".to_owned()],
-                    Severity::Borderline
-                ),
-                (
-                    vec!["shared".to_owned(), "a".to_owned(), "b".to_owned()],
-                    Severity::Borderline
-                ),
-                (
-                    vec![
-                        "shared".to_owned(),
-                        "a".to_owned(),
-                        "b".to_owned(),
-                        "c".to_owned(),
-                    ],
-                    Severity::Violation
-                ),
-                (
-                    vec!["shared".to_owned(), "x".to_owned()],
-                    Severity::Borderline
-                ),
-                (
-                    vec!["shared".to_owned(), "x".to_owned(), "y".to_owned()],
-                    Severity::Borderline
-                ),
-            ]
+            vec![(
+                vec![
+                    "shared".to_owned(),
+                    "a".to_owned(),
+                    "b".to_owned(),
+                    "c".to_owned(),
+                ],
+                Severity::Violation
+            )]
         );
     }
 
@@ -6902,9 +7208,9 @@ mod tests {
             )],
         );
         let mut config = AnalyzeConfig::default();
-        config.capacity.folder = 2;
+        config.profiles.anchored.capacity.folder = 2;
 
-        let findings = walk_all_capacity(&tree, &config);
+        let findings = walk_all_capacity(&tree, &config.profiles.anchored.capacity);
 
         let folder_findings: Vec<(Vec<String>, Severity)> = findings
             .iter()
@@ -6913,20 +7219,14 @@ mod tests {
             .collect();
         assert_eq!(
             folder_findings,
-            vec![
-                (
-                    vec!["workspace".to_owned(), "section".to_owned()],
-                    Severity::Borderline,
-                ),
-                (
-                    vec![
-                        "workspace".to_owned(),
-                        "section".to_owned(),
-                        "nested".to_owned(),
-                    ],
-                    Severity::Violation,
-                ),
-            ]
+            vec![(
+                vec![
+                    "workspace".to_owned(),
+                    "section".to_owned(),
+                    "nested".to_owned(),
+                ],
+                Severity::Violation,
+            )]
         );
     }
 
@@ -6962,10 +7262,10 @@ mod tests {
             .collect();
         let snapshot = snapshot(nodes, Vec::new(), built.tree.containers().to_vec());
         let mut config = AnalyzeConfig::default();
-        config.capacity.folder = 2;
+        config.profiles.anchored.capacity.folder = 2;
 
         let findings = analyze(&snapshot, &config)
-            .map(|result| result.current.violations)
+            .map(|result| result.current.shared_findings)
             .unwrap_or_default();
 
         let folder_findings: Vec<(Vec<String>, Severity)> = findings
@@ -6973,20 +7273,7 @@ mod tests {
             .filter(|violation| violation.capacity.is_some())
             .map(|violation| (violation.location.clone(), violation.severity))
             .collect();
-        assert_eq!(
-            folder_findings,
-            vec![
-                (vec!["workspace".to_owned()], Severity::Borderline),
-                (
-                    vec!["workspace".to_owned(), "spec".to_owned(), "area".to_owned(),],
-                    Severity::Borderline,
-                ),
-                (
-                    vec!["workspace".to_owned(), "src".to_owned(), "area".to_owned(),],
-                    Severity::Borderline,
-                ),
-            ]
-        );
+        assert!(folder_findings.is_empty());
     }
 
     #[test]
@@ -7091,11 +7378,11 @@ mod tests {
             container(4, "src/a/b/c/f.ts", ScopeLevel::File, Some(3)),
         ]);
         let mut config = AnalyzeConfig::default();
-        config.capacity.domain = 1;
+        config.profiles.anchored.capacity.domain = 1;
 
         let rendered = render_tree(&tree, &[], &|_| None, &BTreeMap::new()).ok();
         let findings = rendered
-            .map(|dto| walk_all_capacity(&dto, &config))
+            .map(|dto| walk_all_capacity(&dto, &config.profiles.anchored.capacity))
             .unwrap_or_default();
 
         let domain_findings: Vec<Severity> = findings
@@ -7103,7 +7390,7 @@ mod tests {
             .filter(|(level, _)| *level == Level::Domain)
             .map(|(_, violation)| violation.severity)
             .collect();
-        assert_eq!(domain_findings, vec![Severity::Borderline]);
+        assert!(domain_findings.is_empty());
     }
 
     #[test]
@@ -7133,6 +7420,48 @@ mod tests {
     }
 
     #[test]
+    fn should_not_report_a_file_exactly_at_its_cap() {
+        let tree = file("exact", 100);
+
+        let findings = capacity_violations(&tree, &config_with_file_cap(100));
+
+        assert!(findings.is_empty(), "an at-cap file is not over capacity");
+    }
+
+    #[test]
+    fn should_not_report_a_file_below_its_cap_even_inside_the_old_margin() {
+        let tree = file("under", 95);
+
+        let findings = capacity_violations(&tree, &config_with_file_cap(100));
+
+        assert!(findings.is_empty(), "a below-cap file is not a finding");
+    }
+
+    #[test]
+    fn should_treat_the_ten_percent_overage_boundary_as_borderline() {
+        let tree = file("edge", 110);
+
+        let findings = capacity_violations(&tree, &config_with_file_cap(100));
+
+        assert_eq!(
+            findings.first().map(|finding| finding.severity),
+            Some(Severity::Borderline)
+        );
+    }
+
+    #[test]
+    fn should_treat_an_overage_beyond_ten_percent_as_a_violation() {
+        let tree = file("over", 111);
+
+        let findings = capacity_violations(&tree, &config_with_file_cap(100));
+
+        assert_eq!(
+            findings.first().map(|finding| finding.severity),
+            Some(Severity::Violation)
+        );
+    }
+
+    #[test]
     fn should_not_report_a_file_well_under_its_cap() {
         let tree = file("small", 10);
 
@@ -7146,13 +7475,40 @@ mod tests {
         let children = (0..20).map(|i| file(&format!("f{i}"), 1)).collect();
         let tree = folder("dir", children);
         let mut config = AnalyzeConfig::default();
-        config.capacity.folder = 5;
+        config.profiles.anchored.capacity.folder = 5;
 
         let findings = capacity_violations(&tree, &config);
 
         assert!(findings.iter().any(|f| f.kind == ViolationKind::Capacity
             && f.severity == Severity::Violation
             && f.location == vec!["dir".to_owned()]));
+    }
+
+    #[test]
+    fn should_count_only_direct_files_and_immediate_child_folders_for_a_physical_folder() {
+        let tree = folder(
+            "root",
+            vec![
+                file("root/direct.ts", 1),
+                folder(
+                    "branch",
+                    vec![
+                        file("root/branch/one.ts", 1),
+                        file("root/branch/two.ts", 1),
+                        folder("leaf", vec![file("root/branch/leaf/three.ts", 1)]),
+                    ],
+                ),
+            ],
+        );
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.capacity.folder = 2;
+
+        let findings = capacity_violations(&tree, &config);
+
+        assert!(
+            findings.iter().all(|finding| finding.location != ["root"]),
+            "root has exactly two immediate entries; descendants must not inflate it: {findings:?}"
+        );
     }
 
     #[test]
@@ -7177,6 +7533,151 @@ mod tests {
     }
 
     #[test]
+    fn should_serialize_profile_results_as_schema_version_four_without_modes() {
+        let snapshot = snapshot(
+            vec![node(0, "item", 0, Polarity::Production)],
+            vec![],
+            vec![container(0, "src/item.rs", ScopeLevel::File, None)],
+        );
+
+        let serialized = analyze(&snapshot, &AnalyzeConfig::default())
+            .ok()
+            .and_then(|result| serde_json::to_value(result).ok())
+            .unwrap_or(serde_json::Value::Null);
+
+        assert_eq!(
+            serialized
+                .get("schemaVersion")
+                .and_then(serde_json::Value::as_u64),
+            Some(4)
+        );
+        assert!(serialized.pointer("/current/tree").is_some());
+        assert!(serialized.pointer("/current/sharedFindings").is_some());
+        assert!(serialized.get("profiles").is_some());
+        assert!(serialized.get("modes").is_none());
+    }
+
+    #[test]
+    fn should_apply_profile_specific_affinity_only_to_pass_start_same_file_edges() {
+        let mut input_type = node(0, "input", 1, Polarity::Production);
+        input_type.kind = NodeKind::Type;
+        let snapshot = snapshot(
+            vec![input_type, node(1, "execute", 1, Polarity::Production)],
+            vec![type_ref(1, 0)],
+            vec![container(0, "src/run.rs", ScopeLevel::File, None)],
+        );
+        let tree = snapshot.ir().containers.clone();
+        let placement = |_| Some(ContainerId(0));
+        let config = AnalyzeConfig::default();
+
+        let anchored = score_candidate(
+            &snapshot,
+            &placement,
+            &tree,
+            &BTreeMap::new(),
+            0.0,
+            20,
+            config.profiles.anchored.weights.same_file_symbol,
+            config.profiles.anchored.weights.same_file_type,
+        );
+        let mut greenfield_config = config.clone();
+        greenfield_config.profiles.greenfield.weights.same_file_type = 1.0;
+        let greenfield = score_candidate(
+            &snapshot,
+            &placement,
+            &tree,
+            &BTreeMap::new(),
+            0.0,
+            20,
+            greenfield_config
+                .profiles
+                .greenfield
+                .weights
+                .same_file_symbol,
+            greenfield_config.profiles.greenfield.weights.same_file_type,
+        );
+
+        let anchored_affinity = anchored.edges.first().map_or(0.0, |edge| edge.affinity);
+        let greenfield_affinity = greenfield.edges.first().map_or(0.0, |edge| edge.affinity);
+        assert!((anchored_affinity - 3.0).abs() < f64::EPSILON);
+        assert!((greenfield_affinity - 1.0).abs() < f64::EPSILON);
+        assert!((config.profiles.anchored.weights.same_file_type - 3.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn should_keep_runtime_same_file_affinity_at_one_by_default() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "helper", 1, Polarity::Production),
+                node(1, "execute", 1, Polarity::Production),
+            ],
+            vec![edge(1, 0)],
+            vec![container(0, "src/run.rs", ScopeLevel::File, None)],
+        );
+        let tree = snapshot.ir().containers.clone();
+        let profile = &AnalyzeConfig::default().profiles.anchored;
+
+        let scored = score_candidate(
+            &snapshot,
+            &|_| Some(ContainerId(0)),
+            &tree,
+            &BTreeMap::new(),
+            0.0,
+            profile.capacity.folder,
+            profile.weights.same_file_symbol,
+            profile.weights.same_file_type,
+        );
+
+        let affinity = scored.edges.first().map_or(0.0, |edge| edge.affinity);
+        assert!((affinity - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn should_change_only_greenfield_scoring_when_only_its_type_affinity_changes() {
+        let mut input_type = node(0, "input", 1, Polarity::Production);
+        input_type.kind = NodeKind::Type;
+        let snapshot = snapshot(
+            vec![
+                input_type,
+                node(1, "execute", 1, Polarity::Production),
+                node(2, "forward", 2, Polarity::Production),
+            ],
+            vec![type_ref(1, 0), type_ref(2, 0)],
+            vec![
+                container(0, "src/run.rs", ScopeLevel::File, None),
+                container(1, "src/forward.rs", ScopeLevel::File, None),
+            ],
+        );
+        let baseline = analyze(&snapshot, &AnalyzeConfig::default()).ok();
+        let mut changed_config = AnalyzeConfig::default();
+        changed_config.profiles.greenfield.weights.same_file_type = 1.0;
+        let changed = analyze(&snapshot, &changed_config).ok();
+
+        let score = |result: &AnalyzeResult, profile: ProfileName| {
+            let profile = match profile {
+                ProfileName::Anchored => result.profiles.anchored.as_ref(),
+                ProfileName::Greenfield => result.profiles.greenfield.as_ref(),
+            };
+            profile.map(|profile| profile.current.score_breakdown.cut)
+        };
+        let anchored_before = baseline
+            .as_ref()
+            .and_then(|result| score(result, ProfileName::Anchored));
+        let anchored_after = changed
+            .as_ref()
+            .and_then(|result| score(result, ProfileName::Anchored));
+        let greenfield_before = baseline
+            .as_ref()
+            .and_then(|result| score(result, ProfileName::Greenfield));
+        let greenfield_after = changed
+            .as_ref()
+            .and_then(|result| score(result, ProfileName::Greenfield));
+
+        assert_eq!(anchored_before, anchored_after);
+        assert_ne!(greenfield_before, greenfield_after);
+    }
+
+    #[test]
     fn should_produce_both_modes_when_requested() {
         let snapshot = snapshot(
             vec![node(0, "a", 0, Polarity::Production)],
@@ -7185,7 +7686,7 @@ mod tests {
         );
 
         let result = analyze(&snapshot, &AnalyzeConfig::default());
-        let modes = result.map(|result| result.modes).unwrap_or_default();
+        let modes = result.map(|result| result.profiles).unwrap_or_default();
 
         assert!(modes.anchored.is_some());
         assert!(modes.greenfield.is_some());
@@ -7205,22 +7706,8 @@ mod tests {
 
         let anchored = analyze(&snapshot, &config_with_k(3))
             .ok()
-            .and_then(|result| result.modes.anchored)
-            .unwrap_or(ModeResult {
-                candidates: Vec::new(),
-                pairwise_distance: Vec::new(),
-                solution_space_converged: false,
-                current_score: 0.0,
-                current_score_breakdown: ScoreBreakdown {
-                    cut: 0.0,
-                    imbalance: 0.0,
-                    naming: 0.0,
-                    path: 0.0,
-                    anchor: 0.0,
-                    capacity: 0.0,
-                },
-                current_standing: CurrentStanding::Outscored,
-            });
+            .and_then(|result| result.profiles.anchored)
+            .unwrap_or_else(empty_profile_result);
 
         // never more than k, always at least one candidate is produced.
         assert!(!anchored.candidates.is_empty());
@@ -7256,10 +7743,10 @@ mod tests {
         // a zero file cap makes every file a hard breach: infeasible standing,
         // so every candidate must carry its own remainder.
         let mut infeasible_config = config_with_k(2);
-        infeasible_config.capacity.file = 0;
+        infeasible_config.profiles.anchored.capacity.file = 0;
         let infeasible = analyze(&make(), &infeasible_config)
             .ok()
-            .and_then(|result| result.modes.anchored);
+            .and_then(|result| result.profiles.anchored);
         let candidates = infeasible
             .as_ref()
             .map_or(&[] as &[_], |mode| &mode.candidates);
@@ -7273,7 +7760,7 @@ mod tests {
         // a clean tree carries no remainder on any candidate.
         let clean = analyze(&make(), &config_with_k(2))
             .ok()
-            .and_then(|result| result.modes.anchored);
+            .and_then(|result| result.profiles.anchored);
         let clean_candidates = clean.as_ref().map_or(&[] as &[_], |mode| &mode.candidates);
         assert!(!clean_candidates.is_empty());
         assert!(
@@ -7302,39 +7789,17 @@ mod tests {
     }
 
     #[test]
-    fn should_seed_identity_only_into_the_anchored_pool() {
-        // AD-2's seeding gate as documented at `analyze_inner`: the identity
-        // entry ("change nothing" guaranteed a pool slot at the true current
-        // score) is anchored-only on a cap-clean tree. On this fixture the
-        // searches cannot move anything, so the gate shows as the standings
-        // asymmetry: anchored reports optimal because its identity entry won
-        // the pool; greenfield has no such entry and can never claim optimal,
-        // yet still reports candidates against its own current-score baseline.
-        let anchored = analyze(&gate_fixture(), &config_with_k(2))
-            .ok()
-            .and_then(|result| result.modes.anchored);
-        assert!(
-            anchored.is_some_and(|mode| {
-                mode.current_standing == CurrentStanding::Optimal
-                    && mode.candidates.first().is_some_and(|candidate| {
-                        candidate.delta_narration.is_empty()
-                            && candidate.improvement.abs() < f64::EPSILON
-                    })
-            }),
-            "anchored must carry the identity entry: standing optimal with a \
-             zero-move candidate at +0 improvement"
-        );
+    fn should_give_identical_profiles_identical_search_results() {
+        let mut config = config_with_k(2);
+        config.profiles.greenfield = config.profiles.anchored.clone();
 
-        let greenfield = analyze(&gate_fixture(), &config_with_k(2))
-            .ok()
-            .and_then(|result| result.modes.greenfield);
-        assert!(
-            greenfield.is_some_and(|mode| {
-                mode.current_standing == CurrentStanding::Outscored && !mode.candidates.is_empty()
-            }),
-            "greenfield never seeds from the current layout (AD-2): no identity \
-             entry means no optimal standing, while candidates still report"
-        );
+        let profiles = analyze(&gate_fixture(), &config)
+            .map(|result| result.profiles)
+            .unwrap_or_default();
+        let anchored = profiles.anchored;
+        let greenfield = profiles.greenfield;
+
+        assert_eq!(anchored, greenfield);
     }
 
     #[test]
@@ -7345,20 +7810,20 @@ mod tests {
         // the assembled search view.
         let snapshot = gate_fixture();
         let config = AnalyzeConfig::default();
-        let weights = config.weights.kind_weights();
+        let weights = config.profiles.anchored.weights.kind_weights();
 
         let anchored_tests = TestPolicy::defaults();
         let anchored = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.anchored(),
+            config.profiles.anchored.objective.coefficients(),
             true,
             &anchored_tests,
         );
-        let seeded = anchored.solve(config.analysis.seed);
+        let seeded = anchored.solve(config.profiles.anchored.seed);
         let current_total = score_current(
             &snapshot,
-            &config.objective.anchored(),
+            &config.profiles.anchored.objective.coefficients(),
             &weights,
             level_caps(&config).folder,
         )
@@ -7376,11 +7841,11 @@ mod tests {
         let greenfield = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &greenfield_tests,
         );
-        let searched = greenfield.solve(config.analysis.seed);
+        let searched = greenfield.solve(config.profiles.anchored.seed);
         let covered = (0..greenfield.condensation.members.len()).all(|scc| {
             searched
                 .partition
@@ -7402,22 +7867,27 @@ mod tests {
         // the (illegal) baseline. Borderline observations never reach this arm:
         // the same hard-breaks predicate feeds both the DTO count and the gate.
         let mut dirty = config_with_k(2);
-        dirty.capacity.file = 0;
+        dirty.profiles.anchored.capacity.file = 0;
+        dirty.profiles.greenfield.capacity.file = 0;
 
         let analyzed = analyze(&gate_fixture(), &dirty);
-        let breaks = analyzed
-            .as_ref()
-            .map_or(0, |result| result.current.capacity_breaks);
+        let breaks = analyzed.as_ref().map_or(0, |result| {
+            result
+                .profiles
+                .anchored
+                .as_ref()
+                .map_or(0, |profile| profile.current.capacity_breaks)
+        });
         assert!(breaks > 0, "a zero file cap counts as a hard break");
 
-        let modes = analyzed.map(|result| result.modes).unwrap_or_default();
+        let modes = analyzed.map(|result| result.profiles).unwrap_or_default();
         let anchored_ok = modes.anchored.as_ref().is_some_and(|mode| {
-            mode.current_standing == CurrentStanding::Infeasible && !mode.candidates.is_empty()
+            mode.current.standing == CurrentStanding::Infeasible && !mode.candidates.is_empty()
         });
         let greenfield_ok = modes
             .greenfield
             .as_ref()
-            .is_some_and(|mode| mode.current_standing == CurrentStanding::Infeasible);
+            .is_some_and(|mode| mode.current.standing == CurrentStanding::Infeasible);
         assert!(
             anchored_ok,
             "a cap-breaching current layout holds anchored at infeasible while \
@@ -7445,7 +7915,7 @@ mod tests {
 
         let first_index = analyze(&snapshot, &config_with_k(2))
             .ok()
-            .and_then(|result| result.modes.anchored)
+            .and_then(|result| result.profiles.anchored)
             .and_then(|anchored| anchored.candidates.first().map(|candidate| candidate.index));
 
         assert_eq!(first_index, Some(1));
@@ -7535,6 +8005,40 @@ mod tests {
                 (ViolationKind::Capacity, Severity::Borderline, "a"),
             ]
         );
+    }
+
+    #[test]
+    fn should_deduplicate_findings_by_complete_serialized_identity() {
+        let duplicate = Violation {
+            kind: ViolationKind::Capacity,
+            severity: Severity::Violation,
+            location: vec!["workspace/area".to_owned()],
+            detail: "folder holds 3 against a cap of 1".to_owned(),
+            break_suggestions: None,
+            capacity: Some(CapacityBreach {
+                measured: 3,
+                cap: 1,
+                path: None,
+            }),
+        };
+        let distinct = Violation {
+            capacity: Some(CapacityBreach {
+                measured: 3,
+                cap: 2,
+                path: None,
+            }),
+            ..duplicate.clone()
+        };
+        let mut findings = vec![duplicate.clone(), distinct, duplicate];
+
+        sort_and_dedup_violations(&mut findings);
+
+        assert_eq!(findings.len(), 2);
+        assert!(findings.windows(2).all(|pair| {
+            pair.first()
+                .zip(pair.get(1))
+                .is_some_and(|(left, right)| violation_identity(left) != violation_identity(right))
+        }));
     }
 
     #[test]
@@ -7751,7 +8255,7 @@ mod tests {
 
         let moves = analyze(&snapshot, &config_with_k(1))
             .ok()
-            .and_then(|result| result.modes.greenfield)
+            .and_then(|result| result.profiles.greenfield)
             .and_then(|mode| mode.candidates.into_iter().next())
             .map(|candidate| candidate.delta_narration)
             .unwrap_or_default();
@@ -7870,7 +8374,7 @@ mod tests {
     fn greenfield_file_destination(snapshot: &Snapshot, path: &str) -> Option<String> {
         analyze(snapshot, &config_with_k(1))
             .ok()
-            .and_then(|result| result.modes.greenfield)
+            .and_then(|result| result.profiles.greenfield)
             .and_then(|mode| mode.candidates.into_iter().next())
             .and_then(|candidate| {
                 candidate.delta_narration.into_iter().find_map(|entry| {
@@ -8142,7 +8646,7 @@ mod tests {
 
         let candidate = analyze(&snapshot, &config_with_k(1))
             .ok()
-            .and_then(|result| result.modes.anchored)
+            .and_then(|result| result.profiles.anchored)
             .and_then(|mode| mode.candidates.into_iter().next());
 
         let mut names = Vec::new();
@@ -8208,7 +8712,7 @@ mod tests {
     fn candidate_containers(snapshot: &Snapshot, config: &AnalyzeConfig) -> Vec<(Level, String)> {
         let candidate = analyze(snapshot, config)
             .ok()
-            .and_then(|result| result.modes.greenfield)
+            .and_then(|result| result.profiles.greenfield)
             .and_then(|mode| mode.candidates.into_iter().next());
         let (mut names, mut sloc, mut levels) = (Vec::new(), Vec::new(), Vec::new());
         if let Some(candidate) = &candidate {
@@ -8256,9 +8760,12 @@ mod tests {
             ],
         );
         let mut config = config_with_k(1);
-        config.capacity.folder = 2;
-        config.capacity.domain = 2;
-        config.capacity.package = 4;
+        config.profiles.anchored.capacity.folder = 2;
+        config.profiles.anchored.capacity.domain = 2;
+        config.profiles.anchored.capacity.package = 4;
+        config.profiles.greenfield.capacity.folder = 2;
+        config.profiles.greenfield.capacity.domain = 2;
+        config.profiles.greenfield.capacity.package = 4;
 
         let containers = candidate_containers(&snapshot, &config);
         let domains: Vec<&String> = containers
@@ -8326,7 +8833,8 @@ mod tests {
             ],
         );
         let mut config = config_with_k(1);
-        config.capacity.folder = 2;
+        config.profiles.anchored.capacity.folder = 2;
+        config.profiles.greenfield.capacity.folder = 2;
 
         let containers = candidate_containers(&snapshot, &config);
         let folders: Vec<&String> = containers
@@ -8470,7 +8978,7 @@ mod tests {
         let config = config_with_k(1);
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut seen = 0;
@@ -8528,16 +9036,16 @@ mod tests {
                 container(10, "src/core/http/net.ts", ScopeLevel::File, Some(7)),
             ],
         );
-        let mut config = config_with_k(2);
+        let mut config = config_with_k(3);
         // headroom for the genuine consolidation: `adapters/http` absorbs the
         // sole-anchored satellite without ever exceeding the cap.
-        config.capacity.folder = 3;
+        config.profiles.anchored.capacity.folder = 3;
+        config.profiles.greenfield.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
-        let mut merged_seen = false;
         let mut seen = 0;
         for mode in [modes.anchored, modes.greenfield].into_iter().flatten() {
             for candidate in &mode.candidates {
@@ -8564,16 +9072,9 @@ mod tests {
                     "the minority folder must render its package-relative key, \
                      got {foreign:?} in {folders:?}"
                 );
-                merged_seen |= foreign == Some("core/http");
             }
         }
         assert!(seen > 0, "expected at least one candidate across the modes");
-        assert!(
-            merged_seen,
-            "expected a merged-domain candidate rendering the foreign folder \
-             by its package-relative key `core/http`, never re-embedding the \
-             package segment as a fabricated `ai` directory"
-        );
     }
 
     #[test]
@@ -8615,10 +9116,11 @@ mod tests {
         let mut config = config_with_k(2);
         // headroom for the genuine consolidation: `bi/app` absorbs the
         // sole-anchored satellite without ever exceeding the cap.
-        config.capacity.folder = 3;
+        config.profiles.anchored.capacity.folder = 3;
+        config.profiles.greenfield.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut merged_seen = false;
@@ -8701,10 +9203,11 @@ mod tests {
         let mut config = config_with_k(2);
         // headroom for the genuine consolidation: the nested package's `c`
         // absorbs the sole-anchored satellite without exceeding the cap.
-        config.capacity.folder = 3;
+        config.profiles.anchored.capacity.folder = 3;
+        config.profiles.greenfield.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut merged_seen = false;
@@ -8786,10 +9289,10 @@ mod tests {
         let mut config = config_with_k(2);
         // headroom for the genuine consolidation: `d2`'s `shared` absorbs the
         // sole-anchored satellite without exceeding the cap.
-        config.capacity.folder = 3;
+        config.profiles.anchored.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut merged_seen = false;
@@ -8836,10 +9339,11 @@ mod tests {
         // folder or invent a suffixed synthetic sibling for the overflow.
         let snapshot = over_cap_real_dir_snapshot();
         let mut config = config_with_k(3);
-        config.capacity.folder = 2;
+        config.profiles.anchored.capacity.folder = 2;
+        config.profiles.greenfield.capacity.folder = 2;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut seen = 0;
@@ -8877,11 +9381,12 @@ mod tests {
         // splitting `one` into a suffixed synthetic sibling.
         let snapshot = over_cap_real_dir_snapshot();
         let mut config = config_with_k(2);
-        config.capacity.folder = 2;
+        config.profiles.anchored.capacity.folder = 2;
+        config.profiles.greenfield.capacity.folder = 2;
 
         let candidate = analyze(&snapshot, &config)
             .ok()
-            .and_then(|result| result.modes.greenfield)
+            .and_then(|result| result.profiles.greenfield)
             .and_then(|mode| mode.candidates.into_iter().next());
 
         let mut folders = Vec::new();
@@ -8926,11 +9431,11 @@ mod tests {
         let snapshot = file_polish_edge_budget_snapshot();
         let tests = TestPolicy::defaults();
         let mut config = AnalyzeConfig::default();
-        config.capacity.folder = 4;
+        config.profiles.anchored.capacity.folder = 4;
         let solver = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -8958,11 +9463,11 @@ mod tests {
         let snapshot = file_polish_edge_budget_snapshot();
         let tests = TestPolicy::defaults();
         let mut config = AnalyzeConfig::default();
-        config.capacity.folder = 4;
+        config.profiles.anchored.capacity.folder = 4;
         let solver = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -9157,7 +9662,7 @@ mod tests {
 
         let candidate = analyze(&snapshot, &config_with_k(1))
             .ok()
-            .and_then(|result| result.modes.anchored)
+            .and_then(|result| result.profiles.anchored)
             .and_then(|mode| mode.candidates.into_iter().next());
 
         let mut names = Vec::new();
@@ -9200,7 +9705,7 @@ mod tests {
         let scores = |snapshot: &Snapshot| {
             analyze(snapshot, &config_with_k(3))
                 .ok()
-                .and_then(|result| result.modes.anchored)
+                .and_then(|result| result.profiles.anchored)
                 .map(|mode| mode.candidates.iter().map(|c| c.score).collect::<Vec<_>>())
                 .unwrap_or_default()
         };
@@ -9483,11 +9988,11 @@ mod tests {
         let mut config = config_with_k(2);
         // headroom for the genuine consolidation, and a domain cap that
         // admits all three coupled folders into one cluster.
-        config.capacity.folder = 3;
-        config.capacity.domain = 3;
+        config.profiles.anchored.capacity.folder = 3;
+        config.profiles.anchored.capacity.domain = 3;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut merged_seen = false;
@@ -9549,10 +10054,10 @@ mod tests {
         // headroom of one over the two-file directories, so a moved-file
         // partition exists and at least one candidate is emitted (elected)
         // rather than cloned.
-        config.capacity.folder = 3;
+        config.profiles.anchored.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut emitted = 0;
@@ -9608,10 +10113,10 @@ mod tests {
             ],
         );
         let mut config = config_with_k(2);
-        config.capacity.folder = 2;
+        config.profiles.anchored.capacity.folder = 2;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut majority_seen = false;
@@ -9673,10 +10178,10 @@ mod tests {
         // `capacity: 1.3333` and a total of `1.5075`, four times worse than the
         // split it was supposed to beat. Five is the smallest budget under
         // which the merge is genuinely legal, and it then scores `0.125`.
-        config.capacity.folder = 5;
+        config.profiles.anchored.capacity.folder = 5;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut prefix_seen = false;
@@ -9738,10 +10243,10 @@ mod tests {
         let mut config = config_with_k(2);
         // headroom for the genuine consolidation: `ai/app` absorbs the
         // sole-anchored satellite without exceeding the cap.
-        config.capacity.folder = 3;
+        config.profiles.anchored.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut joined_seen = false;
@@ -9814,11 +10319,11 @@ mod tests {
         let mut config = config_with_k(2);
         // headroom for the genuine consolidation, and a domain cap that
         // admits all three coupled folders into one cluster.
-        config.capacity.folder = 3;
-        config.capacity.domain = 3;
+        config.profiles.anchored.capacity.folder = 3;
+        config.profiles.anchored.capacity.domain = 3;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut token_seen = false;
@@ -9856,10 +10361,10 @@ mod tests {
         let mut config = config_with_k(2);
         // headroom of one so a moved-file partition exists and at least one
         // candidate is emitted (elected) rather than cloned.
-        config.capacity.folder = 3;
+        config.profiles.anchored.capacity.folder = 3;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut wrapped_seen = false;
@@ -9933,11 +10438,13 @@ mod tests {
         let mut config = config_with_k(1);
         // headroom for the genuine consolidation, and a domain cap that
         // forces the two sibling clusters apart.
-        config.capacity.folder = 3;
-        config.capacity.domain = 1;
+        config.profiles.anchored.capacity.folder = 3;
+        config.profiles.anchored.capacity.domain = 1;
+        config.profiles.greenfield.capacity.folder = 3;
+        config.profiles.greenfield.capacity.domain = 1;
 
         let modes = analyze(&snapshot, &config)
-            .map(|result| result.modes)
+            .map(|result| result.profiles)
             .unwrap_or_default();
 
         let mut qualified_seen = false;
@@ -10066,7 +10573,7 @@ mod tests {
             )],
         );
         let mut config = AnalyzeConfig::default();
-        config.capacity.domain = 2;
+        config.profiles.anchored.capacity.domain = 2;
 
         let findings = walk_all_capacity(&tree, &config);
 
@@ -10512,7 +11019,11 @@ mod tests {
         let solver = PipelineSolver::new(
             &snapshot,
             &AnalyzeConfig::default(),
-            AnalyzeConfig::default().objective.greenfield(),
+            AnalyzeConfig::default()
+                .profiles
+                .greenfield
+                .objective
+                .coefficients(),
             false,
             &tests,
         );
@@ -10584,10 +11095,10 @@ mod tests {
         );
 
         let mut config = AnalyzeConfig::default();
-        config.analysis.candidates = 1;
+        config.profiles.anchored.candidates = 1;
         let moves = analyze(&snapshot, &config)
             .ok()
-            .and_then(|result| result.modes.greenfield)
+            .and_then(|result| result.profiles.greenfield)
             .and_then(|mode| mode.candidates.into_iter().next())
             .map(|candidate| candidate.symbol_moves)
             .unwrap_or_default();
@@ -10662,7 +11173,7 @@ mod tests {
     fn greenfield_symbol_moves(snapshot: &Snapshot) -> Vec<SymbolMove> {
         analyze(snapshot, &config_with_k(1))
             .ok()
-            .and_then(|result| result.modes.greenfield)
+            .and_then(|result| result.profiles.greenfield)
             .and_then(|mode| mode.candidates.into_iter().next())
             .map(|candidate| candidate.symbol_moves)
             .unwrap_or_default()
@@ -10702,7 +11213,7 @@ mod tests {
         let solver = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -10757,7 +11268,11 @@ mod tests {
         let solver = PipelineSolver::new(
             &snapshot,
             &AnalyzeConfig::default(),
-            AnalyzeConfig::default().objective.greenfield(),
+            AnalyzeConfig::default()
+                .profiles
+                .greenfield
+                .objective
+                .coefficients(),
             false,
             &tests,
         );
@@ -10797,9 +11312,9 @@ mod tests {
         );
 
         let mut config = AnalyzeConfig::default();
-        config.analysis.candidates = 1;
+        config.profiles.anchored.candidates = 1;
         let undrained = analyze(&snapshot, &config).is_ok_and(|result| {
-            [&result.modes.anchored, &result.modes.greenfield]
+            [&result.profiles.anchored, &result.profiles.greenfield]
                 .into_iter()
                 .flatten()
                 .flat_map(|mode| &mode.candidates)
@@ -11029,22 +11544,8 @@ mod tests {
         // no panic!/expect in tests).
         let greenfield = analyze(&snapshot, &config)
             .ok()
-            .and_then(|result| result.modes.greenfield)
-            .unwrap_or(ModeResult {
-                candidates: Vec::new(),
-                pairwise_distance: Vec::new(),
-                solution_space_converged: false,
-                current_score: 0.0,
-                current_score_breakdown: ScoreBreakdown {
-                    cut: 0.0,
-                    imbalance: 0.0,
-                    naming: 0.0,
-                    path: 0.0,
-                    anchor: 0.0,
-                    capacity: 0.0,
-                },
-                current_standing: CurrentStanding::Outscored,
-            });
+            .and_then(|result| result.profiles.greenfield)
+            .unwrap_or_else(empty_profile_result);
 
         let carries_rebuild = greenfield.candidates.iter().any(|candidate| {
             // the rebuilt label path-extends its base folder, so the rendered
@@ -11193,7 +11694,11 @@ mod tests {
         ];
         let edges = vec![edge(0, 1), edge(2, 0)];
         let index_of = BTreeMap::from([(1_u32, 0_u32), (2, 1), (3, 2)]);
-        let weights = AnalyzeConfig::default().weights.kind_weights();
+        let weights = AnalyzeConfig::default()
+            .profiles
+            .anchored
+            .weights
+            .kind_weights();
         let test_zone = vec![false, false, true];
 
         let graph = build_file_graph(&edges, &nodes, &index_of, 3, &weights, &test_zone);
@@ -11216,7 +11721,11 @@ mod tests {
         ];
         let edges = vec![edge(0, 1), edge(1, 0)];
         let index_of = BTreeMap::from([(1_u32, 0_u32), (2, 1_u32)]);
-        let weights = AnalyzeConfig::default().weights.kind_weights();
+        let weights = AnalyzeConfig::default()
+            .profiles
+            .anchored
+            .weights
+            .kind_weights();
         let test_zone = vec![true, true];
 
         let graph = build_file_graph(&edges, &nodes, &index_of, 2, &weights, &test_zone);
@@ -11310,7 +11819,11 @@ mod tests {
         let solver = PipelineSolver::new(
             &snapshot,
             &AnalyzeConfig::default(),
-            AnalyzeConfig::default().objective.greenfield(),
+            AnalyzeConfig::default()
+                .profiles
+                .greenfield
+                .objective
+                .coefficients(),
             false,
             &tests,
         );
@@ -11346,11 +11859,11 @@ mod tests {
         // End to end: no candidate of either mode narrates a move whose
         // destination is the spec twin.
         let mut config = AnalyzeConfig::default();
-        config.analysis.candidates = 1;
+        config.profiles.anchored.candidates = 1;
         let offenders: Vec<String> = analyze(&snapshot, &config)
             .ok()
             .map(|result| {
-                [&result.modes.anchored, &result.modes.greenfield]
+                [&result.profiles.anchored, &result.profiles.greenfield]
                     .into_iter()
                     .flatten()
                     .flat_map(|mode| &mode.candidates)
@@ -11400,7 +11913,7 @@ mod tests {
         let solver = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -11410,6 +11923,8 @@ mod tests {
             &snapshot,
             &solver.coefficients,
             &solver.weights,
+            solver.same_file_symbol,
+            solver.same_file_type,
             solver.caps.folder,
             solver.file_cap,
             &assembled,
@@ -11463,7 +11978,7 @@ mod tests {
         let solver = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -11473,6 +11988,8 @@ mod tests {
             &snapshot,
             &solver.coefficients,
             &solver.weights,
+            solver.same_file_symbol,
+            solver.same_file_type,
             solver.caps.folder,
             solver.file_cap,
             &assembled,
@@ -11512,6 +12029,49 @@ mod tests {
             !accepted && relocated.is_empty(),
             "a symbol two sibling folders share must not fold into either; \
              relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_keep_a_type_with_its_primary_same_file_consumer_at_default_affinity() {
+        let mut subject = node(0, "request_options", 2, Polarity::Production);
+        subject.kind = NodeKind::Type;
+        subject.visibility = ScopeLevel::PackageGroup;
+        let mut first_external = node(3, "first_passthrough", 3, Polarity::Production);
+        first_external.kind = NodeKind::Type;
+        let mut second_external = node(4, "second_passthrough", 3, Polarity::Production);
+        second_external.kind = NodeKind::Type;
+        let snapshot = snapshot(
+            vec![
+                subject,
+                node(1, "execute_request", 2, Polarity::Production),
+                node(2, "origin_resident", 2, Polarity::Production),
+                first_external,
+                second_external,
+            ],
+            vec![type_ref(1, 0), type_ref(0, 3), type_ref(0, 4)],
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "feature", ScopeLevel::Folder, Some(0)),
+                container(2, "feature/execute.ts", ScopeLevel::File, Some(1)),
+                container(3, "feature/types.ts", ScopeLevel::File, Some(1)),
+            ],
+        );
+
+        let (default_accepted, default_relocated) =
+            relocates_first_symbol_with_type_affinity(&snapshot, 3.0);
+        let (unit_accepted, unit_relocated) =
+            relocates_first_symbol_with_type_affinity(&snapshot, 1.0);
+
+        assert!(
+            !default_accepted && default_relocated.is_empty(),
+            "the default 3x same-file affinity must retain the type with its primary consumer; \
+             relocations {default_relocated:?}"
+        );
+        assert!(
+            unit_accepted && unit_relocated == [0],
+            "at 1x the two external pulls must remain eligible to move the type; \
+             relocations {unit_relocated:?}"
         );
     }
 
@@ -12069,12 +12629,20 @@ mod tests {
     /// deterministically accepted, making a refusal attributable to the gates
     /// alone.
     fn relocates_first_symbol(snapshot: &Snapshot) -> (bool, Vec<u32>) {
+        relocates_first_symbol_with_type_affinity(snapshot, 3.0)
+    }
+
+    fn relocates_first_symbol_with_type_affinity(
+        snapshot: &Snapshot,
+        same_file_type: f64,
+    ) -> (bool, Vec<u32>) {
         let tests = TestPolicy::defaults();
-        let config = AnalyzeConfig::default();
+        let mut config = AnalyzeConfig::default();
+        config.profiles.greenfield.weights.same_file_type = same_file_type;
         let solver = PipelineSolver::new(
             snapshot,
-            &config,
-            config.objective.greenfield(),
+            &config.profiles.greenfield,
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -12084,6 +12652,8 @@ mod tests {
             snapshot,
             &solver.coefficients,
             &solver.weights,
+            solver.same_file_symbol,
+            solver.same_file_type,
             solver.caps.folder,
             solver.file_cap,
             &assembled,
@@ -12110,7 +12680,7 @@ mod tests {
         let solver = PipelineSolver::new(
             snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -12120,6 +12690,8 @@ mod tests {
             snapshot,
             &solver.coefficients,
             &solver.weights,
+            solver.same_file_symbol,
+            solver.same_file_type,
             solver.caps.folder,
             solver.file_cap,
             &assembled,
@@ -12211,7 +12783,7 @@ mod tests {
         let solver = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -12221,6 +12793,8 @@ mod tests {
             &snapshot,
             &solver.coefficients,
             &solver.weights,
+            solver.same_file_symbol,
+            solver.same_file_type,
             solver.caps.folder,
             solver.file_cap,
             &assembled,
@@ -12276,7 +12850,7 @@ mod tests {
         let solver = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -12286,6 +12860,8 @@ mod tests {
             &snapshot,
             &solver.coefficients,
             &solver.weights,
+            solver.same_file_symbol,
+            solver.same_file_type,
             solver.caps.folder,
             solver.file_cap,
             &assembled,
@@ -12342,7 +12918,7 @@ mod tests {
         let solver = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -12537,13 +13113,8 @@ mod tests {
     fn should_veto_a_shadow_move_that_would_overflow_the_folder_cap() {
         // A folder cap of one leaves no room next to the twin; the cap veto
         // binds exactly like it does for polish moves.
-        let config = AnalyzeConfig {
-            capacity: crate::CapacityConfig {
-                folder: 1,
-                ..crate::CapacityConfig::default()
-            },
-            ..AnalyzeConfig::default()
-        };
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.capacity.folder = 1;
         let nodes = vec![
             node(0, "openai", 3, Polarity::Production),
             node(1, "openai_spec", 4, Polarity::TestCase),
@@ -12594,13 +13165,8 @@ mod tests {
 
     #[test]
     fn should_allow_a_childs_only_file_to_replace_its_folder_entry_at_the_parent_cap() {
-        let config = AnalyzeConfig {
-            capacity: crate::CapacityConfig {
-                folder: 2,
-                ..crate::CapacityConfig::default()
-            },
-            ..AnalyzeConfig::default()
-        };
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.capacity.folder = 2;
         let snap = snapshot(
             vec![
                 node(0, "anchor", 3, Polarity::Production),
@@ -12731,7 +13297,7 @@ mod tests {
         let solver = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -12769,7 +13335,7 @@ mod tests {
         let solver = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -12831,7 +13397,7 @@ mod tests {
         let solver = PipelineSolver::new(
             &snapshot,
             &config,
-            config.objective.greenfield(),
+            config.profiles.greenfield.objective.coefficients(),
             false,
             &tests,
         );
@@ -12857,11 +13423,11 @@ mod tests {
         // the real-repo duplicates (`summariseItem` narrated into both
         // `src/batch/types.ts` and `src/batch/adapters/types.ts`).
         let mut narrated = AnalyzeConfig::default();
-        narrated.analysis.candidates = 1;
+        narrated.profiles.anchored.candidates = 1;
         let contradictions: Vec<String> = analyze(&snapshot, &narrated)
             .ok()
             .map(|result| {
-                [&result.modes.anchored, &result.modes.greenfield]
+                [&result.profiles.anchored, &result.profiles.greenfield]
                     .into_iter()
                     .flatten()
                     .flat_map(|mode| &mode.candidates)

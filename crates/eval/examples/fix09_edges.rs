@@ -4,7 +4,7 @@
 
 #![allow(clippy::print_stdout)] // diagnostic binary; the workspace deny targets library code
 
-use strata_engine::config::{AnalyzeConfig, Mode};
+use strata_engine::config::AnalyzeConfig;
 use strata_engine::snapshot_from_root;
 use strata_eval::{eval_fixture_root, load_target};
 
@@ -17,9 +17,13 @@ fn main() {
 fn run() -> Result<(), String> {
     let spec = load_target("naming-drift").map_err(|error| format!("naming-drift: {error}"))?;
     let mut config = AnalyzeConfig::default();
-    config.analysis.mode = Mode::Both;
-    config.analysis.candidates = spec.run.candidates;
-    config.analysis.seed = spec.run.seed;
+    for profile in [
+        &mut config.profiles.anchored,
+        &mut config.profiles.greenfield,
+    ] {
+        profile.candidates = spec.run.candidates;
+        profile.seed = spec.run.seed;
+    }
     let root = eval_fixture_root("naming-drift");
     let snapshot =
         snapshot_from_root(&root, &config).map_err(|error| format!("naming-drift: {error}"))?;

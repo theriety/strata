@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use strata_engine::config::{AnalyzeConfig, Mode};
+use strata_engine::config::{AnalyzeConfig, ProfileName};
 use strata_engine::result::{
     AnalyzeResult, Candidate, ContainerNode, Level, ModeResult, Severity as EngineSeverity,
     Violation, ViolationKind as EngineViolationKind,
@@ -248,13 +248,6 @@ pub fn run_case(
     spec.validate(expected_fixture)?;
 
     let mut config = AnalyzeConfig::default();
-    config.analysis.mode = match spec.run.mode {
-        RunMode::Anchored => Mode::Anchored,
-        RunMode::Greenfield => Mode::Greenfield,
-        RunMode::Both => Mode::Both,
-    };
-    config.analysis.candidates = spec.run.candidates;
-    config.analysis.seed = spec.run.seed;
     match spec.run.config {
         ConfigSource::Defaults => {}
         ConfigSource::Fixture => {
@@ -266,6 +259,18 @@ pub fn run_case(
                 }
             })?;
         }
+    }
+    config.analysis.profiles = match spec.run.mode {
+        RunMode::Anchored => vec![ProfileName::Anchored],
+        RunMode::Greenfield => vec![ProfileName::Greenfield],
+        RunMode::Both => vec![ProfileName::Anchored, ProfileName::Greenfield],
+    };
+    for profile in [
+        &mut config.profiles.anchored,
+        &mut config.profiles.greenfield,
+    ] {
+        profile.candidates = spec.run.candidates;
+        profile.seed = spec.run.seed;
     }
 
     let snapshot = snapshot_from_root(root, &config).map_err(|error| EvalError::EngineRun {
@@ -298,11 +303,8 @@ pub fn run_case(
 
     // Preconditions are verified against current BEFORE scoring; a failure is a
     // harness or fixture defect, never distance, so it lands in `errors` too.
-    let preconditions = evaluate_preconditions(
-        &spec.precondition,
-        result.summary.files,
-        &result.current.violations,
-    );
+    let findings = all_findings(&result);
+    let preconditions = evaluate_preconditions(&spec.precondition, result.summary.files, &findings);
     for verdict in preconditions.iter().filter(|verdict| !verdict.passed) {
         errors.push(EvalError::TargetInvalid {
             target: expected_fixture.to_owned(),
@@ -492,9 +494,30 @@ fn census_of(result: &AnalyzeResult) -> BTreeSet<String> {
 /// The mode's [`ModeResult`], or `None` when the run did not produce the face.
 fn mode_result_of(result: &AnalyzeResult, face: FaceMode) -> Option<&ModeResult> {
     match face {
-        FaceMode::Anchored => result.modes.anchored.as_ref(),
-        FaceMode::Greenfield => result.modes.greenfield.as_ref(),
+        FaceMode::Anchored => result.profiles.anchored.as_ref(),
+        FaceMode::Greenfield => result.profiles.greenfield.as_ref(),
     }
+}
+
+/// Returns the deduplicated findings visible across the executed profiles.
+fn all_findings(result: &AnalyzeResult) -> Vec<Violation> {
+    let mut findings = result.current.shared_findings.clone();
+    for profile in [
+        result.profiles.anchored.as_ref(),
+        result.profiles.greenfield.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        findings.extend(profile.current.unique_findings.iter().cloned());
+    }
+    let mut unique = Vec::new();
+    for finding in findings {
+        if !unique.contains(&finding) {
+            unique.push(finding);
+        }
+    }
+    unique
 }
 
 /// Evaluates every assertion in the block once per face it applies to, then the

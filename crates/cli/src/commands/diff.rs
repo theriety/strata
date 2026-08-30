@@ -147,7 +147,8 @@ mod tests {
 
     use strata_engine::{
         Candidate, ContainerNode, CurrentStanding, CurrentTree, FileMove, Level, ModeResult, Modes,
-        Move, MoveKind, MoveReason, ScoreBreakdown, Summary, SymbolPlacement,
+        Move, MoveKind, MoveReason, ProfileConfig, ProfileCurrent, ScoreBreakdown, Summary,
+        SymbolPlacement,
     };
 
     use super::*;
@@ -165,19 +166,21 @@ mod tests {
             },
             current: CurrentTree {
                 tree: file("lib"),
-                score: 1.0,
-                score_breakdown: zero(),
-                capacity_breaks: 0,
-                violations: Vec::new(),
+                shared_findings: Vec::new(),
             },
-            modes: Modes {
+            profiles: Modes {
                 anchored: Some(ModeResult {
+                    parameters: ProfileConfig::default(),
+                    current: ProfileCurrent {
+                        score: 1.0,
+                        score_breakdown: zero(),
+                        unique_findings: Vec::new(),
+                        standing: CurrentStanding::Outscored,
+                        capacity_breaks: 0,
+                    },
                     candidates: vec![candidate(1), candidate(2)],
                     pairwise_distance: vec![vec![0.0, 0.7], vec![0.7, 0.0]],
                     solution_space_converged: true,
-                    current_score: 1.0,
-                    current_score_breakdown: zero(),
-                    current_standing: CurrentStanding::Outscored,
                 }),
                 greenfield: None,
             },

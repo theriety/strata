@@ -1,1 +1,1 @@
-cycle [violation] stepAlpha, stepBeta, stepGamma :: 3-symbol cycle; break stepGamma -> stepAlpha (w=1.0, exact)
+cycle [violation] alpha.ts, beta.ts, gamma.ts :: 3-symbol cycle; symbols form one placement unit and must remain in one file unless a suggested dependency edge is broken; break stepGamma -> stepAlpha (w=1.0, exact)

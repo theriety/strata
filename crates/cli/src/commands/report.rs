@@ -15,6 +15,7 @@ use strata_engine::{
 };
 
 use crate::commands::read_result;
+use crate::render::effective_parameter_lines;
 
 /// The parsed inputs of a `report` run.
 #[derive(Debug)]
@@ -62,17 +63,14 @@ fn render_markdown(result: &AnalyzeResult) -> String {
         result.summary.symbols, result.summary.edges, result.summary.files
     );
 
-    let _ = writeln!(markdown, "## Current layout\n");
-    let _ = writeln!(markdown, "Score `{:.4}`.\n", result.current.score);
-    write_breakdown(&mut markdown, &result.current.score_breakdown);
-    write_violations(&mut markdown, &result.current.violations);
+    let _ = writeln!(markdown, "## Shared findings\n");
+    write_violations(&mut markdown, &result.current.shared_findings);
 
-    let current_capacity = result.current.capacity_breaks;
-    if let Some(mode) = &result.modes.anchored {
-        write_mode(&mut markdown, "Anchored", mode, current_capacity);
+    if let Some(mode) = &result.profiles.anchored {
+        write_mode(&mut markdown, "Anchored", mode);
     }
-    if let Some(mode) = &result.modes.greenfield {
-        write_mode(&mut markdown, "Greenfield", mode, current_capacity);
+    if let Some(mode) = &result.profiles.greenfield {
+        write_mode(&mut markdown, "Greenfield", mode);
     }
     markdown
 }
@@ -98,15 +96,26 @@ fn write_violations(markdown: &mut String, violations: &[Violation]) {
 }
 
 /// Writes one mode's candidate sections.
-fn write_mode(markdown: &mut String, name: &str, mode: &ModeResult, current_capacity: u32) {
-    let _ = writeln!(markdown, "## {name} candidates\n");
+fn write_mode(markdown: &mut String, name: &str, mode: &ModeResult) {
+    let _ = writeln!(markdown, "## {name} parameter profile\n");
+    let _ = writeln!(markdown, "### Effective parameters\n");
+    let _ = writeln!(markdown, "```text");
+    for line in effective_parameter_lines(&name.to_ascii_lowercase(), &mode.parameters) {
+        let _ = writeln!(markdown, "{}", line.trim_start());
+    }
+    let _ = writeln!(markdown, "```\n");
+    let _ = writeln!(markdown, "Current score `{:.4}`.\n", mode.current.score);
+    write_breakdown(markdown, &mode.current.score_breakdown);
+    let _ = writeln!(markdown, "### Profile-specific findings\n");
+    write_violations(markdown, &mode.current.unique_findings);
+    let _ = writeln!(markdown, "### Candidates\n");
     if mode.solution_space_converged {
         let _ = writeln!(
             markdown,
             "_Fewer than the requested candidates survived; the solution space converged._\n"
         );
     }
-    match mode.current_standing {
+    match mode.current.standing {
         CurrentStanding::Optimal => {
             let _ = writeln!(
                 markdown,
@@ -119,6 +128,7 @@ fn write_mode(markdown: &mut String, name: &str, mode: &ModeResult, current_capa
             .and_then(|candidate| candidate.capacity_remainder)
         {
             Some(capacity) => {
+                let current_capacity = mode.current.capacity_breaks;
                 let resolved = current_capacity.saturating_sub(capacity.remaining);
                 let _ = writeln!(
                     markdown,
@@ -195,7 +205,7 @@ mod tests {
 
     use strata_engine::{
         ConditionalSplit, ContainerNode, CurrentTree, EdgeBreak, FileMove, Level, Modes, Move,
-        MoveKind, MoveReason, Severity, Summary, ViolationKind,
+        MoveKind, MoveReason, ProfileConfig, ProfileCurrent, Severity, Summary, ViolationKind,
     };
 
     use super::*;
@@ -213,10 +223,7 @@ mod tests {
             },
             current: CurrentTree {
                 tree: file("lib"),
-                score: 2.0,
-                score_breakdown: zero(),
-                capacity_breaks: 0,
-                violations: vec![Violation {
+                shared_findings: vec![Violation {
                     kind: ViolationKind::Cycle,
                     severity: Severity::Violation,
                     location: vec!["a".to_owned()],
@@ -225,16 +232,21 @@ mod tests {
                     capacity: None,
                 }],
             },
-            modes: Modes {
+            profiles: Modes {
                 anchored: Some(ModeResult {
+                    parameters: ProfileConfig::default(),
+                    current: ProfileCurrent {
+                        score: 2.0,
+                        score_breakdown: zero(),
+                        unique_findings: Vec::new(),
+                        standing: CurrentStanding::Outscored,
+                        capacity_breaks: 0,
+                    },
                     candidates: vec![candidate()],
                     pairwise_distance: vec![vec![0.0]],
                     // one candidate against a default k of three: the space converged,
                     // so the report prints the fewer-than-requested notice.
                     solution_space_converged: true,
-                    current_score: 2.0,
-                    current_score_breakdown: zero(),
-                    current_standing: CurrentStanding::Outscored,
                 }),
                 greenfield: None,
             },
@@ -303,7 +315,14 @@ mod tests {
         assert!(markdown.contains("# Strata report"));
         assert!(markdown.contains("Snapshot `abc123`"));
         assert!(markdown.contains("### Violations"));
-        assert!(markdown.contains("## Anchored candidates"));
+        assert!(markdown.contains("## Anchored parameter profile"));
+        assert!(markdown.contains("### Effective parameters"));
+        assert!(markdown.contains("capacity  file 250 · folder 20"));
+        assert!(markdown.contains("objective imbalance 0.1 · naming 0.3"));
+        assert!(markdown.contains("same-file-symbol 1.0 · same-file-type 3.0"));
+        assert!(markdown.contains("solver    ilp-threshold 300"));
+        assert!(markdown.contains("diversity seeds-per-candidate 10"));
+        assert!(markdown.contains("tests     helper-cap 250"));
         assert!(markdown.contains("### Candidate 1 (improvement `+1.0000`, score `1.0000`)"));
         assert!(markdown.contains("Conditional splits"));
         assert!(markdown.contains("solution space converged"));
@@ -312,7 +331,7 @@ mod tests {
     #[test]
     fn should_number_each_file_of_a_large_move_group_as_a_step() {
         let mut result = sample();
-        if let Some(mode) = result.modes.anchored.as_mut()
+        if let Some(mode) = result.profiles.anchored.as_mut()
             && let Some(subject) = mode.candidates.first_mut()
         {
             subject.delta_narration = vec![Move {
