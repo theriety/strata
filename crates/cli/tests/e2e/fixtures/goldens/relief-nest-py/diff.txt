@@ -1,4 +1,4 @@
-moves (1 group(s), 12 file(s); improvement +0.2478):
+moves (1 group(s), 12 file(s); gain +0.2478):
 move — relieves over-cap folder relief-nest-py/hub (24/20 entries)
   1. relief-nest-py/hub/ingest_00.py [relief-nest-py/hub → relief-nest-py/hub/ingest]
   2. relief-nest-py/hub/ingest_01.py [relief-nest-py/hub → relief-nest-py/hub/ingest]

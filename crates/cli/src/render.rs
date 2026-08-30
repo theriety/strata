@@ -168,6 +168,17 @@ fn sf(value: f64) -> String {
     }
 }
 
+/// Describes a candidate's score change without calling a regression a gain.
+fn improvement_summary(improvement: f64) -> String {
+    if improvement > 0.0 {
+        format!("gain {}", sf(improvement))
+    } else if improvement < 0.0 {
+        format!("regression {}", f4(improvement.abs()))
+    } else {
+        "no improvement".to_owned()
+    }
+}
+
 /// Rounds to four decimals the way the delta column prints.
 fn round4(value: f64) -> f64 {
     (value * 10_000.0).round() / 10_000.0
@@ -453,13 +464,24 @@ fn reading_rules(result: &AnalyzeResult) -> Vec<String> {
             f4(profile.current.score),
             f4(candidate.score)
         ));
-        lines.push(
-            " gain      : improvement over that parameter profile's own starting point, measured in".to_owned(),
-        );
-        lines.push(format!(
-            "             the same units as the score              {}",
-            sf(candidate.improvement)
-        ));
+        if candidate.improvement > 0.0 {
+            lines.push(
+                " gain      : improvement over that parameter profile's own starting point, measured in".to_owned(),
+            );
+            lines.push(format!(
+                "             the same units as the score              {}",
+                sf(candidate.improvement)
+            ));
+        } else {
+            lines.push(
+                " change    : the candidate does not improve that parameter profile's starting score"
+                    .to_owned(),
+            );
+            lines.push(format!(
+                "             {}",
+                improvement_summary(candidate.improvement)
+            ));
+        }
     } else {
         lines.push(" scores    : four decimals, lower is better".to_owned());
         lines.push(
@@ -657,22 +679,21 @@ fn candidates_section(result: &AnalyzeResult) -> Vec<String> {
             format!("   {annotation}")
         };
         lines.push(format!(
-            " candidate {}   {tag:<tag_width$}   score  {}   gain {}{suffix}",
+            " candidate {}   {tag:<tag_width$}   score  {}   {}{suffix}",
             row + 1,
             f4(candidate.score),
-            sf(candidate.improvement),
+            improvement_summary(candidate.improvement),
         ));
     }
 
     lines.push(String::new());
     if let [(anchored_name, anchored), (greenfield_name, greenfield)] = modes.as_slice() {
-        let text = format!(
-            "these two gains have different starting points — {anchored_name} prices the \
-             current tree at {} using its effective coefficients; {greenfield_name} prices the \
-             same tree at {} using its own effective coefficients. Each gain is measured against \
-             its own parameter profile's baseline — never compare across parameter profiles.",
-            f4(anchored.current.score),
-            f4(greenfield.current.score),
+        let text = profile_comparison_text(
+            anchored_name,
+            anchored,
+            greenfield_name,
+            greenfield,
+            tags.as_slice(),
         );
         lines.extend(labeled_block(" comparability: ", 17, 17, &text));
     } else {
@@ -698,6 +719,36 @@ fn candidates_section(result: &AnalyzeResult) -> Vec<String> {
         lines.extend(labeled_block(" note  ", 7, 7, &note));
     }
     lines
+}
+
+/// Compares two profile baselines without claiming gains for empty or regressing sets.
+fn profile_comparison_text(
+    anchored_name: &str,
+    anchored: &ModeResult,
+    greenfield_name: &str,
+    greenfield: &ModeResult,
+    candidates: &[(String, &Candidate, &'static str)],
+) -> String {
+    if candidates.is_empty() {
+        return "neither parameter profile produced a candidate, so there are no score changes to compare."
+            .to_owned();
+    }
+    let all_improving = candidates
+        .iter()
+        .all(|(_, candidate, _)| candidate.improvement > 0.0);
+    let (changes, each) = if all_improving {
+        ("gains", "gain")
+    } else {
+        ("score changes", "change")
+    };
+    format!(
+        "these two {changes} have different starting points — {anchored_name} prices the \
+         current tree at {} using its effective coefficients; {greenfield_name} prices the \
+         same tree at {} using its own effective coefficients. Each {each} is measured against \
+         its own parameter profile's baseline — never compare across parameter profiles.",
+        f4(anchored.current.score),
+        f4(greenfield.current.score),
+    )
 }
 
 /// Whether `index` names the head candidate of the named mode.
@@ -1238,7 +1289,6 @@ fn score_delta_section(result: &AnalyzeResult) -> Vec<String> {
     };
     let proposal_breakdown = featured.score_breakdown;
     let proposal_score = featured.score;
-    let gain = Some(featured.improvement);
     let current = &profile.current.score_breakdown;
 
     let mut lines = vec![format!(
@@ -1265,7 +1315,11 @@ fn score_delta_section(result: &AnalyzeResult) -> Vec<String> {
             sf(round4(proposal_breakdown.capacity - current.capacity))
         ));
     }
-    let gain_note = gain.map_or_else(String::new, |gain| format!("   (gain {})", sf(gain)));
+    let gain_note = if featured.improvement > 0.0 {
+        format!("   (gain {})", sf(featured.improvement))
+    } else {
+        format!("   ({})", improvement_summary(featured.improvement))
+    };
     lines.push(format!(
         " {:<15}{:>11}    {:>11}    {:>11}{gain_note}",
         "score",
@@ -1293,64 +1347,21 @@ fn score_delta_section(result: &AnalyzeResult) -> Vec<String> {
     lines
 }
 
-/// The `§6` verdict band: adopt when there is an action, the second mode's
-/// standing, whether keeping is offered, and the partial-adoption rule.
+/// The `§6` verdict band: adopt an improving action or decline a regression,
+/// then state the second mode, keeping option, and partial-adoption rule.
 fn recommendation_section(result: &AnalyzeResult) -> Vec<String> {
     let mut lines = Vec::new();
     let modes = present_modes(result);
     let featured = featured_candidate(result);
     let total: usize = modes.iter().map(|(_, mode)| mode.candidates.len()).sum();
 
-    if let Some((featured_name, candidate)) = featured
-        && !candidate.delta_narration.is_empty()
-    {
-        let files: usize = candidate
-            .delta_narration
-            .iter()
-            .map(|entry| entry.files.len())
-            .sum();
-        let mut adopt = format!(
-            "candidate {} — {}, gain {}, {} changes relocating {} files (§2).",
-            candidate.index,
-            f4(candidate.score),
-            sf(candidate.improvement),
-            candidate.delta_narration.len(),
-            files
-        );
-        let current = modes
-            .iter()
-            .find(|(name, _)| *name == featured_name)
-            .map_or(&candidate.score_breakdown, |(_, mode)| {
-                &mode.current.score_breakdown
-            });
-        adopt.push_str(&driver_sentence(current, candidate));
-        lines.extend(labeled_block(&format!(" {:<11}", "adopt"), 12, 12, &adopt));
-
-        if let Some((other_name, other_mode, other)) = modes
-            .iter()
-            .filter_map(|(name, mode)| mode.candidates.first().map(|head| (*name, mode, head)))
-            .find(|(name, _, _)| *name != featured_name)
-        {
-            let shape = if other.tree == candidate.tree {
-                "the same grouping"
-            } else {
-                "a related but different shape"
-            };
-            let pair = if total == 2 { "the two" } else { "them" };
-            let second = format!(
-                "{other_name} reaches {shape} — {}, gain {} against its own {} baseline; decide \
-                 between {pair} by intent, never across baselines.",
-                f4(other.score),
-                sf(other.improvement),
-                f4(other_mode.current.score),
-            );
-            lines.extend(labeled_block(
-                &format!(" {:<11}", "second"),
-                12,
-                12,
-                &second,
-            ));
-        }
+    if let Some((featured_name, candidate)) = featured {
+        lines.extend(candidate_recommendation_lines(
+            modes.as_slice(),
+            featured_name,
+            candidate,
+            total,
+        ));
     }
 
     let infeasible: Vec<&str> = modes
@@ -1396,6 +1407,83 @@ fn recommendation_section(result: &AnalyzeResult) -> Vec<String> {
         12,
         "partial plans are not rescored; apply §2 in its given order, one change at a time.",
     ));
+    lines
+}
+
+/// Renders the action verdict for a featured candidate that actually relocates files.
+fn candidate_recommendation_lines(
+    modes: &[(&str, &ModeResult)],
+    featured_name: &str,
+    candidate: &Candidate,
+    total: usize,
+) -> Vec<String> {
+    if candidate.delta_narration.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    let files: usize = candidate
+        .delta_narration
+        .iter()
+        .map(|entry| entry.files.len())
+        .sum();
+    if candidate.improvement > 0.0 {
+        let mut adopt = format!(
+            "candidate {} — {}, gain {}, {} changes relocating {} files (§2).",
+            candidate.index,
+            f4(candidate.score),
+            sf(candidate.improvement),
+            candidate.delta_narration.len(),
+            files
+        );
+        let current = modes
+            .iter()
+            .find(|(name, _)| *name == featured_name)
+            .map_or(&candidate.score_breakdown, |(_, mode)| {
+                &mode.current.score_breakdown
+            });
+        adopt.push_str(&driver_sentence(current, candidate));
+        lines.extend(labeled_block(&format!(" {:<11}", "adopt"), 12, 12, &adopt));
+
+        if let Some((other_name, other_mode, other)) = modes
+            .iter()
+            .filter_map(|(name, mode)| mode.candidates.first().map(|head| (*name, mode, head)))
+            .find(|(name, _, _)| *name != featured_name)
+        {
+            let shape = if other.tree == candidate.tree {
+                "the same grouping"
+            } else {
+                "a related but different shape"
+            };
+            let pair = if total == 2 { "the two" } else { "them" };
+            let second = format!(
+                "{other_name} reaches {shape} — {}, {} against its own {} baseline; decide \
+                     between {pair} by intent, never across baselines.",
+                f4(other.score),
+                improvement_summary(other.improvement),
+                f4(other_mode.current.score),
+            );
+            lines.extend(labeled_block(
+                &format!(" {:<11}", "second"),
+                12,
+                12,
+                &second,
+            ));
+        }
+    } else {
+        let decline = format!(
+            "candidate {} is not recommended — it scores {} with {} against the {featured_name} \
+             parameter profile's baseline.",
+            candidate.index,
+            f4(candidate.score),
+            improvement_summary(candidate.improvement),
+        );
+        lines.extend(labeled_block(
+            &format!(" {:<11}", "decline"),
+            12,
+            12,
+            &decline,
+        ));
+    }
     lines
 }
 
@@ -1512,9 +1600,9 @@ pub fn render_diff(candidate: &Candidate, out: &mut impl Write) -> io::Result<()
     if candidate.delta_narration.is_empty() {
         writeln!(
             out,
-            "symbol moves ({} symbol(s); improvement {:+.4}):",
+            "symbol moves ({} symbol(s); {}):",
             candidate.symbol_moves.len(),
-            candidate.improvement
+            improvement_summary(candidate.improvement)
         )?;
     } else {
         let groups = candidate.delta_narration.len();
@@ -1525,8 +1613,8 @@ pub fn render_diff(candidate: &Candidate, out: &mut impl Write) -> io::Result<()
             .sum();
         writeln!(
             out,
-            "moves ({groups} group(s), {files} file(s); improvement {:+.4}):",
-            candidate.improvement
+            "moves ({groups} group(s), {files} file(s); {}):",
+            improvement_summary(candidate.improvement)
         )?;
         for line in move_step_lines(&candidate.delta_narration) {
             writeln!(out, "{line}")?;
@@ -2432,6 +2520,25 @@ mod tests {
     }
 
     #[test]
+    fn should_not_claim_two_gains_when_both_profiles_have_no_candidates() {
+        let mut result = result_with_candidate();
+        if let Some(anchored) = result.profiles.anchored.as_mut() {
+            anchored.candidates.clear();
+        }
+        result.profiles.greenfield = result.profiles.anchored.clone();
+
+        let text = report_lines(&result, "fixture").join("\n");
+
+        assert!(!text.contains("these two gains"), "{text}");
+        assert!(
+            text.contains(
+                "neither parameter profile produced a candidate, so there are no score changes"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn should_label_grain_on_every_suggestion_block() {
         let mut result = result_with_candidate();
         if let Some(candidate) = result
@@ -2597,6 +2704,37 @@ mod tests {
             "the remainder is stated directly: {text}"
         );
         assert!(text.contains("not offered — the anchored parameter profile marks"));
+    }
+
+    #[test]
+    fn should_not_recommend_or_call_a_negative_improvement_a_gain() {
+        let mut result = result_with_candidate();
+        if let Some(candidate) = result
+            .profiles
+            .anchored
+            .as_mut()
+            .and_then(|profile| profile.candidates.first_mut())
+        {
+            candidate.score = 2.0;
+            candidate.improvement = -0.5;
+            candidate.delta_narration = vec![move_of(
+                MoveKind::Move,
+                &["worker.ts"],
+                "src/feature",
+                "src/shared",
+                MoveReason::Clustering,
+            )];
+        }
+
+        let text = report_lines(&result, "fixture").join("\n");
+
+        assert!(!text.contains(" adopt      candidate"), "{text}");
+        assert!(!text.contains("gain -0.5000"), "{text}");
+        assert!(
+            text.contains("decline    candidate 1 is not recommended"),
+            "{text}"
+        );
+        assert!(text.contains("regression 0.5000"), "{text}");
     }
 
     #[test]
@@ -2795,8 +2933,65 @@ mod tests {
         let text = String::from_utf8(buffer).unwrap_or_default();
         assert_eq!(
             text,
-            "moves (1 group(s), 1 file(s); improvement +1.2500):\nmove — regrouped by clustering\n  1. alpha [old → new]\n"
+            "moves (1 group(s), 1 file(s); gain +1.2500):\nmove — regrouped by clustering\n  1. alpha [old → new]\n"
         );
+    }
+
+    #[test]
+    fn should_describe_diff_regressions_and_zero_changes_without_calling_them_gains() {
+        let regression = Candidate {
+            index: 1,
+            score: 2.0,
+            score_breakdown: zero_breakdown(),
+            improvement: -0.5,
+            tree: file_node("lib", 1),
+            conditional_splits: Vec::new(),
+            delta_narration: vec![move_of(
+                MoveKind::Move,
+                &["worker.ts"],
+                "src/feature",
+                "src/shared",
+                MoveReason::Clustering,
+            )],
+            symbol_moves: Vec::new(),
+            capacity_remainder: None,
+        };
+        let unchanged = Candidate {
+            index: 1,
+            score: 1.5,
+            score_breakdown: zero_breakdown(),
+            improvement: 0.0,
+            tree: file_node("lib", 1),
+            conditional_splits: Vec::new(),
+            delta_narration: Vec::new(),
+            symbol_moves: vec![SymbolMove {
+                symbol: "WorkInput".to_owned(),
+                kind: SymbolKind::Type,
+                from_path: "src/task/run.rs".to_owned(),
+                to_path: "src/task/types.rs".to_owned(),
+                delta: 0.0,
+                broken_imports: 1,
+            }],
+            capacity_remainder: None,
+        };
+        let mut regression_output = Vec::new();
+        let mut unchanged_output = Vec::new();
+
+        render_diff(&regression, &mut regression_output).unwrap_or_default();
+        render_diff(&unchanged, &mut unchanged_output).unwrap_or_default();
+
+        let regression_text = String::from_utf8(regression_output).unwrap_or_default();
+        let unchanged_text = String::from_utf8(unchanged_output).unwrap_or_default();
+        assert!(
+            regression_text.starts_with("moves (1 group(s), 1 file(s); regression 0.5000):"),
+            "{regression_text}"
+        );
+        assert!(
+            unchanged_text.starts_with("symbol moves (1 symbol(s); no improvement):"),
+            "{unchanged_text}"
+        );
+        assert!(!regression_text.contains("gain"), "{regression_text}");
+        assert!(!unchanged_text.contains("gain"), "{unchanged_text}");
     }
 
     #[test]

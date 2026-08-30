@@ -26,7 +26,7 @@ diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
 ```
 
-Current score `1.4728`.
+Current score `0.6728`.
 
 - cut `0.1250`, imbalance `0.0000`, naming `-0.0522`, path `-0.2000`, anchor `0.0000`
 
@@ -42,7 +42,7 @@ _Fewer than the requested candidates survived; the solution space converged._
 
 _Current layout violates capacity caps; best candidate resolves 1 of 1 capacity finding(s)._
 
-### Candidate 1 (improvement `+0.2478`, score `1.2250`)
+### Candidate 1 (improvement `+0.2478`, score `0.4250`)
 
 - cut `0.1250`, imbalance `0.0000`, naming `-0.1000`, path `-0.1000`, anchor `0.5000`
 
@@ -80,7 +80,7 @@ diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
 ```
 
-Current score `1.6728`.
+Current score `0.8728`.
 
 - cut `0.1250`, imbalance `0.0000`, naming `-0.0522`, path `-0.0000`, anchor `0.0000`
 
@@ -96,7 +96,7 @@ _Fewer than the requested candidates survived; the solution space converged._
 
 _Current layout violates capacity caps; best candidate resolves 1 of 1 capacity finding(s)._
 
-### Candidate 1 (improvement `+0.8478`, score `0.8250`)
+### Candidate 1 (improvement `+0.8478`, score `0.0250`)
 
 - cut `0.1250`, imbalance `0.0000`, naming `-0.1000`, path `-0.0000`, anchor `0.0000`
 

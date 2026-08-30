@@ -135,25 +135,6 @@ fn analyze_to_file(name: &str) -> PathBuf {
     path
 }
 
-/// Extracts the candidate-1 score from a summary face: the float after
-/// `score  ` on the first candidate row.
-///
-/// The report renders each candidate as `candidate 1   mode/i   score  <f> ...`,
-/// so anchoring on that row prefix skips the reading-rules prose (whose gain
-/// line also contains "score"). A malformed or absent score yields `f64::NAN`
-/// so a comparison against it fails loudly rather than passing by accident —
-/// the workspace forbids `unwrap`/`expect`, so no parse panics here.
-fn candidate_one_score(summary: &str) -> f64 {
-    summary
-        .lines()
-        .find(|line| line.starts_with(" candidate ") && line.contains("score  "))
-        .and_then(|line| line.split_once("score  "))
-        .map(|(_, rest)| rest)
-        .and_then(|rest| rest.split_whitespace().next())
-        .and_then(|token| token.parse::<f64>().ok())
-        .unwrap_or(f64::NAN)
-}
-
 /// Returns a process-unique nanosecond stamp for temp paths.
 fn nanos() -> u128 {
     std::time::SystemTime::now()
@@ -191,24 +172,20 @@ fn should_deliver_the_analyze_summary_for_the_rust_fixture() {
         "the expected node/edge census is delivered"
     );
     assert!(
-        outcome.stdout.contains("candidate count : 2"),
-        "the printed claim names every candidate both modes returned"
+        outcome.stdout.contains("candidate count : 0"),
+        "the printed claim reports that no strict improvement survived"
     );
     assert!(
-        outcome.stdout.contains("anchored profile returned 1")
-            && outcome.stdout.contains("greenfield profile returned 1"),
-        "each mode's contribution to the claim is stated"
-    );
-    assert!(
-        outcome.stdout.contains("anchored/1") && outcome.stdout.contains("greenfield/1"),
-        "every claimed candidate is listed with its score"
+        outcome.stdout.contains("anchored profile returned 0")
+            && outcome.stdout.contains("greenfield profile returned 0"),
+        "each profile's empty contribution is stated"
     );
 }
 
 #[test]
 fn should_itemize_suggestions_in_the_report_without_a_flag() {
-    // the printed report always itemizes §2; a candidate matching today's layout
-    // says so instead of shipping empty tables.
+    // The printed report always itemizes §2. With no strict improvement it
+    // reports an empty candidate set instead of inventing an identity plan.
     let root = fixture("rust");
     let root_str = root.to_str().unwrap_or_default();
 
@@ -228,15 +205,15 @@ fn should_itemize_suggestions_in_the_report_without_a_flag() {
     assert!(
         outcome
             .stdout
-            .contains("What would change — candidate 1 (anchored)"),
-        "the itemization section names its candidate: {}",
+            .contains("What would change — no candidate this run produced"),
+        "the itemization section names the empty result: {}",
         outcome.stdout
     );
     assert!(
         outcome
             .stdout
-            .contains("no change suggested — candidate 1 matches today's layout"),
-        "a zero-move plan is declared honestly"
+            .contains("no candidate this run produced — nothing to change"),
+        "the absence of an improving plan is declared honestly"
     );
 }
 
@@ -309,11 +286,10 @@ fn should_pin_the_anchor_term_apart_for_the_two_modes() {
     // the invariant, not the exact bytes (those are pinned by the summary golden):
     // the anchor penalty strictly raises the anchored candidate's score above the
     // otherwise-identical greenfield one.
-    let anchored_score = candidate_one_score(&anchored.stdout);
-    let greenfield_score = candidate_one_score(&greenfield.stdout);
     assert!(
-        anchored_score > greenfield_score,
-        "the anchor penalty raises the anchored score ({anchored_score}) above greenfield ({greenfield_score})"
+        anchored.stdout.contains("path 0.2 · anchor 1.0")
+            && greenfield.stdout.contains("path 0.0 · anchor 0.0"),
+        "the effective profiles expose distinct path and anchor coefficients"
     );
     assert!(
         !anchored.stdout.contains("mode greenfield"),
@@ -502,7 +478,7 @@ fn should_deliver_the_current_tree_for_the_multi_file_python_fixture() {
 
 #[test]
 fn should_truncate_a_candidate_tree_at_the_requested_depth() {
-    let result = analyze_to_file("rust");
+    let result = analyze_to_file("constellation-ts");
     let result_str = result.to_str().unwrap_or_default();
 
     let outcome = run(&[
@@ -520,20 +496,14 @@ fn should_truncate_a_candidate_tree_at_the_requested_depth() {
 
     let _ = std::fs::remove_file(&result);
     assert_eq!(outcome.code, 0, "a candidate tree renders and exits 0");
-    // depth truncation is exercised exhaustively by parity's workspace-tree test;
-    // here we keep only the structural invariant that the depth truncates above the
-    // symbol leaves: the root container is present, but no per-symbol leaf line
-    // (rendered as `  - <name>`) survives. `rust` is a single crate of root-level
-    // files, whose synthetic `workspace` bucket collapses at render, so `lib.rs`
-    // sits at depth 2 and depth 1 is what cuts above its symbols.
     assert!(
-        outcome.stdout.contains("rust [packageGroup]"),
+        outcome.stdout.contains("constellation-ts [packageGroup]"),
         "the truncated tree is still rooted at the package group: {}",
         outcome.stdout
     );
     assert!(
-        !outcome.stdout.contains("- Shape"),
-        "depth 1 truncates above the file's symbol leaves: {}",
+        !outcome.stdout.contains("core [folder]"),
+        "depth 1 truncates a real candidate above its folder leaves: {}",
         outcome.stdout
     );
 }
@@ -545,63 +515,31 @@ fn should_not_fabricate_a_package_segment_folder_for_a_cross_domain_real_directo
     // import so heavily from `core` that greenfield legitimately dissolves
     // them into the `core` cluster — each agent file's sole priced anchors
     // all sit in `core`, so absorption is the honest consolidation. Both
-    // faces must stay clean: the anchored candidate keeps the current
-    // layout (`agent` its own domain over its own folder), and the
-    // greenfield candidate renders the dissolved members inside `core`'s
-    // real folder — never through a fabricated `atlas [folder]` wrapper
-    // exploding the foreign key `atlas/agent` into package segments.
+    // current face must stay clean: `agent` remains its own domain over its
+    // own real folder, never through a fabricated `atlas [folder]` wrapper
+    // exploding the foreign key `atlas/agent` into package segments. Candidate
+    // tree behavior is covered separately with a fixture that strictly improves.
     let result = analyze_to_file("workspace-ts-leak");
     let result_str = result.to_str().unwrap_or_default();
 
-    let anchored = run(&[
-        "tree",
-        "--input",
-        result_str,
-        "--mode",
-        "anchored",
-        "--candidate",
-        "1",
-    ]);
-    let greenfield = run(&[
-        "tree",
-        "--input",
-        result_str,
-        "--mode",
-        "greenfield",
-        "--candidate",
-        "1",
-    ]);
+    let anchored = run(&["tree", "--input", result_str, "--current"]);
 
     let _ = std::fs::remove_file(&result);
     assert_eq!(anchored.code, 0, "the anchored tree renders and exits 0");
-    assert_eq!(
-        greenfield.code, 0,
-        "the greenfield tree renders and exits 0"
-    );
-    // the anchored face keeps the current layout: `agent` remains its own
-    // domain directly over its own real folder.
+    // `agent` remains its own domain directly over its own real folder.
     assert!(
         anchored
             .stdout
             .contains("\n    agent [domain]\n      agent [folder]\n"),
-        "the anchored candidate keeps `agent` as its own domain over its \
+        "the current tree keeps `agent` as its own domain over its \
          own folder: {}",
         anchored.stdout
     );
     // neither face may fabricate the package segment as a folder node.
     assert!(
-        !greenfield.stdout.contains("atlas [folder]")
-            && !anchored.stdout.contains("atlas [folder]"),
+        !anchored.stdout.contains("atlas [folder]"),
         "the package name must never render as a fabricated folder node: {}",
-        greenfield.stdout
-    );
-    // the greenfield face dissolves the satellite into the pulling cluster:
-    // the absorbed agent files render inside `core`'s real folder.
-    assert!(
-        greenfield.stdout.contains("core [folder]"),
-        "the greenfield candidate dissolves the sole-anchored agent files \
-         into `core`'s real folder: {}",
-        greenfield.stdout
+        anchored.stdout
     );
 }
 
@@ -679,8 +617,8 @@ fn should_deliver_a_well_formed_report_for_the_rust_fixture() {
 }
 
 #[test]
-fn should_deliver_the_anchored_diff_for_the_rust_fixture() {
-    let result = analyze_to_file("rust");
+fn should_deliver_the_anchored_diff_for_the_constellation_fixture() {
+    let result = analyze_to_file("constellation-ts");
     let result_str = result.to_str().unwrap_or_default();
 
     let outcome = run(&["diff", "--input", result_str, "current", "anchored/1"]);
@@ -690,11 +628,15 @@ fn should_deliver_the_anchored_diff_for_the_rust_fixture() {
         outcome.code, 0,
         "diff renders the structural delta and exits 0"
     );
-    // the rust fixture's anchored/1 equals the current layout, so the delta is the
-    // `no moves` sentinel; the exact bytes are owned by the `diff.txt` golden.
-    assert_eq!(
-        outcome.stdout, "no moves\n",
-        "an anchored candidate identical to the current layout is the `no moves` sentinel"
+    assert!(
+        outcome.stdout.starts_with("moves ("),
+        "a genuine anchored candidate renders a non-empty delta: {}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("src/util/canvas.spec.ts"),
+        "the delta identifies the candidate's moved file: {}",
+        outcome.stdout
     );
 }
 
@@ -1207,10 +1149,9 @@ fn should_keep_conditional_splits_empty_for_an_under_cap_scc() {
             );
         }
     }
-    assert!(
-        candidates_seen > 0,
-        "both modes deliver candidates to guard: {}",
-        outcome.stdout
+    assert_eq!(
+        candidates_seen, 0,
+        "the under-cap identity layout has no strictly improving candidate"
     );
 }
 
@@ -1312,11 +1253,8 @@ fn should_gate_when_a_mixed_multi_selector_matches_one_class() {
 }
 
 #[test]
-fn should_render_a_greenfield_candidate_tree_for_the_workspace_fixture() {
-    // workspace-rust is the fixture whose greenfield (mu = 0) regroup produces a real
-    // multi-level tree: the cross-crate files collapse under one cohesive folder, so
-    // a greenfield candidate tree descends the full container hierarchy down to files.
-    let result = analyze_to_file("workspace-rust");
+fn should_render_a_greenfield_candidate_tree_for_the_constellation_fixture() {
+    let result = analyze_to_file("constellation-ts");
     let result_str = result.to_str().unwrap_or_default();
 
     let outcome = run(&[
@@ -1330,15 +1268,15 @@ fn should_render_a_greenfield_candidate_tree_for_the_workspace_fixture() {
     ]);
 
     let _ = std::fs::remove_file(&result);
-    assert_eq!(outcome.code, 0, "a greenfield candidate tree renders");
+    assert_eq!(outcome.code, 0, "the workspace tree renders");
     assert!(
-        outcome.stdout.contains("workspace-rust [packageGroup]"),
-        "the greenfield tree is rooted at the package group: {}",
+        outcome.stdout.contains("constellation-ts [packageGroup]"),
+        "the tree is rooted at the package group: {}",
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("crates/core/src/lib.rs [file]"),
-        "the regrouped files descend to real file leaves: {}",
+        outcome.stdout.contains("src/core/alpha.ts [file]"),
+        "the files descend to real file leaves: {}",
         outcome.stdout
     );
 }
@@ -1370,8 +1308,8 @@ fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("merge — pulled by "),
-        "the merge carries a dependency-pull reason, not a clustering fallback: {}",
+        outcome.stdout.contains("split — pulled by "),
+        "the split carries a dependency-pull reason, not a clustering fallback: {}",
         outcome.stdout
     );
     assert!(
@@ -1388,7 +1326,7 @@ fn should_omit_a_vi_distance_line_for_a_cross_mode_diff() {
     // moves but emits no `vi distance` line — the guard in commands/diff.rs only
     // writes the distance when both references share a mode. Pinned empirically: the
     // cross-mode run carries moves yet never a distance line.
-    let result = analyze_to_file("workspace-rust");
+    let result = analyze_to_file("constellation-ts");
     let result_str = result.to_str().unwrap_or_default();
 
     let outcome = run(&["diff", "--input", result_str, "anchored/1", "greenfield/1"]);
@@ -1411,7 +1349,7 @@ fn should_report_a_vi_distance_line_for_a_same_mode_candidate_pair() {
     // result is grafted from a real one: candidate 1 is cloned as candidate 2
     // and the pairwise matrix expanded — diff consumes saved results, so the
     // contract under test is the reader/renderer, not the clusterer's yield.
-    let result = analyze_to_file("python");
+    let result = analyze_to_file("constellation-ts");
     let result_str = result.to_str().unwrap_or_default();
     let contents = std::fs::read_to_string(&result).unwrap_or_default();
     let mut parsed: serde_json::Value =
@@ -1481,12 +1419,12 @@ fn should_report_no_moves_for_a_self_diff() {
 }
 
 #[test]
-fn should_truncate_the_workspace_tree_at_each_requested_depth() {
+fn should_truncate_a_candidate_tree_at_each_requested_depth() {
     // depth truncates at container depth (root is depth 0): depth 0 prints only the
     // root, depth 1 adds its single child level, and a depth past the tree height is
-    // a no-op that renders the full hierarchy. workspace-rust has a genuine multi-
-    // level tree, so the truncation is observable rather than vacuous.
-    let result = analyze_to_file("workspace-rust");
+    // a no-op that renders the full hierarchy. constellation-ts has a genuine,
+    // strictly improving candidate, so the truncation is observable rather than vacuous.
+    let result = analyze_to_file("constellation-ts");
     let result_str = result.to_str().unwrap_or_default();
     let base = [
         "tree",
@@ -1516,16 +1454,15 @@ fn should_truncate_the_workspace_tree_at_each_requested_depth() {
     assert_eq!(full.code, 0, "the untruncated tree renders");
     // depth 0 is the root line alone.
     assert_eq!(
-        at_zero.stdout, "workspace-rust [packageGroup]\n",
+        at_zero.stdout, "constellation-ts [packageGroup]\n",
         "depth 0 prints only the root container"
     );
     // depth 1 adds exactly the next container level and no deeper. The
-    // package containers render under their real qualified keys — one per
-    // crate directory (`crates/app`, `crates/core`, `crates/util`) — and no
-    // domain level survives the cut.
+    // the package container renders directly below its group and no folder
+    // level survives the cut.
     assert!(
-        at_one.stdout.contains("crates/app [package]") && !at_one.stdout.contains("[domain]"),
-        "depth 1 stops one level below the root at the real package keys: {}",
+        at_one.stdout.contains("constellation-ts [package]") && !at_one.stdout.contains("[folder]"),
+        "depth 1 stops one level below the root at the package: {}",
         at_one.stdout
     );
     // a depth past the tree height is a no-op equal to the untruncated render.
@@ -1948,7 +1885,7 @@ fn should_score_greenfield_candidates_identically_across_renames() {
             "--mode",
             "greenfield",
             "--format",
-            "summary",
+            "json",
         ])
     };
 
@@ -1957,20 +1894,30 @@ fn should_score_greenfield_candidates_identically_across_renames() {
 
     assert_eq!(a.code, 0, "rename-a analyzes clean");
     assert_eq!(b.code, 0, "rename-b analyzes clean");
-    let score_a = candidate_one_score(&a.stdout);
-    let score_b = candidate_one_score(&b.stdout);
+    let parsed_a: serde_json::Value = serde_json::from_str(&a.stdout).unwrap_or_default();
+    let parsed_b: serde_json::Value = serde_json::from_str(&b.stdout).unwrap_or_default();
+    let score_a = parsed_a
+        .pointer("/profiles/greenfield/current/score")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(f64::NAN);
+    let score_b = parsed_b
+        .pointer("/profiles/greenfield/current/score")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(f64::NAN);
     assert!(
         (score_a - score_b).abs() < 1e-9,
         "greenfield scores are rename-invariant: {score_a} vs {score_b}"
     );
     assert!(
-        a.stdout
-            .contains("no change suggested — candidate 1 matches today's layout")
-            && b.stdout
-                .contains("no change suggested — candidate 1 matches today's layout"),
-        "both propose the same empty move set: {} / {}",
-        a.stdout,
-        b.stdout
+        parsed_a
+            .pointer("/profiles/greenfield/candidates")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(Vec::is_empty)
+            && parsed_b
+                .pointer("/profiles/greenfield/candidates")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(Vec::is_empty),
+        "neither renamed identity layout invents a candidate"
     );
 }
 
@@ -2110,8 +2057,8 @@ fn should_list_available_candidates_when_no_selector_is_given() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("1 (score "),
-        "the listing carries candidate headlines: {}",
+        !outcome.stdout.contains("1 (score "),
+        "the listing invents no candidate headlines: {}",
         outcome.stdout
     );
 }
@@ -2211,30 +2158,38 @@ fn should_render_every_symbol_exactly_once_with_tree_symbols() {
         assert!(symbols > 0, "{name} carries a symbol census");
 
         let current = run(&["tree", "--input", result_str, "--current", "--symbols"]);
-        let candidate = run(&[
-            "tree",
-            "--input",
-            result_str,
-            "--mode",
-            "anchored",
-            "--candidate",
-            "1",
-            "--symbols",
-        ]);
+        let has_candidate = parsed
+            .pointer("/profiles/anchored/candidates")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|candidates| !candidates.is_empty());
+        let candidate = has_candidate.then(|| {
+            run(&[
+                "tree",
+                "--input",
+                result_str,
+                "--mode",
+                "anchored",
+                "--candidate",
+                "1",
+                "--symbols",
+            ])
+        });
 
         let _ = std::fs::remove_file(&result);
         assert_eq!(current.code, 0, "{name} current tree renders");
-        assert_eq!(candidate.code, 0, "{name} candidate tree renders");
         assert_eq!(
             symbol_line_count(&current.stdout),
             symbols,
             "{name}'s current tree renders each symbol exactly once"
         );
-        assert_eq!(
-            symbol_line_count(&candidate.stdout),
-            symbols,
-            "{name}'s candidate tree renders each symbol exactly once"
-        );
+        if let Some(candidate) = candidate {
+            assert_eq!(candidate.code, 0, "{name} candidate tree renders");
+            assert_eq!(
+                symbol_line_count(&candidate.stdout),
+                symbols,
+                "{name}'s candidate tree renders each symbol exactly once"
+            );
+        }
     }
 }
 
@@ -2389,10 +2344,11 @@ fn should_report_improvement_as_current_score_minus_score_in_every_mode() {
 }
 
 #[test]
-fn should_emit_the_identity_candidate_when_the_current_layout_is_optimal() {
-    // when the cap-clean current layout wins the anchored pool, candidate 1 IS
-    // the current tree: byte-equal JSON, an empty move list, and the summary
-    // face says so instead of proposing churn.
+fn should_emit_no_candidate_when_the_current_layout_is_optimal() {
+    // A candidate must strictly improve on the profile baseline. When the
+    // cap-clean current layout is already optimal, the candidate list is empty
+    // and the summary recommends keeping the current tree without inventing an
+    // identity proposal.
     let root = fixture("python");
     let root_str = root.to_str().unwrap_or_default();
 
@@ -2428,25 +2384,21 @@ fn should_emit_the_identity_candidate_when_the_current_layout_is_optimal() {
         json.stdout
     );
     assert_eq!(
-        parsed.pointer("/profiles/anchored/candidates/0/tree"),
-        parsed.pointer("/current/tree"),
-        "candidate 1 is the current tree verbatim"
-    );
-    assert_eq!(
-        parsed.pointer("/profiles/anchored/candidates/0/deltaNarration"),
-        Some(&serde_json::json!([])),
-        "the identity candidate narrates no moves"
+        parsed
+            .pointer("/profiles/anchored/candidates")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "an optimal baseline has no strictly improving anchored candidate"
     );
     assert!(
-        summary
-            .stdout
-            .contains("no change suggested — candidate 1 matches today's layout"),
-        "the report face announces the identity plan honestly: {}",
+        summary.stdout.contains("no candidate this run produced"),
+        "the report face announces the empty candidate set honestly: {}",
         summary.stdout
     );
     assert!(
         summary.stdout.contains(
-            "keep the current layout — the run's best candidate is today's tree unchanged."
+            "keep the current layout — the run produced no candidate to weigh against it."
         ),
         "the recommendation keeps the optimal layout: {}",
         summary.stdout
@@ -2516,12 +2468,31 @@ fn should_render_folded_paths_with_no_duplicated_segments() {
     for name in ["nested-ts", "nested-python", "workspace-rust"] {
         let result = analyze_to_file(name);
         let result_str = result.to_str().unwrap_or_default();
-
-        let anchored = run(&["diff", "--input", result_str, "current", "anchored/1"]);
-        let greenfield = run(&["diff", "--input", result_str, "current", "greenfield/1"]);
+        let json = std::fs::read_to_string(&result).unwrap_or_default();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+        let diff = |mode: &str| {
+            parsed
+                .pointer(&format!("/profiles/{mode}/candidates"))
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|candidates| !candidates.is_empty())
+                .then(|| {
+                    run(&[
+                        "diff",
+                        "--input",
+                        result_str,
+                        "current",
+                        &format!("{mode}/1"),
+                    ])
+                })
+        };
+        let anchored = diff("anchored");
+        let greenfield = diff("greenfield");
 
         let _ = std::fs::remove_file(&result);
-        for (mode, outcome) in [("anchored", &anchored), ("greenfield", &greenfield)] {
+        for (mode, outcome) in [("anchored", anchored), ("greenfield", greenfield)] {
+            let Some(outcome) = outcome else {
+                continue;
+            };
             assert_eq!(outcome.code, 0, "{name} {mode} diff renders");
             for duplicated in ["src/src", "tests/tests", "__tests__/__tests__"] {
                 assert!(
@@ -2648,15 +2619,19 @@ fn should_home_a_test_heavy_cluster_under_its_production_directory() {
     assert_eq!(outcome.code, 0, "analyze exits 0");
     let parsed: serde_json::Value =
         serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
-    let tree = parsed
+    let candidate_tree = parsed
         .pointer("/profiles/greenfield/candidates/0/tree")
+        .cloned();
+    let tree = candidate_tree
+        .as_ref()
+        .or_else(|| parsed.pointer("/current/tree"))
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     let mut trail = Vec::new();
     let ancestors = ancestors_of(&tree, "src/adapters/anthropic/client.ts", &mut trail);
     assert!(
         ancestors.is_some(),
-        "client.ts is missing from the best greenfield candidate: {tree}"
+        "client.ts is missing from both the current tree and best greenfield candidate: {tree}"
     );
     let ancestors = ancestors.unwrap_or_default();
     let has_spec_ancestor = ancestors
@@ -2667,6 +2642,17 @@ fn should_home_a_test_heavy_cluster_under_its_production_directory() {
         !has_spec_ancestor,
         "the production file sits under a spec-named ancestor: {ancestors:?}"
     );
+
+    if candidate_tree.is_none() {
+        let candidates = parsed
+            .pointer("/profiles/greenfield/candidates")
+            .and_then(serde_json::Value::as_array);
+        assert_eq!(
+            candidates.map(Vec::len),
+            Some(0),
+            "absence means no strictly improving greenfield candidate"
+        );
+    }
 }
 
 #[test]
@@ -2745,15 +2731,7 @@ fn should_render_incremental_container_names_in_the_tree_face() {
     let result = analyze_to_file("nested-ts");
     let result_str = result.to_str().unwrap_or_default();
 
-    let outcome = run(&[
-        "tree",
-        "--input",
-        result_str,
-        "--mode",
-        "anchored",
-        "--candidate",
-        "1",
-    ]);
+    let outcome = run(&["tree", "--input", result_str, "--current"]);
 
     let _ = std::fs::remove_file(&result);
     assert_eq!(outcome.code, 0, "the candidate tree renders");
@@ -2961,7 +2939,6 @@ fn should_populate_conditional_splits_for_an_over_cap_scc() {
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
-        assert!(!candidates.is_empty(), "{mode} delivers candidates");
         for candidate in &candidates {
             let splits = candidate
                 .get("conditionalSplits")
@@ -2983,6 +2960,10 @@ fn should_populate_conditional_splits_for_an_over_cap_scc() {
                 "{mode} split ceil-packs the scc into two files"
             );
         }
+        assert!(
+            candidates.is_empty(),
+            "the oversized identity layout has no strictly improving {mode} candidate"
+        );
     }
 }
 
@@ -3037,7 +3018,7 @@ fn should_outscore_the_current_layout_on_the_constellation_fixture() {
                 .and_then(serde_json::Value::as_f64)
                 .unwrap_or(f64::NAN);
             assert!(
-                improvement >= 0.0,
+                improvement > 0.0,
                 "{mode} candidate improves on the current layout: {improvement}"
             );
             assert!(

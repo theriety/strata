@@ -14,7 +14,7 @@
 
 use strata_engine::config::AnalyzeConfig;
 use strata_engine::{analyze, snapshot_from_root};
-use strata_eval::{e2e_fixture_root, eval_fixture_root, harness, load_target};
+use strata_eval::{EvalError, e2e_fixture_root, eval_fixture_root, harness, load_target};
 
 /// The compile-time-checked case table: every committed target paired with the
 /// designed defect its distance is measured against.
@@ -102,6 +102,57 @@ fn inversion_witnesses_anchored_inversion() {
     assert_best_state("inversion");
 }
 
+#[test]
+fn zero_candidate_best_state_evaluates_the_current_tree() -> Result<(), EvalError> {
+    let spec = load_target("inversion")?;
+    let report = harness::run_case(&eval_fixture_root("inversion"), &spec, "inversion")?;
+
+    assert!(
+        report.errors.is_empty(),
+        "zero-candidate best state must not abort: {:?}",
+        report.errors
+    );
+    assert!(
+        report
+            .observations
+            .iter()
+            .all(|observation| observation.candidates == 0),
+        "the regression requires both parameter profiles to return no alternative"
+    );
+    assert!(
+        report.verdicts.iter().all(|verdict| verdict.passed),
+        "the current tree is the defended best state: {:?}",
+        report.verdicts
+    );
+    Ok(())
+}
+
+#[test]
+fn zero_candidate_result_does_not_fabricate_later_alternatives() -> Result<(), EvalError> {
+    let mut spec = load_target("inversion")?;
+    let Some(assertion) = spec.assert.first_mut() else {
+        return Err(EvalError::TargetInvalid {
+            target: "inversion".to_owned(),
+            message: "the committed target has no assertion block".to_owned(),
+        });
+    };
+    assertion.candidate = 2;
+
+    match harness::run_case(&eval_fixture_root("inversion"), &spec, "inversion") {
+        Ok(_) => {
+            return Err(EvalError::TargetInvalid {
+                target: "inversion".to_owned(),
+                message: "candidate 2 was fabricated from an empty alternative set".to_owned(),
+            });
+        }
+        Err(error) => assert!(
+            error.to_string().contains("candidate 2 requested"),
+            "the error must identify the unavailable alternative: {error}"
+        ),
+    }
+    Ok(())
+}
+
 /// RED AS DESIGNED: green when container names align with their members.
 #[test]
 fn naming_drift_witnesses_naming_incoherence() {
@@ -180,7 +231,8 @@ fn smoke_typescript_fixture_analyzes_in_process() {
 }
 
 /// Drives `snapshot_from_root` + `analyze` directly — no CLI subprocess — and
-/// asserts only sanity: files found, both faces produced candidates.
+/// asserts only sanity: files found, both faces produced results, and any
+/// alternatives returned are strict improvements over their own baselines.
 fn analyze_e2e_smoke(fixture_name: &str) {
     let config = AnalyzeConfig::default();
     let root = e2e_fixture_root(fixture_name);
@@ -194,21 +246,22 @@ fn analyze_e2e_smoke(fixture_name: &str) {
                 if result.summary.files == 0 {
                     problems.push("found no files".to_owned());
                 }
-                if result
-                    .profiles
-                    .anchored
-                    .as_ref()
-                    .is_none_or(|mode| mode.candidates.is_empty())
-                {
-                    problems.push("anchored produced no candidate".to_owned());
-                }
-                if result
-                    .profiles
-                    .greenfield
-                    .as_ref()
-                    .is_none_or(|mode| mode.candidates.is_empty())
-                {
-                    problems.push("greenfield produced no candidate".to_owned());
+                for (name, profile) in [
+                    ("anchored", result.profiles.anchored.as_ref()),
+                    ("greenfield", result.profiles.greenfield.as_ref()),
+                ] {
+                    match profile {
+                        None => problems.push(format!("{name} produced no profile result")),
+                        Some(profile)
+                            if profile
+                                .candidates
+                                .iter()
+                                .any(|candidate| candidate.improvement <= 0.0) =>
+                        {
+                            problems.push(format!("{name} returned a non-improving alternative"));
+                        }
+                        Some(_) => {}
+                    }
                 }
             }
         },

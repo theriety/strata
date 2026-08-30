@@ -42,12 +42,6 @@ _Fewer than the requested candidates survived; the solution space converged._
 
 _Current layout is already optimal; candidate 1 is the current tree._
 
-### Candidate 1 (improvement `+0.0000`, score `0.3844`)
-
-- cut `0.3170`, imbalance `0.2790`, naming `-0.0115`, path `-0.2000`, anchor `0.0000`
-
-No moves versus the current layout.
-
 ## Greenfield parameter profile
 
 ### Effective parameters

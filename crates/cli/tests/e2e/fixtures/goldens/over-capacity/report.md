@@ -27,7 +27,7 @@ diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
 ```
 
-Current score `-0.1905`.
+Current score `1.4095`.
 
 - cut `0.0000`, imbalance `0.0095`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
 
@@ -41,15 +41,7 @@ None.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-_Current layout violates capacity caps; best candidate resolves 0 of 2 capacity finding(s)._
-
-_2 file-level breach(es) exceed the file cap; only conditional splits can fix them._
-
-### Candidate 1 (improvement `+0.0000`, score `-0.1905`)
-
-- cut `0.0000`, imbalance `0.0095`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`
-
-No moves versus the current layout.
+_Current layout violates capacity caps._
 
 ## Greenfield parameter profile
 
@@ -67,7 +59,7 @@ diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
 ```
 
-Current score `0.0095`.
+Current score `1.6095`.
 
 - cut `0.0000`, imbalance `0.0095`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
 
@@ -81,13 +73,5 @@ None.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-_Current layout violates capacity caps; best candidate resolves 0 of 2 capacity finding(s)._
-
-_2 file-level breach(es) exceed the file cap; only conditional splits can fix them._
-
-### Candidate 1 (improvement `+0.0000`, score `0.0095`)
-
-- cut `0.0000`, imbalance `0.0095`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`
-
-No moves versus the current layout.
+_Current layout violates capacity caps._
 

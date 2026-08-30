@@ -183,16 +183,24 @@ fn assert_golden(name: &str, file: &str, actual: &[u8]) {
 fn assert_goldens(name: &str) {
     let result_path = analyze_to_file(name);
     let result_str = result_path.to_str().unwrap_or_default();
+    let result_json = std::fs::read_to_string(&result_path).unwrap_or_default();
+    let parsed: serde_json::Value = serde_json::from_str(&result_json).unwrap_or_default();
+    let anchored_candidate_exists = parsed
+        .pointer("/profiles/anchored/candidates")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|candidates| !candidates.is_empty());
 
     let (tree_code, tree_out) =
         run_strata(&["tree", "--input", result_str, "--current", "--symbols"]);
     assert_eq!(tree_code, 0, "tree exits 0 for {name}");
     assert_golden(name, "tree.txt", &tree_out);
 
-    let (diff_code, diff_out) =
-        run_strata(&["diff", "--input", result_str, "current", "anchored/1"]);
-    assert_eq!(diff_code, 0, "diff exits 0 for {name}");
-    assert_golden(name, "diff.txt", &diff_out);
+    if anchored_candidate_exists {
+        let (diff_code, diff_out) =
+            run_strata(&["diff", "--input", result_str, "current", "anchored/1"]);
+        assert_eq!(diff_code, 0, "candidate diff exits 0 for {name}");
+        assert_golden(name, "diff.txt", &diff_out);
+    }
 
     let root = fixture(name);
     let root_str = root.to_str().unwrap_or_default();

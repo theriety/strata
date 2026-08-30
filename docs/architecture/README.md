@@ -15,3 +15,4 @@ departed from spec.
 | [ADR-0006](decisions/0006-symbol-destination-guardrails.md) | Symbol destinations obey pass-start guardrails | Accepted |
 | [ADR-0008](decisions/0008-physical-layout-governs-relocation-and-capacity.md) | Physical layout governs relocation and capacity | Accepted |
 | [ADR-0009](decisions/0009-complete-analysis-parameter-profiles.md) | Complete analysis parameter profiles | Accepted |
+| [ADR-0010](decisions/0010-recommendation-integrity.md) | Recommendations require structural and scoring integrity | Accepted |

@@ -239,7 +239,8 @@ fn find_package_node<'a>(node: &'a ContainerNode, name: &str) -> Option<&'a Cont
 /// # Errors
 ///
 /// Returns [`EvalError`] when the case aborts before its verdicts are
-/// meaningful: invalid target, unreadable fixture, missing candidate.
+/// meaningful: invalid target, unreadable fixture, or an unavailable
+/// alternative beyond the current best state.
 pub fn run_case(
     root: &Path,
     spec: &TargetSpec,
@@ -460,20 +461,30 @@ fn build_inputs<'a>(
             Ok(index) => mode_result.candidates.get(index),
             Err(_) => None,
         };
-        let candidate = candidate.ok_or_else(|| {
-            fail(format!(
-                "candidate {} requested but the {face:?} mode returned {} candidates",
-                block.candidate,
-                mode_result.candidates.len()
-            ))
-        })?;
+        let (tree, capacity_remaining) = match candidate {
+            Some(candidate) => (
+                &candidate.tree,
+                candidate
+                    .capacity_remainder
+                    .map(|remainder| remainder.remaining),
+            ),
+            None if block.candidate == 1 && mode_result.candidates.is_empty() => (
+                &result.current.tree,
+                Some(mode_result.current.capacity_breaks),
+            ),
+            None => {
+                return Err(fail(format!(
+                    "candidate {} requested but the {face:?} mode returned {} candidates",
+                    block.candidate,
+                    mode_result.candidates.len()
+                )));
+            }
+        };
         faces.insert(
             face,
             FaceInputs {
-                tree: &candidate.tree,
-                capacity_remaining: candidate
-                    .capacity_remainder
-                    .map(|remainder| remainder.remaining),
+                tree,
+                capacity_remaining,
             },
         );
     }

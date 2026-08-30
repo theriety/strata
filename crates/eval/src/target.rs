@@ -220,7 +220,8 @@ pub struct AssertBlock {
     /// own `mode key.
     #[serde(default)]
     pub modes: Vec<FaceMode>,
-    /// 1-based candidate index the assertions read; 1 is best-scoring.
+    /// 1-based state index the assertions read; 1 is the best returned
+    /// alternative, or the current tree when no improving alternative exists.
     #[serde(default = "default_candidate")]
     pub candidate: u32,
     /// Real directories that must survive as named containers.

@@ -4,7 +4,7 @@
 --------------------------------------------------------------------------------
  reading rules
 --------------------------------------------------------------------------------
- scores    : four decimals, lower is better            1.4728 → 1.2250
+ scores    : four decimals, lower is better            0.6728 → 0.4250
  gain      : improvement over that parameter profile's own starting point, measured in
              the same units as the score              +0.2478
  profiles  : anchored and greenfield are complete parameter profiles; by default
@@ -54,12 +54,12 @@
    diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
    tests     helper-cap 250 · patterns 0 · builtins true
 
- candidate 1   anchored/1     score  1.2250   gain +0.2478   best score
- candidate 2   greenfield/1   score  0.8250   gain +0.8478   same shape, own baseline
+ candidate 1   anchored/1     score  0.4250   gain +0.2478   best score
+ candidate 2   greenfield/1   score  0.0250   gain +0.8478   same shape, own baseline
 
  comparability: these two gains have different starting points — anchored prices the current tree
-                 at 1.4728 using its effective coefficients; greenfield prices the same tree at
-                 1.6728 using its own effective coefficients. Each gain is measured against its own
+                 at 0.6728 using its effective coefficients; greenfield prices the same tree at
+                 0.8728 using its own effective coefficients. Each gain is measured against its own
                  parameter profile's baseline — never compare across parameter profiles.
 
  note  fewer than the requested candidates survived; the solution space converged.
@@ -134,8 +134,8 @@
  naming             -0.0522        -0.1000        -0.0478
  path               -0.2000        -0.1000        +0.1000
  anchor              0.0000         0.5000        +0.5000
- capacity            1.6000         0.8000        -0.8000
- score               1.4728         1.2250        -0.2478   (gain +0.2478)
+ capacity            0.8000         0.0000        -0.8000
+ score               0.6728         0.4250        -0.2478   (gain +0.2478)
 
  the terms combine into the total score; lower is better.
 
@@ -147,8 +147,8 @@
 ================================================================================
  §6  Recommendation
 ================================================================================
- adopt      candidate 1 — 1.2250, gain +0.2478, 1 changes relocating 12 files (§2).
- second     greenfield reaches the same grouping — 0.8250, gain +0.8478 against its own 1.6728
+ adopt      candidate 1 — 0.4250, gain +0.2478, 1 changes relocating 12 files (§2).
+ second     greenfield reaches the same grouping — 0.0250, gain +0.8478 against its own 0.8728
             baseline; decide between the two by intent, never across baselines.
  keep       not offered — both parameter profiles mark today's layout infeasible under their own
             caps (§4).

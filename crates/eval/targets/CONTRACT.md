@@ -65,11 +65,16 @@ harness grows a runner, pin that warning-and-defaults behavior with a
 precondition or add an explicit defaults flag.
 
 That JSON is the engine's `AnalyzeResult` DTO (`crates/engine/src/result.rs`,
-camelCase). The harness evaluates preconditions against `current`, assertions
-against `modes.<mode>.candidates[<candidate>-1]` for each mode listed under
-`[assert]` (unless an assertion names its own mode), and pair-F1 against the
-optional reference tree. A precondition failure means the harness or fixture is
-broken — report it as an error, never as distance.
+camelCase). The harness evaluates preconditions against `current`. Assertions
+normally read `profiles.<profile>.candidates[<candidate>-1]` for each profile
+listed under `[assert]` (unless an assertion names its own profile). When a
+profile returns no improving candidates, `candidate = 1` reads the current tree
+as that profile's best state and uses its current hard-capacity count. This does
+not fabricate a candidate: diversity observations still report zero
+alternatives, and requesting candidate 2 or later remains an error. Pair-F1
+reads the same asserted state against the optional reference tree. A
+precondition failure means the harness or fixture is broken — report it as an
+error, never as distance.
 
 Naming facts the harness relies on (from `crates/engine/src/analyze.rs` and
 `crates/ir/src/laminar.rs`):
@@ -168,10 +173,10 @@ violation = "capacity"
 location_suffix = "hub"
 because = "hub holds 24 files against the default folder cap of 20"
 
-# --- assertions: evaluated per mode on modes.<m>.candidates[candidate-1] -------
+# --- assertions: evaluated per profile on its selected best state -------------
 [assert]
 modes = ["anchored", "greenfield"]   # modes whose best candidate must satisfy them
-candidate = 1                        # 1-based; 1 = best-scoring
+candidate = 1                        # 1 = best alternative, or current when none improve
 
 # The directory survives as a named container. `path` is a container key in
 # the post-strip, package-relative form above, while fixture files are

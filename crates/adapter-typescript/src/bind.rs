@@ -557,10 +557,22 @@ fn apply_polarity(nodes: &mut [Node], polarity: &[Polarity]) {
 
 /// Returns `true` if `path` is a test file by convention.
 fn is_test_path(path: &str) -> bool {
-    path.contains(".spec.ts")
-        || path.contains(".test.ts")
-        || path.contains("__tests__/")
-        || path.contains("/__tests__/")
+    if path.split('/').any(|segment| segment == "__tests__") {
+        return true;
+    }
+
+    let Some(stem) = path
+        .strip_suffix(".tsx")
+        .or_else(|| path.strip_suffix(".ts"))
+    else {
+        return false;
+    };
+    let file_name = stem.rsplit('/').next().unwrap_or(stem);
+
+    file_name
+        .split('.')
+        .skip(1)
+        .any(|segment| matches!(segment, "spec" | "test"))
 }
 
 /// Resolves module specifiers to canonical module paths.
@@ -1169,6 +1181,15 @@ mod tests {
         assert!(is_test_path("src/app.test.ts"));
         assert!(is_test_path("src/__tests__/support.ts"));
         assert!(!is_test_path("src/app.ts"));
+    }
+
+    #[test]
+    fn should_recognize_qualified_test_paths_without_matching_words() {
+        assert!(is_test_path("src/worker.spec.int.ts"));
+        assert!(is_test_path("src/worker.test.integration.ts"));
+        assert!(is_test_path("src/worker.spec.browser.tsx"));
+        assert!(!is_test_path("src/specification.ts"));
+        assert!(!is_test_path("src/worker.testable.tsx"));
     }
 
     #[test]

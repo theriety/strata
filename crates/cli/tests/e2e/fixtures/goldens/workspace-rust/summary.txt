@@ -4,9 +4,9 @@
 --------------------------------------------------------------------------------
  reading rules
 --------------------------------------------------------------------------------
- scores    : four decimals, lower is better            0.6810 → 0.6810
+ scores    : four decimals, lower is better
  gain      : improvement over that parameter profile's own starting point, measured in
-             the same units as the score              +0.0000
+             the same units as the score
  profiles  : anchored and greenfield are complete parameter profiles; by default
              anchored prices path and anchor terms while greenfield sets them to zero
  leaf      : one relocatable unit — a source file plus the symbols it
@@ -34,7 +34,7 @@
 ================================================================================
  §1  The candidates this run produced
 ================================================================================
- candidate count : 2  (anchored profile returned 1 · greenfield profile returned 1)
+ candidate count : 0  (anchored profile returned 0 · greenfield profile returned 0)
  anchored parameter profile (effective):
    search    candidates 3 · seed 42
    capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
@@ -54,25 +54,21 @@
    diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
    tests     helper-cap 250 · patterns 0 · builtins true
 
- candidate 1   anchored/1     score  0.6810   gain +0.0000   best score
- candidate 2   greenfield/1   score  0.8810   gain +0.0000   same shape, own baseline
 
- comparability: these two gains have different starting points — anchored prices the current tree
-                 at 0.6810 using its effective coefficients; greenfield prices the same tree at
-                 0.8810 using its own effective coefficients. Each gain is measured against its own
-                 parameter profile's baseline — never compare across parameter profiles.
+ comparability: neither parameter profile produced a candidate, so there are no score changes to
+                 compare.
 
  note  fewer than the requested candidates survived; the solution space converged.
 
 ================================================================================
- §2  What would change — candidate 1 (anchored)
+ §2  What would change — no candidate this run produced
 ================================================================================
-no change suggested — candidate 1 matches today's layout, file for file.
+no candidate this run produced — nothing to change.
 
 ================================================================================
  §3  Blast radius — changed containers only
 ================================================================================
-nothing relocates — every container keeps its files.
+no candidate this run produced — nothing relocates.
 
 ================================================================================
  §4  Findings this run raised
@@ -98,26 +94,14 @@ nothing relocates — every container keeps its files.
  none
 
 ================================================================================
- §5  Score delta — current → candidate 1
+ §5  Score delta — no candidate this run produced
 ================================================================================
- term               current       proposal    delta
- cut                 0.8756         0.8756        +0.0000
- imbalance           0.0054         0.0054        +0.0000
- naming             -0.0000        -0.0000        +0.0000
- path               -0.2000        -0.2000        +0.0000
- anchor              0.0000         0.0000        +0.0000
- score               0.6810         0.6810        +0.0000   (gain +0.0000)
-
- the five terms combine into the total score; lower is better.
-
- term gloss  cut = import connections broken by moving · imbalance = lopsided folder sizes · naming
-             = folder names fit their contents · path = how far things travel · anchor = credit for
-             respecting existing well-placed code
+ no candidate this run produced.
 
 ================================================================================
  §6  Recommendation
 ================================================================================
- keep       keep the current layout — the run's best candidate is today's tree unchanged.
+ keep       keep the current layout — the run produced no candidate to weigh against it.
  in part    partial plans are not rescored; apply §2 in its given order, one change at a time.
 
 ================================================================================
