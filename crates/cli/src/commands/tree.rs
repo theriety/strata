@@ -153,6 +153,7 @@ mod tests {
             naming: 0.0,
             path: 0.0,
             anchor: 0.0,
+            dependency_only: 0.0,
             capacity: 0.0,
         }
     }

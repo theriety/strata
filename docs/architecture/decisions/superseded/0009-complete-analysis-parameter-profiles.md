@@ -1,3 +1,9 @@
+> **Status:** Superseded
+>
+> **Superseded by:** [ADR-0011 — Relocation ownership and dependency-only scoring](../0011-relocation-ownership-scoring.md)
+>
+> **What changed:** Partial change: analysis results advance from schema version 4 to version 5 so profile scoring can carry the dependency-only objective term.
+
 # ADR-0009: Complete analysis parameter profiles
 
 - Status: `Accepted`

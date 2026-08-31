@@ -918,9 +918,17 @@ fn score_current_with_affinity(
         .iter()
         .map(|node| (node.id.0, node.container))
         .collect();
+    let pass_start_file_by_candidate: BTreeMap<ContainerId, ContainerId> = ir
+        .containers
+        .containers()
+        .iter()
+        .filter(|container| container.level == ScopeLevel::File)
+        .map(|container| (container.id, container.id))
+        .collect();
     let candidate = score_candidate(
         snapshot,
         &|id| container_of.get(&id).copied(),
+        &pass_start_file_by_candidate,
         &ir.containers,
         &namespaces,
         0.0,
@@ -1708,6 +1716,7 @@ impl<'a> PipelineSolver<'a> {
         let candidate = score_candidate(
             self.snapshot,
             &placement,
+            &assembled.pass_start_file_by_candidate,
             &assembled.tree,
             &assembled.namespace_by_file,
             distance,
@@ -2254,6 +2263,7 @@ impl<'a> PipelineSolver<'a> {
             return CandidateTree {
                 tree: ContainerTree::new(vec![root]),
                 placement: BTreeMap::new(),
+                pass_start_file_by_candidate: BTreeMap::new(),
                 zone_by_file: BTreeMap::new(),
                 namespace_by_file: BTreeMap::new(),
                 key_by_id: BTreeMap::new(),
@@ -2358,6 +2368,7 @@ impl<'a> PipelineSolver<'a> {
         let mut file_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
         let mut zone_by_file: BTreeMap<ContainerId, bool> = BTreeMap::new();
         let mut namespace_by_file: BTreeMap<ContainerId, SmolStr> = BTreeMap::new();
+        let mut pass_start_file_by_candidate: BTreeMap<ContainerId, ContainerId> = BTreeMap::new();
         for (&folder, members) in members_of {
             let Some(&(domain, _, _)) = chain_of.get(&folder) else {
                 continue;
@@ -2396,6 +2407,7 @@ impl<'a> PipelineSolver<'a> {
                     synthetic: false,
                 });
                 file_ids.insert(vertex, id);
+                pass_start_file_by_candidate.insert(id, ContainerId(file.container));
                 namespace_by_file.insert(id, file.namespace.clone());
                 zone_by_file.insert(
                     id,
@@ -2410,6 +2422,7 @@ impl<'a> PipelineSolver<'a> {
         CandidateTree {
             tree: ContainerTree::new(arena.containers),
             placement: self.placements(&file_ids),
+            pass_start_file_by_candidate,
             zone_by_file,
             namespace_by_file,
             key_by_id,
@@ -2675,6 +2688,7 @@ impl<'a> PipelineSolver<'a> {
             &score_candidate(
                 self.snapshot,
                 &merged,
+                &assembled.pass_start_file_by_candidate,
                 &assembled.tree,
                 &assembled.namespace_by_file,
                 distance,
@@ -2881,6 +2895,10 @@ struct CandidateTree {
     tree: ContainerTree,
     /// The file container each symbol node lands in, keyed by node id.
     placement: BTreeMap<u32, ContainerId>,
+    /// Pass-start identity of every freshly interned candidate file. This keeps
+    /// a whole file's folder relocation distinct from a declaration changing
+    /// files inside that candidate tree.
+    pass_start_file_by_candidate: BTreeMap<ContainerId, ContainerId>,
     /// Whether each candidate file sits inside the test zone (FIX11). Candidate
     /// file ids are fresh arena ids, so the file graph's vertex-parallel zone
     /// marks cannot be consulted directly at symbol grain — they ride here,
@@ -4569,6 +4587,7 @@ impl CycleCounts {
 fn score_candidate(
     snapshot: &Snapshot,
     placement: &dyn Fn(u32) -> Option<ContainerId>,
+    pass_start_file_by_candidate: &BTreeMap<ContainerId, ContainerId>,
     tree: &ContainerTree,
     namespaces: &BTreeMap<ContainerId, SmolStr>,
     move_distance: f64,
@@ -4626,6 +4645,8 @@ fn score_candidate(
     let containers = container_sizes(snapshot, placement, tree);
     let (cohesion_groups, path_cohesion) = cohesion_inputs(snapshot, placement, tree);
     let capacity_pressure = capacity_pressure(snapshot, placement, tree, namespaces, capacity);
+    let dependency_only_relocations =
+        dependency_only_relocations(snapshot, placement, pass_start_file_by_candidate);
 
     ScoreCandidate {
         edges,
@@ -4634,7 +4655,70 @@ fn score_candidate(
         path_cohesion,
         move_distance,
         capacity_pressure,
+        dependency_only_relocations,
     }
+}
+
+/// Counts production declarations that leave their pass-start file for a file
+/// holding one of their dependencies but none of their consumers. Candidate
+/// file ids are mapped back to immutable file identity so moving a whole file
+/// between folders contributes zero.
+fn dependency_only_relocations(
+    snapshot: &Snapshot,
+    placement: &dyn Fn(u32) -> Option<ContainerId>,
+    pass_start_file_by_candidate: &BTreeMap<ContainerId, ContainerId>,
+) -> u32 {
+    let ir = snapshot.ir();
+    let nodes: BTreeMap<u32, &Node> = ir.nodes.iter().map(|node| (node.id.0, node)).collect();
+    let mut outgoing_files: BTreeMap<u32, BTreeSet<ContainerId>> = BTreeMap::new();
+    let mut incoming_files: BTreeMap<u32, BTreeSet<ContainerId>> = BTreeMap::new();
+    for edge in &ir.edges {
+        if edge.source == edge.target {
+            continue;
+        }
+        let (Some(source), Some(target)) = (nodes.get(&edge.source.0), nodes.get(&edge.target.0))
+        else {
+            continue;
+        };
+        outgoing_files
+            .entry(edge.source.0)
+            .or_default()
+            .insert(target.container);
+        incoming_files
+            .entry(edge.target.0)
+            .or_default()
+            .insert(source.container);
+    }
+
+    ir.nodes
+        .iter()
+        .filter(|node| {
+            node.polarity == Polarity::Production
+                && matches!(node.kind, NodeKind::Symbol | NodeKind::Type)
+        })
+        .filter(|node| {
+            let Some(candidate_file) = placement(node.id.0) else {
+                return false;
+            };
+            let Some(destination) = pass_start_file_by_candidate.get(&candidate_file).copied()
+            else {
+                return false;
+            };
+            if destination == node.container {
+                return false;
+            }
+
+            let destination_has_dependency = outgoing_files
+                .get(&node.id.0)
+                .is_some_and(|files| files.contains(&destination));
+            let destination_has_consumer = incoming_files
+                .get(&node.id.0)
+                .is_some_and(|files| files.contains(&destination));
+            destination_has_dependency && !destination_has_consumer
+        })
+        .count()
+        .try_into()
+        .unwrap_or(u32::MAX)
 }
 
 /// Prices every configured capacity level with the same measures used by
@@ -5815,6 +5899,135 @@ impl PassStartGuard {
     }
 }
 
+/// Protects a declaration jointly consumed by sibling physical-folder
+/// branches from being buried inside just one of those branches. Ownership is
+/// derived once from pass-start paths and raw structural edges; unrelated
+/// folder reach therefore cannot manufacture permission later in the pass.
+struct ConsumerBranchGuard {
+    ownership_by_node: BTreeMap<u32, ConsumerBranchOwnership>,
+    folder_by_candidate_file: BTreeMap<ContainerId, Vec<SmolStr>>,
+}
+
+struct ConsumerBranchOwnership {
+    lca: Vec<SmolStr>,
+    occupied_branches: BTreeSet<SmolStr>,
+}
+
+impl ConsumerBranchGuard {
+    fn new(assembled: &CandidateTree, snapshot: &Snapshot, edges: &[Edge]) -> Self {
+        let pass_start_folder_by_file: BTreeMap<ContainerId, Vec<SmolStr>> = snapshot
+            .ir()
+            .containers
+            .containers()
+            .iter()
+            .filter(|container| container.level == ScopeLevel::File)
+            .map(|container| (container.id, physical_folder_segments(&container.name)))
+            .collect();
+        let folder_by_candidate_file = assembled
+            .pass_start_file_by_candidate
+            .iter()
+            .filter_map(|(&candidate, original)| {
+                Some((candidate, pass_start_folder_by_file.get(original)?.clone()))
+            })
+            .collect();
+        let nodes: BTreeMap<u32, &Node> = snapshot
+            .ir()
+            .nodes
+            .iter()
+            .map(|node| (node.id.0, node))
+            .collect();
+        let mut consumer_folders: BTreeMap<u32, BTreeSet<Vec<SmolStr>>> = BTreeMap::new();
+        for edge in edges {
+            if edge.source == edge.target {
+                continue;
+            }
+            let Some(source) = nodes.get(&edge.source.0) else {
+                continue;
+            };
+            let Some(folder) = pass_start_folder_by_file.get(&source.container) else {
+                continue;
+            };
+            consumer_folders
+                .entry(edge.target.0)
+                .or_default()
+                .insert(folder.clone());
+        }
+
+        let ownership_by_node = consumer_folders
+            .into_iter()
+            .filter_map(|(node, folders)| {
+                let folders: Vec<Vec<SmolStr>> = folders.into_iter().collect();
+                let first = folders.first()?;
+                let lca_len = first
+                    .iter()
+                    .enumerate()
+                    .take_while(|(index, segment)| {
+                        folders
+                            .iter()
+                            .all(|folder| folder.get(*index) == Some(*segment))
+                    })
+                    .count();
+                let occupied_branches: BTreeSet<SmolStr> = folders
+                    .iter()
+                    .filter_map(|folder| folder.get(lca_len).cloned())
+                    .collect();
+                (occupied_branches.len() >= 2).then_some((
+                    node,
+                    ConsumerBranchOwnership {
+                        lca: first.get(..lca_len)?.to_vec(),
+                        occupied_branches,
+                    },
+                ))
+            })
+            .collect();
+
+        Self {
+            ownership_by_node,
+            folder_by_candidate_file,
+        }
+    }
+
+    fn blocks(&self, node: u32, destination: ContainerId) -> bool {
+        let Some(ownership) = self.ownership_by_node.get(&node) else {
+            return false;
+        };
+        let Some(folder) = self.folder_by_candidate_file.get(&destination) else {
+            return false;
+        };
+        folder.starts_with(&ownership.lca)
+            && folder
+                .get(ownership.lca.len())
+                .is_some_and(|branch| ownership.occupied_branches.contains(branch))
+    }
+
+    /// Reports a destination inside the consumers' shared LCA but outside
+    /// every occupied branch. Such a sibling is neutral shared territory, so
+    /// the older pairwise reach guard must not mistake its absent branch edges
+    /// for one consumer taking ownership from another.
+    fn is_neutral_shared_destination(&self, node: u32, destination: ContainerId) -> bool {
+        let Some(ownership) = self.ownership_by_node.get(&node) else {
+            return false;
+        };
+        let Some(folder) = self.folder_by_candidate_file.get(&destination) else {
+            return false;
+        };
+        folder.starts_with(&ownership.lca)
+            && folder
+                .get(ownership.lca.len())
+                .is_some_and(|branch| !ownership.occupied_branches.contains(branch))
+    }
+}
+
+fn physical_folder_segments(file: &str) -> Vec<SmolStr> {
+    file.rsplit_once('/').map_or_else(Vec::new, |(folder, _)| {
+        folder
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(SmolStr::new)
+            .collect()
+    })
+}
+
 struct SymbolPass<'a> {
     snapshot: &'a Snapshot,
     coefficients: &'a Coefficients,
@@ -5829,10 +6042,6 @@ struct SymbolPass<'a> {
     /// Both-direction priced incidence per node, computed once: an edge
     /// priced 0.0 never nominates a destination (FIX04).
     incident: BTreeMap<u32, Vec<(u32, f64)>>,
-    /// Pass-start incoming dependency sources by declaration. Edge direction
-    /// distinguishes consumers from files that merely hold dependencies used
-    /// by the declaration.
-    incoming_consumers: BTreeMap<u32, Vec<u32>>,
     /// Per-file production SLOC under the assembly, maintained
     /// incrementally across acceptances.
     sloc: BTreeMap<ContainerId, u32>,
@@ -5847,6 +6056,9 @@ struct SymbolPass<'a> {
     /// Refuses relocations that would hand a third party a folder it never
     /// depended on (FIX13).
     reach: ReachGuard,
+    /// Refuses burying a jointly consumed declaration in one occupied sibling
+    /// branch, independent of incidental pass-start reach between branches.
+    consumer_branches: ConsumerBranchGuard,
     /// Files containing at least one type and no runtime symbol at pass start.
     type_only_files: BTreeSet<ContainerId>,
     /// Physical pass-start directory depth of every candidate file.
@@ -5903,7 +6115,6 @@ impl<'a> SymbolPass<'a> {
             *residents.entry(file).or_insert(0) += 1;
         }
         let mut incident: BTreeMap<u32, Vec<(u32, f64)>> = BTreeMap::new();
-        let mut incoming_consumers: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         // FIX11: the test-zone tie-cut rides placement into symbol grain. A
         // node's zone is its placed file's mark; an edge with either endpoint
         // inside the zone prices to zero exactly as `build_file_graph` prices
@@ -5917,12 +6128,6 @@ impl<'a> SymbolPass<'a> {
         };
         let node_by_id: BTreeMap<u32, &Node> = nodes.iter().map(|node| (node.id.0, node)).collect();
         for edge in edges {
-            if edge.source != edge.target {
-                incoming_consumers
-                    .entry(edge.target.0)
-                    .or_default()
-                    .push(edge.source.0);
-            }
             let affinity = match (
                 node_by_id.get(&edge.source.0),
                 node_by_id.get(&edge.target.0),
@@ -5950,6 +6155,7 @@ impl<'a> SymbolPass<'a> {
                 .push((edge.source.0, weight));
         }
         let reach = ReachGuard::new(assembled, base, edges, weights, &touches_zone);
+        let consumer_branches = ConsumerBranchGuard::new(assembled, snapshot, edges);
         let mut file_roles: BTreeMap<ContainerId, (bool, bool)> = BTreeMap::new();
         for node in nodes {
             let Some(&file) = base.get(&node.id.0) else {
@@ -5998,8 +6204,8 @@ impl<'a> SymbolPass<'a> {
             nodes,
             edges,
             incident,
-            incoming_consumers,
             reach,
+            consumer_branches,
             type_only_files,
             file_depth,
             pass_start,
@@ -6092,22 +6298,6 @@ impl<'a> SymbolPass<'a> {
             .or_else(|| self.base.get(&id).copied())
     }
 
-    fn dependency_only_destination(
-        &self,
-        node: u32,
-        source: ContainerId,
-        destination: ContainerId,
-    ) -> bool {
-        let consumers = self.incoming_consumers.get(&node).into_iter().flatten();
-        let source_owned_at_start = consumers
-            .clone()
-            .any(|consumer| self.base.get(consumer).copied() == Some(source));
-        let destination_owned_at_start = consumers
-            .clone()
-            .any(|consumer| self.base.get(consumer).copied() == Some(destination));
-        source_owned_at_start && !destination_owned_at_start
-    }
-
     fn collides_in_destination(&self, node: &Node, destination: ContainerId) -> bool {
         self.nodes.iter().any(|resident| {
             resident.id != node.id
@@ -6128,6 +6318,7 @@ impl<'a> SymbolPass<'a> {
         let candidate = score_candidate(
             self.snapshot,
             &placement,
+            &self.assembled.pass_start_file_by_candidate,
             &self.assembled.tree,
             &self.assembled.namespace_by_file,
             distance,
@@ -6224,8 +6415,8 @@ impl<'a> SymbolPass<'a> {
             {
                 continue;
             }
-            if self.dependency_only_destination(node.id.0, source_file, destination)
-                || self.collides_in_destination(node, destination)
+            if self.collides_in_destination(node, destination)
+                || self.consumer_branches.blocks(node.id.0, destination)
             {
                 continue;
             }
@@ -6260,6 +6451,9 @@ impl<'a> SymbolPass<'a> {
             if self
                 .reach
                 .invents_a_reach(node.id.0, source_file, destination)
+                && !self
+                    .consumer_branches
+                    .is_neutral_shared_destination(node.id.0, destination)
             {
                 continue;
             }
@@ -6374,6 +6568,7 @@ mod tests {
                     path: 0.0,
                     anchor: 0.0,
                     capacity: 0.0,
+                    dependency_only: 0.0,
                 },
                 unique_findings: Vec::new(),
                 standing: CurrentStanding::Outscored,
@@ -7646,7 +7841,7 @@ mod tests {
     }
 
     #[test]
-    fn should_serialize_profile_results_as_schema_version_four_without_modes() {
+    fn should_serialize_profile_results_as_schema_version_five_without_modes() {
         let snapshot = snapshot(
             vec![node(0, "item", 0, Polarity::Production)],
             vec![],
@@ -7662,7 +7857,7 @@ mod tests {
             serialized
                 .get("schemaVersion")
                 .and_then(serde_json::Value::as_u64),
-            Some(4)
+            Some(5)
         );
         assert!(serialized.pointer("/current/tree").is_some());
         assert!(serialized.pointer("/current/sharedFindings").is_some());
@@ -7686,6 +7881,7 @@ mod tests {
         let anchored = score_candidate(
             &snapshot,
             &placement,
+            &BTreeMap::from([(ContainerId(0), ContainerId(0))]),
             &tree,
             &BTreeMap::new(),
             0.0,
@@ -7698,6 +7894,7 @@ mod tests {
         let greenfield = score_candidate(
             &snapshot,
             &placement,
+            &BTreeMap::from([(ContainerId(0), ContainerId(0))]),
             &tree,
             &BTreeMap::new(),
             0.0,
@@ -7733,6 +7930,7 @@ mod tests {
         let scored = score_candidate(
             &snapshot,
             &|_| Some(ContainerId(0)),
+            &BTreeMap::from([(ContainerId(0), ContainerId(0))]),
             &tree,
             &BTreeMap::new(),
             0.0,
@@ -12446,6 +12644,161 @@ mod tests {
     }
 
     #[test]
+    fn should_veto_burying_shared_ownership_despite_unrelated_reach() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "shared_contract", 6, Polarity::Production),
+                node(1, "common_resident", 6, Polarity::Production),
+                node(2, "left_consumer", 7, Polarity::Production),
+                node(3, "right_consumer", 8, Polarity::Production),
+                node(4, "left_service", 7, Polarity::Production),
+                node(5, "right_client", 8, Polarity::Production),
+            ],
+            vec![type_ref(2, 0), type_ref(3, 0), edge(5, 4), edge(2, 0)],
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "components", ScopeLevel::Domain, Some(0)),
+                container(2, "components/common", ScopeLevel::Folder, Some(1)),
+                container(3, "components/left", ScopeLevel::Folder, Some(1)),
+                container(4, "components/right", ScopeLevel::Folder, Some(1)),
+                container(5, "unused", ScopeLevel::Folder, Some(1)),
+                container(
+                    6,
+                    "components/common/contracts.ts",
+                    ScopeLevel::File,
+                    Some(2),
+                ),
+                container(7, "components/left/service.ts", ScopeLevel::File, Some(3)),
+                container(8, "components/right/client.ts", ScopeLevel::File, Some(4)),
+            ],
+        );
+
+        let (accepted, relocated) = relocates_first_symbol_with_dependency_only(&snapshot, 0.0);
+
+        assert!(
+            !accepted && relocated.is_empty(),
+            "an unrelated right-to-left dependency must not transfer ownership of a shared \
+             declaration to the left branch; relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_allow_shared_consumers_that_remain_in_one_folder() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "shared_contract", 3, Polarity::Production),
+                node(1, "origin_resident", 3, Polarity::Production),
+                node(2, "first_consumer", 4, Polarity::Production),
+                node(3, "second_consumer", 5, Polarity::Production),
+            ],
+            vec![type_ref(2, 0), type_ref(2, 0), type_ref(3, 0)],
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "components", ScopeLevel::Folder, Some(0)),
+                container(2, "components/shared.ts", ScopeLevel::File, Some(1)),
+                container(3, "components/first.ts", ScopeLevel::File, Some(1)),
+                container(4, "components/second.ts", ScopeLevel::File, Some(1)),
+            ],
+        );
+
+        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            accepted && relocated == [0],
+            "consumers in one physical folder do not create competing branch ownership; \
+             relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_allow_a_shared_declaration_to_move_into_a_neutral_branch() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "shared_contract", 6, Polarity::Production),
+                node(1, "origin_resident", 6, Polarity::Production),
+                node(2, "left_consumer", 7, Polarity::Production),
+                node(3, "right_consumer", 8, Polarity::Production),
+                node(4, "neutral_dependency", 9, Polarity::Production),
+            ],
+            vec![
+                type_ref(2, 0),
+                type_ref(3, 0),
+                type_ref(0, 4),
+                type_ref(0, 4),
+            ],
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "components", ScopeLevel::Domain, Some(0)),
+                container(2, "components/holding", ScopeLevel::Folder, Some(1)),
+                container(3, "components/left", ScopeLevel::Folder, Some(1)),
+                container(4, "components/right", ScopeLevel::Folder, Some(1)),
+                container(5, "components/common", ScopeLevel::Folder, Some(1)),
+                container(
+                    6,
+                    "components/holding/contracts.ts",
+                    ScopeLevel::File,
+                    Some(2),
+                ),
+                container(7, "components/left/consumer.ts", ScopeLevel::File, Some(3)),
+                container(8, "components/right/consumer.ts", ScopeLevel::File, Some(4)),
+                container(9, "components/common/helpers.ts", ScopeLevel::File, Some(5)),
+            ],
+        );
+
+        let (accepted, relocated) = relocates_first_symbol_with_dependency_only(&snapshot, 0.0);
+
+        assert!(
+            accepted && relocated == [0],
+            "a neutral sibling branch does not award either consumer branch ownership; \
+             relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_allow_a_shared_declaration_to_move_toward_the_consumer_lca() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "shared_contract", 6, Polarity::Production),
+                node(1, "origin_resident", 6, Polarity::Production),
+                node(2, "left_consumer", 7, Polarity::Production),
+                node(3, "right_consumer", 8, Polarity::Production),
+                node(4, "common_dependency", 9, Polarity::Production),
+            ],
+            vec![
+                type_ref(2, 0),
+                type_ref(3, 0),
+                type_ref(0, 4),
+                type_ref(0, 4),
+            ],
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "components", ScopeLevel::Domain, Some(0)),
+                container(2, "components/holding", ScopeLevel::Folder, Some(1)),
+                container(3, "components/left", ScopeLevel::Folder, Some(1)),
+                container(4, "components/right", ScopeLevel::Folder, Some(1)),
+                container(
+                    5,
+                    "components/holding/contracts.ts",
+                    ScopeLevel::File,
+                    Some(2),
+                ),
+                container(6, "components/left/consumer.ts", ScopeLevel::File, Some(3)),
+                container(7, "components/right/consumer.ts", ScopeLevel::File, Some(4)),
+                container(8, "unused", ScopeLevel::Folder, Some(1)),
+                container(9, "components/common.ts", ScopeLevel::File, Some(1)),
+            ],
+        );
+
+        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+        assert!(
+            accepted && relocated == [0],
+            "the consumers' lowest common folder is their shared ownership boundary; \
+             relocations {relocated:?}"
+        );
+    }
+
+    #[test]
     fn should_keep_a_type_with_its_primary_same_file_consumer_at_default_affinity() {
         let mut subject = node(0, "request_options", 2, Polarity::Production);
         subject.kind = NodeKind::Type;
@@ -12472,9 +12825,9 @@ mod tests {
         );
 
         let (default_accepted, default_relocated) =
-            relocates_first_symbol_with_type_affinity(&snapshot, 3.0);
+            relocates_first_symbol_with_affinities(&snapshot, 3.0, 0.0);
         let (unit_accepted, unit_relocated) =
-            relocates_first_symbol_with_type_affinity(&snapshot, 1.0);
+            relocates_first_symbol_with_affinities(&snapshot, 1.0, 0.0);
 
         assert!(
             !default_accepted && default_relocated.is_empty(),
@@ -12482,9 +12835,9 @@ mod tests {
              relocations {default_relocated:?}"
         );
         assert!(
-            !unit_accepted && unit_relocated.is_empty(),
-            "lower affinity cannot override the source consumer's ownership; \
-             relocations {unit_relocated:?}"
+            unit_accepted && unit_relocated == [0],
+            "unit affinity permits a dependency-only move whose raw gain exceeds the \
+             configured penalty; relocations {unit_relocated:?}"
         );
     }
 
@@ -12756,12 +13109,10 @@ mod tests {
         );
     }
 
-    /// A hoist is the direction the veto exists to protect. Moving a symbol
-    /// *up* into a folder that already encloses its origin is exempt even
-    /// though a dependant outside gains a dependency on that folder — on
-    /// `~/Repositories/ai` five genuine consolidations ride this exemption.
+    /// A declaration shared across sibling consumer branches cannot be moved
+    /// into either occupied branch, even when that move is also a hoist.
     #[test]
-    fn should_still_hoist_a_symbol_toward_a_folder_enclosing_its_home() {
+    fn should_veto_a_hoist_into_one_of_multiple_consumer_branches() {
         let snapshot = snapshot(
             vec![
                 node(0, "schema_analyst_config", 6, Polarity::Production),
@@ -12781,149 +13132,12 @@ mod tests {
                 container(7, "nav/use.ts", ScopeLevel::File, Some(4)),
             ],
         );
-        let (accepted, _) = relocates_first_symbol(&snapshot);
-
-        assert!(
-            accepted,
-            "hoisting toward an enclosing folder must stay legal even when a \
-             dependant outside it gains the dependency"
-        );
-    }
-
-    #[test]
-    fn should_veto_a_runtime_move_owned_only_by_its_dependencies() {
-        let snapshot = snapshot(
-            vec![
-                node(0, "execute_step", 2, Polarity::Production),
-                node(1, "invoke_step", 2, Polarity::Production),
-                node(2, "shared_setting", 3, Polarity::Production),
-            ],
-            vec![edge(1, 0), edge(0, 2)],
-            vec![
-                container(0, "workspace", ScopeLevel::PackageGroup, None),
-                container(1, "area", ScopeLevel::Folder, Some(0)),
-                container(2, "area/runner.ts", ScopeLevel::File, Some(1)),
-                container(3, "area/settings.ts", ScopeLevel::File, Some(1)),
-            ],
-        );
-
         let (accepted, relocated) = relocates_first_symbol(&snapshot);
 
         assert!(
             !accepted && relocated.is_empty(),
-            "a surviving same-file consumer owns the runtime declaration over a \
-             file containing only its dependencies; relocations {relocated:?}"
-        );
-    }
-
-    #[test]
-    fn should_keep_source_ownership_after_its_consumer_moves() -> Result<(), String> {
-        let snapshot = snapshot(
-            vec![
-                node(0, "shared_step", 2, Polarity::Production),
-                node(1, "source_consumer", 2, Polarity::Production),
-                node(2, "destination_dependency", 3, Polarity::Production),
-                node(3, "relocation_resident", 4, Polarity::Production),
-            ],
-            vec![edge(1, 0), edge(0, 2)],
-            vec![
-                container(0, "workspace", ScopeLevel::PackageGroup, None),
-                container(1, "area", ScopeLevel::Folder, Some(0)),
-                container(2, "area/source.ts", ScopeLevel::File, Some(1)),
-                container(3, "area/dependencies.ts", ScopeLevel::File, Some(1)),
-                container(4, "area/relocated.ts", ScopeLevel::File, Some(1)),
-            ],
-        );
-        let tests = TestPolicy::defaults();
-        let config = AnalyzeConfig::default();
-        let solver = PipelineSolver::new(
-            &snapshot,
-            &config.profiles.greenfield,
-            config.profiles.greenfield.objective.coefficients(),
-            false,
-            &tests,
-        );
-        let ir = snapshot.ir();
-        let assembled = solver.assemble(&solver.real_partition);
-        let mut pass = SymbolPass::new(
-            &snapshot,
-            &solver.coefficients,
-            &solver.weights,
-            solver.same_file_symbol,
-            solver.same_file_type,
-            solver.capacity,
-            &assembled,
-            &ir.nodes,
-            &ir.edges,
-        );
-        let source = pass
-            .base
-            .get(&0)
-            .copied()
-            .ok_or_else(|| String::from("source fixture placement must exist"))?;
-        let destination = pass
-            .base
-            .get(&2)
-            .copied()
-            .ok_or_else(|| String::from("destination fixture placement must exist"))?;
-        let relocated = pass
-            .base
-            .get(&3)
-            .copied()
-            .ok_or_else(|| String::from("relocated fixture placement must exist"))?;
-
-        assert!(pass.dependency_only_destination(0, source, destination));
-        pass.overlay.insert(1, relocated);
-
-        assert!(
-            pass.dependency_only_destination(0, source, destination),
-            "an earlier consumer relocation cannot erase pass-start source ownership"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn should_veto_a_type_move_owned_only_by_its_dependencies() {
-        let mut request = node(0, "StepRequest", 2, Polarity::Production);
-        request.kind = NodeKind::Type;
-        let mut first = node(2, "FirstField", 3, Polarity::Production);
-        first.kind = NodeKind::Type;
-        let mut second = node(3, "SecondField", 3, Polarity::Production);
-        second.kind = NodeKind::Type;
-        let mut third = node(4, "ThirdField", 3, Polarity::Production);
-        third.kind = NodeKind::Type;
-        let mut fourth = node(5, "FourthField", 3, Polarity::Production);
-        fourth.kind = NodeKind::Type;
-        let snapshot = snapshot(
-            vec![
-                request,
-                node(1, "execute_step", 2, Polarity::Production),
-                first,
-                second,
-                third,
-                fourth,
-            ],
-            vec![
-                type_ref(1, 0),
-                type_ref(0, 2),
-                type_ref(0, 3),
-                type_ref(0, 4),
-                type_ref(0, 5),
-            ],
-            vec![
-                container(0, "workspace", ScopeLevel::PackageGroup, None),
-                container(1, "area", ScopeLevel::Folder, Some(0)),
-                container(2, "area/runner.ts", ScopeLevel::File, Some(1)),
-                container(3, "area/fields.ts", ScopeLevel::File, Some(1)),
-            ],
-        );
-
-        let (accepted, relocated) = relocates_first_symbol(&snapshot);
-
-        assert!(
-            !accepted && relocated.is_empty(),
-            "a same-file runtime consumer owns its request type over a file \
-             containing only field dependencies; relocations {relocated:?}"
+            "a hoist must not bury shared ownership in one occupied consumer branch; \
+             relocations {relocated:?}"
         );
     }
 
@@ -12950,25 +13164,166 @@ mod tests {
     }
 
     #[test]
-    fn should_allow_a_consumer_free_move_toward_a_dependency() {
+    fn should_price_a_weak_dependency_only_move_by_profile() {
+        let snapshot = dependency_only_snapshot();
+
+        let (disabled, disabled_relocations) =
+            relocates_first_symbol_with_dependency_only(&snapshot, 0.0);
+        let (default, default_relocations) =
+            relocates_first_symbol_with_dependency_only(&snapshot, 0.05);
+
+        assert!(
+            disabled && disabled_relocations == [0],
+            "zero pricing must preserve a dependency-driven relocation; \
+             relocations {disabled_relocations:?}"
+        );
+        assert!(
+            !default && default_relocations.is_empty(),
+            "the default charge must outweigh this fixture's sub-0.05 raw gain; \
+             relocations {default_relocations:?}"
+        );
+    }
+
+    #[test]
+    fn should_apply_dependency_only_pricing_to_only_the_changed_profile() {
+        let snapshot = dependency_only_snapshot();
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.objective.imbalance = 0.0;
+        config.profiles.anchored.objective.naming = 0.0;
+        config.profiles.anchored.objective.path = 0.0;
+        config.profiles.anchored.objective.anchor = 0.0;
+        config.profiles.anchored.objective.capacity = 0.0;
+        config.profiles.anchored.objective.dependency_only = 0.0;
+        config.profiles.greenfield.objective.imbalance = 0.0;
+        config.profiles.greenfield.objective.naming = 0.0;
+        config.profiles.greenfield.objective.path = 0.0;
+        config.profiles.greenfield.objective.anchor = 0.0;
+        config.profiles.greenfield.objective.capacity = 0.0;
+        config.profiles.greenfield.objective.dependency_only = 0.05;
+
+        let (anchored, anchored_relocations) =
+            relocates_first_symbol_with_profile(&snapshot, &config.profiles.anchored);
+        let (greenfield, greenfield_relocations) =
+            relocates_first_symbol_with_profile(&snapshot, &config.profiles.greenfield);
+
+        assert!(anchored && anchored_relocations == [0]);
+        assert!(!greenfield && greenfield_relocations.is_empty());
+    }
+
+    #[test]
+    fn should_include_dependency_only_pricing_in_the_relocation_delta() {
+        let snapshot = dependency_only_snapshot();
+        let without_charge = first_symbol_delta_with_dependency_only(&snapshot, 0.0);
+        let with_charge = first_symbol_delta_with_dependency_only(&snapshot, 0.001);
+        assert!(
+            without_charge.is_some(),
+            "the uncharged dependency-only move must be eligible"
+        );
+        assert!(
+            with_charge.is_some(),
+            "a small dependency-only charge must keep the move eligible"
+        );
+        let (Some(without_charge), Some(with_charge)) = (without_charge, with_charge) else {
+            return;
+        };
+
+        assert!(
+            (without_charge - with_charge - 0.001).abs() < 1.0e-12,
+            "the narrated improvement must include the fixed charge exactly once"
+        );
+    }
+
+    #[test]
+    fn should_count_every_structural_dependency_without_charging_a_whole_file_move() {
+        for kind in [
+            EdgeKind::ValueImport,
+            EdgeKind::Inheritance,
+            EdgeKind::Call,
+            EdgeKind::TypeReference,
+            EdgeKind::ReExport,
+        ] {
+            let snapshot = snapshot(
+                vec![
+                    node(0, "derived_value", 2, Polarity::Production),
+                    node(1, "source_value", 3, Polarity::Production),
+                ],
+                vec![
+                    Edge {
+                        source: NodeId(0),
+                        target: NodeId(1),
+                        kind,
+                        hardness: Hardness::Hard,
+                        confidence: 1.0,
+                    },
+                    Edge {
+                        source: NodeId(0),
+                        target: NodeId(0),
+                        kind,
+                        hardness: Hardness::Hard,
+                        confidence: 1.0,
+                    },
+                ],
+                vec![
+                    container(0, "workspace", ScopeLevel::PackageGroup, None),
+                    container(1, "area", ScopeLevel::Folder, Some(0)),
+                    container(2, "area/derived.ts", ScopeLevel::File, Some(1)),
+                    container(3, "area/source.ts", ScopeLevel::File, Some(1)),
+                ],
+            );
+            let placement = |id| {
+                Some(if id == 0 {
+                    ContainerId(20)
+                } else {
+                    ContainerId(21)
+                })
+            };
+
+            let relocated = BTreeMap::from([
+                (ContainerId(20), ContainerId(3)),
+                (ContainerId(21), ContainerId(3)),
+            ]);
+            assert_eq!(
+                dependency_only_relocations(&snapshot, &placement, &relocated),
+                1,
+                "{kind:?} is structural and nominates the dependency's pass-start file"
+            );
+
+            let whole_file = BTreeMap::from([
+                (ContainerId(20), ContainerId(2)),
+                (ContainerId(21), ContainerId(3)),
+            ]);
+            assert_eq!(
+                dependency_only_relocations(&snapshot, &placement, &whole_file),
+                0,
+                "a fresh candidate id mapped to the original file is not a declaration move"
+            );
+        }
+    }
+
+    #[test]
+    fn should_not_charge_a_move_into_its_sole_consumers_file() {
         let snapshot = snapshot(
             vec![
-                node(0, "derived_value", 2, Polarity::Production),
+                node(0, "shared_step", 2, Polarity::Production),
                 node(1, "origin_resident", 2, Polarity::Production),
-                node(2, "source_value", 3, Polarity::Production),
+                node(2, "destination_consumer", 3, Polarity::Production),
             ],
-            vec![edge(0, 2)],
+            vec![edge(2, 0)],
             vec![
                 container(0, "workspace", ScopeLevel::PackageGroup, None),
                 container(1, "area", ScopeLevel::Folder, Some(0)),
-                container(2, "area/derived.ts", ScopeLevel::File, Some(1)),
-                container(3, "area/source.ts", ScopeLevel::File, Some(1)),
+                container(2, "area/shared.ts", ScopeLevel::File, Some(1)),
+                container(3, "area/consumer.ts", ScopeLevel::File, Some(1)),
             ],
         );
 
-        let (accepted, relocated) = relocates_first_symbol(&snapshot);
+        let (accepted, relocated) = relocates_first_symbol_with_dependency_only(&snapshot, 0.05);
 
-        assert!(accepted && relocated == [0]);
+        assert!(
+            accepted && relocated == [0],
+            "a declaration's sole consumer owns a valid destination under default pricing; \
+             relocations {relocated:?}"
+        );
     }
 
     #[test]
@@ -13240,27 +13595,6 @@ mod tests {
         );
     }
 
-    /// Reachability is not ownership evidence. A destination that only holds
-    /// an outgoing dependency remains inadmissible while the source retains a
-    /// consumer, even when no pass-start path closes a cycle.
-    #[test]
-    fn should_veto_a_dependency_only_destination_without_a_reach_path() {
-        let snapshot = snapshot(
-            vec![
-                node(0, "shared_value", 2, Polarity::Production),
-                node(1, "claimant", 2, Polarity::Production),
-                node(2, "origin_resident", 2, Polarity::Production),
-                node(3, "destination_resident", 4, Polarity::Production),
-            ],
-            vec![type_ref(1, 0), type_ref(0, 3)],
-            sequential_claimant_containers(),
-        );
-
-        let (subject_moved, relocated) = relocates_first_symbol(&snapshot);
-
-        assert!(!subject_moved && relocated.is_empty());
-    }
-
     /// A cycle closed between two files already sitting inside a larger cycle
     /// leaves the cyclic *vertex* count untouched, so only a cyclic *edge*
     /// measure can see it.
@@ -13322,9 +13656,18 @@ mod tests {
         snapshot: &Snapshot,
         same_file_type: f64,
     ) -> (bool, Vec<u32>) {
+        relocates_first_symbol_with_affinities(snapshot, same_file_type, 0.05)
+    }
+
+    fn relocates_first_symbol_with_affinities(
+        snapshot: &Snapshot,
+        same_file_type: f64,
+        dependency_only: f64,
+    ) -> (bool, Vec<u32>) {
         let tests = TestPolicy::defaults();
         let mut config = AnalyzeConfig::default();
         config.profiles.greenfield.weights.same_file_type = same_file_type;
+        config.profiles.greenfield.objective.dependency_only = dependency_only;
         let solver = PipelineSolver::new(
             snapshot,
             &config.profiles.greenfield,
@@ -13346,6 +13689,93 @@ mod tests {
             &ir.edges,
         );
         pass.best = f64::INFINITY;
+        let accepted = ir
+            .nodes
+            .first()
+            .is_some_and(|subject| pass.try_relocate(subject));
+        (
+            accepted,
+            pass.relocations.iter().map(|entry| entry.node).collect(),
+        )
+    }
+
+    fn relocates_first_symbol_with_dependency_only(
+        snapshot: &Snapshot,
+        dependency_only: f64,
+    ) -> (bool, Vec<u32>) {
+        let mut config = AnalyzeConfig::default();
+        config.profiles.greenfield.objective.imbalance = 0.0;
+        config.profiles.greenfield.objective.naming = 0.0;
+        config.profiles.greenfield.objective.path = 0.0;
+        config.profiles.greenfield.objective.anchor = 0.0;
+        config.profiles.greenfield.objective.capacity = 0.0;
+        config.profiles.greenfield.objective.dependency_only = dependency_only;
+        relocates_first_symbol_with_profile(snapshot, &config.profiles.greenfield)
+    }
+
+    fn first_symbol_delta_with_dependency_only(
+        snapshot: &Snapshot,
+        dependency_only: f64,
+    ) -> Option<f64> {
+        let mut profile = ProfileConfig::default();
+        profile.objective.imbalance = 0.0;
+        profile.objective.naming = 0.0;
+        profile.objective.path = 0.0;
+        profile.objective.anchor = 0.0;
+        profile.objective.capacity = 0.0;
+        profile.objective.dependency_only = dependency_only;
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(
+            snapshot,
+            &profile,
+            profile.objective.coefficients(),
+            false,
+            &tests,
+        );
+        let ir = snapshot.ir();
+        let assembled = solver.assemble(&solver.real_partition);
+        let mut pass = SymbolPass::new(
+            snapshot,
+            &solver.coefficients,
+            &solver.weights,
+            solver.same_file_symbol,
+            solver.same_file_type,
+            solver.capacity,
+            &assembled,
+            &ir.nodes,
+            &ir.edges,
+        );
+        ir.nodes
+            .first()
+            .and_then(|subject| pass.try_relocate(subject).then_some(()))?;
+        pass.relocations.first().map(|relocation| relocation.delta)
+    }
+
+    fn relocates_first_symbol_with_profile(
+        snapshot: &Snapshot,
+        profile: &ProfileConfig,
+    ) -> (bool, Vec<u32>) {
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(
+            snapshot,
+            profile,
+            profile.objective.coefficients(),
+            false,
+            &tests,
+        );
+        let ir = snapshot.ir();
+        let assembled = solver.assemble(&solver.real_partition);
+        let mut pass = SymbolPass::new(
+            snapshot,
+            &solver.coefficients,
+            &solver.weights,
+            solver.same_file_symbol,
+            solver.same_file_type,
+            solver.capacity,
+            &assembled,
+            &ir.nodes,
+            &ir.edges,
+        );
         let accepted = ir
             .nodes
             .first()
@@ -13436,6 +13866,27 @@ mod tests {
                 container(5, "types/tools.ts", ScopeLevel::File, Some(2)),
                 container(6, "anthropic/tools.ts", ScopeLevel::File, Some(3)),
                 container(7, "openai/tools.ts", ScopeLevel::File, Some(4)),
+            ],
+        )
+    }
+
+    fn dependency_only_snapshot() -> Snapshot {
+        snapshot(
+            vec![
+                node(0, "derived_value", 2, Polarity::Production),
+                node(1, "origin_resident", 2, Polarity::Production),
+                node(2, "source_value", 3, Polarity::Production),
+                node(3, "stable_reader", 4, Polarity::Production),
+                node(4, "stable_source", 5, Polarity::Production),
+            ],
+            vec![edge(0, 2), edge(3, 4)],
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "area", ScopeLevel::Folder, Some(0)),
+                container(2, "area/derived.ts", ScopeLevel::File, Some(1)),
+                container(3, "area/source.ts", ScopeLevel::File, Some(1)),
+                container(4, "area/reader.ts", ScopeLevel::File, Some(1)),
+                container(5, "area/stable.ts", ScopeLevel::File, Some(1)),
             ],
         )
     }

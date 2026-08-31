@@ -17,7 +17,7 @@ use crate::config::ProfileConfig;
 ///
 /// Readers of a saved result reject any other version rather than misreading a
 /// future shape.
-pub const RESULT_SCHEMA_VERSION: u32 = 4;
+pub const RESULT_SCHEMA_VERSION: u32 = 5;
 
 /// The top-level analysis result: the snapshot hash, the current tree with its
 /// violations, and the per-mode candidate sets.
@@ -193,6 +193,8 @@ pub struct ScoreBreakdown {
     pub anchor: f64,
     /// The scoped over-capacity binding penalty (FIX03).
     pub capacity: f64,
+    /// The charge for moves into files containing dependencies but no consumers.
+    pub dependency_only: f64,
 }
 
 impl From<strata_core::score::ScoreBreakdown> for ScoreBreakdown {
@@ -204,6 +206,7 @@ impl From<strata_core::score::ScoreBreakdown> for ScoreBreakdown {
             path: value.path,
             anchor: value.anchor,
             capacity: value.capacity,
+            dependency_only: value.dependency_only,
         }
     }
 }
@@ -503,7 +506,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn should_serialize_schema_version_four_without_modes() {
+    fn should_serialize_schema_version_five_without_modes() {
         let result = AnalyzeResult {
             schema_version: RESULT_SCHEMA_VERSION,
             snapshot_hash: "snapshot".to_owned(),
@@ -531,7 +534,7 @@ mod tests {
         assert_eq!(
             json.pointer("/schemaVersion")
                 .and_then(serde_json::Value::as_u64),
-            Some(4)
+            Some(5)
         );
         assert!(json.get("profiles").is_some());
         assert!(json.get("modes").is_none());
@@ -547,6 +550,7 @@ mod tests {
             path: 0.0,
             anchor: 0.25,
             capacity: 0.75,
+            dependency_only: 0.05,
         };
 
         let json = serde_json::to_string(&breakdown).unwrap_or_default();
@@ -554,6 +558,7 @@ mod tests {
         assert!(json.contains("\"cut\":1.0"));
         assert!(json.contains("\"anchor\":0.25"));
         assert!(json.contains("\"capacity\":0.75"));
+        assert!(json.contains("\"dependencyOnly\":0.05"));
     }
 
     #[test]

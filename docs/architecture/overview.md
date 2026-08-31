@@ -144,7 +144,8 @@ There is no profile-specific algorithm. Anchored and greenfield are complete par
 Both profiles evaluate the same objective form:
 
 ```text
-J(T) = Σ w(e)·c(e)·h(lca) + λ·imbalance − α·naming − β·path + μ·d(T, T0)
+J(T) = cut + λ·imbalance − α·naming − β·path
+     + μ·d(T, T0) + γ·capacity + δ·dependency-only
 ```
 
 - **Anchored defaults** keep every term active. The move-distance penalty `μ·d(T, T0)` and path-cohesion bonus `β·path` reward staying close to today's layout.
@@ -154,9 +155,13 @@ The CLI's `--mode` flag is a compatibility selector for which parameter profiles
 
 Dependency edges are classified once from immutable analysis-start placement. An edge whose endpoints begin in different files keeps its ordinary dependency-kind price. A same-file edge touching a type uses the profile's `same-file-type` multiplier; every other same-file edge uses `same-file-symbol`. The defaults are `3.0` and `1.0`, respectively, so a type's primary same-file consumer has stronger affinity than weaker external type references without changing runtime-symbol affinity.
 
+The `dependency-only` term charges a fixed profile coefficient, defaulting to `0.05`, once for each relocated production declaration whose destination contained at analysis start at least one target of the declaration's outgoing structural dependencies and no incoming consumer. All structural IR edge kinds participate, self-loops are ignored, and the current layout has zero dependency-only pressure. Setting the coefficient to `0.0` disables the charge. Tentative admission, candidate ordering, total scores, score breakdowns, gains, and narrated move deltas all use this same pass-start classification.
+
+Symbol admission separately protects shared ownership. Incoming consumers are resolved to their analysis-start physical folders. If consumers span multiple child-folder branches beneath their lowest common ancestor, a declaration cannot move into only one of those branches, even when unrelated pass-start dependencies already connect the folders. Moves remain eligible when there is one consumer, all consumers occupy one folder, or the destination is a neutral shared branch or the consumers' common ancestor.
+
 ## Analysis result contract
 
-Result schema version 4 separates facts shared by the executed profiles from profile-specific evaluation:
+Result schema version 5 separates facts shared by the executed profiles from profile-specific evaluation and records the dependency-only objective term:
 
 ```text
 AnalyzeResult
@@ -174,6 +179,8 @@ AnalyzeResult
     └── greenfield
         └── same shape
 ```
+
+Each profile's score breakdown serializes the additional term as `dependencyOnly`. Configuration and human output use `dependency-only`. Readers reject earlier result schema versions instead of inferring a missing score component.
 
 A finding is shared only when its complete serialized content is identical in both executed profiles. Each profile's `uniqueFindings` excludes that exact intersection. A single-profile run leaves `sharedFindings` empty, while deterministic sorting and deduplication keep JSON and human output stable. Profile gains are compared only with that profile's current score.
 

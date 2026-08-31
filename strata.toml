@@ -42,6 +42,8 @@ naming = 0.3
 path = 0.2
 # mu: move-distance anchoring penalty weight (anchored only).
 anchor = 1.0
+# Fixed score penalty per declaration moved toward dependencies but no consumers.
+dependency-only = 0.05
 capacity = 4.0
 
 [profiles.anchored.weights]
@@ -102,6 +104,7 @@ imbalance = 0.1
 naming = 0.3
 path = 0.0
 anchor = 0.0
+dependency-only = 0.05
 capacity = 4.0
 
 [profiles.greenfield.weights]

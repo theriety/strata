@@ -172,6 +172,10 @@ pub struct ObjectiveConfig {
     /// any folder or domain pays `gamma` per over-cap share, so relief can win
     /// on J instead of relying on selection alone.
     pub capacity: f64,
+    /// Fixed charge for relocating a declaration into a file that contains one
+    /// of its dependencies but none of its consumers at pass start.
+    #[serde(rename = "dependency-only")]
+    pub dependency_only: f64,
 }
 
 impl Default for ObjectiveConfig {
@@ -182,6 +186,7 @@ impl Default for ObjectiveConfig {
             path: 0.2,
             anchor: 1.0,
             capacity: 4.0,
+            dependency_only: 0.05,
         }
     }
 }
@@ -196,6 +201,7 @@ impl ObjectiveConfig {
             beta: self.path,
             mu: self.anchor,
             gamma: self.capacity,
+            dependency_only: self.dependency_only,
         }
     }
 
@@ -635,6 +641,10 @@ impl AnalyzeConfig {
         non_negative_finite(&key("objective.path"), profile.objective.path)?;
         non_negative_finite(&key("objective.anchor"), profile.objective.anchor)?;
         non_negative_finite(&key("objective.capacity"), profile.objective.capacity)?;
+        non_negative_finite(
+            &key("objective.dependency-only"),
+            profile.objective.dependency_only,
+        )?;
         non_negative_finite(&key("weights.value-import"), profile.weights.value_import)?;
         non_negative_finite(&key("weights.inheritance"), profile.weights.inheritance)?;
         non_negative_finite(&key("weights.call"), profile.weights.call)?;
@@ -863,6 +873,58 @@ mod tests {
         assert_eq!(config.profiles.anchored.diversity.seeds_per_candidate, 10);
         assert!(config.profiles.greenfield.objective.path.abs() < f64::EPSILON);
         assert!(config.profiles.greenfield.objective.anchor.abs() < f64::EPSILON);
+        assert!((config.profiles.anchored.objective.dependency_only - 0.05).abs() < f64::EPSILON);
+        assert!((config.profiles.greenfield.objective.dependency_only - 0.05).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn should_parse_an_explicit_zero_dependency_only_objective() {
+        let config = toml::from_str::<AnalyzeConfig>(
+            "[profiles.anchored.objective]\ndependency-only = 0.0\n",
+        )
+        .unwrap_or_default();
+
+        assert!(config.profiles.anchored.objective.dependency_only.abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn should_keep_the_dependency_only_default_when_the_objective_is_partial() {
+        let parsed =
+            toml::from_str::<AnalyzeConfig>("[profiles.greenfield.objective]\nnaming = 0.8\n");
+        assert!(
+            parsed.is_ok(),
+            "partial profile objective should parse: {:?}",
+            parsed.as_ref().err()
+        );
+        let config = parsed.unwrap_or_default();
+
+        assert!((config.profiles.greenfield.objective.naming - 0.8).abs() < f64::EPSILON);
+        assert!((config.profiles.greenfield.objective.dependency_only - 0.05).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn should_reject_invalid_dependency_only_objectives_with_their_key_path() {
+        for dependency_only in [-0.01, f64::INFINITY, f64::NAN] {
+            let config = AnalyzeConfig {
+                profiles: ProfilesConfig {
+                    anchored: ProfileConfig {
+                        objective: ObjectiveConfig {
+                            dependency_only,
+                            ..ObjectiveConfig::default()
+                        },
+                        ..ProfileConfig::default()
+                    },
+                    ..ProfilesConfig::default()
+                },
+                ..AnalyzeConfig::default()
+            };
+
+            assert!(matches!(
+                config.validate(),
+                Err(StrataError::ConfigInvalid { key: Some(key), .. })
+                    if key == "profiles.anchored.objective.dependency-only"
+            ));
+        }
     }
 
     #[test]
@@ -1310,6 +1372,7 @@ builtins = false
             path: 0.6,
             anchor: 0.7,
             capacity: 4.0,
+            dependency_only: 0.8,
         };
 
         let coefficients = objective.anchored();
@@ -1318,6 +1381,7 @@ builtins = false
         assert!((coefficients.alpha - 0.5).abs() < f64::EPSILON);
         assert!((coefficients.beta - 0.6).abs() < f64::EPSILON);
         assert!((coefficients.mu - 0.7).abs() < f64::EPSILON);
+        assert!((coefficients.dependency_only - 0.8).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1328,6 +1392,7 @@ builtins = false
             path: 0.6,
             anchor: 0.7,
             capacity: 4.0,
+            dependency_only: 0.8,
         };
 
         let coefficients = objective.greenfield();
@@ -1336,6 +1401,7 @@ builtins = false
         assert!((coefficients.alpha - 0.5).abs() < f64::EPSILON);
         assert!((coefficients.beta - 0.6).abs() < f64::EPSILON);
         assert!((coefficients.mu - 0.7).abs() < f64::EPSILON);
+        assert!((coefficients.dependency_only - 0.8).abs() < f64::EPSILON);
     }
 
     #[test]

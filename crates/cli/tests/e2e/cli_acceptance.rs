@@ -2000,16 +2000,16 @@ fn should_exit_one_on_a_malformed_result_input_for_every_reader() {
 
 #[test]
 fn should_reject_a_result_with_an_unsupported_schema_version() {
-    // a saved result stamped with any other schemaVersion — future (999) or the
-    // retired v1 — must be refused up front with a remediable message, not
+    // a saved result stamped with any other schemaVersion — future (999), the
+    // immediately retired v4, or v1 — must be refused up front with a remediable message, not
     // misread field-by-field.
     let result = analyze_to_file("rust");
     let contents = std::fs::read_to_string(&result).unwrap_or_default();
     let result_str = result.to_str().unwrap_or_default();
 
-    for version in ["999", "1"] {
+    for version in ["999", "4", "1"] {
         let stamped = contents.replace(
-            "\"schemaVersion\":4",
+            "\"schemaVersion\":5",
             &format!("\"schemaVersion\":{version}"),
         );
         assert_ne!(contents, stamped, "the version stamp was found and bumped");
@@ -2125,7 +2125,7 @@ fn should_default_to_json_when_stdout_is_piped() {
         parsed
             .pointer("/schemaVersion")
             .and_then(serde_json::Value::as_u64),
-        Some(4),
+        Some(u64::from(strata_engine::RESULT_SCHEMA_VERSION)),
         "piped output is json with the schema stamp: {}",
         outcome.stdout
     );

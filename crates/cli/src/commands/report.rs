@@ -194,8 +194,13 @@ fn write_candidate(markdown: &mut String, candidate: &Candidate) {
 fn write_breakdown(markdown: &mut String, breakdown: &ScoreBreakdown) {
     let _ = writeln!(
         markdown,
-        "- cut `{:.4}`, imbalance `{:.4}`, naming `{:.4}`, path `{:.4}`, anchor `{:.4}`\n",
-        breakdown.cut, breakdown.imbalance, breakdown.naming, breakdown.path, breakdown.anchor
+        "- cut `{:.4}`, imbalance `{:.4}`, naming `{:.4}`, path `{:.4}`, anchor `{:.4}`, dependency-only `{:.4}`\n",
+        breakdown.cut,
+        breakdown.imbalance,
+        breakdown.naming,
+        breakdown.path,
+        breakdown.anchor,
+        breakdown.dependency_only
     );
 }
 
@@ -304,6 +309,7 @@ mod tests {
             naming: 0.0,
             path: 0.0,
             anchor: 0.0,
+            dependency_only: 0.0,
             capacity: 0.0,
         }
     }
@@ -319,6 +325,7 @@ mod tests {
         assert!(markdown.contains("### Effective parameters"));
         assert!(markdown.contains("capacity  file 250 · folder 20"));
         assert!(markdown.contains("objective imbalance 0.1 · naming 0.3"));
+        assert!(markdown.contains("dependency-only 0.05"));
         assert!(markdown.contains("same-file-symbol 1.0 · same-file-type 3.0"));
         assert!(markdown.contains("solver    ilp-threshold 300"));
         assert!(markdown.contains("diversity seeds-per-candidate 10"));

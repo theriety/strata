@@ -11,6 +11,7 @@
 //!      - beta   * path(T)              // current-path cohesion (anchored)
 //!      + mu     * d(T, T0)             // move distance from the current tree
 //!      + gamma  * cap(T)               // scoped over-capacity binding
+//!      + delta  * dependency_only(T)   // dependency-only relocations
 //! ```
 //!
 //! minimised over candidate trees. Every term is a dimensionless ratio on a
@@ -22,10 +23,10 @@
 //! the raw cut sum grows with repository size while every other term stays
 //! bounded, and the bounded terms drown (D-37).
 //!
-//! The two modes differ only in coefficients: greenfield zeroes `mu` and `beta`
+//! The two profiles differ only in coefficients: greenfield zeroes `mu` and `beta`
 //! so the current layout cannot leak back in through path similarity, while
 //! anchored keeps both positive so candidates stay reachable from today's
-//! structure. There is no mode-specific code path — a mode is purely a
+//! structure. There is no profile-specific code path — a profile is purely a
 //! [`Coefficients`] preset.
 //!
 //! Cohesion terms (`naming`, `path`) enter with a minus sign because more
@@ -44,13 +45,15 @@ use std::collections::BTreeSet;
 
 use strata_ir::{EdgeKind, ScopeLevel};
 
-/// The coefficients of the objective, fixed per mode.
+/// The coefficients of the objective, fixed per parameter profile.
 ///
 /// `lambda`, `alpha`, and `beta` weight the imbalance, naming, and path terms;
 /// `mu` weights the anchoring (move-distance) term; `gamma` weights the scoped
-/// over-capacity binding term (FIX03). A greenfield preset sets `mu` and `beta`
-/// to zero; an anchored preset keeps them positive. Capacity binds in both
-/// modes: relief is owed regardless of how far from today's layout it sits.
+/// over-capacity binding term (FIX03); `dependency_only` weights declarations
+/// relocated toward their dependencies but away from every consumer. A
+/// greenfield preset sets `mu` and `beta` to zero; an anchored preset keeps
+/// them positive. Capacity and dependency-only relocation pricing apply in
+/// both profiles.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Coefficients {
     /// Weight of the sibling size-imbalance penalty.
@@ -63,6 +66,8 @@ pub struct Coefficients {
     pub mu: f64,
     /// Weight of the scoped over-capacity binding penalty (both modes).
     pub gamma: f64,
+    /// Fixed charge for each dependency-only declaration relocation.
+    pub dependency_only: f64,
 }
 
 impl Coefficients {
@@ -77,6 +82,7 @@ impl Coefficients {
             beta: 1.0,
             mu: 1.0,
             gamma: 4.0,
+            dependency_only: 0.05,
         }
     }
 
@@ -92,6 +98,7 @@ impl Coefficients {
             beta: 0.0,
             mu: 0.0,
             gamma: 4.0,
+            dependency_only: 0.05,
         }
     }
 }
@@ -224,12 +231,15 @@ pub struct Candidate {
     /// binds within the budget; one full breach unit per container at twice the
     /// budget.
     pub capacity_pressure: f64,
+    /// Number of production declarations relocated into a pass-start file that
+    /// contains one of their dependencies but none of their consumers.
+    pub dependency_only_relocations: u32,
 }
 
 /// Per-candidate score decomposition, reported in the DTO so users see *why* a
 /// tree ranks where it does.
 ///
-/// `total` is the sum of all six terms — the value of J(T) being minimised.
+/// `total` is the sum of all seven terms — the value of J(T) being minimised.
 /// `naming` and `path` are already negated (their minus sign folded in), so the
 /// breakdown sums to `total` directly.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -247,7 +257,9 @@ pub struct ScoreBreakdown {
     pub anchor: f64,
     /// `gamma * cap(T)` — the scoped over-capacity binding penalty (FIX03).
     pub capacity: f64,
-    /// The full objective `J(T)`, the sum of the six terms above.
+    /// Fixed per-declaration dependency-only relocation penalty.
+    pub dependency_only: f64,
+    /// The full objective `J(T)`, the sum of the seven terms above.
     pub total: f64,
 }
 
@@ -258,9 +270,10 @@ pub struct ScoreBreakdown {
 /// cut is the edge-weight-share-weighted mean crossing height normalized into
 /// `0.0..=1.0`, imbalance sums the squared coefficient of variation of every
 /// container's child sizes, naming and path are the (negated) cohesion bonuses,
-/// anchor is `mu` times the move distance, and capacity is `gamma` times the
-/// pre-extracted scoped binding pressure. Acyclicity and polarity stay hard
-/// vetoes enforced upstream.
+/// anchor is `mu` times the move distance, capacity is `gamma` times the
+/// pre-extracted scoped binding pressure, and dependency-only pricing is its
+/// fixed coefficient times the qualifying relocation count. Acyclicity and
+/// polarity stay hard vetoes enforced upstream.
 #[must_use]
 pub fn score(
     candidate: &Candidate,
@@ -273,6 +286,8 @@ pub fn score(
     let path = -coefficients.beta * candidate.path_cohesion;
     let anchor = coefficients.mu * candidate.move_distance;
     let capacity = coefficients.gamma * candidate.capacity_pressure;
+    let dependency_only =
+        coefficients.dependency_only * f64::from(candidate.dependency_only_relocations);
 
     ScoreBreakdown {
         cut,
@@ -281,7 +296,8 @@ pub fn score(
         path,
         anchor,
         capacity,
-        total: cut + imbalance + naming + path + anchor + capacity,
+        dependency_only,
+        total: cut + imbalance + naming + path + anchor + capacity + dependency_only,
     }
 }
 
@@ -447,7 +463,47 @@ mod tests {
             path_cohesion: 0.0,
             move_distance: 0.0,
             capacity_pressure: 0.0,
+            dependency_only_relocations: 0,
         }
+    }
+
+    #[test]
+    fn should_price_each_dependency_only_relocation_exactly_once() {
+        let current = score(
+            &empty_candidate(),
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
+        let candidate = Candidate {
+            dependency_only_relocations: 1,
+            ..empty_candidate()
+        };
+        let moved = score(
+            &candidate,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
+
+        assert!(close(current.dependency_only, 0.0));
+        assert!(close(moved.dependency_only, 0.05));
+        assert!(close(moved.total - current.total, 0.05));
+    }
+
+    #[test]
+    fn should_disable_dependency_only_pricing_at_zero() {
+        let candidate = Candidate {
+            dependency_only_relocations: 2,
+            ..empty_candidate()
+        };
+        let coefficients = Coefficients {
+            dependency_only: 0.0,
+            ..Coefficients::greenfield()
+        };
+
+        let breakdown = score(&candidate, &coefficients, &KindWeights::default());
+
+        assert!(close(breakdown.dependency_only, 0.0));
+        assert!(close(breakdown.total, 0.0));
     }
 
     #[test]
@@ -815,6 +871,7 @@ mod tests {
             path_cohesion: 0.5,
             move_distance: 0.2,
             capacity_pressure: 0.3,
+            dependency_only_relocations: 2,
         };
         let breakdown = score(
             &candidate,
@@ -827,7 +884,8 @@ mod tests {
             + breakdown.naming
             + breakdown.path
             + breakdown.anchor
-            + breakdown.capacity;
+            + breakdown.capacity
+            + breakdown.dependency_only;
         assert!(close(breakdown.total, expected));
     }
 

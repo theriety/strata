@@ -588,6 +588,10 @@ pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<St
             weight(p.objective.capacity)
         ),
         format!(
+            "             dependency-only {}",
+            weight(p.objective.dependency_only)
+        ),
+        format!(
             "   weights   value-import {} · inheritance {} · call {} · type-reference {} · re-export {}",
             weight(p.weights.value_import),
             weight(p.weights.inheritance),
@@ -1270,17 +1274,18 @@ fn kind_word(kind: ViolationKind) -> &'static str {
 /// Accessor for one scored term of a breakdown.
 type Term = fn(&ScoreBreakdown) -> f64;
 
-/// The five scored terms in their fixed table order.
-const TERMS: [(&str, Term); 5] = [
+/// The scored terms that always print, in their fixed table order.
+const TERMS: [(&str, Term); 6] = [
     ("cut", |breakdown| breakdown.cut),
     ("imbalance", |breakdown| breakdown.imbalance),
     ("naming", |breakdown| breakdown.naming),
     ("path", |breakdown| breakdown.path),
     ("anchor", |breakdown| breakdown.anchor),
+    ("dependency-only", |breakdown| breakdown.dependency_only),
 ];
 
 /// The `§5` per-term decomposition of the current score versus the featured
-/// candidate, with the combine line and the plain-language term gloss. A sixth
+/// candidate, with the combine line and the plain-language term gloss. The
 /// capacity term prints only when a run actually prices one, keeping every
 /// zero-capacity page byte-shaped like the approved artifact.
 fn score_delta_section(result: &AnalyzeResult) -> Vec<String> {
@@ -1331,14 +1336,15 @@ fn score_delta_section(result: &AnalyzeResult) -> Vec<String> {
     lines.push(if capacity_live {
         " the terms combine into the total score; lower is better.".to_owned()
     } else {
-        " the five terms combine into the total score; lower is better.".to_owned()
+        " the six terms combine into the total score; lower is better.".to_owned()
     });
     lines.push(String::new());
 
     let mut gloss = String::from(
         "cut = import connections broken by moving · imbalance = lopsided folder sizes · naming \
          = folder names fit their contents · path = how far things travel · anchor = credit for \
-         respecting existing well-placed code",
+         respecting existing well-placed code · dependency-only = penalty for moving a declaration \
+         toward only what it depends on",
     );
     if capacity_live {
         gloss.push_str(" · capacity = penalty for containers still over cap");
@@ -1820,6 +1826,7 @@ mod tests {
             naming: 0.0,
             path: 0.0,
             anchor: 0.0,
+            dependency_only: 0.0,
             capacity: 0.0,
         }
     }
@@ -2393,6 +2400,11 @@ mod tests {
                 "missing {expected}: {rendered}"
             );
         }
+        assert_eq!(
+            rendered.matches("dependency-only").count(),
+            1,
+            "the objective exposes dependency-only exactly once: {rendered}"
+        );
     }
 
     #[test]
@@ -2802,8 +2814,11 @@ mod tests {
     fn should_extend_the_term_gloss_only_when_the_capacity_term_is_live() {
         let quiet_text = report_lines(&result_with_candidate(), "fixture").join("\n");
 
-        assert!(quiet_text.contains("the five terms combine into the total score"));
-        assert!(!quiet_text.contains("penalty"), "{quiet_text}");
+        assert!(quiet_text.contains("the six terms combine into the total score"));
+        assert!(
+            quiet_text.contains("dependency-only = penalty"),
+            "{quiet_text}"
+        );
 
         let mut live = result_with_candidate();
         if let Some(profile) = live.profiles.anchored.as_mut() {
@@ -2815,6 +2830,33 @@ mod tests {
         assert!(
             live_text.contains("penalty"),
             "the live capacity term adds its gloss: {live_text}"
+        );
+    }
+
+    #[test]
+    fn should_render_dependency_only_once_in_the_score_table_and_once_in_its_gloss() {
+        let mut result = result_with_candidate();
+        if let Some(profile) = result.profiles.anchored.as_mut() {
+            profile.current.score_breakdown.dependency_only = 0.0;
+            if let Some(candidate) = profile.candidates.first_mut() {
+                candidate.score_breakdown.dependency_only = 0.05;
+            }
+        }
+
+        let section = score_delta_section(&result);
+        let table_rows = section
+            .iter()
+            .filter(|line| line.trim_start().starts_with("dependency-only"))
+            .count();
+        let gloss_mentions = section
+            .iter()
+            .filter(|line| line.contains("dependency-only ="))
+            .count();
+
+        assert_eq!(table_rows, 1, "the term has one score row: {section:?}");
+        assert_eq!(
+            gloss_mentions, 1,
+            "the term has one glossary definition: {section:?}"
         );
     }
 

@@ -39,6 +39,7 @@
    search    candidates 3 · seed 42
    capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
    objective imbalance 0.1 · naming 0.3 · path 0.2 · anchor 1.0 · capacity 4.0
+             dependency-only 0.05
    weights   value-import 1.0 · inheritance 1.5 · call 1.0 · type-reference 0.3 · re-export 0.0
              same-file-symbol 1.0 · same-file-type 3.0
    solver    ilp-threshold 300 · timeout-seconds 60
@@ -48,6 +49,7 @@
    search    candidates 3 · seed 42
    capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
    objective imbalance 0.1 · naming 0.3 · path 0.0 · anchor 0.0 · capacity 4.0
+             dependency-only 0.05
    weights   value-import 1.0 · inheritance 1.5 · call 1.0 · type-reference 0.3 · re-export 0.0
              same-file-symbol 1.0 · same-file-type 3.0
    solver    ilp-threshold 300 · timeout-seconds 60
@@ -122,13 +124,15 @@ Every suggestion relocates whole files (2 in all):
  naming             -0.0000        -0.0150        -0.0150
  path               -0.0000        -0.0000        +0.0000
  anchor              0.0000         0.0000        +0.0000
+ dependency-only     0.0000         0.0000        +0.0000
  score               0.4553         0.3840        -0.0712   (gain +0.0712)
 
- the five terms combine into the total score; lower is better.
+ the six terms combine into the total score; lower is better.
 
  term gloss  cut = import connections broken by moving · imbalance = lopsided folder sizes · naming
              = folder names fit their contents · path = how far things travel · anchor = credit for
-             respecting existing well-placed code
+             respecting existing well-placed code · dependency-only = penalty for moving a
+             declaration toward only what it depends on
 
 ================================================================================
  §6  Recommendation
