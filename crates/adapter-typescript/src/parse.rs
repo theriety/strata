@@ -4,15 +4,17 @@
 //! error is surfaced as [`AdapterError::Parse`] carrying the offending path and
 //! a span-derived reason — files are never skipped silently.
 
+use std::collections::BTreeSet;
+
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use smol_str::SmolStr;
 use strata_ir::{AdapterError, SourceFile};
 use swc_common::{BytePos, FileName, SourceMap, Spanned, sync::Lrc};
 use swc_ecma_ast::{
-    CallExpr, Callee, ClassDecl, Decl, DefaultDecl, Expr, FnDecl, Lit, Module, ModuleDecl,
-    ModuleItem, NewExpr, Pat, TsEnumDecl, TsExprWithTypeArgs, TsInterfaceDecl, TsTypeAliasDecl,
-    VarDecl,
+    CallExpr, Callee, ClassDecl, ClassMember, Decl, DefaultDecl, Expr, FnDecl, Lit, Module,
+    ModuleDecl, ModuleItem, NewExpr, Pat, PropName, TsEnumDecl, TsExprWithTypeArgs,
+    TsInterfaceDecl, TsTypeAliasDecl, VarDecl,
 };
 use swc_ecma_parser::{Parser, StringInput, Syntax, TsSyntax, lexer::Lexer};
 use swc_ecma_visit::{Visit, VisitWith};
@@ -39,6 +41,9 @@ pub struct Declaration {
     pub called: Vec<SmolStr>,
     /// Literal specifiers of `import('...')` calls inside this declaration.
     pub dynamic_imports: Vec<SmolStr>,
+    /// Signature types whose names uniquely match this declaration as owner.
+    #[serde(default)]
+    pub signature_companions: Vec<SmolStr>,
 }
 
 /// The semantic role of a parsed top-level declaration.
@@ -68,10 +73,70 @@ pub struct StaticImport {
 pub struct ReExport {
     /// The module specifier the symbols are re-exported from.
     pub source: SmolStr,
-    /// Names re-exported, empty for `export * from '...'`.
-    pub names: Vec<SmolStr>,
+    /// Named re-export bindings, empty for `export * from '...'`.
+    #[serde(default)]
+    pub names: Vec<ReExportBinding>,
     /// `true` for `export type { x } from '...'`.
     pub type_only: bool,
+}
+
+/// A source binding introduced by a re-export declaration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum ReExportBinding {
+    /// Legacy unaliased payload (`"Widget"`).
+    Legacy(SmolStr),
+    /// A named binding, including an explicitly represented unaliased name.
+    Named {
+        /// Name looked up in the source module.
+        original: SmolStr,
+        /// Name introduced in the re-exporting module.
+        exported: SmolStr,
+    },
+    /// A namespace binding (`export * as namespace`).
+    Namespace {
+        /// Namespace symbol introduced in the re-exporting module.
+        namespace: SmolStr,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamedReExportBinding {
+    original: SmolStr,
+    exported: SmolStr,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NamespaceReExportBinding {
+    namespace: SmolStr,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ReExportBindingWire {
+    Legacy(SmolStr),
+    Named(NamedReExportBinding),
+    Namespace(NamespaceReExportBinding),
+}
+
+impl<'de> Deserialize<'de> for ReExportBinding {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match ReExportBindingWire::deserialize(deserializer)? {
+            ReExportBindingWire::Legacy(name) => Self::Legacy(name),
+            ReExportBindingWire::Named(binding) => Self::Named {
+                original: binding.original,
+                exported: binding.exported,
+            },
+            ReExportBindingWire::Namespace(binding) => Self::Namespace {
+                namespace: binding.namespace,
+            },
+        })
+    }
 }
 
 /// A serializable, language-agnostic summary of one parsed module.
@@ -175,7 +240,7 @@ fn extract(path: &SmolStr, module: &Module, contents: &str, base: BytePos) -> Pa
                         let names = named
                             .specifiers
                             .iter()
-                            .filter_map(export_specifier_name)
+                            .filter_map(export_specifier_binding)
                             .collect();
                         re_exports.push(ReExport {
                             source: specifier(src),
@@ -228,6 +293,7 @@ fn extract(path: &SmolStr, module: &Module, contents: &str, base: BytePos) -> Pa
             referenced: references.referenced,
             called: references.called,
             dynamic_imports: references.dynamic_imports,
+            signature_companions: Vec::new(),
         });
     }
 
@@ -239,17 +305,28 @@ fn extract(path: &SmolStr, module: &Module, contents: &str, base: BytePos) -> Pa
     }
 }
 
-/// Resolves the bound name of an export specifier (`export { a as b }` -> `b`).
-fn export_specifier_name(export: &swc_ecma_ast::ExportSpecifier) -> Option<SmolStr> {
-    use swc_ecma_ast::{ExportSpecifier, ModuleExportName};
-    let name = match export {
-        ExportSpecifier::Named(named) => named.exported.as_ref().unwrap_or(&named.orig),
-        ExportSpecifier::Namespace(ns) => &ns.name,
+/// Preserves both sides of a named export (`export { a as b }` -> `(a, b)`).
+fn export_specifier_binding(export: &swc_ecma_ast::ExportSpecifier) -> Option<ReExportBinding> {
+    use swc_ecma_ast::ExportSpecifier;
+    let (original, exported) = match export {
+        ExportSpecifier::Named(named) => (
+            module_export_name(&named.orig),
+            module_export_name(named.exported.as_ref().unwrap_or(&named.orig)),
+        ),
+        ExportSpecifier::Namespace(ns) => {
+            let name = module_export_name(&ns.name);
+            return Some(ReExportBinding::Namespace { namespace: name });
+        }
         ExportSpecifier::Default(_) => return None,
     };
+    Some(ReExportBinding::Named { original, exported })
+}
+
+fn module_export_name(name: &swc_ecma_ast::ModuleExportName) -> SmolStr {
+    use swc_ecma_ast::ModuleExportName;
     match name {
-        ModuleExportName::Ident(ident) => Some(SmolStr::new(ident.sym.as_str())),
-        ModuleExportName::Str(string) => Some(specifier(string)),
+        ModuleExportName::Ident(ident) => SmolStr::new(ident.sym.as_str()),
+        ModuleExportName::Str(string) => specifier(string),
     }
 }
 
@@ -292,7 +369,7 @@ fn push_default_decl(
             let mut references = ReferenceCollector::default();
             class.class.visit_with(&mut references);
             out.push(Declaration {
-                name,
+                name: name.clone(),
                 kind: DeclarationKind::Symbol,
                 exported: true,
                 sloc: slice_sloc(default.span(), contents, base),
@@ -300,6 +377,7 @@ fn push_default_decl(
                 referenced: references.referenced,
                 called: references.called,
                 dynamic_imports: references.dynamic_imports,
+                signature_companions: class_signature_companions(&name, &class.class),
             });
         }
         DefaultDecl::Fn(function) => {
@@ -310,7 +388,7 @@ fn push_default_decl(
             let mut references = ReferenceCollector::default();
             function.function.visit_with(&mut references);
             out.push(Declaration {
-                name,
+                name: name.clone(),
                 kind: DeclarationKind::Symbol,
                 exported: true,
                 sloc: slice_sloc(default.span(), contents, base),
@@ -318,6 +396,7 @@ fn push_default_decl(
                 referenced: references.referenced,
                 called: references.called,
                 dynamic_imports: references.dynamic_imports,
+                signature_companions: function_signature_companions(&name, &function.function),
             });
         }
         DefaultDecl::TsInterfaceDecl(interface) => {
@@ -344,6 +423,7 @@ fn class_declaration(
         referenced: references.referenced,
         called: references.called,
         dynamic_imports: references.dynamic_imports,
+        signature_companions: class_signature_companions(class.ident.sym.as_str(), &class.class),
     }
 }
 
@@ -360,6 +440,10 @@ fn fn_declaration(function: &FnDecl, exported: bool, contents: &str, base: ByteP
         referenced: references.referenced,
         called: references.called,
         dynamic_imports: references.dynamic_imports,
+        signature_companions: function_signature_companions(
+            function.ident.sym.as_str(),
+            &function.function,
+        ),
     }
 }
 
@@ -388,6 +472,7 @@ fn var_declarations(
             referenced: references.referenced,
             called: references.called,
             dynamic_imports: references.dynamic_imports,
+            signature_companions: Vec::new(),
         });
     }
 }
@@ -412,6 +497,7 @@ fn interface_declaration(
         referenced: references.referenced,
         called: references.called,
         dynamic_imports: references.dynamic_imports,
+        signature_companions: Vec::new(),
     }
 }
 
@@ -435,6 +521,7 @@ fn type_alias_declaration(
         referenced: references.referenced,
         called: references.called,
         dynamic_imports: references.dynamic_imports,
+        signature_companions: Vec::new(),
     }
 }
 
@@ -454,7 +541,119 @@ fn enum_declaration(
         referenced: Vec::new(),
         called: Vec::new(),
         dynamic_imports: Vec::new(),
+        signature_companions: Vec::new(),
     }
+}
+
+fn function_signature_companions(
+    owner_name: &str,
+    function: &swc_ecma_ast::Function,
+) -> Vec<SmolStr> {
+    signature_type_names(function)
+        .into_iter()
+        .filter(|type_name| companion_name_matches(type_name, owner_name))
+        .collect()
+}
+
+fn class_signature_companions(class_name: &str, class: &swc_ecma_ast::Class) -> Vec<SmolStr> {
+    let mut companions = Vec::new();
+    for member in &class.body {
+        let ClassMember::Method(method) = member else {
+            continue;
+        };
+        let PropName::Ident(method_name) = &method.key else {
+            continue;
+        };
+        let owner_name = format!("{class_name}_{}", method_name.sym);
+        companions.extend(
+            signature_type_names(&method.function)
+                .into_iter()
+                .filter(|type_name| companion_name_matches(type_name, &owner_name)),
+        );
+    }
+    companions
+}
+
+fn signature_type_names(function: &swc_ecma_ast::Function) -> BTreeSet<SmolStr> {
+    let mut collector = ReferenceCollector::for_declaration_members();
+    for parameter in &function.params {
+        if let Some(type_ann) = pattern_type_annotation(&parameter.pat) {
+            type_ann.type_ann.visit_with(&mut collector);
+        }
+    }
+    if let Some(return_type) = &function.return_type {
+        return_type.type_ann.visit_with(&mut collector);
+    }
+    collector.referenced.into_iter().collect()
+}
+
+/// Returns only the annotation attached to a parameter pattern.
+///
+/// Assignment defaults and destructuring bodies are deliberately not visited:
+/// companion evidence comes from the declared signature, never expressions.
+fn pattern_type_annotation(pattern: &Pat) -> Option<&swc_ecma_ast::TsTypeAnn> {
+    match pattern {
+        Pat::Ident(binding) => binding.type_ann.as_deref(),
+        Pat::Array(array) => array.type_ann.as_deref(),
+        Pat::Object(object) => object.type_ann.as_deref(),
+        Pat::Rest(rest) => rest.type_ann.as_deref(),
+        Pat::Assign(assign) => pattern_type_annotation(&assign.left),
+        Pat::Invalid(_) | Pat::Expr(_) => None,
+    }
+}
+
+fn companion_name_matches(type_name: &str, owner_name: &str) -> bool {
+    const SUFFIXES: [&str; 7] = [
+        "Params", "Options", "Input", "Output", "Result", "Context", "State",
+    ];
+    let Some(stem) = SUFFIXES
+        .iter()
+        .find_map(|suffix| type_name.strip_suffix(suffix))
+    else {
+        return false;
+    };
+    let companion = semantic_tokens(stem);
+    companion.len() >= 2 && companion == semantic_tokens(owner_name)
+}
+
+fn semantic_tokens(name: &str) -> BTreeSet<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let chars: Vec<char> = name.chars().collect();
+    for (index, ch) in chars.iter().copied().enumerate() {
+        let boundary = !current.is_empty()
+            && (ch == '_'
+                || ch == '-'
+                || (ch.is_uppercase()
+                    && chars
+                        .get(index.wrapping_sub(1))
+                        .is_some_and(|previous| previous.is_lowercase())));
+        if boundary {
+            words.push(std::mem::take(&mut current));
+        }
+        if ch != '_' && ch != '-' {
+            current.push(ch.to_ascii_lowercase());
+        }
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+        .into_iter()
+        .filter(|word| word != "adapter" && word != "to")
+        .map(|word| normalize_ing(&word))
+        .collect()
+}
+
+fn normalize_ing(word: &str) -> String {
+    let Some(stem) = word.strip_suffix("ing") else {
+        return word.to_owned();
+    };
+    let mut normalized = stem.to_owned();
+    if matches!(normalized.as_bytes(), [.., penultimate, last] if penultimate == last) {
+        normalized.pop();
+    }
+    normalized
 }
 
 /// Collects the names a class extends and implements.

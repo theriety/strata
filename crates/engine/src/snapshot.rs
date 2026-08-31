@@ -359,6 +359,7 @@ fn merge_fragments(
 ) -> IntermediateRepresentation {
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges = Vec::new();
+    let mut affinities = Vec::new();
     // the file path each merged node belongs to, parallel to `nodes`.
     let mut node_paths: Vec<SmolStr> = Vec::new();
     let mut all_paths: Vec<SmolStr> = Vec::new();
@@ -393,6 +394,11 @@ fn merge_fragments(
             edge.target = NodeId(edge.target.0 + node_offset);
             edges.push(edge);
         }
+        for mut affinity in fragment.affinities {
+            affinity.owner = NodeId(affinity.owner.0 + node_offset);
+            affinity.companion = NodeId(affinity.companion.0 + node_offset);
+            affinities.push(affinity);
+        }
         node_offset += node_span;
     }
 
@@ -401,7 +407,9 @@ fn merge_fragments(
         node.container = built.files.get(path).copied().unwrap_or(ContainerId(0));
     }
 
-    IntermediateRepresentation::new(nodes, edges, built.tree)
+    let mut ir = IntermediateRepresentation::new(nodes, edges, built.tree);
+    ir.affinities = affinities;
+    ir
 }
 
 /// Returns one past the maximum id in `ids`, i.e. the id range width a fragment
@@ -480,7 +488,9 @@ fn name_lookup(nodes: &[Node]) -> HashMap<NodeId, SmolStr> {
 
 #[cfg(test)]
 mod tests {
-    use strata_ir::{Container, Edge, Hardness, NodeKind, Polarity, ScopeLevel};
+    use strata_ir::{
+        Affinity, AffinityKind, Container, Edge, Hardness, NodeKind, Polarity, ScopeLevel,
+    };
 
     use super::*;
 
@@ -660,11 +670,21 @@ mod tests {
         let first = IrFragment {
             nodes: vec![node(0, "a", 0)],
             edges: vec![edge(0, 0, EdgeKind::Call)],
+            affinities: vec![Affinity {
+                owner: NodeId(0),
+                companion: NodeId(0),
+                kind: AffinityKind::CompanionOwner,
+            }],
             containers: vec![container(0, "src/a.ts")],
         };
         let second = IrFragment {
             nodes: vec![node(0, "b", 0)],
             edges: vec![edge(0, 0, EdgeKind::Call)],
+            affinities: vec![Affinity {
+                owner: NodeId(0),
+                companion: NodeId(0),
+                kind: AffinityKind::CompanionOwner,
+            }],
             containers: vec![container(0, "src/b.ts")],
         };
 
@@ -674,6 +694,11 @@ mod tests {
         assert_eq!(merged.nodes.len(), 2);
         assert_eq!(merged.nodes.get(1).map(|n| n.id), Some(NodeId(1)));
         assert_eq!(merged.edges.get(1).map(|e| e.source), Some(NodeId(1)));
+        assert_eq!(merged.affinities.get(1).map(|a| a.owner), Some(NodeId(1)));
+        assert_eq!(
+            merged.affinities.get(1).map(|a| a.companion),
+            Some(NodeId(1))
+        );
 
         // ...and each node is re-homed to its own file container in the rebuilt
         // tree, so the two distinct files never collapse together.
@@ -691,11 +716,13 @@ mod tests {
         let source = IrFragment {
             nodes: vec![node(0, "widget", 0)],
             edges: Vec::new(),
+            affinities: Vec::new(),
             containers: vec![container(0, "src/ui/widget.ts")],
         };
         let test = IrFragment {
             nodes: vec![node(0, "widget_test", 0)],
             edges: Vec::new(),
+            affinities: Vec::new(),
             containers: vec![container(0, "spec/ui/widget.spec.ts")],
         };
         let layout = Layout {

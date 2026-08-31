@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use thiserror::Error;
 
+use crate::Affinity;
 use crate::container::Container;
 use crate::edge::Edge;
 use crate::node::Node;
@@ -36,6 +37,8 @@ pub struct IrFragment {
     pub nodes: Vec<Node>,
     /// Edges contributed by this adapter.
     pub edges: Vec<Edge>,
+    /// Non-dependency semantic relationships contributed by this adapter.
+    pub affinities: Vec<Affinity>,
     /// Containers contributed by this adapter.
     pub containers: Vec<Container>,
 }

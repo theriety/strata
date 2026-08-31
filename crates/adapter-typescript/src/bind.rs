@@ -10,16 +10,16 @@
 //! cannot be resolved statically (dynamic `import('...')`) become low-confidence
 //! edges rather than being dropped.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use smol_str::SmolStr;
 use strata_ir::{
-    Container, ContainerId, ContainerTree, Edge, EdgeKind, Hardness, IrFragment, Node, NodeId,
-    NodeKind, Polarity, ScopeLevel,
+    Affinity, AffinityKind, Container, ContainerId, ContainerTree, Edge, EdgeKind, Hardness,
+    IrFragment, Node, NodeId, NodeKind, Polarity, ScopeLevel,
 };
 
-use crate::parse::{DeclarationKind, ParsedModule};
+use crate::parse::{DeclarationKind, ParsedModule, ReExport, ReExportBinding};
 
 /// Per-module, per-name lookup of the node a declaration was assigned.
 type ExportTable = HashMap<SmolStr, HashMap<SmolStr, NodeId>>;
@@ -99,6 +99,14 @@ pub fn bind(
     );
 
     let mut edges = emit_edges(modules, &resolver, &exports, &local);
+    let affinities = emit_companion_affinities(
+        modules,
+        &resolver,
+        &exports,
+        &local,
+        &nodes,
+        &re_export_links,
+    );
     emit_re_exports(&re_export_links, &mut edges);
     let polarity = classify_polarity(modules, &nodes, &local, &exported, &edges);
     apply_polarity(&mut nodes, &polarity);
@@ -106,8 +114,100 @@ pub fn bind(
     Ok(IrFragment {
         nodes,
         edges,
+        affinities,
         containers: containers.tree.containers().to_vec(),
     })
+}
+
+fn emit_companion_affinities(
+    modules: &[ParsedModule],
+    resolver: &Resolver,
+    exports: &ExportTable,
+    local: &HashMap<SmolStr, HashMap<SmolStr, NodeId>>,
+    nodes: &[Node],
+    re_export_links: &[ReExportLink],
+) -> Vec<Affinity> {
+    let kinds: HashMap<NodeId, NodeKind> = nodes.iter().map(|node| (node.id, node.kind)).collect();
+    let mut targets_by_source: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
+    for link in re_export_links {
+        if link.namespace {
+            continue;
+        }
+        targets_by_source
+            .entry(link.source)
+            .or_default()
+            .insert(link.target);
+    }
+    let re_export_targets: HashMap<NodeId, NodeId> = targets_by_source
+        .into_iter()
+        .filter_map(|(source, targets)| {
+            let mut targets = targets.into_iter();
+            let target = targets.next()?;
+            targets.next().is_none().then_some((source, target))
+        })
+        .collect();
+    let mut owners_by_companion: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    for module in modules {
+        let module_local = local.get(&module.path);
+        let imported = resolve_imports(module, resolver, exports);
+        for declaration in &module.declarations {
+            let Some(&owner) = module_local.and_then(|table| table.get(&declaration.name)) else {
+                continue;
+            };
+            for name in &declaration.signature_companions {
+                let companion = imported
+                    .get(name)
+                    .map(|(target, _)| *target)
+                    .or_else(|| module_local.and_then(|table| table.get(name)).copied());
+                let companion = companion.and_then(|companion| {
+                    originating_re_export_target(companion, &re_export_targets)
+                });
+                if let Some(companion) = companion
+                    && kinds.get(&companion) == Some(&NodeKind::Type)
+                {
+                    owners_by_companion
+                        .entry(companion)
+                        .or_default()
+                        .push(owner);
+                }
+            }
+        }
+    }
+    owners_by_companion
+        .into_iter()
+        .filter_map(|(companion, owners)| {
+            let [owner] = owners.as_slice() else {
+                return None;
+            };
+            Some(Affinity {
+                owner: *owner,
+                companion,
+                kind: AffinityKind::CompanionOwner,
+            })
+        })
+        .collect()
+}
+
+/// Follows affinity identity through barrel bindings to the declaration that
+/// originated the exported name.
+///
+/// This lookup is intentionally affinity-only: ordinary imports continue to
+/// resolve to barrel nodes so dependency and re-export edge semantics remain
+/// unchanged. A malformed link cycle has no authoritative origin, so it emits
+/// no affinity rather than choosing an arbitrary barrel node.
+fn originating_re_export_target(
+    start: NodeId,
+    re_export_targets: &HashMap<NodeId, NodeId>,
+) -> Option<NodeId> {
+    let mut current = start;
+    let mut visited = HashSet::new();
+    while let Some(&target) = re_export_targets.get(&current) {
+        if !visited.insert(current) {
+            return None;
+        }
+        current = target;
+    }
+    Some(current)
 }
 
 /// A binding failure. Reserved for future resolution errors; the binder is
@@ -351,6 +451,8 @@ struct ReExportLink {
     source: NodeId,
     /// The original declaration the name is re-exported from.
     target: NodeId,
+    /// Whether the source is a namespace object rather than a named binding.
+    namespace: bool,
 }
 
 /// Materializes a node for every barrel re-export binding and records its link
@@ -375,66 +477,159 @@ fn assign_re_export_nodes(
     local: &mut HashMap<SmolStr, HashMap<SmolStr, NodeId>>,
 ) -> Vec<ReExportLink> {
     let mut links = Vec::new();
-    for module in modules {
-        let container = containers.file_of(&module.path);
-        for re_export in &module.re_exports {
-            let Some(target_module) = resolver.resolve(&module.path, &re_export.source) else {
-                continue;
-            };
-            let Some(target_exports) = exports.get(&target_module) else {
-                continue;
-            };
-            // Snapshot the (name, target) bindings up front so the `exports` table
-            // can be mutated below without aliasing the immutable target borrow.
-            let mut bindings: Vec<(SmolStr, NodeId)> = if re_export.names.is_empty() {
-                target_exports
-                    .iter()
-                    .map(|(name, &target)| (name.clone(), target))
-                    .collect()
-            } else {
-                re_export
-                    .names
-                    .iter()
-                    .filter_map(|name| target_exports.get(name).map(|&t| (name.clone(), t)))
-                    .collect()
-            };
-            bindings.sort_by(|a, b| a.0.cmp(&b.0));
-            for (name, target) in bindings {
-                // A pre-existing local declaration already provides the binding.
-                if local
-                    .get(&module.path)
-                    .is_some_and(|t| t.contains_key(&name))
-                {
+    let ordered_modules = modules_by_path(modules);
+
+    loop {
+        let mut made_progress = false;
+        for module in &ordered_modules {
+            let container = containers.file_of(&module.path);
+            for re_export in &module.re_exports {
+                let Some(target_module) = resolver.resolve(&module.path, &re_export.source) else {
+                    continue;
+                };
+                let Some(target_exports) = exports.get(&target_module) else {
+                    continue;
+                };
+                if let Some(namespace) = re_export.names.iter().find_map(|binding| match binding {
+                    ReExportBinding::Namespace { namespace } => Some(namespace.as_str()),
+                    ReExportBinding::Legacy(_) | ReExportBinding::Named { .. } => None,
+                }) {
+                    if local
+                        .get(&module.path)
+                        .is_some_and(|table| table.contains_key(namespace))
+                    {
+                        continue;
+                    }
+                    let targets = sorted_unique_targets(target_exports);
+                    let id = push_namespace_node(nodes, exported, container, namespace);
+                    local
+                        .entry(module.path.clone())
+                        .or_default()
+                        .insert(SmolStr::new(namespace), id);
+                    exports
+                        .entry(module.path.clone())
+                        .or_default()
+                        .insert(SmolStr::new(namespace), id);
+                    links.extend(targets.into_iter().map(|target| ReExportLink {
+                        source: id,
+                        target,
+                        namespace: true,
+                    }));
+                    made_progress = true;
                     continue;
                 }
-                let id = NodeId(u32::try_from(nodes.len()).unwrap_or(u32::MAX));
-                nodes.push(Node {
-                    id,
-                    name: name.clone(),
-                    kind: if re_export.type_only {
-                        NodeKind::Type
-                    } else {
-                        NodeKind::Symbol
-                    },
-                    polarity: Polarity::Production,
-                    container,
-                    visibility: ScopeLevel::File,
-                    effective_size: 0,
-                });
-                exported.push(true);
-                local
-                    .entry(module.path.clone())
-                    .or_default()
-                    .insert(name.clone(), id);
-                exports
-                    .entry(module.path.clone())
-                    .or_default()
-                    .insert(name.clone(), id);
-                links.push(ReExportLink { source: id, target });
+                // Snapshot the (name, target) bindings up front so the `exports`
+                // table can be mutated below without aliasing its target borrow.
+                let mut bindings = resolved_re_export_bindings(re_export, target_exports);
+                bindings.sort_by(|a, b| a.0.cmp(&b.0));
+                for (name, target) in bindings {
+                    // A prior pass or source declaration already provides this
+                    // binding. Skipping it makes every pass monotonic.
+                    if local
+                        .get(&module.path)
+                        .is_some_and(|table| table.contains_key(&name))
+                    {
+                        continue;
+                    }
+                    let id = NodeId(u32::try_from(nodes.len()).unwrap_or(u32::MAX));
+                    nodes.push(Node {
+                        id,
+                        name: name.clone(),
+                        kind: if re_export.type_only {
+                            NodeKind::Type
+                        } else {
+                            NodeKind::Symbol
+                        },
+                        polarity: Polarity::Production,
+                        container,
+                        visibility: ScopeLevel::File,
+                        effective_size: 0,
+                    });
+                    exported.push(true);
+                    local
+                        .entry(module.path.clone())
+                        .or_default()
+                        .insert(name.clone(), id);
+                    exports
+                        .entry(module.path.clone())
+                        .or_default()
+                        .insert(name.clone(), id);
+                    links.push(ReExportLink {
+                        source: id,
+                        target,
+                        namespace: false,
+                    });
+                    made_progress = true;
+                }
             }
+        }
+        if !made_progress {
+            break;
         }
     }
     links
+}
+
+fn resolved_re_export_bindings(
+    re_export: &ReExport,
+    target_exports: &HashMap<SmolStr, NodeId>,
+) -> Vec<(SmolStr, NodeId)> {
+    if re_export.names.is_empty() {
+        return target_exports
+            .iter()
+            .map(|(name, &target)| (name.clone(), target))
+            .collect();
+    }
+    re_export
+        .names
+        .iter()
+        .filter_map(|binding| {
+            let (original, exported_name) = match binding {
+                ReExportBinding::Legacy(name) => (name.as_str(), name.as_str()),
+                ReExportBinding::Named {
+                    original,
+                    exported: exported_name,
+                } => (original.as_str(), exported_name.as_str()),
+                ReExportBinding::Namespace { .. } => return None,
+            };
+            target_exports
+                .get(original)
+                .map(|&target| (SmolStr::new(exported_name), target))
+        })
+        .collect()
+}
+
+fn modules_by_path(modules: &[ParsedModule]) -> Vec<&ParsedModule> {
+    let mut ordered: Vec<&ParsedModule> = modules.iter().collect();
+    ordered.sort_by(|left, right| left.path.cmp(&right.path));
+    ordered
+}
+
+fn sorted_unique_targets(exports: &HashMap<SmolStr, NodeId>) -> Vec<NodeId> {
+    let mut targets: Vec<NodeId> = exports.values().copied().collect();
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+fn push_namespace_node(
+    nodes: &mut Vec<Node>,
+    exported: &mut Vec<bool>,
+    container: ContainerId,
+    namespace: &str,
+) -> NodeId {
+    let id = NodeId(u32::try_from(nodes.len()).unwrap_or(u32::MAX));
+    nodes.push(Node {
+        id,
+        name: SmolStr::new(namespace),
+        kind: NodeKind::Symbol,
+        polarity: Polarity::Production,
+        container,
+        visibility: ScopeLevel::File,
+        effective_size: 0,
+    });
+    exported.push(true);
+    id
 }
 
 /// Emits the soft re-export edges from the resolved barrel bindings.
@@ -866,6 +1061,7 @@ mod tests {
             referenced: called.iter().copied().map(SmolStr::new).collect(),
             called: called.iter().copied().map(SmolStr::new).collect(),
             dynamic_imports: Vec::new(),
+            signature_companions: Vec::new(),
         }
     }
 
@@ -888,6 +1084,7 @@ mod tests {
             referenced: Vec::new(),
             called: Vec::new(),
             dynamic_imports: Vec::new(),
+            signature_companions: Vec::new(),
         });
 
         let fragment = bind(
@@ -936,6 +1133,7 @@ mod tests {
             referenced: referenced.iter().copied().map(SmolStr::new).collect(),
             called: Vec::new(),
             dynamic_imports: Vec::new(),
+            signature_companions: Vec::new(),
         }
     }
 
@@ -1036,7 +1234,10 @@ mod tests {
         let mut barrel = module_at("src/index.ts");
         barrel.re_exports.push(crate::parse::ReExport {
             source: SmolStr::new("./widget"),
-            names: vec![SmolStr::new("Widget")],
+            names: vec![crate::parse::ReExportBinding::Named {
+                original: SmolStr::new("Widget"),
+                exported: SmolStr::new("Widget"),
+            }],
             type_only: false,
         });
         let mut provider = module_at("src/widget.ts");
@@ -1049,6 +1250,7 @@ mod tests {
             referenced: Vec::new(),
             called: Vec::new(),
             dynamic_imports: Vec::new(),
+            signature_companions: Vec::new(),
         });
 
         let fragment = bind(
@@ -1204,6 +1406,7 @@ mod tests {
             referenced: Vec::new(),
             called: Vec::new(),
             dynamic_imports: Vec::new(),
+            signature_companions: Vec::new(),
         });
 
         let fragment = bind(
@@ -1244,6 +1447,7 @@ mod tests {
             referenced: vec![SmolStr::new("describe"), SmolStr::new("executeSubject")],
             called: vec![SmolStr::new("describe"), SmolStr::new("executeSubject")],
             dynamic_imports: Vec::new(),
+            signature_companions: Vec::new(),
         });
         let mut twin = module_at("src/subject.ts");
         twin.declarations.push(crate::parse::Declaration {
@@ -1255,6 +1459,7 @@ mod tests {
             referenced: Vec::new(),
             called: Vec::new(),
             dynamic_imports: Vec::new(),
+            signature_companions: Vec::new(),
         });
 
         let fragment = bind(

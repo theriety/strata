@@ -174,6 +174,7 @@ naming = 0.3
 path = 0.2
 anchor = 1.0
 dependency-only = 0.05
+companion-separation = 0.05
 capacity = 4.0
 
 [profiles.anchored.weights]
@@ -216,6 +217,7 @@ naming = 0.3
 path = 0.0
 anchor = 0.0
 dependency-only = 0.05
+companion-separation = 0.05
 capacity = 4.0
 
 [profiles.greenfield.weights]
@@ -244,7 +246,7 @@ builtins = true
 
 The former `analysis.mode`, `analysis.candidates`, `analysis.seed`, and top-level analysis-policy sections are invalid. `--mode` remains a CLI compatibility selector: it chooses which parameter profiles execute but does not define their parameters.
 
-Saved analysis JSON uses result schema version 5. Each score breakdown includes `dependencyOnly`, the fixed per-declaration charge controlled by the profile's `dependency-only` objective value. Version-4 saved results are not accepted by `report`, `tree`, or `diff`.
+Saved analysis JSON uses result schema version 6. Each score breakdown includes `dependencyOnly` and `companionSeparation`. The latter is the directional charge for keeping a conservatively matched signature type away from its immutable owner file. Earlier saved result versions are not accepted by `report`, `tree`, or `diff`.
 
 ## How it works
 

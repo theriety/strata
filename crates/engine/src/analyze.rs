@@ -4647,6 +4647,8 @@ fn score_candidate(
     let capacity_pressure = capacity_pressure(snapshot, placement, tree, namespaces, capacity);
     let dependency_only_relocations =
         dependency_only_relocations(snapshot, placement, pass_start_file_by_candidate);
+    let companion_separations =
+        companion_separations(snapshot, placement, pass_start_file_by_candidate);
 
     ScoreCandidate {
         edges,
@@ -4656,7 +4658,40 @@ fn score_candidate(
         move_distance,
         capacity_pressure,
         dependency_only_relocations,
+        companion_separations,
     }
+}
+
+/// Counts companions not placed in the immutable pass-start file of their owner.
+fn companion_separations(
+    snapshot: &Snapshot,
+    placement: &dyn Fn(u32) -> Option<ContainerId>,
+    pass_start_file_by_candidate: &BTreeMap<ContainerId, ContainerId>,
+) -> u32 {
+    let nodes: BTreeMap<NodeId, &Node> = snapshot
+        .ir()
+        .nodes
+        .iter()
+        .map(|node| (node.id, node))
+        .collect();
+    snapshot
+        .ir()
+        .affinities
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|affinity| {
+            let Some(owner) = nodes.get(&affinity.owner) else {
+                return false;
+            };
+            placement(affinity.companion.0)
+                .and_then(|file| pass_start_file_by_candidate.get(&file).copied())
+                != Some(owner.container)
+        })
+        .count()
+        .try_into()
+        .unwrap_or(u32::MAX)
 }
 
 /// Counts production declarations that leave their pass-start file for a file
@@ -6154,6 +6189,20 @@ impl<'a> SymbolPass<'a> {
                 .or_default()
                 .push((edge.source.0, weight));
         }
+        if coefficients.companion_separation > 0.0 {
+            for affinity in snapshot
+                .ir()
+                .affinities
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+            {
+                incident
+                    .entry(affinity.companion.0)
+                    .or_default()
+                    .push((affinity.owner.0, coefficients.companion_separation));
+            }
+        }
         let reach = ReachGuard::new(assembled, base, edges, weights, &touches_zone);
         let consumer_branches = ConsumerBranchGuard::new(assembled, snapshot, edges);
         let mut file_roles: BTreeMap<ContainerId, (bool, bool)> = BTreeMap::new();
@@ -6550,8 +6599,8 @@ mod tests {
 
     use smol_str::SmolStr;
     use strata_ir::{
-        ContainerId, Edge, EdgeKind, Hardness, IntermediateRepresentation, Layout, NodeId,
-        NodeKind, build_laminar_tree,
+        Affinity, AffinityKind, ContainerId, Edge, EdgeKind, Hardness, IntermediateRepresentation,
+        Layout, NodeId, NodeKind, build_laminar_tree,
     };
 
     use super::*;
@@ -6569,6 +6618,7 @@ mod tests {
                     anchor: 0.0,
                     capacity: 0.0,
                     dependency_only: 0.0,
+                    companion_separation: 0.0,
                 },
                 unique_findings: Vec::new(),
                 standing: CurrentStanding::Outscored,
@@ -6659,7 +6709,18 @@ mod tests {
     /// minimal fallback.
     #[allow(clippy::panic)] // loud failure is the point of this test helper
     fn snapshot(nodes: Vec<Node>, edges: Vec<Edge>, containers: Vec<Container>) -> Snapshot {
-        let ir = IntermediateRepresentation::new(nodes, edges, ContainerTree::new(containers));
+        snapshot_with_affinities(nodes, edges, Vec::new(), containers)
+    }
+
+    #[allow(clippy::panic)] // loud failure is the point of this test helper
+    fn snapshot_with_affinities(
+        nodes: Vec<Node>,
+        edges: Vec<Edge>,
+        affinities: Vec<Affinity>,
+        containers: Vec<Container>,
+    ) -> Snapshot {
+        let mut ir = IntermediateRepresentation::new(nodes, edges, ContainerTree::new(containers));
+        ir.affinities = affinities;
         Snapshot::assemble(ir)
             .unwrap_or_else(|error| panic!("test snapshot failed to assemble: {error}"))
     }
@@ -7841,7 +7902,7 @@ mod tests {
     }
 
     #[test]
-    fn should_serialize_profile_results_as_schema_version_five_without_modes() {
+    fn should_serialize_profile_results_as_schema_version_six_without_modes() {
         let snapshot = snapshot(
             vec![node(0, "item", 0, Polarity::Production)],
             vec![],
@@ -7857,7 +7918,7 @@ mod tests {
             serialized
                 .get("schemaVersion")
                 .and_then(serde_json::Value::as_u64),
-            Some(5)
+            Some(6)
         );
         assert!(serialized.pointer("/current/tree").is_some());
         assert!(serialized.pointer("/current/sharedFindings").is_some());
@@ -13185,6 +13246,105 @@ mod tests {
     }
 
     #[test]
+    fn should_move_a_companion_type_to_its_immutable_owner_file() {
+        let snapshot = companion_owner_snapshot(false);
+
+        let (accepted, relocated) =
+            relocates_first_symbol_with_companion_separation(&snapshot, 0.05);
+
+        assert!(
+            accepted && relocated == [0],
+            "co-locating the companion type removes exactly one directional separation; \
+             relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_not_reward_moving_an_owner_toward_its_companion() {
+        let snapshot = companion_owner_snapshot(true);
+
+        let (accepted, relocated) =
+            relocates_first_symbol_with_companion_separation(&snapshot, 0.05);
+
+        assert!(
+            !accepted && relocated.is_empty(),
+            "owner motion cannot satisfy directional companion affinity; relocations {relocated:?}"
+        );
+    }
+
+    #[test]
+    fn should_apply_companion_separation_to_only_the_changed_profile() {
+        let snapshot = companion_owner_snapshot(false);
+        let mut anchored = ProfileConfig::default();
+        anchored.objective.imbalance = 0.0;
+        anchored.objective.naming = 0.0;
+        anchored.objective.path = 0.0;
+        anchored.objective.anchor = 0.0;
+        anchored.objective.capacity = 0.0;
+        anchored.objective.dependency_only = 0.0;
+        anchored.objective.companion_separation = 0.0;
+        let mut greenfield = anchored.clone();
+        greenfield.objective.companion_separation = 0.05;
+
+        let (anchored_accepted, anchored_relocations) =
+            relocates_first_symbol_with_profile(&snapshot, &anchored);
+        let (greenfield_accepted, greenfield_relocations) =
+            relocates_first_symbol_with_profile(&snapshot, &greenfield);
+
+        assert!(!anchored_accepted && anchored_relocations.is_empty());
+        assert!(greenfield_accepted && greenfield_relocations == [0]);
+    }
+
+    #[test]
+    fn should_count_duplicate_companion_affinity_exactly_once() {
+        let snapshot = companion_owner_snapshot_with_affinity_count(false, 2);
+        let placement = |id| {
+            snapshot
+                .ir()
+                .nodes
+                .iter()
+                .find(|node| node.id.0 == id)
+                .map(|node| node.container)
+        };
+        let pass_start_files = snapshot
+            .ir()
+            .nodes
+            .iter()
+            .map(|node| (node.container, node.container))
+            .collect();
+
+        assert_eq!(
+            companion_separations(&snapshot, &placement, &pass_start_files),
+            1,
+            "one separated companion contributes one fixed charge despite duplicate input"
+        );
+    }
+
+    #[test]
+    fn should_nominate_duplicate_companion_affinity_exactly_once() {
+        let snapshot = companion_owner_snapshot_with_affinity_count(false, 2);
+
+        assert_eq!(
+            companion_nomination_count(&snapshot, 0, 2),
+            1,
+            "one companion-owner relation nominates its owner file exactly once"
+        );
+    }
+
+    #[test]
+    fn should_not_cross_a_transparent_namespace_for_companion_affinity() {
+        let snapshot = transparent_namespace_companion_snapshot();
+
+        let (accepted, relocated) =
+            relocates_first_symbol_with_companion_separation(&snapshot, 0.05);
+
+        assert!(
+            !accepted && relocated.is_empty(),
+            "affinity cannot bypass the pass-start namespace guard; relocations {relocated:?}"
+        );
+    }
+
+    #[test]
     fn should_apply_dependency_only_pricing_to_only_the_changed_profile() {
         let snapshot = dependency_only_snapshot();
         let mut config = AnalyzeConfig::default();
@@ -13713,6 +13873,54 @@ mod tests {
         relocates_first_symbol_with_profile(snapshot, &config.profiles.greenfield)
     }
 
+    fn relocates_first_symbol_with_companion_separation(
+        snapshot: &Snapshot,
+        companion_separation: f64,
+    ) -> (bool, Vec<u32>) {
+        let mut profile = ProfileConfig::default();
+        profile.objective.imbalance = 0.0;
+        profile.objective.naming = 0.0;
+        profile.objective.path = 0.0;
+        profile.objective.anchor = 0.0;
+        profile.objective.capacity = 0.0;
+        profile.objective.dependency_only = 0.0;
+        profile.objective.companion_separation = companion_separation;
+        relocates_first_symbol_with_profile(snapshot, &profile)
+    }
+
+    fn companion_nomination_count(snapshot: &Snapshot, companion: u32, owner: u32) -> usize {
+        let tests = TestPolicy::defaults();
+        let mut profile = ProfileConfig::default();
+        profile.objective.companion_separation = 0.05;
+        let solver = PipelineSolver::new(
+            snapshot,
+            &profile,
+            profile.objective.coefficients(),
+            false,
+            &tests,
+        );
+        let ir = snapshot.ir();
+        let assembled = solver.assemble(&solver.real_partition);
+        let pass = SymbolPass::new(
+            snapshot,
+            &solver.coefficients,
+            &solver.weights,
+            solver.same_file_symbol,
+            solver.same_file_type,
+            solver.capacity,
+            &assembled,
+            &ir.nodes,
+            &ir.edges,
+        );
+
+        pass.incident
+            .get(&companion)
+            .into_iter()
+            .flatten()
+            .filter(|(target, _)| *target == owner)
+            .count()
+    }
+
     fn first_symbol_delta_with_dependency_only(
         snapshot: &Snapshot,
         dependency_only: f64,
@@ -13888,6 +14096,92 @@ mod tests {
                 container(4, "area/reader.ts", ScopeLevel::File, Some(1)),
                 container(5, "area/stable.ts", ScopeLevel::File, Some(1)),
             ],
+        )
+    }
+
+    fn companion_owner_snapshot(owner_first: bool) -> Snapshot {
+        companion_owner_snapshot_with_affinity_count(owner_first, 1)
+    }
+
+    fn companion_owner_snapshot_with_affinity_count(
+        owner_first: bool,
+        affinity_count: usize,
+    ) -> Snapshot {
+        let (companion_id, owner_id) = if owner_first { (2, 0) } else { (0, 2) };
+        let mut companion = node(
+            companion_id,
+            "AssembleArtifactParams",
+            if owner_first { 3 } else { 2 },
+            Polarity::Production,
+        );
+        companion.kind = NodeKind::Type;
+        let owner = node(
+            owner_id,
+            "assembleArtifact",
+            if owner_first { 2 } else { 3 },
+            Polarity::Production,
+        );
+        let resident = node(1, "origin_resident", 2, Polarity::Production);
+        let mut nodes = vec![companion, resident, owner];
+        nodes.sort_by_key(|node| node.id.0);
+
+        snapshot_with_affinities(
+            nodes,
+            Vec::new(),
+            (0..affinity_count)
+                .map(|_| Affinity {
+                    owner: NodeId(owner_id),
+                    companion: NodeId(companion_id),
+                    kind: AffinityKind::CompanionOwner,
+                })
+                .collect(),
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "area", ScopeLevel::Folder, Some(0)),
+                container(2, "area/origin.ts", ScopeLevel::File, Some(1)),
+                container(3, "area/owner.ts", ScopeLevel::File, Some(1)),
+            ],
+        )
+    }
+
+    fn transparent_namespace_companion_snapshot() -> Snapshot {
+        let origin_path = SmolStr::new("left/area/keep/companion.ts");
+        let owner_path = SmolStr::new("right/area/sink/owner.ts");
+        let paths = vec![origin_path.clone(), owner_path.clone()];
+        let layout = Layout {
+            package_roots: Vec::new(),
+            source_roots: vec![SmolStr::new("left"), SmolStr::new("right")],
+        };
+        let built = build_laminar_tree(&paths, "workspace", &layout);
+        let companion_file = built
+            .files
+            .get(&origin_path)
+            .map_or(u32::MAX, |container| container.0);
+        let owner_file = built
+            .files
+            .get(&owner_path)
+            .map_or(u32::MAX, |container| container.0);
+        let mut companion = node(
+            0,
+            "AssembleArtifactParams",
+            companion_file,
+            Polarity::Production,
+        );
+        companion.kind = NodeKind::Type;
+
+        snapshot_with_affinities(
+            vec![
+                companion,
+                node(1, "origin_resident", companion_file, Polarity::Production),
+                node(2, "assembleArtifact", owner_file, Polarity::Production),
+            ],
+            Vec::new(),
+            vec![Affinity {
+                owner: NodeId(2),
+                companion: NodeId(0),
+                kind: AffinityKind::CompanionOwner,
+            }],
+            built.tree.containers().to_vec(),
         )
     }
 

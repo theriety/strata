@@ -68,6 +68,8 @@ pub struct Coefficients {
     pub gamma: f64,
     /// Fixed charge for each dependency-only declaration relocation.
     pub dependency_only: f64,
+    /// Fixed charge for each companion type separated from its owner file.
+    pub companion_separation: f64,
 }
 
 impl Coefficients {
@@ -83,6 +85,7 @@ impl Coefficients {
             mu: 1.0,
             gamma: 4.0,
             dependency_only: 0.05,
+            companion_separation: 0.05,
         }
     }
 
@@ -99,6 +102,7 @@ impl Coefficients {
             mu: 0.0,
             gamma: 4.0,
             dependency_only: 0.05,
+            companion_separation: 0.05,
         }
     }
 }
@@ -234,6 +238,8 @@ pub struct Candidate {
     /// Number of production declarations relocated into a pass-start file that
     /// contains one of their dependencies but none of their consumers.
     pub dependency_only_relocations: u32,
+    /// Number of companion types separated from their immutable owner file.
+    pub companion_separations: u32,
 }
 
 /// Per-candidate score decomposition, reported in the DTO so users see *why* a
@@ -259,6 +265,8 @@ pub struct ScoreBreakdown {
     pub capacity: f64,
     /// Fixed per-declaration dependency-only relocation penalty.
     pub dependency_only: f64,
+    /// Fixed per-companion separation penalty.
+    pub companion_separation: f64,
     /// The full objective `J(T)`, the sum of the seven terms above.
     pub total: f64,
 }
@@ -288,6 +296,8 @@ pub fn score(
     let capacity = coefficients.gamma * candidate.capacity_pressure;
     let dependency_only =
         coefficients.dependency_only * f64::from(candidate.dependency_only_relocations);
+    let companion_separation =
+        coefficients.companion_separation * f64::from(candidate.companion_separations);
 
     ScoreBreakdown {
         cut,
@@ -297,7 +307,15 @@ pub fn score(
         anchor,
         capacity,
         dependency_only,
-        total: cut + imbalance + naming + path + anchor + capacity + dependency_only,
+        companion_separation,
+        total: cut
+            + imbalance
+            + naming
+            + path
+            + anchor
+            + capacity
+            + dependency_only
+            + companion_separation,
     }
 }
 
@@ -464,7 +482,47 @@ mod tests {
             move_distance: 0.0,
             capacity_pressure: 0.0,
             dependency_only_relocations: 0,
+            companion_separations: 0,
         }
+    }
+
+    #[test]
+    fn should_price_each_companion_separation_exactly_once() {
+        let current = score(
+            &empty_candidate(),
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
+        let candidate = Candidate {
+            companion_separations: 1,
+            ..empty_candidate()
+        };
+        let separated = score(
+            &candidate,
+            &Coefficients::greenfield(),
+            &KindWeights::default(),
+        );
+
+        assert!(close(current.companion_separation, 0.0));
+        assert!(close(separated.companion_separation, 0.05));
+        assert!(close(separated.total - current.total, 0.05));
+    }
+
+    #[test]
+    fn should_disable_companion_separation_pricing_at_zero() {
+        let candidate = Candidate {
+            companion_separations: 2,
+            ..empty_candidate()
+        };
+        let coefficients = Coefficients {
+            companion_separation: 0.0,
+            ..Coefficients::greenfield()
+        };
+
+        let breakdown = score(&candidate, &coefficients, &KindWeights::default());
+
+        assert!(close(breakdown.companion_separation, 0.0));
+        assert!(close(breakdown.total, 0.0));
     }
 
     #[test]
@@ -872,6 +930,7 @@ mod tests {
             move_distance: 0.2,
             capacity_pressure: 0.3,
             dependency_only_relocations: 2,
+            companion_separations: 1,
         };
         let breakdown = score(
             &candidate,
@@ -885,7 +944,8 @@ mod tests {
             + breakdown.path
             + breakdown.anchor
             + breakdown.capacity
-            + breakdown.dependency_only;
+            + breakdown.dependency_only
+            + breakdown.companion_separation;
         assert!(close(breakdown.total, expected));
     }
 

@@ -91,6 +91,7 @@ pub fn bind(files: &[ParsedFile], manifest: &Path, root: &Path) -> Result<IrFrag
     Ok(IrFragment {
         nodes,
         edges,
+        affinities: Vec::new(),
         containers: assignment_containers(files, root),
     })
 }

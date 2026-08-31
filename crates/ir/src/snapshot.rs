@@ -5,12 +5,13 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::Affinity;
 use crate::container::{ContainerTree, TreeError};
 use crate::edge::Edge;
 use crate::node::{Node, NodeId};
 
 /// Current IR schema version, bumped on any breaking contract change.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// The raw, unvalidated typed graph plus its laminar container tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,6 +22,8 @@ pub struct IntermediateRepresentation {
     pub nodes: Vec<Node>,
     /// All directed edges in the graph.
     pub edges: Vec<Edge>,
+    /// Non-dependency semantic relationships between declarations.
+    pub affinities: Vec<Affinity>,
     /// The laminar container tree.
     pub containers: ContainerTree,
 }
@@ -33,6 +36,7 @@ impl IntermediateRepresentation {
             schema_version: SCHEMA_VERSION,
             nodes,
             edges,
+            affinities: Vec::new(),
             containers,
         }
     }
@@ -122,6 +126,17 @@ impl Snapshot {
                 });
             }
         }
+        for affinity in &ir.affinities {
+            for endpoint in [affinity.owner, affinity.companion] {
+                if !node_ids.contains(&endpoint) {
+                    return Err(SnapshotError::DanglingEdge {
+                        source_node: affinity.owner.0,
+                        target_node: affinity.companion.0,
+                        missing: endpoint.0,
+                    });
+                }
+            }
+        }
 
         ir.containers.validate()?;
 
@@ -139,6 +154,8 @@ impl Snapshot {
                 edge.confidence.to_bits(),
             )
         });
+        ir.affinities.sort();
+        ir.affinities.dedup();
         ir.containers.sort_by_id();
 
         let bytes = serde_json::to_vec(&ir).map_err(|error| SnapshotError::Serialization {
@@ -170,6 +187,7 @@ mod tests {
     use crate::container::{Container, ContainerId};
     use crate::edge::{EdgeKind, Hardness};
     use crate::node::{NodeKind, Polarity, ScopeLevel};
+    use crate::{Affinity, AffinityKind};
 
     fn root_container() -> Container {
         Container {
@@ -267,6 +285,73 @@ mod tests {
                 target_node: 1,
                 missing: 1,
             })
+        );
+    }
+
+    #[test]
+    fn should_preserve_companion_affinity_without_creating_a_dependency() {
+        let nodes = vec![
+            node(0, "assemble_artifact"),
+            node(1, "AssembleArtifactParams"),
+        ];
+        let affinity = Affinity {
+            owner: NodeId(0),
+            companion: NodeId(1),
+            kind: AffinityKind::CompanionOwner,
+        };
+        let mut single = ir_with(nodes.clone(), vec![]);
+        single.affinities.push(affinity);
+        let mut duplicated = ir_with(nodes, vec![]);
+        duplicated.affinities.extend([affinity, affinity]);
+
+        let assembled_single = Snapshot::assemble(single);
+        let assembled_duplicated = Snapshot::assemble(duplicated);
+        let evidence = assembled_single.and_then(|single_snapshot| {
+            assembled_duplicated.map(|duplicated_snapshot| {
+                (
+                    duplicated_snapshot.ir().affinities.len(),
+                    duplicated_snapshot.ir().edges.is_empty(),
+                    duplicated_snapshot.hash() == single_snapshot.hash(),
+                )
+            })
+        });
+
+        assert_eq!(
+            evidence,
+            Ok((1, true, true)),
+            "duplicate semantic affinities canonicalize and hash like one metadata relation"
+        );
+    }
+
+    #[test]
+    fn should_canonicalize_affinities_independently_of_input_order() {
+        let mut forward = ir_with(
+            vec![
+                node(0, "assemble_artifact"),
+                node(1, "AssembleArtifactParams"),
+                node(2, "inspect_artifact"),
+                node(3, "InspectArtifactParams"),
+            ],
+            vec![],
+        );
+        forward.affinities = vec![
+            Affinity {
+                owner: NodeId(0),
+                companion: NodeId(1),
+                kind: AffinityKind::CompanionOwner,
+            },
+            Affinity {
+                owner: NodeId(2),
+                companion: NodeId(3),
+                kind: AffinityKind::CompanionOwner,
+            },
+        ];
+        let mut reverse = forward.clone();
+        reverse.affinities.reverse();
+
+        assert_eq!(
+            Snapshot::assemble(forward).map(|snapshot| *snapshot.hash().as_bytes()),
+            Snapshot::assemble(reverse).map(|snapshot| *snapshot.hash().as_bytes())
         );
     }
 

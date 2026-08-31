@@ -146,6 +146,7 @@ Both profiles evaluate the same objective form:
 ```text
 J(T) = cut + λ·imbalance − α·naming − β·path
      + μ·d(T, T0) + γ·capacity + δ·dependency-only
+     + ε·companion-separation
 ```
 
 - **Anchored defaults** keep every term active. The move-distance penalty `μ·d(T, T0)` and path-cohesion bonus `β·path` reward staying close to today's layout.
@@ -157,11 +158,13 @@ Dependency edges are classified once from immutable analysis-start placement. An
 
 The `dependency-only` term charges a fixed profile coefficient, defaulting to `0.05`, once for each relocated production declaration whose destination contained at analysis start at least one target of the declaration's outgoing structural dependencies and no incoming consumer. All structural IR edge kinds participate, self-loops are ignored, and the current layout has zero dependency-only pressure. Setting the coefficient to `0.0` disables the charge. Tentative admission, candidate ordering, total scores, score breakdowns, gains, and narrated move deltas all use this same pass-start classification.
 
+Adapters may emit language-neutral companion-owner affinities separately from dependency edges. TypeScript emits one only for a signature type with an approved role suffix whose semantic name tokens uniquely match a function or class method. The `companion-separation` term, defaulting to `0.05`, charges a companion unless it occupies its owner's immutable analysis-start file. Moving the owner toward the type earns no benefit, and affinities never enter cuts, cycles, reach, capacity, polarity, or dependency guards.
+
 Symbol admission separately protects shared ownership. Incoming consumers are resolved to their analysis-start physical folders. If consumers span multiple child-folder branches beneath their lowest common ancestor, a declaration cannot move into only one of those branches, even when unrelated pass-start dependencies already connect the folders. Moves remain eligible when there is one consumer, all consumers occupy one folder, or the destination is a neutral shared branch or the consumers' common ancestor.
 
 ## Analysis result contract
 
-Result schema version 5 separates facts shared by the executed profiles from profile-specific evaluation and records the dependency-only objective term:
+Result schema version 6 separates facts shared by the executed profiles from profile-specific evaluation and records both relocation-policy objective terms:
 
 ```text
 AnalyzeResult
@@ -180,7 +183,7 @@ AnalyzeResult
         └── same shape
 ```
 
-Each profile's score breakdown serializes the additional term as `dependencyOnly`. Configuration and human output use `dependency-only`. Readers reject earlier result schema versions instead of inferring a missing score component.
+Each profile's score breakdown serializes the additional terms as `dependencyOnly` and `companionSeparation`. Configuration and human output use `dependency-only` and `companion-separation`. Readers reject earlier result schema versions instead of inferring missing score components.
 
 A finding is shared only when its complete serialized content is identical in both executed profiles. Each profile's `uniqueFindings` excludes that exact intersection. A single-profile run leaves `sharedFindings` empty, while deterministic sorting and deduplication keep JSON and human output stable. Profile gains are compared only with that profile's current score.
 

@@ -194,13 +194,14 @@ fn write_candidate(markdown: &mut String, candidate: &Candidate) {
 fn write_breakdown(markdown: &mut String, breakdown: &ScoreBreakdown) {
     let _ = writeln!(
         markdown,
-        "- cut `{:.4}`, imbalance `{:.4}`, naming `{:.4}`, path `{:.4}`, anchor `{:.4}`, dependency-only `{:.4}`\n",
+        "- cut `{:.4}`, imbalance `{:.4}`, naming `{:.4}`, path `{:.4}`, anchor `{:.4}`, dependency-only `{:.4}`, companion-separation `{:.4}`\n",
         breakdown.cut,
         breakdown.imbalance,
         breakdown.naming,
         breakdown.path,
         breakdown.anchor,
-        breakdown.dependency_only
+        breakdown.dependency_only,
+        breakdown.companion_separation
     );
 }
 
@@ -310,6 +311,7 @@ mod tests {
             path: 0.0,
             anchor: 0.0,
             dependency_only: 0.0,
+            companion_separation: 0.0,
             capacity: 0.0,
         }
     }

@@ -176,6 +176,9 @@ pub struct ObjectiveConfig {
     /// of its dependencies but none of its consumers at pass start.
     #[serde(rename = "dependency-only")]
     pub dependency_only: f64,
+    /// Fixed charge while a companion type remains outside its owner file.
+    #[serde(rename = "companion-separation")]
+    pub companion_separation: f64,
 }
 
 impl Default for ObjectiveConfig {
@@ -187,6 +190,7 @@ impl Default for ObjectiveConfig {
             anchor: 1.0,
             capacity: 4.0,
             dependency_only: 0.05,
+            companion_separation: 0.05,
         }
     }
 }
@@ -202,6 +206,7 @@ impl ObjectiveConfig {
             mu: self.anchor,
             gamma: self.capacity,
             dependency_only: self.dependency_only,
+            companion_separation: self.companion_separation,
         }
     }
 
@@ -645,6 +650,10 @@ impl AnalyzeConfig {
             &key("objective.dependency-only"),
             profile.objective.dependency_only,
         )?;
+        non_negative_finite(
+            &key("objective.companion-separation"),
+            profile.objective.companion_separation,
+        )?;
         non_negative_finite(&key("weights.value-import"), profile.weights.value_import)?;
         non_negative_finite(&key("weights.inheritance"), profile.weights.inheritance)?;
         non_negative_finite(&key("weights.call"), profile.weights.call)?;
@@ -875,6 +884,66 @@ mod tests {
         assert!(config.profiles.greenfield.objective.anchor.abs() < f64::EPSILON);
         assert!((config.profiles.anchored.objective.dependency_only - 0.05).abs() < f64::EPSILON);
         assert!((config.profiles.greenfield.objective.dependency_only - 0.05).abs() < f64::EPSILON);
+        assert!(
+            (config.profiles.anchored.objective.companion_separation - 0.05).abs() < f64::EPSILON
+        );
+        assert!(
+            (config.profiles.greenfield.objective.companion_separation - 0.05).abs() < f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn should_parse_an_explicit_zero_companion_separation_objective() {
+        let parsed = toml::from_str::<AnalyzeConfig>(
+            "[profiles.greenfield.objective]\ncompanion-separation = 0.0\n",
+        );
+        assert!(
+            parsed.is_ok(),
+            "zero disables companion separation for one profile"
+        );
+        let config = parsed.unwrap_or_default();
+
+        assert!(
+            config
+                .profiles
+                .greenfield
+                .objective
+                .companion_separation
+                .abs()
+                < f64::EPSILON
+        );
+        assert!(
+            (config.profiles.anchored.objective.companion_separation - 0.05).abs() < f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn should_reject_invalid_companion_separation_objectives_with_their_key_path() {
+        for companion_separation in [-0.01, f64::INFINITY, f64::NAN] {
+            let result = AnalyzeConfig {
+                profiles: ProfilesConfig {
+                    anchored: ProfileConfig {
+                        objective: ObjectiveConfig {
+                            companion_separation,
+                            ..ObjectiveConfig::default()
+                        },
+                        ..ProfileConfig::default()
+                    },
+                    ..ProfilesConfig::default()
+                },
+                ..AnalyzeConfig::default()
+            }
+            .validate();
+
+            assert!(
+                matches!(
+                    result,
+                    Err(StrataError::ConfigInvalid { key: Some(key), .. })
+                        if key == "profiles.anchored.objective.companion-separation"
+                ),
+                "negative and non-finite companion pricing is invalid"
+            );
+        }
     }
 
     #[test]
@@ -1373,6 +1442,7 @@ builtins = false
             anchor: 0.7,
             capacity: 4.0,
             dependency_only: 0.8,
+            companion_separation: 0.9,
         };
 
         let coefficients = objective.anchored();
@@ -1382,6 +1452,7 @@ builtins = false
         assert!((coefficients.beta - 0.6).abs() < f64::EPSILON);
         assert!((coefficients.mu - 0.7).abs() < f64::EPSILON);
         assert!((coefficients.dependency_only - 0.8).abs() < f64::EPSILON);
+        assert!((coefficients.companion_separation - 0.9).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1393,6 +1464,7 @@ builtins = false
             anchor: 0.7,
             capacity: 4.0,
             dependency_only: 0.8,
+            companion_separation: 0.9,
         };
 
         let coefficients = objective.greenfield();

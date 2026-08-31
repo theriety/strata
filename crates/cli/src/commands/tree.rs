@@ -154,6 +154,7 @@ mod tests {
             path: 0.0,
             anchor: 0.0,
             dependency_only: 0.0,
+            companion_separation: 0.0,
             capacity: 0.0,
         }
     }
