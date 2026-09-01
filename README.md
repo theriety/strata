@@ -58,6 +58,29 @@ strata analyze --root path/to/repo --show-suggestions
 
 The flag is a no-op for `--format json`, which already serializes every candidate tree.
 
+### Reading relocation advice
+
+`strata` separates relocation advice into two confidence groups:
+
+- **Recommended** — the destination passes the selected profiles' evidence thresholds, and a strict majority of all executed profiles select that same destination. With the default two profiles, both must agree.
+- **Review candidate** — the move is structurally safe but has weaker evidence, insufficient separation from another plausible destination, support from only some profiles, or conflicting destinations across profiles. Review candidates remain visible so uncertainty does not hide a potentially useful move.
+
+Ordinary non-moves are omitted; there is no public `Rejected` group. Agreement between profiles supports a recommendation but is not independent proof, because the profiles evaluate the same underlying graph. A single-profile run can still recommend a move, but the move must pass that profile's evidence and ambiguity thresholds.
+
+The evidence qualification is deterministic and language-neutral. It evaluates the immutable analysis-start graph before comparing profiles:
+
+- **Unique owner** — the destination contains the sole explicit function or method that owns the symbol.
+- **Role affinity** — the symbol's name agrees with the destination filename and existing symbols. Names are hints and can never authorize a move alone.
+- **Source cohesion** — the move does not break a stronger conceptual cluster in the source file.
+- **Destination cohesion** — multiple destination declarations support the symbol's role; one nearby declaration is deliberately limited evidence.
+- **Producer evidence** — explicit owner affinities emitted by an adapter provide producer evidence that outweighs passive consumers.
+- **Ambiguity margin** — the proposed destination must clearly beat the strongest conservative alternative supported by the analysis-start graph.
+- **Architectural reach** — shared consumers favor their common ancestor rather than one consumer branch.
+
+Hard structural guards remain profile-independent. Profiles may adjust only the soft evidence weights and thresholds used to qualify otherwise admissible moves.
+
+The ambiguity comparison deliberately over-approximates alternatives from pass-start evidence: the current source, incident production-neighbor homes, explicit owner homes, and the common physical folder of consumers. It does not reconstruct every optimizer admission check. An implausible alternative may therefore demote a move to `Review candidate`, but ambiguity qualification cannot promote a move or remove it from the raw candidates.
+
 ### Useful options for `analyze`
 
 | Flag | Meaning |
@@ -145,7 +168,7 @@ Every command reads `strata.toml` from the analysis root (override with `--confi
 |---------|----------|
 | `[adapters]` | Which `languages` to run, `include`/`exclude` source globs, and physical source-root handling. |
 | `[analysis]` | Selected parameter profiles and process-wide `jobs`. |
-| `[profiles.anchored]` | Anchored candidate count, seed, capacities, objective, dependency weights, solver, diversity, test policy, and relocation policy. |
+| `[profiles.anchored]` | Anchored candidate count, seed, capacities, objective, evidence qualification, dependency weights, solver, diversity, test policy, and relocation policy. |
 | `[profiles.greenfield]` | The same complete parameter set for greenfield, independently configurable. |
 
 The checked-in [`strata.toml`](strata.toml) documents every key alongside its default value.
@@ -176,6 +199,19 @@ anchor = 1.0
 dependency-only = 0.05
 companion-separation = 0.05
 capacity = 4.0
+
+[profiles.anchored.qualification]
+minimum-evidence = 0.60
+minimum-structural = 0.50
+minimum-ambiguity-margin = 0.15
+
+[profiles.anchored.qualification.weights]
+unique-owner = 0.10
+role-affinity = 0.10
+source-cohesion = 0.25
+destination-cohesion = 0.25
+producer-evidence = 0.10
+architectural-reach = 0.20
 
 [profiles.anchored.weights]
 value-import = 1.0
@@ -229,6 +265,19 @@ anchor = 0.0
 dependency-only = 0.05
 companion-separation = 0.05
 capacity = 4.0
+
+[profiles.greenfield.qualification]
+minimum-evidence = 0.60
+minimum-structural = 0.50
+minimum-ambiguity-margin = 0.15
+
+[profiles.greenfield.qualification.weights]
+unique-owner = 0.10
+role-affinity = 0.10
+source-cohesion = 0.25
+destination-cohesion = 0.25
+producer-evidence = 0.10
+architectural-reach = 0.20
 
 [profiles.greenfield.weights]
 value-import = 1.0
@@ -286,7 +335,9 @@ When a source moves, every exact mirror is attempted as a best-effort follower. 
 
 The former `analysis.mode`, `analysis.candidates`, `analysis.seed`, and top-level analysis-policy sections are invalid. `--mode` remains a CLI compatibility selector: it chooses which parameter profiles execute but does not define their parameters.
 
-Saved analysis JSON uses result schema version 7. Each score breakdown includes `dependencyOnly` and `companionSeparation`. The latter is the directional charge for keeping a conservatively matched signature type away from its immutable owner file. Each primary file `Move` also has `mirrors` and `blockedMirrors`: successful mirrors contain `sourcePath`, `path`, `from`, and `to`, while blocked mirrors contain `sourcePath`, `path`, `from`, `intendedTo`, and `reason`. Earlier saved result versions are not accepted by `report`, `tree`, or `diff`.
+Saved analysis JSON uses result schema version 8. The top-level `advice` object contains `recommended` and `reviewCandidates`; raw per-profile candidates remain available for inspection. Each advice item records `destination`, `supportingProfiles`, `qualifiedProfiles`, `absentProfiles`, `conflictingDestinations`, `assessments`, and `reviewReasons`. An assessment includes all six raw evidence signals, the weighted and structural scores, the ambiguity margin and best alternative, the effective thresholds, and the qualification result. There is no serialized rejected group.
+
+Each score breakdown includes `dependencyOnly` and `companionSeparation`. The latter is the directional charge for keeping a conservatively matched signature type away from its immutable owner file. Each primary file `Move` also has `mirrors` and `blockedMirrors`: successful mirrors contain `sourcePath`, `path`, `from`, and `to`, while blocked mirrors contain `sourcePath`, `path`, `from`, `intendedTo`, and `reason`. Earlier saved result versions are not accepted by `report`, `tree`, or `diff`.
 
 ## How it works
 

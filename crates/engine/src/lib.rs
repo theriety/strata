@@ -29,15 +29,18 @@ pub use strata_ir as ir;
 pub use crate::analyze::{BORDERLINE_CAPACITY_MARGIN, analyze};
 pub use crate::config::{
     AdaptersConfig, AnalysisConfig, AnalyzeConfig, CapacityConfig, DiversityConfig, Mode,
-    ObjectiveConfig, ProfileConfig, ProfileName, ProfilesConfig, RelocationConfig, SolverConfig,
-    TestMirrorRule, TestMirroringConfig, TestsConfig, WeightsConfig, load_config,
+    ObjectiveConfig, ProfileConfig, ProfileName, ProfilesConfig, QualificationConfig,
+    QualificationWeightsConfig, RelocationConfig, SolverConfig, TestMirrorRule,
+    TestMirroringConfig, TestsConfig, WeightsConfig, load_config,
 };
 pub use crate::error::StrataError;
 pub use crate::result::{
-    AnalyzeResult, BlockedMirror, BlockedMirrorReason, Candidate, CapacityBreach,
+    Advice, AnalyzeResult, BlockedMirror, BlockedMirrorReason, Candidate, CapacityBreach,
     CapacityRemainder, ConditionalSplit, ContainerNode, CurrentStanding, CurrentTree, EdgeBreak,
-    FileMove, Level, MirrorMove, ModeResult, Modes, Move, MoveKind, MoveReason, ProfileCurrent,
-    ProfileResult, Profiles, RESULT_SCHEMA_VERSION, ScoreBreakdown, Severity, Summary, SymbolKind,
-    SymbolMove, SymbolPlacement, Violation, ViolationKind,
+    EvidenceSignals, FileMove, Level, MirrorMove, ModeResult, Modes, Move, MoveKind, MoveReason,
+    ProfileAssessment, ProfileConflict, ProfileCurrent, ProfileResult, Profiles,
+    QualificationThresholds, RESULT_SCHEMA_VERSION, RelocationAdvice, RelocationProposal,
+    ReviewReason, ScoreBreakdown, Severity, Summary, SymbolKind, SymbolMove, SymbolPlacement,
+    Violation, ViolationKind,
 };
 pub use crate::snapshot::snapshot_from_root;

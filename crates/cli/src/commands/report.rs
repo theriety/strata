@@ -238,6 +238,7 @@ mod tests {
                     capacity: None,
                 }],
             },
+            advice: strata_engine::Advice::default(),
             profiles: Modes {
                 anchored: Some(ModeResult {
                     parameters: ProfileConfig::default(),

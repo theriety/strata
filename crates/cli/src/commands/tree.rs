@@ -102,6 +102,7 @@ mod tests {
                 tree: file("current_lib"),
                 shared_findings: Vec::new(),
             },
+            advice: strata_engine::Advice::default(),
             profiles: Modes {
                 anchored: Some(ModeResult {
                     parameters: ProfileConfig::default(),

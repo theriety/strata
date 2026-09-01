@@ -27,6 +27,9 @@ diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
 relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
 mirroring enabled true · builtins true · rules 0
+qualification evidence 0.6 · structural 0.5 · ambiguity-margin 0.15
+owner 0.1 · role 0.1 · source 0.25 · destination 0.25
+producer 0.1 · architectural-reach 0.2
 ```
 
 Current score `0.4000`.
@@ -62,6 +65,9 @@ diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
 relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
 mirroring enabled true · builtins true · rules 0
+qualification evidence 0.6 · structural 0.5 · ambiguity-margin 0.15
+owner 0.1 · role 0.1 · source 0.25 · destination 0.25
+producer 0.1 · architectural-reach 0.2
 ```
 
 Current score `0.6000`.

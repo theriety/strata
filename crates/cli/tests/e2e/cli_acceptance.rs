@@ -2017,15 +2017,15 @@ fn should_exit_one_on_a_malformed_result_input_for_every_reader() {
 #[test]
 fn should_reject_a_result_with_an_unsupported_schema_version() {
     // a saved result stamped with any other schemaVersion — future (999), the
-    // immediately retired v5, or v1 — must be refused up front with a remediable message, not
+    // immediately retired v7, or v1 — must be refused up front with a remediable message, not
     // misread field-by-field.
     let result = analyze_to_file("rust");
     let contents = std::fs::read_to_string(&result).unwrap_or_default();
     let result_str = result.to_str().unwrap_or_default();
 
-    for version in ["999", "5", "1"] {
+    for version in ["999", "7", "1"] {
         let stamped = contents.replace(
-            "\"schemaVersion\":7",
+            "\"schemaVersion\":8",
             &format!("\"schemaVersion\":{version}"),
         );
         assert_ne!(contents, stamped, "the version stamp was found and bumped");
@@ -2045,7 +2045,7 @@ fn should_reject_a_result_with_an_unsupported_schema_version() {
         );
         assert!(
             outcome.stderr.contains(&format!(
-                "unsupported result schemaVersion {version}; expected 7"
+                "unsupported result schemaVersion {version}; expected 8"
             )),
             "the refusal names the offending version: {}",
             outcome.stderr

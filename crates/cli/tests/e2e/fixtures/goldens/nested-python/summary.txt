@@ -47,6 +47,9 @@
    tests     helper-cap 250 · patterns 0 · builtins true
    relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
               mirroring enabled true · builtins true · rules 0
+   qualification evidence 0.6 · structural 0.5 · ambiguity-margin 0.15
+                 owner 0.1 · role 0.1 · source 0.25 · destination 0.25
+                 producer 0.1 · architectural-reach 0.2
  greenfield parameter profile (effective):
    search    candidates 3 · seed 42
    capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
@@ -59,6 +62,9 @@
    tests     helper-cap 250 · patterns 0 · builtins true
    relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
               mirroring enabled true · builtins true · rules 0
+   qualification evidence 0.6 · structural 0.5 · ambiguity-margin 0.15
+                 owner 0.1 · role 0.1 · source 0.25 · destination 0.25
+                 producer 0.1 · architectural-reach 0.2
 
  candidate 1   greenfield/1   score  0.3535   gain +0.2310   best score
 
@@ -72,6 +78,28 @@
 ================================================================================
  §2  What would change — candidate 1 (greenfield)
 ================================================================================
+ Recommended (0):
+ Review candidate (3):
+   - file `nested-python/app.py` → `nested-python/geometry` · supporting [greenfield] · qualified
+   [] · absent [anchored] · conflicts []
+     greenfield: owner 0.00 · role 0.00 · source 1.00 · destination 1.00 · producer 0.00 · reach
+     0.00 · margin 0.48; weighted 0.50/0.60 · structural 0.56/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative nested-python
+     review reasons: PartialProfileSupport, WeakEvidence, NoMajoritySupport
+   - `describe` from `geometry/rectangle.py` → `app.py` · supporting [greenfield] · qualified [] ·
+   absent [anchored] · conflicts []
+     greenfield: owner 0.00 · role 0.00 · source 1.00 · destination 0.38 · producer 0.00 · reach
+     0.00 · margin 0.07; weighted 0.35/0.60 · structural 0.38/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative geometry/shape.py
+     review reasons: PartialProfileSupport, WeakEvidence, WeakStructuralEvidence,
+     WeakAmbiguityMargin, NoMajoritySupport
+   - type `Shape` from `geometry/shape.py` → `geometry/rectangle.py` · supporting [greenfield] ·
+   qualified [] · absent [anchored] · conflicts []
+     greenfield: owner 0.00 · role 0.00 · source 1.00 · destination 0.78 · producer 0.00 · reach
+     0.00 · margin 0.17; weighted 0.45/0.60 · structural 0.50/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative app.py
+     review reasons: PartialProfileSupport, WeakEvidence, WeakStructuralEvidence, NoMajoritySupport
+
  Every suggestion relocates whole files (1 in all). The plan also relocates 2 symbol(s) between
  files, itemized below.
 
@@ -137,8 +165,10 @@
 ================================================================================
  §6  Recommendation
 ================================================================================
- adopt      candidate 1 — 0.3535, gain +0.2310, 1 changes relocating 1 files (§2). It goes straight
-            at the cut that dominates today's score (0.3170 → 0.2091).
+ review     candidate 1 — 0.3535, gain +0.2310, 3 changes relocating 1 files (§2). It goes straight
+            at the cut that dominates today's score (0.3170 → 0.2091). Consensus classifies 0
+            relocation(s) as Recommended and 3 as Review candidate; human review is required before
+            adopting the plan.
  keep       keeping today's layout remains possible — it scores 0.5844 against this proposal's
             0.3535.
  in part    partial plans are not rescored; apply §2 in its given order, one change at a time.

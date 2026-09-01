@@ -275,6 +275,7 @@ mod tests {
                 shared_findings: Vec::new(),
             },
             profiles: strata_engine::Profiles::default(),
+            advice: strata_engine::Advice::default(),
         };
 
         let found = mode_result(&result, "anchored");

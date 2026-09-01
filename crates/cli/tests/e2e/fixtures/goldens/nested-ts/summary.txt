@@ -47,6 +47,9 @@
    tests     helper-cap 250 · patterns 0 · builtins true
    relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
               mirroring enabled true · builtins true · rules 0
+   qualification evidence 0.6 · structural 0.5 · ambiguity-margin 0.15
+                 owner 0.1 · role 0.1 · source 0.25 · destination 0.25
+                 producer 0.1 · architectural-reach 0.2
  greenfield parameter profile (effective):
    search    candidates 3 · seed 42
    capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
@@ -59,6 +62,9 @@
    tests     helper-cap 250 · patterns 0 · builtins true
    relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
               mirroring enabled true · builtins true · rules 0
+   qualification evidence 0.6 · structural 0.5 · ambiguity-margin 0.15
+                 owner 0.1 · role 0.1 · source 0.25 · destination 0.25
+                 producer 0.1 · architectural-reach 0.2
 
  candidate 1   greenfield/1   score  0.3654   gain +0.0899   best score
 
@@ -72,6 +78,15 @@
 ================================================================================
  §2  What would change — candidate 1 (greenfield)
 ================================================================================
+ Recommended (0):
+ Review candidate (1):
+   - file `nested-ts/src/app.ts` → `nested-ts/src/geometry` · supporting [greenfield] · qualified
+   [] · absent [anchored] · conflicts []
+     greenfield: owner 0.00 · role 0.00 · source 1.00 · destination 1.00 · producer 0.00 · reach
+     0.00 · margin 0.43; weighted 0.50/0.60 · structural 0.56/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative nested-ts/src
+     review reasons: PartialProfileSupport, WeakEvidence, NoMajoritySupport
+
 Every suggestion relocates whole files (1 in all):
 
  --------------------------------------------------------------------------------
@@ -132,8 +147,10 @@ Every suggestion relocates whole files (1 in all):
 ================================================================================
  §6  Recommendation
 ================================================================================
- adopt      candidate 1 — 0.3654, gain +0.0899, 1 changes relocating 1 files (§2). It goes straight
-            at the cut that dominates today's score (0.3363 → 0.2306).
+ review     candidate 1 — 0.3654, gain +0.0899, 1 changes relocating 1 files (§2). It goes straight
+            at the cut that dominates today's score (0.3363 → 0.2306). Consensus classifies 0
+            relocation(s) as Recommended and 1 as Review candidate; human review is required before
+            adopting the plan.
  keep       keeping today's layout remains possible — it scores 0.4553 against this proposal's
             0.3654.
  in part    partial plans are not rescored; apply §2 in its given order, one change at a time.

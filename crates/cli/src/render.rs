@@ -19,7 +19,7 @@ use std::io::{self, Write};
 use strata_engine::{
     AnalyzeResult, BlockedMirror, BlockedMirrorReason, Candidate, ContainerNode, CurrentStanding,
     FileMove, Level, MirrorMove, ModeResult, Move, MoveKind, MoveReason, ProfileConfig,
-    ScoreBreakdown, Severity, SymbolKind, SymbolMove, Violation, ViolationKind,
+    RelocationProposal, ScoreBreakdown, Severity, SymbolKind, SymbolMove, Violation, ViolationKind,
 };
 
 /// The output format the `analyze` command renders in.
@@ -634,6 +634,24 @@ pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<St
             p.relocation.test_mirroring.builtins,
             p.relocation.test_mirroring.rules.len()
         ),
+        format!(
+            "   qualification evidence {} · structural {} · ambiguity-margin {}",
+            weight(p.qualification.minimum_evidence),
+            weight(p.qualification.minimum_structural),
+            weight(p.qualification.minimum_ambiguity_margin)
+        ),
+        format!(
+            "                 owner {} · role {} · source {} · destination {}",
+            weight(p.qualification.weights.unique_owner),
+            weight(p.qualification.weights.role_affinity),
+            weight(p.qualification.weights.source_cohesion),
+            weight(p.qualification.weights.destination_cohesion)
+        ),
+        format!(
+            "                 producer {} · architectural-reach {}",
+            weight(p.qualification.weights.producer_evidence),
+            weight(p.qualification.weights.architectural_reach)
+        ),
     ]
 }
 
@@ -835,8 +853,10 @@ fn infeasibility_note(result: &AnalyzeResult) -> Option<String> {
 /// The `§2` itemization: the preamble, one block per narrated change, and the
 /// unchanged-files honesty line.
 fn changes_section(result: &AnalyzeResult) -> Vec<String> {
+    let mut qualification = advice_lines(result);
     let Some((featured_name, featured)) = featured_candidate(result) else {
-        return vec!["no candidate this run produced — nothing to change.".to_owned()];
+        qualification.push("no candidate this run produced — nothing to change.".to_owned());
+        return qualification;
     };
     let moved: usize = featured.delta_narration.iter().map(moved_file_count).sum();
     let symbol_count = featured.symbol_moves.len();
@@ -847,7 +867,8 @@ fn changes_section(result: &AnalyzeResult) -> Vec<String> {
             "no change suggested — candidate {} matches today's layout, file for file.",
             featured.index
         ));
-        return lines;
+        qualification.extend(lines);
+        return qualification;
     }
 
     let other_head = present_modes(result)
@@ -926,7 +947,106 @@ fn changes_section(result: &AnalyzeResult) -> Vec<String> {
             format!("The other {unchanged} files are absent because nothing about them changes.");
         lines.extend(wrap(&omission, 1, 1));
     }
+    qualification.extend(lines);
+    qualification
+}
+
+fn advice_lines(result: &AnalyzeResult) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (heading, items) in [
+        ("Recommended", result.advice.recommended.as_slice()),
+        (
+            "Review candidate",
+            result.advice.review_candidates.as_slice(),
+        ),
+    ] {
+        lines.push(format!(" {heading} ({}):", items.len()));
+        for item in items {
+            lines.extend(wrap(
+                &format!(
+                    "- {} → `{}` · supporting [{}] · qualified [{}] · absent [{}] · conflicts [{}]",
+                    advice_subject(&item.proposal),
+                    item.destination,
+                    profile_names(&item.supporting_profiles),
+                    profile_names(&item.qualified_profiles),
+                    profile_names(&item.absent_profiles),
+                    item.conflicting_destinations
+                        .iter()
+                        .map(|conflict| format!(
+                            "{}→{}",
+                            profile_name(conflict.profile),
+                            conflict.destination
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+                3,
+                3,
+            ));
+            for assessment in &item.assessments {
+                let evidence = assessment.evidence;
+                lines.extend(wrap(&format!(
+                    "{}: owner {:.2} · role {:.2} · source {:.2} · destination {:.2} · producer {:.2} · reach {:.2} · margin {:.2}; weighted {:.2}/{:.2} · structural {:.2}/{:.2} · margin threshold {:.2} · qualified {} · best alternative {}",
+                    profile_name(assessment.profile), evidence.unique_owner, evidence.role_affinity,
+                    evidence.source_cohesion, evidence.destination_cohesion, evidence.producer_evidence,
+                    evidence.architectural_reach, assessment.ambiguity_margin, assessment.weighted_score,
+                    assessment.thresholds.minimum_evidence, assessment.structural_score,
+                    assessment.thresholds.minimum_structural, assessment.thresholds.minimum_ambiguity_margin,
+                    assessment.qualified, assessment.best_alternative.as_deref().unwrap_or("none")
+                ), 5, 5));
+            }
+            if !item.review_reasons.is_empty() {
+                lines.extend(wrap(
+                    &format!(
+                        "review reasons: {}",
+                        item.review_reasons
+                            .iter()
+                            .map(|reason| format!("{reason:?}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    5,
+                    5,
+                ));
+            }
+        }
+    }
+    lines.push(String::new());
     lines
+}
+
+fn profile_name(profile: strata_engine::ProfileName) -> &'static str {
+    match profile {
+        strata_engine::ProfileName::Anchored => "anchored",
+        strata_engine::ProfileName::Greenfield => "greenfield",
+    }
+}
+
+fn advice_subject(proposal: &RelocationProposal) -> String {
+    match proposal {
+        RelocationProposal::File { relocation } => relocation.files.first().map_or_else(
+            || "file `(unknown)`".to_owned(),
+            |file| format!("file `{}`", file.path),
+        ),
+        RelocationProposal::Symbol { relocation } => {
+            let prefix = if relocation.kind == SymbolKind::Type {
+                "type "
+            } else {
+                ""
+            };
+            format!(
+                "{prefix}`{}` from `{}`",
+                relocation.symbol, relocation.from_path
+            )
+        }
+    }
+}
+fn profile_names(profiles: &[strata_engine::ProfileName]) -> String {
+    profiles
+        .iter()
+        .map(|profile| profile_name(*profile))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The display name of the mode other than `featured_name`.
@@ -1435,6 +1555,8 @@ fn recommendation_section(result: &AnalyzeResult) -> Vec<String> {
             featured_name,
             candidate,
             total,
+            result.advice.recommended.len(),
+            result.advice.review_candidates.len(),
         ));
     }
 
@@ -1490,19 +1612,25 @@ fn candidate_recommendation_lines(
     featured_name: &str,
     candidate: &Candidate,
     total: usize,
+    recommended_count: usize,
+    review_count: usize,
 ) -> Vec<String> {
-    if candidate.delta_narration.is_empty() {
+    if candidate.delta_narration.is_empty() && candidate.symbol_moves.is_empty() {
         return Vec::new();
     }
     let mut lines = Vec::new();
     let files: usize = candidate.delta_narration.iter().map(moved_file_count).sum();
+    let changes = candidate
+        .delta_narration
+        .len()
+        .saturating_add(candidate.symbol_moves.len());
     if candidate.improvement > 0.0 {
-        let mut adopt = format!(
+        let mut verdict = format!(
             "candidate {} — {}, gain {}, {} changes relocating {} files (§2).",
             candidate.index,
             f4(candidate.score),
             sf(candidate.improvement),
-            candidate.delta_narration.len(),
+            changes,
             files
         );
         let current = modes
@@ -1511,8 +1639,29 @@ fn candidate_recommendation_lines(
             .map_or(&candidate.score_breakdown, |(_, mode)| {
                 &mode.current.score_breakdown
             });
-        adopt.push_str(&driver_sentence(current, candidate));
-        lines.extend(labeled_block(&format!(" {:<11}", "adopt"), 12, 12, &adopt));
+        verdict.push_str(&driver_sentence(current, candidate));
+        let fully_recommended = recommended_count > 0 && review_count == 0;
+        if fully_recommended {
+            lines.extend(labeled_block(
+                &format!(" {:<11}", "adopt"),
+                12,
+                12,
+                &verdict,
+            ));
+        } else {
+            let _ = write!(
+                verdict,
+                " Consensus classifies {recommended_count} relocation(s) as Recommended and \
+                 {review_count} as Review candidate; human review is required before adopting \
+                 the plan."
+            );
+            lines.extend(labeled_block(
+                &format!(" {:<11}", "review"),
+                12,
+                12,
+                &verdict,
+            ));
+        }
 
         if let Some((other_name, other_mode, other)) = modes
             .iter()
@@ -1836,6 +1985,7 @@ mod tests {
                 tree: file_node("lib", 2),
                 shared_findings: Vec::new(),
             },
+            advice: strata_engine::Advice::default(),
             profiles: Modes {
                 anchored: Some(ModeResult {
                     parameters: ProfileConfig::default(),
@@ -2722,7 +2872,7 @@ mod tests {
     }
 
     #[test]
-    fn should_render_the_recommendation_band_with_driver_and_flat_cut_clauses() {
+    fn should_render_the_review_band_with_driver_and_flat_cut_clauses() {
         let mut result = result_with_candidate();
         if let Some(mode) = result.profiles.anchored.as_mut() {
             mode.current.score_breakdown.imbalance = 1.0;
@@ -2751,7 +2901,7 @@ mod tests {
 
         let text = report_lines(&result, "fixture").join("\n");
 
-        for clause in ["adopt", "second", "keep", "in part"] {
+        for clause in ["review", "second", "keep", "in part"] {
             let label = format!(" {clause:<11}");
             assert!(text.contains(&label), "the {clause} clause prints: {text}");
         }
@@ -2993,6 +3143,170 @@ mod tests {
         }
         let diverged_text = report_lines(&diverged, "fixture").join("\n");
         assert!(!diverged_text.contains("solution space converged"));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn should_present_only_recommended_and_review_candidate_advice_groups() {
+        let mut result = result_with_candidate();
+        let assessment = strata_engine::ProfileAssessment {
+            profile: strata_engine::ProfileName::Anchored,
+            destination: "shared/owner.ts".to_owned(),
+            evidence: strata_engine::EvidenceSignals {
+                unique_owner: 1.0,
+                role_affinity: 0.8,
+                source_cohesion: 0.7,
+                destination_cohesion: 0.6,
+                producer_evidence: 0.5,
+                architectural_reach: 0.4,
+            },
+            weighted_score: 0.75,
+            structural_score: 0.65,
+            ambiguity_margin: 0.2,
+            best_alternative: Some("shared/alternative.ts".to_owned()),
+            thresholds: strata_engine::QualificationThresholds {
+                minimum_evidence: 0.6,
+                minimum_structural: 0.5,
+                minimum_ambiguity_margin: 0.15,
+            },
+            qualified: true,
+        };
+        let relocation = SymbolMove {
+            symbol: "RecordOptions".to_owned(),
+            kind: SymbolKind::Type,
+            from_path: "origin/options.ts".to_owned(),
+            to_path: "shared/owner.ts".to_owned(),
+            delta: -0.1,
+            broken_imports: 1,
+        };
+        let candidate = result
+            .profiles
+            .anchored
+            .as_mut()
+            .and_then(|profile| profile.candidates.first_mut());
+        assert!(candidate.is_some(), "fixture has an anchored candidate");
+        if let Some(candidate) = candidate {
+            candidate.symbol_moves = vec![relocation.clone()];
+        }
+        let item = strata_engine::RelocationAdvice {
+            proposal: strata_engine::RelocationProposal::Symbol { relocation },
+            destination: "shared/owner.ts".to_owned(),
+            supporting_profiles: vec![strata_engine::ProfileName::Anchored],
+            qualified_profiles: vec![strata_engine::ProfileName::Anchored],
+            absent_profiles: vec![strata_engine::ProfileName::Greenfield],
+            conflicting_destinations: vec![strata_engine::ProfileConflict {
+                profile: strata_engine::ProfileName::Greenfield,
+                destination: "shared/alternative.ts".to_owned(),
+            }],
+            assessments: vec![assessment],
+            review_reasons: vec![strata_engine::ReviewReason::PartialProfileSupport],
+        };
+        result.advice.recommended = vec![item.clone()];
+        result.advice.review_candidates = vec![item];
+        let text = report_lines(&result, "fixture").join("\n");
+        let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        assert!(text.contains("Recommended"), "{text}");
+        assert!(text.contains("Review candidate"), "{text}");
+        for expected in [
+            "supporting [anchored]",
+            "qualified [anchored]",
+            "absent [greenfield]",
+            "greenfield→shared/alternative.ts",
+            "owner 1.00",
+            "role 0.80",
+            "source 0.70",
+            "destination 0.60",
+            "producer 0.50",
+            "reach 0.40",
+            "weighted 0.75/0.60",
+            "structural 0.65/0.50",
+            "margin threshold 0.15",
+            "qualified true",
+            "best alternative shared/alternative.ts",
+            "review reasons: PartialProfileSupport",
+            "RecordOptions",
+            "origin/options.ts",
+        ] {
+            assert!(
+                compact.contains(expected),
+                "missing `{expected}` from:\n{text}"
+            );
+        }
+        assert!(
+            !text.contains("Rejected"),
+            "ordinary non-moves stay absent: {text}"
+        );
+        assert!(
+            !compact.contains("adopt candidate"),
+            "a surfaced review-only atom makes blanket adoption unsafe: {text}"
+        );
+
+        let mut fully_recommended = result;
+        fully_recommended.advice.review_candidates.clear();
+        let recommended_text = report_lines(&fully_recommended, "fixture")
+            .join("\n")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            recommended_text.contains("adopt candidate"),
+            "all surfaced atoms are qualified, so the winning candidate may be adopted: {recommended_text}"
+        );
+    }
+
+    #[test]
+    fn should_render_file_advice_alternatives_with_their_physical_source_root() {
+        let mut result = result_with_candidate();
+        result.advice.review_candidates = vec![strata_engine::RelocationAdvice {
+            proposal: strata_engine::RelocationProposal::File {
+                relocation: Move {
+                    kind: MoveKind::Move,
+                    files: vec![FileMove {
+                        path: "dataset/src/origin/unit.ts".to_owned(),
+                        from: "dataset/src/origin".to_owned(),
+                    }],
+                    to: "dataset/src/chosen".to_owned(),
+                    reason: MoveReason::Clustering,
+                    mirrors: Vec::new(),
+                    blocked_mirrors: Vec::new(),
+                },
+            },
+            destination: "dataset/src/chosen".to_owned(),
+            supporting_profiles: vec![strata_engine::ProfileName::Anchored],
+            qualified_profiles: Vec::new(),
+            absent_profiles: vec![strata_engine::ProfileName::Greenfield],
+            conflicting_destinations: Vec::new(),
+            assessments: vec![strata_engine::ProfileAssessment {
+                profile: strata_engine::ProfileName::Anchored,
+                destination: "dataset/src/chosen".to_owned(),
+                evidence: strata_engine::EvidenceSignals {
+                    unique_owner: 0.0,
+                    role_affinity: 0.0,
+                    source_cohesion: 0.0,
+                    destination_cohesion: 0.0,
+                    producer_evidence: 0.0,
+                    architectural_reach: 0.0,
+                },
+                weighted_score: 0.0,
+                structural_score: 0.0,
+                ambiguity_margin: 0.0,
+                best_alternative: Some("dataset/src/alternative".to_owned()),
+                thresholds: strata_engine::QualificationThresholds {
+                    minimum_evidence: 0.6,
+                    minimum_structural: 0.5,
+                    minimum_ambiguity_margin: 0.15,
+                },
+                qualified: false,
+            }],
+            review_reasons: vec![strata_engine::ReviewReason::PartialProfileSupport],
+        }];
+
+        let text = report_lines(&result, "dataset").join("\n");
+
+        assert!(text.contains("file `dataset/src/origin/unit.ts` → `dataset/src/chosen`"));
+        assert!(text.contains("best alternative dataset/src/alternative"));
+        assert!(!text.contains("best alternative dataset/spec/alternative"));
     }
 
     #[test]
