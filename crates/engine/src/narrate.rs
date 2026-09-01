@@ -84,21 +84,32 @@ pub(crate) fn tokenize(name: &str) -> BTreeSet<String> {
 /// the files inside them) come out in deterministic lexicographic order.
 /// Each `FileMove` carries a moved *file path* and its source folder — symbol
 /// granularity arrives with the pack phase.
+#[cfg(test)]
 pub(crate) fn narrate(
     current: &ContainerTree,
     candidate: &ContainerTree,
     facts: &FileFacts,
 ) -> Vec<Move> {
-    let before = index_files(current);
-    let mut after = index_files(candidate);
-    for (file, logical) in &after.logical_parent_of {
-        let Some(namespace) = before.namespace_of.get(file) else {
-            continue;
-        };
-        let mut physical = namespace.clone();
-        physical.extend(logical.iter().cloned());
-        after.parent_of.insert(file.clone(), physical);
-    }
+    narrate_with_rootedness(current, candidate, facts, true)
+}
+
+pub(crate) fn narrate_repository_relative(
+    current: &ContainerTree,
+    candidate: &ContainerTree,
+    facts: &FileFacts,
+) -> Vec<Move> {
+    narrate_with_rootedness(current, candidate, facts, false)
+}
+
+fn narrate_with_rootedness(
+    current: &ContainerTree,
+    candidate: &ContainerTree,
+    facts: &FileFacts,
+    package_rooted: bool,
+) -> Vec<Move> {
+    let before = index_files(current, package_rooted);
+    let mut after = index_files(candidate, package_rooted);
+    preserve_pass_start_namespaces(&before, &mut after);
     after.members_of.clear();
     for (file, parent) in &after.parent_of {
         after
@@ -167,9 +178,22 @@ pub(crate) fn narrate(
                 files,
                 to: destination.join("/"),
                 reason,
+                mirrors: Vec::new(),
+                blocked_mirrors: Vec::new(),
             }
         })
         .collect()
+}
+
+fn preserve_pass_start_namespaces(before: &FilePlacements, after: &mut FilePlacements) {
+    for (file, logical) in &after.logical_parent_of {
+        let Some(namespace) = before.namespace_of.get(file) else {
+            continue;
+        };
+        let mut physical = namespace.clone();
+        physical.extend(logical.iter().cloned());
+        after.parent_of.insert(file.clone(), physical);
+    }
 }
 
 /// The moved files and source folders accumulated for one narration group.
@@ -218,21 +242,44 @@ fn folder_entry_counts(parent_of: &BTreeMap<String, Vec<String>>) -> BTreeMap<Ve
 
 /// Projects a repository-relative path beneath its package-group root.
 ///
-/// Nested package roots can be present at the end of `root` and the beginning
-/// of `relative`. The longest boundary overlap is emitted once; every other
-/// segment keeps its original order.
+/// `relative` is explicitly unrooted. Repeating the root name as its first
+/// real directory is therefore significant and must be retained.
 pub(crate) fn project_physical_path(root: &str, relative: &[String]) -> Vec<String> {
+    let mut projected: Vec<String> = root
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+        .collect();
+    projected.extend(relative.iter().cloned());
+    projected
+}
+
+/// Normalizes a path which may already carry the complete package-group root.
+pub(crate) fn normalize_physical_path(root: &str, path: &[String]) -> Vec<String> {
+    let root_segments: Vec<String> = root
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if path.starts_with(&root_segments) {
+        path.to_vec()
+    } else {
+        project_physical_path(root, path)
+    }
+}
+
+pub(crate) fn project_package_rooted_path(root: &str, path: &[String]) -> Vec<String> {
     let root: Vec<String> = root
         .split('/')
         .filter(|segment| !segment.is_empty())
         .map(str::to_owned)
         .collect();
-    let overlap = (0..=root.len().min(relative.len()))
+    let overlap = (0..=root.len().min(path.len()))
         .rev()
-        .find(|&length| root.get(root.len().saturating_sub(length)..) == relative.get(..length))
+        .find(|&length| root.get(root.len().saturating_sub(length)..) == path.get(..length))
         .unwrap_or(0);
     let mut projected = root;
-    projected.extend(relative.iter().skip(overlap).cloned());
+    projected.extend(path.iter().skip(overlap).cloned());
     projected
 }
 
@@ -245,7 +292,7 @@ pub(crate) fn project_physical_path(root: &str, relative: &[String]) -> Vec<Stri
 /// path components: a suggested domain that merges several real directories has
 /// no directory of its own to name, so it never contributes a destination
 /// segment (and its injective display label never leaks into a move target).
-fn index_files(tree: &ContainerTree) -> FilePlacements {
+fn index_files(tree: &ContainerTree, package_rooted: bool) -> FilePlacements {
     let containers = tree.containers();
     let by_id: BTreeMap<u32, &strata_ir::Container> = containers
         .iter()
@@ -303,7 +350,11 @@ fn index_files(tree: &ContainerTree) -> FilePlacements {
             .filter(|segment| !segment.is_empty())
             .map(str::to_owned)
             .collect();
-        let physical_file_segments = project_physical_path(dataset, &raw_segments);
+        let physical_file_segments = if package_rooted {
+            project_package_rooted_path(dataset, &raw_segments)
+        } else {
+            project_physical_path(dataset, &raw_segments)
+        };
         let raw_directory = physical_file_segments
             .get(..physical_file_segments.len().saturating_sub(1))
             .unwrap_or_default();
@@ -340,6 +391,24 @@ fn index_files(tree: &ContainerTree) -> FilePlacements {
         members_of,
         entry_count,
     }
+}
+
+/// Projects immutable file identities onto their candidate physical folders.
+#[cfg(test)]
+pub(crate) fn physical_file_folders(tree: &ContainerTree) -> BTreeMap<String, Vec<String>> {
+    index_files(tree, false).parent_of
+}
+
+/// Returns current and proposed physical parents after restoring each file's
+/// immutable repository namespace onto the candidate's logical destination.
+pub(crate) fn physical_relocation_folders(
+    current: &ContainerTree,
+    candidate: &ContainerTree,
+) -> (BTreeMap<String, Vec<String>>, BTreeMap<String, Vec<String>>) {
+    let before = index_files(current, false);
+    let mut after = index_files(candidate, false);
+    preserve_pass_start_namespaces(&before, &mut after);
+    (before.parent_of, after.parent_of)
 }
 
 /// Returns the subject a moved spec file follows, when it follows one.
@@ -563,6 +632,31 @@ mod tests {
     use strata_ir::{Container, ContainerId};
 
     use super::*;
+
+    #[test]
+    fn should_retain_a_real_directory_that_repeats_the_repository_root() {
+        let relative = vec!["app".to_owned(), "foo.ts".to_owned()];
+
+        assert_eq!(
+            project_physical_path("app", &relative),
+            vec!["app".to_owned(), "app".to_owned(), "foo.ts".to_owned()]
+        );
+        assert_eq!(
+            normalize_physical_path(
+                "app",
+                &[
+                    "app".to_owned(),
+                    "candidate".to_owned(),
+                    "foo.ts".to_owned()
+                ]
+            ),
+            vec![
+                "app".to_owned(),
+                "candidate".to_owned(),
+                "foo.ts".to_owned()
+            ]
+        );
+    }
 
     /// Builds a container at a level with an optional parent.
     fn container(id: u32, name: &str, level: ScopeLevel, parent: Option<u32>) -> Container {

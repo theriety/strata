@@ -26,6 +26,8 @@ same-file-symbol 1.0 · same-file-type 3.0
 solver    ilp-threshold 300 · timeout-seconds 60
 diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
+relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+mirroring enabled true · builtins true · rules 0
 ```
 
 Current score `-0.1375`.
@@ -59,6 +61,8 @@ same-file-symbol 1.0 · same-file-type 3.0
 solver    ilp-threshold 300 · timeout-seconds 60
 diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
+relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+mirroring enabled true · builtins true · rules 0
 ```
 
 Current score `0.0625`.

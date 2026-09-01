@@ -25,6 +25,8 @@ same-file-symbol 1.0 · same-file-type 3.0
 solver    ilp-threshold 300 · timeout-seconds 60
 diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
+relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+mirroring enabled true · builtins true · rules 0
 ```
 
 Current score `0.2553`.
@@ -58,6 +60,8 @@ same-file-symbol 1.0 · same-file-type 3.0
 solver    ilp-threshold 300 · timeout-seconds 60
 diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
+relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+mirroring enabled true · builtins true · rules 0
 ```
 
 Current score `0.4553`.
@@ -74,16 +78,14 @@ None.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+0.0712`, score `0.3840`)
+### Candidate 1 (improvement `+0.0899`, score `0.3654`)
 
-- cut `0.2306`, imbalance `0.1684`, naming `-0.0150`, path `-0.0000`, anchor `0.0000`, dependency-only `0.0000`, companion-separation `0.0000`
+- cut `0.2306`, imbalance `0.1347`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`, dependency-only `0.0000`, companion-separation `0.0000`
 
 **Moves**
 
 ```
 move — pulled by rectangle.ts (w 2.0)
   1. nested-ts/src/app.ts [nested-ts/src → nested-ts/src/geometry]
-move — follows app.ts
-  2. nested-ts/src/__tests__/app.spec.ts [nested-ts/src/__tests__ → nested-ts/src/geometry]
 ```
 

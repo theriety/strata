@@ -45,6 +45,8 @@
    solver    ilp-threshold 300 · timeout-seconds 60
    diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
    tests     helper-cap 250 · patterns 0 · builtins true
+   relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+              mirroring enabled true · builtins true · rules 0
  greenfield parameter profile (effective):
    search    candidates 3 · seed 42
    capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
@@ -55,6 +57,8 @@
    solver    ilp-threshold 300 · timeout-seconds 60
    diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
    tests     helper-cap 250 · patterns 0 · builtins true
+   relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+              mirroring enabled true · builtins true · rules 0
 
  candidate 1   greenfield/1   score  0.3535   gain +0.2310   best score
 

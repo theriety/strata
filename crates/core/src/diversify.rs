@@ -51,11 +51,13 @@ pub struct ModeConfig {
 /// The partition drives VI selection; the score drives the tolerance filter and
 /// the best-first ordering. Lower scores are better (the objective is minimised).
 #[derive(Debug, Clone, PartialEq)]
-pub struct SolvedCandidate {
+pub struct SolvedCandidate<E = ()> {
     /// The induced partition of symbols into containers.
     pub partition: Partition,
     /// The objective score J(T); lower is better.
     pub score: f64,
+    /// Solver-owned evidence produced by the same deterministic restart.
+    pub evidence: E,
 }
 
 /// A restartable solver: maps a seed to a single scored candidate.
@@ -64,8 +66,11 @@ pub struct SolvedCandidate {
 /// cluster + pack with that seed), so the pool is reproducible. The trait is the
 /// only coupling between diversification and the rest of the pipeline.
 pub trait Solver: Sync {
+    /// Evidence that must remain coupled to the selected partition.
+    type Evidence: Clone + Send;
+
     /// Solves once with the given `seed`, returning the scored candidate.
-    fn solve(&self, seed: u64) -> SolvedCandidate;
+    fn solve(&self, seed: u64) -> SolvedCandidate<Self::Evidence>;
 }
 
 /// The result of a diversification run: the chosen candidates and whether the
@@ -75,9 +80,9 @@ pub trait Solver: Sync {
 /// exactly when fewer than `k` distinct candidates survived selection — a signal
 /// that the structure is largely determined, not a failure.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ModeResult {
+pub struct ModeResult<E = ()> {
     /// The selected candidates, best score first.
-    pub candidates: Vec<SolvedCandidate>,
+    pub candidates: Vec<SolvedCandidate<E>>,
     /// True iff fewer than `k` candidates survived.
     pub solution_space_converged: bool,
 }
@@ -97,7 +102,10 @@ pub struct ModeResult {
 /// A `k` of zero yields no candidates and is *not* a convergence signal — zero
 /// were requested and zero returned, so `solution_space_converged` stays false.
 #[must_use]
-pub fn diversify(solver: &impl Solver, cfg: &ModeConfig) -> ModeResult {
+pub fn diversify<S>(solver: &S, cfg: &ModeConfig) -> ModeResult<S::Evidence>
+where
+    S: Solver,
+{
     let pool = solve_pool(solver, cfg);
     let filtered = filter_by_tolerance(pool, cfg.score_tolerance);
     let mut picked = select_diverse(&filtered, cfg.k, cfg.min_distance);
@@ -116,7 +124,10 @@ pub fn diversify(solver: &impl Solver, cfg: &ModeConfig) -> ModeResult {
 /// Solves `pool_per_candidate * k` restarts at `base_seed + i` in parallel and
 /// returns them in ascending seed order, so the pool is deterministic
 /// regardless of scheduling.
-fn solve_pool(solver: &impl Solver, cfg: &ModeConfig) -> Vec<SolvedCandidate> {
+fn solve_pool<S>(solver: &S, cfg: &ModeConfig) -> Vec<SolvedCandidate<S::Evidence>>
+where
+    S: Solver,
+{
     let count = cfg.k.saturating_mul(cfg.pool_per_candidate);
     (0..count)
         .into_par_iter()
@@ -134,7 +145,10 @@ fn solve_pool(solver: &impl Solver, cfg: &ModeConfig) -> Vec<SolvedCandidate> {
 ///
 /// An empty pool stays empty. The best score is the minimum; a non-negative
 /// tolerance widens the band above it.
-fn filter_by_tolerance(mut pool: Vec<SolvedCandidate>, tolerance: f64) -> Vec<SolvedCandidate> {
+fn filter_by_tolerance<E>(
+    mut pool: Vec<SolvedCandidate<E>>,
+    tolerance: f64,
+) -> Vec<SolvedCandidate<E>> {
     pool.sort_by(candidate_order);
 
     let Some(best) = pool.first().map(|candidate| candidate.score) else {
@@ -147,7 +161,7 @@ fn filter_by_tolerance(mut pool: Vec<SolvedCandidate>, tolerance: f64) -> Vec<So
 
 /// Total order on candidates: ascending score (best first), ties broken
 /// deterministically by partition assignment.
-fn candidate_order(a: &SolvedCandidate, b: &SolvedCandidate) -> std::cmp::Ordering {
+fn candidate_order<E>(a: &SolvedCandidate<E>, b: &SolvedCandidate<E>) -> std::cmp::Ordering {
     a.score
         .total_cmp(&b.score)
         .then_with(|| a.partition.assignment().cmp(b.partition.assignment()))
@@ -173,7 +187,14 @@ fn tolerance_ceiling(best: f64, tolerance: f64) -> f64 {
 /// minimum is at least `min_distance`; ties break toward the better score (the
 /// earlier pool index). Selection stops at `k` picks or when no remaining
 /// candidate clears `min_distance`.
-fn select_diverse(pool: &[SolvedCandidate], k: usize, min_distance: f64) -> Vec<SolvedCandidate> {
+fn select_diverse<E>(
+    pool: &[SolvedCandidate<E>],
+    k: usize,
+    min_distance: f64,
+) -> Vec<SolvedCandidate<E>>
+where
+    E: Clone,
+{
     if k == 0 {
         return Vec::new();
     }
@@ -200,8 +221,8 @@ fn select_diverse(pool: &[SolvedCandidate], k: usize, min_distance: f64) -> Vec<
 /// Returns the pool index of the unpicked candidate whose minimum VI distance to
 /// the picked set is greatest and at least `min_distance`, or `None` when none
 /// qualifies. Ties favour the lower index (the better score).
-fn best_remaining(
-    pool: &[SolvedCandidate],
+fn best_remaining<E>(
+    pool: &[SolvedCandidate<E>],
     picked_indices: &[usize],
     min_distance: f64,
 ) -> Option<usize> {
@@ -342,6 +363,7 @@ mod tests {
         SolvedCandidate {
             partition: partition(labels),
             score,
+            evidence: (),
         }
     }
 
@@ -353,6 +375,8 @@ mod tests {
     }
 
     impl Solver for ScriptedSolver {
+        type Evidence = ();
+
         fn solve(&self, seed: u64) -> SolvedCandidate {
             let index = usize::try_from(seed.wrapping_sub(self.base)).unwrap_or(usize::MAX);
             self.candidates
@@ -423,6 +447,60 @@ mod tests {
         assert_eq!(result.candidates.first().map(|c| c.score), Some(1.0));
         assert_eq!(result.candidates.get(1).map(|c| c.score), Some(2.0));
         assert!(!result.solution_space_converged);
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct RestartEvidence {
+        seed: u64,
+        labels: Vec<u32>,
+    }
+
+    struct EvidenceSolver;
+
+    impl Solver for EvidenceSolver {
+        type Evidence = RestartEvidence;
+
+        fn solve(&self, seed: u64) -> SolvedCandidate<Self::Evidence> {
+            let labels = if seed.is_multiple_of(2) {
+                vec![0, 0, 1, 1]
+            } else {
+                vec![0, 1, 0, 1]
+            };
+            SolvedCandidate {
+                partition: partition(&labels),
+                score: if seed.is_multiple_of(2) { 1.0 } else { 2.0 },
+                evidence: RestartEvidence { seed, labels },
+            }
+        }
+    }
+
+    #[test]
+    fn should_keep_restart_evidence_coupled_through_parallel_selection() {
+        let result = diversify(
+            &EvidenceSolver,
+            &ModeConfig {
+                k: 2,
+                base_seed: 40,
+                score_tolerance: 10.0,
+                min_distance: 0.1,
+                pool_per_candidate: 4,
+            },
+        );
+
+        assert_eq!(result.candidates.len(), 2);
+        for candidate in result.candidates {
+            let labels: Vec<u32> = candidate
+                .partition
+                .assignment()
+                .iter()
+                .map(|cluster| cluster.0)
+                .collect();
+            assert_eq!(candidate.evidence.labels, labels);
+            assert_eq!(
+                candidate.evidence.seed.is_multiple_of(2),
+                candidate.score < 2.0
+            );
+        }
     }
 
     #[test]

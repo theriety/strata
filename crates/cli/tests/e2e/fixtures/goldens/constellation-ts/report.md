@@ -25,6 +25,8 @@ same-file-symbol 1.0 · same-file-type 3.0
 solver    ilp-threshold 300 · timeout-seconds 60
 diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
+relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+mirroring enabled true · builtins true · rules 0
 ```
 
 Current score `0.1668`.
@@ -41,16 +43,7 @@ None.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+0.1042`, score `0.0626`)
-
-- cut `0.1901`, imbalance `0.0406`, naming `-0.0038`, path `-0.2000`, anchor `0.0357`, dependency-only `0.0000`, companion-separation `0.0000`
-
-**Moves**
-
-```
-move — follows canvas.ts
-  1. constellation-ts/src/util/canvas.spec.ts [constellation-ts/src/util → constellation-ts/src/render]
-```
+_Current layout is already optimal; candidate 1 is the current tree._
 
 ## Greenfield parameter profile
 
@@ -67,6 +60,8 @@ same-file-symbol 1.0 · same-file-type 3.0
 solver    ilp-threshold 300 · timeout-seconds 60
 diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
+relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+mirroring enabled true · builtins true · rules 0
 ```
 
 Current score `0.3668`.
@@ -83,16 +78,14 @@ None.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+0.1467`, score `0.2201`)
+### Candidate 1 (improvement `+0.1372`, score `0.2296`)
 
-- cut `0.1849`, imbalance `0.0387`, naming `-0.0036`, path `-0.0000`, anchor `0.0000`, dependency-only `0.0000`, companion-separation `0.0000`
+- cut `0.1875`, imbalance `0.0437`, naming `-0.0016`, path `-0.0000`, anchor `0.0000`, dependency-only `0.0000`, companion-separation `0.0000`
 
 **Moves**
 
 ```
-split — pulled by matrix.ts (w 1.0)
+move — pulled by matrix.ts (w 1.0)
   1. constellation-ts/src/util/hash.ts [constellation-ts/src/util → constellation-ts/src/model]
-split — follows canvas.ts
-  2. constellation-ts/src/util/canvas.spec.ts [constellation-ts/src/util → constellation-ts/src/render]
 ```
 

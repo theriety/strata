@@ -285,6 +285,8 @@ mod tests {
                 }],
                 to: "new".to_owned(),
                 reason: MoveReason::Clustering,
+                mirrors: Vec::new(),
+                blocked_mirrors: Vec::new(),
             }],
             symbol_moves: Vec::new(),
             capacity_remainder: None,
@@ -354,6 +356,8 @@ mod tests {
                     .collect(),
                 to: "new".to_owned(),
                 reason: MoveReason::Clustering,
+                mirrors: Vec::new(),
+                blocked_mirrors: Vec::new(),
             }];
         }
 

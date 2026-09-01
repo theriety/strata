@@ -25,6 +25,8 @@ same-file-symbol 1.0 · same-file-type 3.0
 solver    ilp-threshold 300 · timeout-seconds 60
 diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
+relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+mirroring enabled true · builtins true · rules 0
 ```
 
 Current score `0.4000`.
@@ -41,16 +43,7 @@ None.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+0.0250`, score `0.3750`)
-
-- cut `0.1250`, imbalance `0.1000`, naming `-0.1500`, path `-0.2000`, anchor `0.5000`, dependency-only `0.0000`, companion-separation `0.0000`
-
-**Moves**
-
-```
-move — follows openai.ts
-  1. twin-follow-ts/src/specs/openai.spec.ts [twin-follow-ts/src/specs → twin-follow-ts/src/api]
-```
+_Current layout is already optimal; candidate 1 is the current tree._
 
 ## Greenfield parameter profile
 
@@ -67,6 +60,8 @@ same-file-symbol 1.0 · same-file-type 3.0
 solver    ilp-threshold 300 · timeout-seconds 60
 diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
 tests     helper-cap 250 · patterns 0 · builtins true
+relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+mirroring enabled true · builtins true · rules 0
 ```
 
 Current score `0.6000`.
@@ -83,14 +78,5 @@ None.
 
 _Fewer than the requested candidates survived; the solution space converged._
 
-### Candidate 1 (improvement `+0.5250`, score `0.0750`)
-
-- cut `0.1250`, imbalance `0.1000`, naming `-0.1500`, path `-0.0000`, anchor `0.0000`, dependency-only `0.0000`, companion-separation `0.0000`
-
-**Moves**
-
-```
-move — follows openai.ts
-  1. twin-follow-ts/src/specs/openai.spec.ts [twin-follow-ts/src/specs → twin-follow-ts/src/api]
-```
+_Current layout is already optimal; candidate 1 is the current tree._
 

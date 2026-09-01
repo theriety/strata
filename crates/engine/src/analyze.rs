@@ -32,14 +32,23 @@ use strata_ir::{
     NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
 };
 
-use crate::config::{AnalyzeConfig, CapacityConfig, ProfileConfig, ProfileName, TestsConfig};
+use crate::config::{
+    AnalyzeConfig, CapacityConfig, MirrorCaptures, MirrorTemplate, ProfileConfig, ProfileName,
+    TestMirrorRule, TestsConfig, builtin_test_mirror_rules,
+};
 use crate::error::StrataError;
-use crate::narrate::{FileFacts, narrate, project_physical_path, tokenize};
+use crate::narrate::{
+    FileFacts, narrate_repository_relative, normalize_physical_path, physical_relocation_folders,
+    project_package_rooted_path, project_physical_path, tokenize,
+};
+#[cfg(test)]
+use crate::narrate::{narrate, physical_file_folders};
 use crate::result::{
-    AnalyzeResult, Candidate, CapacityBreach, CapacityRemainder, ConditionalSplit, ContainerNode,
-    CurrentStanding, CurrentTree, EdgeBreak, Level, ProfileCurrent, ProfileResult, Profiles,
-    RESULT_SCHEMA_VERSION, ScoreBreakdown, Severity, Summary, SymbolKind, SymbolMove,
-    SymbolPlacement, Violation, ViolationKind,
+    AnalyzeResult, BlockedMirror, BlockedMirrorReason, Candidate, CapacityBreach,
+    CapacityRemainder, ConditionalSplit, ContainerNode, CurrentStanding, CurrentTree, EdgeBreak,
+    Level, MirrorMove, Move, ProfileCurrent, ProfileResult, Profiles, RESULT_SCHEMA_VERSION,
+    ScoreBreakdown, Severity, Summary, SymbolKind, SymbolMove, SymbolPlacement, Violation,
+    ViolationKind,
 };
 use crate::snapshot::Language;
 
@@ -157,6 +166,18 @@ impl TestPolicy {
                 .path_patterns
                 .iter()
                 .any(|pattern| pattern.matches(path))
+    }
+
+    /// Built-in path conventions also classify support files whose declarations
+    /// remain production-polarity. Directory segments are exact so ordinary
+    /// names such as `contest` do not become test roots accidentally.
+    fn matches_builtin_path(path: &str) -> bool {
+        let mut segments = path.split('/');
+        let basename = path.rsplit('/').next().unwrap_or(path);
+        segments.any(|segment| matches!(segment, "spec" | "test" | "tests"))
+            || basename
+                .split('.')
+                .any(|segment| matches!(segment, "spec" | "test"))
     }
 }
 
@@ -575,7 +596,7 @@ fn snapshot_capacity_violations(
         .map(|(_, violation)| violation)
         .collect();
     findings.extend(physical_folder_findings(
-        &physical_folder_entries(&snapshot.ir().containers, None),
+        &physical_folder_entries_repository_relative(&snapshot.ir().containers, None),
         capacity.folder,
     ));
     findings
@@ -595,9 +616,25 @@ fn capacity_violations(tree: &ContainerNode, config: &AnalyzeConfig) -> Vec<Viol
 /// source-root-transparent laminar tree. A directory binds its direct files
 /// plus its distinct direct child directories; deeper descendants do not add
 /// to an ancestor's count.
+#[cfg(test)]
 fn physical_folder_entries(
     tree: &ContainerTree,
     namespaces: Option<&BTreeMap<ContainerId, SmolStr>>,
+) -> BTreeMap<Vec<String>, u32> {
+    physical_folder_entries_with_rootedness(tree, namespaces, true)
+}
+
+fn physical_folder_entries_repository_relative(
+    tree: &ContainerTree,
+    namespaces: Option<&BTreeMap<ContainerId, SmolStr>>,
+) -> BTreeMap<Vec<String>, u32> {
+    physical_folder_entries_with_rootedness(tree, namespaces, false)
+}
+
+fn physical_folder_entries_with_rootedness(
+    tree: &ContainerTree,
+    namespaces: Option<&BTreeMap<ContainerId, SmolStr>>,
+    package_rooted: bool,
 ) -> BTreeMap<Vec<String>, u32> {
     let by_id: BTreeMap<u32, &Container> = tree
         .containers()
@@ -649,7 +686,11 @@ fn physical_folder_entries(
                 .map(str::to_owned)
                 .collect();
             relative.extend(logical);
-            project_physical_path(dataset, &relative)
+            if package_rooted {
+                project_package_rooted_path(dataset, &relative)
+            } else {
+                project_physical_path(dataset, &relative)
+            }
         } else {
             let raw_directory: Vec<String> = file
                 .name
@@ -659,7 +700,11 @@ fn physical_folder_entries(
                 .filter(|segment| !segment.is_empty())
                 .map(str::to_owned)
                 .collect();
-            project_physical_path(dataset, &raw_directory)
+            if package_rooted {
+                project_package_rooted_path(dataset, &raw_directory)
+            } else {
+                project_physical_path(dataset, &raw_directory)
+            }
         };
         *direct_files.entry(directory.clone()).or_default() += 1;
 
@@ -992,11 +1037,15 @@ fn build_profile_result(
     // therefore never offered. This applies even when the current tree breaches
     // a hard cap: infeasibility is reported as a finding, not used to relabel a
     // score regression as a gain.
-    let valid: Vec<&SolvedCandidate> = candidates
+    let valid: Vec<&SolvedCandidate<MirrorEvidence>> = candidates
         .iter()
-        .filter(|solved| solver.relocation_identity.accepts(&solved.partition))
+        .filter(|solved| {
+            solver
+                .relocation_identity
+                .accepts_with_mirrors(&solved.partition, &solved.evidence)
+        })
         .collect();
-    let offered: Vec<SolvedCandidate> = valid
+    let offered: Vec<SolvedCandidate<MirrorEvidence>> = valid
         .iter()
         .filter(|solved| solved.score < current_breakdown.total)
         .map(|solved| (*solved).clone())
@@ -1014,7 +1063,12 @@ fn build_profile_result(
         // an infeasible standing must say what each candidate actually fixes,
         // so its tree is re-checked against the same caps as the current one.
         candidate.capacity_remainder = (!capacity_clean).then(|| {
-            solver.capacity_remainder(&solved.partition, &candidate.tree, &profile.capacity)
+            solver.capacity_remainder_with_mirror_evidence(
+                &solved.partition,
+                &solved.evidence,
+                &candidate.tree,
+                &profile.capacity,
+            )
         });
         built.push(candidate);
     }
@@ -1049,7 +1103,7 @@ fn build_profile_result(
 }
 
 /// Returns the variation-of-information matrix over the diversified candidates.
-fn pairwise_distances(candidates: &[SolvedCandidate]) -> Vec<Vec<f64>> {
+fn pairwise_distances(candidates: &[SolvedCandidate<MirrorEvidence>]) -> Vec<Vec<f64>> {
     candidates
         .iter()
         .map(|left| {
@@ -1177,7 +1231,36 @@ impl RelocationIdentityGuard {
                 .all(|identity| !occupied.contains(identity))
     }
 
+    /// Permits a pinned test follower to join a production-owned logical
+    /// cluster while retaining its own render namespace. Exact mirror rules
+    /// establish that cross-namespace relationship; leaf collisions remain a
+    /// hard veto within the projected namespace.
+    fn permits_shadow_join(&self, parts: &Partition, moving: u32, target: ClusterId) -> bool {
+        let Some(moving_identities) = self.identities_by_scc.get(moving as usize) else {
+            return false;
+        };
+        let mut occupied = BTreeSet::new();
+        for (scc, identities) in self.identities_by_scc.iter().enumerate() {
+            let scc = u32::try_from(scc).unwrap_or(u32::MAX);
+            if scc == moving || parts.cluster_of(scc) != Some(target) {
+                continue;
+            }
+            occupied.extend(identities.iter().cloned());
+        }
+        let unique: BTreeSet<&RenderIdentity> = moving_identities.iter().collect();
+        unique.len() == moving_identities.len()
+            && moving_identities
+                .iter()
+                .all(|identity| !occupied.contains(identity))
+    }
+
+    #[cfg(test)]
     fn accepts(&self, parts: &Partition) -> bool {
+        self.accepts_with_mirrors(parts, &MirrorEvidence::default())
+    }
+
+    fn accepts_with_mirrors(&self, parts: &Partition, evidence: &MirrorEvidence) -> bool {
+        let applied = evidence.applied_sccs();
         let mut occupied: BTreeSet<(ClusterId, &SmolStr, &SmolStr)> = BTreeSet::new();
         self.identities_by_scc
             .iter()
@@ -1190,7 +1273,9 @@ impl RelocationIdentityGuard {
                     return false;
                 };
                 identities.iter().all(|(namespace, leaf)| {
-                    allowed.contains(namespace) && occupied.insert((cluster, namespace, leaf))
+                    (allowed.contains(namespace)
+                        || applied.contains(&u32::try_from(scc).unwrap_or(u32::MAX)))
+                        && occupied.insert((cluster, namespace, leaf))
                 })
             })
     }
@@ -1403,6 +1488,16 @@ struct PipelineSolver<'a> {
     /// policy — polarity detection plus configured patterns. Drives the shadow
     /// pass that follows subjects.
     test_zone: Vec<bool>,
+    /// Whole file SCCs forbidden from independent movement by immutable policy.
+    pinned_scc: Vec<bool>,
+    /// Repo-relative file patterns that block symbol departures and arrivals.
+    forbidden_symbol_files: Vec<glob::Pattern>,
+    /// Immutable exact source/test templates compiled for this profile.
+    mirror_rules: Vec<TestMirrorRule>,
+    /// Whether accepted source moves attempt their test followers.
+    mirror_enabled: bool,
+    /// Whether declarations in detected test files are independently pinned.
+    pin_test_symbols: bool,
     /// The current tree's file containers, ascending container id; vertex `i` of
     /// the file graph is `files[i]`.
     files: Vec<FileInfo>,
@@ -1429,6 +1524,10 @@ struct PipelineSolver<'a> {
     /// The identity partition (anchored mode on a cap-clean tree), else `None`.
     /// Cloned before relief, so it always mirrors the current tree exactly.
     identity: Option<Partition>,
+    /// Immutable pass-start folder placement used to ensure tests only follow
+    /// an actual source relocation, never optimize independently.
+    #[cfg(test)]
+    pass_start_partition: Partition,
     /// Whether relief left the search's real-directory partition identical to
     /// the current tree — the mode-independent "nothing changed yet" shape. The
     /// faithful candidate exit (FIX05) keys on this so greenfield reports an
@@ -1465,6 +1564,83 @@ struct PipelineSolver<'a> {
     /// shape that the ordinary polish/score path then ratifies or rejects; no
     /// other seed or fixture is perturbed.
     roof_rebuild: Option<Partition>,
+}
+
+/// Mirror follower decisions produced by the same deterministic solver restart.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct MirrorEvidence {
+    outcomes: Vec<MirrorOutcome>,
+}
+
+impl MirrorEvidence {
+    fn applied_sccs(&self) -> BTreeSet<u32> {
+        self.outcomes
+            .iter()
+            .filter_map(|outcome| {
+                matches!(outcome.disposition, MirrorDisposition::Applied)
+                    .then_some(outcome.mirror_scc)
+            })
+            .collect()
+    }
+
+    fn applied_destination(&self, scc: u32) -> Option<&str> {
+        self.outcomes.iter().find_map(|outcome| {
+            (outcome.mirror_scc == scc && matches!(outcome.disposition, MirrorDisposition::Applied))
+                .then_some(outcome.intended_to.as_str())
+        })
+    }
+}
+
+/// One attempted exact test follower and the hard-constraint result it earned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MirrorOutcome {
+    mirror_scc: u32,
+    source_path: String,
+    path: String,
+    from: String,
+    intended_to: String,
+    disposition: MirrorDisposition,
+}
+
+/// Whether an exact test follower changed placement or met a hard constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MirrorDisposition {
+    Applied,
+    Blocked(BlockedMirrorReason),
+}
+
+/// Immutable template match between one production source and one present test.
+#[derive(Debug, Clone)]
+struct ExactMirrorLink {
+    source_vertex: u32,
+    source_root: String,
+    test_template: String,
+    captures: MirrorCaptures,
+}
+
+/// A candidate folder together with the coordinate system its path uses.
+#[derive(Debug, Clone)]
+enum ProjectedFolder {
+    RepositoryRelative(SmolStr),
+    Rooted(SmolStr),
+}
+
+impl ProjectedFolder {
+    fn repository_relative(&self, root: &str) -> SmolStr {
+        match self {
+            Self::RepositoryRelative(path) => path.clone(),
+            Self::Rooted(path) => {
+                let segments: Vec<&str> = path
+                    .split('/')
+                    .filter(|segment| !segment.is_empty())
+                    .collect();
+                match segments.split_first() {
+                    Some((head, tail)) if *head == root => SmolStr::new(tail.join("/")),
+                    _ => path.clone(),
+                }
+            }
+        }
+    }
 }
 
 /// Inventories the current tree's file containers in file-graph vertex order:
@@ -1517,9 +1693,75 @@ fn file_inventory(ir: &IntermediateRepresentation) -> (Vec<FileInfo>, BTreeMap<u
 }
 
 impl<'a> PipelineSolver<'a> {
+    /// Attaches solver-owned follower outcomes to their primary source moves.
+    fn attach_test_mirrors(moves: &mut Vec<Move>, evidence: &MirrorEvidence) {
+        let mut follower_paths = BTreeSet::new();
+        for outcome in &evidence.outcomes {
+            let Some(entry) = moves.iter_mut().find(|entry| {
+                entry
+                    .files
+                    .iter()
+                    .any(|file| file.path == outcome.source_path)
+            }) else {
+                continue;
+            };
+            match outcome.disposition {
+                MirrorDisposition::Applied => {
+                    follower_paths.insert(outcome.path.clone());
+                    entry.mirrors.push(MirrorMove {
+                        source_path: outcome.source_path.clone(),
+                        path: outcome.path.clone(),
+                        from: outcome.from.clone(),
+                        to: outcome.intended_to.clone(),
+                    });
+                }
+                MirrorDisposition::Blocked(reason) => {
+                    entry.blocked_mirrors.push(BlockedMirror {
+                        source_path: outcome.source_path.clone(),
+                        path: outcome.path.clone(),
+                        from: outcome.from.clone(),
+                        intended_to: outcome.intended_to.clone(),
+                        reason,
+                    });
+                }
+            }
+        }
+        for entry in moves.iter_mut() {
+            entry.mirrors.sort_by(|left, right| {
+                (&left.source_path, &left.path).cmp(&(&right.source_path, &right.path))
+            });
+            entry.mirrors.dedup();
+            entry.blocked_mirrors.sort_by(|left, right| {
+                (&left.source_path, &left.path).cmp(&(&right.source_path, &right.path))
+            });
+            entry.blocked_mirrors.dedup();
+        }
+        moves.retain(|entry| {
+            entry
+                .files
+                .iter()
+                .all(|file| !follower_paths.contains(&file.path))
+        });
+    }
+
     fn physical_entry_counts(&self, parts: &Partition) -> BTreeMap<Vec<String>, u32> {
         let assembled = self.assemble(parts);
-        physical_folder_entries(&assembled.tree, Some(&assembled.namespace_by_file))
+        physical_folder_entries_repository_relative(
+            &assembled.tree,
+            Some(&assembled.namespace_by_file),
+        )
+    }
+
+    fn physical_entry_counts_with_mirror_evidence(
+        &self,
+        parts: &Partition,
+        evidence: &MirrorEvidence,
+    ) -> BTreeMap<Vec<String>, u32> {
+        let assembled = self.assemble_with_mirror_evidence(parts, evidence);
+        physical_folder_entries_repository_relative(
+            &assembled.tree,
+            Some(&assembled.namespace_by_file),
+        )
     }
 
     fn permits_physical_capacity(&self, parts: &Partition, scc: u32, target: ClusterId) -> bool {
@@ -1555,17 +1797,63 @@ impl<'a> PipelineSolver<'a> {
         })
     }
 
-    /// Re-checks a candidate with physical folder semantics while retaining
-    /// the DTO walk for file and upper-level findings.
-    fn capacity_remainder(
+    fn permits_mirror_physical_capacity(
         &self,
         parts: &Partition,
+        scc: u32,
+        target: ClusterId,
+        evidence: &MirrorEvidence,
+        prospective: &MirrorEvidence,
+    ) -> bool {
+        if self.caps.folder == 0 {
+            return true;
+        }
+        let before = self.physical_entry_counts_with_mirror_evidence(parts, evidence);
+        let mut assignment = parts.assignment().to_vec();
+        let Some(slot) = assignment.get_mut(scc as usize) else {
+            return false;
+        };
+        *slot = target;
+        let moved = Partition::from_assignment(assignment, parts.cluster_count());
+        let after = self.physical_entry_counts_with_mirror_evidence(&moved, prospective);
+        before.keys().chain(after.keys()).all(|path| {
+            let prior = before
+                .get(path)
+                .copied()
+                .unwrap_or(0)
+                .saturating_sub(self.caps.folder);
+            let next = after
+                .get(path)
+                .copied()
+                .unwrap_or(0)
+                .saturating_sub(self.caps.folder);
+            next <= prior
+        })
+    }
+
+    /// Re-checks a candidate with physical folder semantics while retaining
+    /// the DTO walk for file and upper-level findings.
+    fn capacity_remainder_with_mirror_evidence(
+        &self,
+        parts: &Partition,
+        evidence: &MirrorEvidence,
         rendered: &ContainerNode,
         capacity: &CapacityConfig,
     ) -> CapacityRemainder {
-        let assembled = self.assemble(parts);
+        let assembled = self.assemble_with_mirror_evidence(parts, evidence);
+        Self::capacity_remainder_for_assembled(&assembled, rendered, capacity)
+    }
+
+    fn capacity_remainder_for_assembled(
+        assembled: &CandidateTree,
+        rendered: &ContainerNode,
+        capacity: &CapacityConfig,
+    ) -> CapacityRemainder {
         let folder_hard = physical_folder_findings(
-            &physical_folder_entries(&assembled.tree, Some(&assembled.namespace_by_file)),
+            &physical_folder_entries_repository_relative(
+                &assembled.tree,
+                Some(&assembled.namespace_by_file),
+            ),
             capacity.folder,
         )
         .into_iter()
@@ -1587,6 +1875,7 @@ impl<'a> PipelineSolver<'a> {
     }
 
     /// Builds the solver, computing every seed-independent pipeline input once.
+    #[allow(clippy::too_many_lines)]
     fn new<P: ProfileSource + ?Sized>(
         snapshot: &'a Snapshot,
         profile_source: &P,
@@ -1610,6 +1899,41 @@ impl<'a> PipelineSolver<'a> {
             &test_zone,
         );
         let condensation = condense(&file_graph);
+        let forbidden_file_patterns: Vec<glob::Pattern> = profile
+            .relocation
+            .forbid_file_moves
+            .iter()
+            .filter_map(|pattern| glob::Pattern::new(pattern).ok())
+            .collect();
+        let forbidden_symbol_files = profile
+            .relocation
+            .forbid_symbol_moves
+            .iter()
+            .filter_map(|pattern| glob::Pattern::new(pattern).ok())
+            .collect();
+        let pinned_vertex: Vec<bool> = files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| {
+                (profile.relocation.pin_detected_test_files
+                    && test_zone.get(index).copied().unwrap_or(false))
+                    || forbidden_file_patterns.iter().any(|pattern| {
+                        pattern.matches_path(std::path::Path::new(file.name.as_str()))
+                    })
+            })
+            .collect();
+        let pinned_scc: Vec<bool> = condensation
+            .members
+            .iter()
+            .map(|members| {
+                members.iter().any(|member| {
+                    pinned_vertex
+                        .get(member.0 as usize)
+                        .copied()
+                        .unwrap_or(false)
+                })
+            })
+            .collect();
         let caps = level_caps(&profile.capacity);
         let reverse_dag = reverse_csr(&condensation.dag);
 
@@ -1627,7 +1951,7 @@ impl<'a> PipelineSolver<'a> {
         // creates, so every non-identity seed starts from a layout the split can
         // win from instead of only being able to shed files out of the over-cap
         // folder.
-        let (relieved_files, search_partition, mut folder_names, mut folder_synthetic) =
+        let (relieved_files, mut search_partition, mut folder_names, mut folder_synthetic) =
             relieve_over_capacity(
                 files,
                 &condensation,
@@ -1637,6 +1961,21 @@ impl<'a> PipelineSolver<'a> {
                 &identity_synthetic,
                 caps.folder,
             );
+        if pinned_scc.iter().any(|pinned| *pinned) {
+            let mut assignment = search_partition.assignment().to_vec();
+            for (scc, pinned) in pinned_scc.iter().copied().enumerate() {
+                if pinned
+                    && let (Some(slot), Some(home)) = (
+                        assignment.get_mut(scc),
+                        identity_partition.cluster_of(u32::try_from(scc).unwrap_or(u32::MAX)),
+                    )
+                {
+                    *slot = home;
+                }
+            }
+            search_partition =
+                Partition::from_assignment(assignment, search_partition.cluster_count());
+        }
         // FIX09 (naming-incoherence): a misnamed roof is invisible to edge-driven
         // search — the strangers under it carry no priced edge to pull them out,
         // so every seed converges on the same welded layout and no candidate can
@@ -1653,6 +1992,7 @@ impl<'a> PipelineSolver<'a> {
             &condensation,
             &file_graph,
             &test_zone,
+            &pinned_scc,
             &search_partition,
             &mut folder_names,
             &mut folder_synthetic,
@@ -1670,7 +2010,7 @@ impl<'a> PipelineSolver<'a> {
             .iter()
             .find(|container| container.level == ScopeLevel::PackageGroup)
             .map_or_else(|| SmolStr::new("workspace"), |group| group.name.clone());
-        let facts = file_facts(
+        let facts = file_facts_repository_relative(
             snapshot,
             &weights,
             profile.capacity.folder,
@@ -1682,6 +2022,11 @@ impl<'a> PipelineSolver<'a> {
         Self {
             snapshot,
             test_zone,
+            pinned_scc,
+            forbidden_symbol_files,
+            mirror_rules: mirror_rules(profile),
+            mirror_enabled: profile.relocation.test_mirroring.enabled,
+            pin_test_symbols: profile.relocation.pin_detected_test_symbols,
             files: relieved_files,
             index_of,
             condensation,
@@ -1694,6 +2039,8 @@ impl<'a> PipelineSolver<'a> {
             same_file_symbol: profile.weights.same_file_symbol,
             same_file_type: profile.weights.same_file_type,
             identity,
+            #[cfg(test)]
+            pass_start_partition: identity_partition,
             real_is_identity,
             real_partition: search_partition,
             real_folder_names: folder_names,
@@ -1709,6 +2056,16 @@ impl<'a> PipelineSolver<'a> {
     /// coefficients.
     fn evaluate(&self, parts: &Partition) -> f64 {
         let assembled = self.assemble(parts);
+        self.evaluate_assembled(&assembled)
+    }
+
+    #[cfg(test)]
+    fn evaluate_with_mirror_evidence(&self, parts: &Partition, evidence: &MirrorEvidence) -> f64 {
+        let assembled = self.assemble_with_mirror_evidence(parts, evidence);
+        self.evaluate_assembled(&assembled)
+    }
+
+    fn evaluate_assembled(&self, assembled: &CandidateTree) -> f64 {
         let placement = |id: u32| assembled.placement.get(&id).copied();
         // the assembly's placement maps every node to its current file's
         // candidate id, so this distance is pure file-grain movement.
@@ -1748,6 +2105,9 @@ impl<'a> PipelineSolver<'a> {
             let mut improved = false;
             for scc in 0..self.condensation.members.len() {
                 let scc32 = u32::try_from(scc).unwrap_or(u32::MAX);
+                if self.pinned_scc.get(scc).copied().unwrap_or(false) {
+                    continue;
+                }
                 let Some(source) = parts.cluster_of(scc32) else {
                     continue;
                 };
@@ -1905,84 +2265,291 @@ impl<'a> PipelineSolver<'a> {
     /// cycle through cut edges (`spec` → `support` → subject), which is exactly
     /// the weld this pass exists to undo; counting it would veto every follow
     /// in a mirrored test tree.
-    fn shadow_tests(&self, parts: &mut Partition) {
-        for (vertex, zone) in self.test_zone.iter().enumerate() {
-            if !zone {
-                continue;
-            }
-            let Some(file) = self.files.get(vertex) else {
-                continue;
-            };
-            let Some(twin_vertex) = self.unique_subject_twin(file) else {
-                continue;
-            };
-            let unit = self
-                .condensation
-                .membership
-                .get(vertex)
-                .copied()
-                .map_or(u32::MAX, |scc| scc.0);
-            // never shadow-move an SCC that carries production code: its
-            // placement was earned by the priced search, not by the tie-cut.
-            let unit_members = self.condensation.members.get(unit as usize);
-            if unit_members.is_none_or(|unit_members| {
-                unit_members.iter().any(|member| {
-                    !self
-                        .test_zone
-                        .get(member.0 as usize)
-                        .copied()
-                        .unwrap_or(true)
-                })
-            }) {
-                continue;
-            }
-            let subject = self
-                .condensation
-                .membership
-                .get(twin_vertex)
-                .copied()
-                .map_or(u32::MAX, |scc| scc.0);
-            let (Some(source), Some(target)) = (parts.cluster_of(unit), parts.cluster_of(subject))
-            else {
-                continue;
-            };
-            if source == target {
-                continue;
-            }
-            if !self.permits_physical_capacity(parts, unit, target) {
-                continue;
-            }
-            if !self.relocation_identity.permits_join(parts, unit, target) {
-                continue;
-            }
-            let _moved = parts.move_node(unit, target);
+    #[allow(clippy::too_many_lines)]
+    fn shadow_tests(&self, parts: &mut Partition) -> MirrorEvidence {
+        if !self.mirror_enabled || self.mirror_rules.is_empty() {
+            return MirrorEvidence::default();
         }
+        let assembled = self.assemble(parts);
+        let (current_physical, proposed_physical) =
+            physical_relocation_folders(&self.snapshot.ir().containers, &assembled.tree);
+        let mut evidence = MirrorEvidence::default();
+        for (mirror_vertex, claims) in self.exact_mirror_links() {
+            for link in claims.values() {
+                let Some(source_scc) = self
+                    .condensation
+                    .membership
+                    .get(link.source_vertex as usize)
+                    .map(|scc| scc.0)
+                else {
+                    continue;
+                };
+                let Some(target) = parts.cluster_of(source_scc) else {
+                    continue;
+                };
+                let Some(source_file) = self.files.get(link.source_vertex as usize) else {
+                    continue;
+                };
+                let source_path = self.repository_path(source_file.name.as_str());
+                if current_physical.get(&source_path) == proposed_physical.get(&source_path) {
+                    continue;
+                }
+                let Some(mirror_scc) = self
+                    .condensation
+                    .membership
+                    .get(mirror_vertex as usize)
+                    .map(|scc| scc.0)
+                else {
+                    continue;
+                };
+                let Some(mirror_file) = self.files.get(mirror_vertex as usize) else {
+                    continue;
+                };
+                let mirror_path = self.repository_path(mirror_file.name.as_str());
+                let intended = proposed_physical
+                    .get(&source_path)
+                    .and_then(|folder| self.project_mirror_path(link, folder));
+                let fallback = self.repository_path(&fill_mirror_template(
+                    &link.test_template,
+                    &link.captures.dir,
+                    &link.captures.stem,
+                ));
+                let intended_path = intended.as_deref().unwrap_or(&fallback);
+                let outcome = MirrorOutcome {
+                    mirror_scc,
+                    source_path,
+                    path: mirror_path.clone(),
+                    from: parent_path(&mirror_path),
+                    intended_to: parent_path(intended_path),
+                    disposition: MirrorDisposition::Applied,
+                };
+                let mut prospective = evidence.clone();
+                prospective.outcomes.push(outcome.clone());
+
+                let reason = if claims.len() > 1 {
+                    Some(BlockedMirrorReason::AmbiguousMapping)
+                } else if intended.is_none() || !self.test_only_scc(mirror_scc) {
+                    Some(BlockedMirrorReason::NamespaceBoundary)
+                } else if !self.permits_mirror_physical_capacity(
+                    parts,
+                    mirror_scc,
+                    target,
+                    &evidence,
+                    &prospective,
+                ) {
+                    Some(BlockedMirrorReason::Capacity)
+                } else {
+                    let mut assignment = parts.assignment().to_vec();
+                    let moved = if let Some(slot) = assignment.get_mut(mirror_scc as usize) {
+                        *slot = target;
+                        Some(Partition::from_assignment(
+                            assignment,
+                            parts.cluster_count(),
+                        ))
+                    } else {
+                        None
+                    };
+                    if moved.as_ref().is_none_or(|moved| {
+                        self.mirror_path_occupied(moved, mirror_vertex, intended_path, &prospective)
+                    }) || !self
+                        .relocation_identity
+                        .permits_shadow_join(parts, mirror_scc, target)
+                    {
+                        Some(BlockedMirrorReason::PathCollision)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(reason) = reason {
+                    evidence.outcomes.push(MirrorOutcome {
+                        disposition: MirrorDisposition::Blocked(reason),
+                        ..outcome
+                    });
+                    continue;
+                }
+                if parts.cluster_of(mirror_scc) != Some(target) {
+                    let _moved = parts.move_node(mirror_scc, target);
+                }
+                evidence.outcomes.push(outcome);
+            }
+        }
+        evidence.outcomes.sort_by(|left, right| {
+            (&left.source_path, &left.path).cmp(&(&right.source_path, &right.path))
+        });
+        evidence.outcomes.dedup();
+        evidence
     }
 
-    /// Returns the file-graph vertex of the unique production-zone file this
-    /// test-zone file was named after: same package home, same stem once the
-    /// test markers strip away. Two equally-named candidates are no twin at
-    /// all — ambiguity keeps the test file where reality has it.
-    fn unique_subject_twin(&self, file: &FileInfo) -> Option<usize> {
-        let stem = subject_stem(&file.name);
-        if stem.is_empty() {
-            return None;
-        }
-        let mut twin: Option<usize> = None;
-        for (index, candidate) in self.files.iter().enumerate() {
-            if candidate.container == file.container
-                || candidate.home.package != file.home.package
-                || self.test_zone.get(index).copied().unwrap_or(true)
-                || subject_stem(&candidate.name) != stem
-            {
+    fn exact_mirror_links(&self) -> BTreeMap<u32, BTreeMap<u32, ExactMirrorLink>> {
+        let mut links: BTreeMap<u32, BTreeMap<u32, ExactMirrorLink>> = BTreeMap::new();
+        let by_path: BTreeMap<String, u32> = self
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(vertex, _)| self.test_zone.get(*vertex).copied().unwrap_or(false))
+            .map(|(vertex, file)| {
+                (
+                    file.name.to_string(),
+                    u32::try_from(vertex).unwrap_or(u32::MAX),
+                )
+            })
+            .collect();
+        for (source_vertex, source) in self.files.iter().enumerate() {
+            if self.test_zone.get(source_vertex).copied().unwrap_or(true) {
                 continue;
             }
-            if twin.is_some() {
-                return None;
+            let relative_source = source.name.as_str();
+            for rule in &self.mirror_rules {
+                let Some(captures) = match_source_template(&rule.source, relative_source) else {
+                    continue;
+                };
+                let source_root = rule
+                    .source
+                    .split_once("{dir}")
+                    .map_or("", |(prefix, _)| prefix)
+                    .trim_matches('/')
+                    .to_owned();
+                for template in &rule.tests {
+                    let expected = fill_mirror_template(template, &captures.dir, &captures.stem);
+                    let Some(&mirror_vertex) = by_path.get(&expected) else {
+                        continue;
+                    };
+                    links
+                        .entry(mirror_vertex)
+                        .or_default()
+                        .entry(u32::try_from(source_vertex).unwrap_or(u32::MAX))
+                        .or_insert_with(|| ExactMirrorLink {
+                            source_vertex: u32::try_from(source_vertex).unwrap_or(u32::MAX),
+                            source_root: source_root.clone(),
+                            test_template: template.clone(),
+                            captures: captures.clone(),
+                        });
+                }
             }
-            twin = Some(index);
         }
-        twin
+        links
+    }
+
+    fn project_mirror_path(
+        &self,
+        link: &ExactMirrorLink,
+        rooted_folder: &[String],
+    ) -> Option<String> {
+        let source_root: Vec<String> = link
+            .source_root
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_owned)
+            .collect();
+        let relative_segments = rooted_folder
+            .strip_prefix(&[self.root_name.to_string()])
+            .unwrap_or(rooted_folder);
+        let source_namespace: Vec<String> = self
+            .files
+            .get(link.source_vertex as usize)?
+            .namespace
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_owned)
+            .collect();
+        let directory = if relative_segments.is_empty() {
+            String::new()
+        } else if relative_segments.starts_with(&source_root) {
+            relative_segments.get(source_root.len()..)?.join("/")
+        } else if source_root.is_empty() {
+            relative_segments.join("/")
+        } else if source_namespace.ends_with(&source_root) {
+            // Laminar folder keys deliberately omit transparent source roots.
+            // Reapply the rule's immutable root; the identity guard separately
+            // prevents the production move from crossing its render namespace.
+            relative_segments.join("/")
+        } else {
+            return None;
+        };
+        Some(self.repository_path(&fill_mirror_template(
+            &link.test_template,
+            &directory,
+            &link.captures.stem,
+        )))
+    }
+
+    fn test_only_scc(&self, scc: u32) -> bool {
+        self.condensation
+            .members
+            .get(scc as usize)
+            .is_some_and(|members| {
+                members.iter().all(|member| {
+                    self.test_zone
+                        .get(member.0 as usize)
+                        .copied()
+                        .unwrap_or(false)
+                })
+            })
+    }
+
+    fn mirror_path_occupied(
+        &self,
+        parts: &Partition,
+        mirror_vertex: u32,
+        intended_path: &str,
+        evidence: &MirrorEvidence,
+    ) -> bool {
+        self.files.iter().enumerate().any(|(vertex, file)| {
+            if vertex == mirror_vertex as usize {
+                return false;
+            }
+            let identity = self.repository_path(file.name.as_str());
+            let Some(folder) = self.projected_folder_for_vertex(
+                parts,
+                u32::try_from(vertex).unwrap_or(u32::MAX),
+                evidence,
+            ) else {
+                return false;
+            };
+            let leaf = identity.rsplit('/').next().unwrap_or(identity.as_str());
+            let projected = match folder {
+                ProjectedFolder::RepositoryRelative(folder) => {
+                    self.repository_path(&format!("{folder}/{leaf}"))
+                }
+                ProjectedFolder::Rooted(folder) => self.candidate_path(&format!("{folder}/{leaf}")),
+            };
+            projected == intended_path
+        })
+    }
+
+    fn projected_folder_for_vertex(
+        &self,
+        parts: &Partition,
+        vertex: u32,
+        evidence: &MirrorEvidence,
+    ) -> Option<ProjectedFolder> {
+        let scc = self.condensation.membership.get(vertex as usize)?.0;
+        if let Some(intended) = evidence.applied_destination(scc) {
+            return Some(ProjectedFolder::Rooted(SmolStr::new(intended)));
+        }
+        let cluster = parts.cluster_of(scc)?;
+        self.real_folder_names
+            .get(cluster.0 as usize)
+            .cloned()
+            .map(ProjectedFolder::RepositoryRelative)
+    }
+
+    fn repository_path(&self, path: &str) -> String {
+        let relative: Vec<String> = path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_owned)
+            .collect();
+        project_physical_path(self.root_name.as_str(), &relative).join("/")
+    }
+
+    fn candidate_path(&self, path: &str) -> String {
+        let path: Vec<String> = path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_owned)
+            .collect();
+        normalize_physical_path(self.root_name.as_str(), &path).join("/")
     }
 
     /// Whether relocating `scc` from `source` into `target` would leave part of
@@ -2117,10 +2684,19 @@ impl<'a> PipelineSolver<'a> {
     /// skipped entirely on identity-equal layouts — `solve` routes those to the
     /// faithful exit before this runs, so "already optimal" never fabricates
     /// movement (FIX05/D-47).
+    #[cfg(test)]
     fn symbol_polish(&self, parts: &Partition) -> SymbolOutcome {
+        self.symbol_polish_with_mirror_evidence(parts, &MirrorEvidence::default())
+    }
+
+    fn symbol_polish_with_mirror_evidence(
+        &self,
+        parts: &Partition,
+        evidence: &MirrorEvidence,
+    ) -> SymbolOutcome {
         let ir = self.snapshot.ir();
-        let assembled = self.assemble(parts);
-        let mut pass = SymbolPass::new(
+        let assembled = self.assemble_with_mirror_evidence(parts, evidence);
+        let mut pass = SymbolPass::new_with_policy(
             self.snapshot,
             &self.coefficients,
             &self.weights,
@@ -2130,18 +2706,102 @@ impl<'a> PipelineSolver<'a> {
             &assembled,
             &ir.nodes,
             &ir.edges,
+            self.symbol_source_blocks(&assembled),
+            self.symbol_destination_blocks(&assembled),
         );
         pass.run();
+        let overlay = pass.overlay;
+        let relocations = pass.relocations;
+        let placement = |id: u32| {
+            overlay
+                .get(&id)
+                .copied()
+                .or_else(|| assembled.placement.get(&id).copied())
+        };
+        let distance = move_distance(self.snapshot, &assembled.tree, &placement);
+        let total = score(
+            &score_candidate(
+                self.snapshot,
+                &placement,
+                &assembled.pass_start_file_by_candidate,
+                &assembled.tree,
+                &assembled.namespace_by_file,
+                distance,
+                &self.capacity,
+                self.same_file_symbol,
+                self.same_file_type,
+            ),
+            &self.coefficients,
+            &self.weights,
+        )
+        .total;
         SymbolOutcome {
-            overlay: pass.overlay,
-            relocations: pass.relocations,
-            total: pass.best,
+            overlay,
+            relocations,
+            total,
         }
+    }
+
+    fn symbol_source_blocks(&self, assembled: &CandidateTree) -> BTreeSet<ContainerId> {
+        let pass_start_names: BTreeMap<ContainerId, &str> = self
+            .snapshot
+            .ir()
+            .containers
+            .containers()
+            .iter()
+            .filter(|container| container.level == ScopeLevel::File)
+            .map(|container| (container.id, container.name.as_str()))
+            .collect();
+        assembled
+            .pass_start_file_by_candidate
+            .iter()
+            .filter_map(|(candidate, pass_start)| {
+                let test_pinned = self.pin_detected_test_symbols()
+                    && assembled
+                        .zone_by_file
+                        .get(candidate)
+                        .copied()
+                        .unwrap_or(false);
+                let path_pinned = pass_start_names
+                    .get(pass_start)
+                    .is_some_and(|path| self.forbidden_symbol_path(path));
+                (test_pinned || path_pinned).then_some(*candidate)
+            })
+            .collect()
+    }
+
+    fn symbol_destination_blocks(&self, assembled: &CandidateTree) -> BTreeSet<ContainerId> {
+        assembled
+            .tree
+            .containers()
+            .iter()
+            .filter(|container| container.level == ScopeLevel::File)
+            .filter(|container| self.forbidden_symbol_path(&container.name))
+            .map(|container| container.id)
+            .collect()
+    }
+
+    fn forbidden_symbol_path(&self, path: &str) -> bool {
+        self.forbidden_symbol_files
+            .iter()
+            .any(|pattern| pattern.matches_path(std::path::Path::new(path)))
+    }
+
+    fn pin_detected_test_symbols(&self) -> bool {
+        // Test symbols are pinned whenever test files themselves are pinned by
+        // the default policy. Explicit symbol-only opt-out is represented by
+        // the absence of a test-zone glob in the compiled policy below.
+        self.pin_test_symbols
     }
     /// Wraps a finished partition, re-pricing it at the true current tree when
     /// it converged back to the identity layout, so every identity entry in the
     /// pool carries one consistent score.
-    fn finish(&self, parts: Partition, total: f64) -> SolvedCandidate {
+    fn finish(
+        &self,
+        parts: Partition,
+        total: f64,
+        evidence: MirrorEvidence,
+    ) -> SolvedCandidate<MirrorEvidence> {
         if let Some(identity) = &self.identity
             && identity == &parts
         {
@@ -2150,13 +2810,14 @@ impl<'a> PipelineSolver<'a> {
         SolvedCandidate {
             partition: parts,
             score: total,
+            evidence,
         }
     }
 
     /// The identity pool entry: the "change nothing" layout scored on the actual
     /// current tree, so the anchored pool always contains the current score and
     /// a suggested candidate can never silently lose to it.
-    fn identity_entry(&self, identity: &Partition) -> SolvedCandidate {
+    fn identity_entry(&self, identity: &Partition) -> SolvedCandidate<MirrorEvidence> {
         SolvedCandidate {
             partition: identity.clone(),
             score: score_current_with_affinity(
@@ -2168,6 +2829,7 @@ impl<'a> PipelineSolver<'a> {
                 self.same_file_type,
             )
             .total,
+            evidence: MirrorEvidence::default(),
         }
     }
 
@@ -2252,6 +2914,14 @@ impl<'a> PipelineSolver<'a> {
     /// resort; the group takes the current root's name — and file leaves keep
     /// their full current paths so file identity stays stable across trees.
     fn assemble(&self, parts: &Partition) -> CandidateTree {
+        self.assemble_with_mirror_evidence(parts, &MirrorEvidence::default())
+    }
+
+    fn assemble_with_mirror_evidence(
+        &self,
+        parts: &Partition,
+        evidence: &MirrorEvidence,
+    ) -> CandidateTree {
         if self.files.is_empty() {
             let root = Container {
                 id: ContainerId(0),
@@ -2342,7 +3012,14 @@ impl<'a> PipelineSolver<'a> {
             }
         }
 
-        self.emit(&members_of, &chain_of, &domain_tally, &package_tally)
+        self.emit(
+            parts,
+            &members_of,
+            &chain_of,
+            &domain_tally,
+            &package_tally,
+            evidence,
+        )
     }
 
     /// Interns the candidate containers parent-before-child — package groups,
@@ -2350,10 +3027,12 @@ impl<'a> PipelineSolver<'a> {
     /// symbol's file placement.
     fn emit(
         &self,
+        parts: &Partition,
         members_of: &BTreeMap<u32, Vec<u32>>,
         chain_of: &BTreeMap<u32, (u32, u32, u32)>,
         domain_tally: &NameTally,
         package_tally: &NameTally,
+        mirror_evidence: &MirrorEvidence,
     ) -> CandidateTree {
         let mut arena = ContainerArena::default();
         let mut key_by_id: BTreeMap<u32, SmolStr> = BTreeMap::new();
@@ -2385,37 +3064,52 @@ impl<'a> PipelineSolver<'a> {
                 .get(folder as usize)
                 .cloned()
                 .unwrap_or_else(|| SmolStr::new("workspace"));
-            let parent = domain_ids.get(&domain).copied();
-            let folder_id = arena.push(ContainerSpec {
-                name: &key,
-                level: ScopeLevel::Folder,
-                parent,
-                synthetic: self
-                    .real_folder_synthetic
-                    .get(folder as usize)
-                    .copied()
-                    .unwrap_or(false),
-            });
+            let mut members_by_folder: BTreeMap<SmolStr, Vec<u32>> = BTreeMap::new();
             for &vertex in members {
-                let Some(file) = self.files.get(vertex as usize) else {
-                    continue;
-                };
-                let id = arena.push(ContainerSpec {
-                    name: &file.name,
-                    level: ScopeLevel::File,
-                    parent: Some(folder_id),
-                    synthetic: false,
-                });
-                file_ids.insert(vertex, id);
-                pass_start_file_by_candidate.insert(id, ContainerId(file.container));
-                namespace_by_file.insert(id, file.namespace.clone());
-                zone_by_file.insert(
-                    id,
-                    self.test_zone
-                        .get(vertex as usize)
+                members_by_folder
+                    .entry(
+                        self.projected_folder_for_vertex(parts, vertex, mirror_evidence)
+                            .map_or_else(
+                                || key.clone(),
+                                |projected| projected.repository_relative(self.root_name.as_str()),
+                            ),
+                    )
+                    .or_default()
+                    .push(vertex);
+            }
+            for (projected_key, namespace_members) in members_by_folder {
+                let parent = domain_ids.get(&domain).copied();
+                let folder_id = arena.push(ContainerSpec {
+                    name: &projected_key,
+                    level: ScopeLevel::Folder,
+                    parent,
+                    synthetic: self
+                        .real_folder_synthetic
+                        .get(folder as usize)
                         .copied()
                         .unwrap_or(false),
-                );
+                });
+                for vertex in namespace_members {
+                    let Some(file) = self.files.get(vertex as usize) else {
+                        continue;
+                    };
+                    let id = arena.push(ContainerSpec {
+                        name: &file.name,
+                        level: ScopeLevel::File,
+                        parent: Some(folder_id),
+                        synthetic: false,
+                    });
+                    file_ids.insert(vertex, id);
+                    pass_start_file_by_candidate.insert(id, ContainerId(file.container));
+                    namespace_by_file.insert(id, file.namespace.clone());
+                    zone_by_file.insert(
+                        id,
+                        self.test_zone
+                            .get(vertex as usize)
+                            .copied()
+                            .unwrap_or(false),
+                    );
+                }
             }
         }
 
@@ -2618,7 +3312,7 @@ impl<'a> PipelineSolver<'a> {
     fn build_candidate(
         &self,
         current_tree: &ContainerTree,
-        solved: &SolvedCandidate,
+        solved: &SolvedCandidate<MirrorEvidence>,
         index: u32,
         splits: &[ConditionalSplit],
     ) -> Result<Candidate, StrataError> {
@@ -2664,11 +3358,11 @@ impl<'a> PipelineSolver<'a> {
             });
         }
 
-        let assembled = self.assemble(&solved.partition);
+        let assembled = self.assemble_with_mirror_evidence(&solved.partition, &solved.evidence);
         // FIX08: re-run the deterministic symbol pass on this exact partition.
         // `solve` already priced its result into the ranking score, so the DTO
         // score here matches what ranked this candidate by construction.
-        let symbols = self.symbol_polish(&solved.partition);
+        let symbols = self.symbol_polish_with_mirror_evidence(&solved.partition, &solved.evidence);
         if !symbols.preserves_namespaces(&assembled) {
             return Err(StrataError::SnapshotInvalid {
                 source: strata_ir::SnapshotError::Serialization {
@@ -2701,7 +3395,8 @@ impl<'a> PipelineSolver<'a> {
         );
         let placement_of = |node: &Node| merged(node.id.0);
         let node = render_tree(&assembled.tree, nodes, &placement_of, &assembled.key_by_id)?;
-        let delta = narrate(current_tree, &assembled.tree, &self.facts);
+        let mut delta = narrate_repository_relative(current_tree, &assembled.tree, &self.facts);
+        Self::attach_test_mirrors(&mut delta, &solved.evidence);
         let symbol_moves = self.symbol_narrate(&assembled, &symbols);
 
         Ok(Candidate {
@@ -2816,8 +3511,33 @@ impl<'a> PipelineSolver<'a> {
     }
 }
 
+fn match_source_template(template: &str, path: &str) -> Option<MirrorCaptures> {
+    MirrorTemplate::parse(template)?.captures(path)
+}
+
+fn fill_mirror_template(template: &str, dir: &str, stem: &str) -> String {
+    MirrorTemplate::parse(template)
+        .map(|parsed| parsed.fill(dir, stem))
+        .unwrap_or_default()
+}
+
+fn parent_path(path: &str) -> String {
+    path.rsplit_once('/')
+        .map_or_else(String::new, |(parent, _)| parent.to_owned())
+}
+
+fn mirror_rules(profile: &ProfileConfig) -> Vec<TestMirrorRule> {
+    let mut rules = profile.relocation.test_mirroring.rules.clone();
+    if profile.relocation.test_mirroring.builtins {
+        rules.extend(builtin_test_mirror_rules());
+    }
+    rules
+}
+
 impl Solver for PipelineSolver<'_> {
-    fn solve(&self, seed: u64) -> SolvedCandidate {
+    type Evidence = MirrorEvidence;
+
+    fn solve(&self, seed: u64) -> SolvedCandidate<MirrorEvidence> {
         let offset = seed.wrapping_sub(self.base_seed);
         if offset == 0
             && let Some(identity) = &self.identity
@@ -2842,7 +3562,7 @@ impl Solver for PipelineSolver<'_> {
         // The shadow pass runs on the polished layout so a test file follows
         // the placement its subject actually earned, not the one reality
         // suggested; production placements are never moved by it.
-        self.shadow_tests(&mut parts);
+        let mirror_evidence = self.shadow_tests(&mut parts);
         // FIX08: the file polish's layout is refined by the symbol-grain pass
         // before scoring, so pool ranking prices symbol relocation too. The
         // outcome itself is not threaded out — `build_candidate` re-runs this
@@ -2850,8 +3570,8 @@ impl Solver for PipelineSolver<'_> {
         // identical overlay, so ranking score and DTO score agree by
         // construction. (The polish's own total is subsumed: the symbol pass
         // re-prices the identical layout before improving on it.)
-        let symbols = self.symbol_polish(&parts);
-        self.finish(parts, symbols.total)
+        let symbols = self.symbol_polish_with_mirror_evidence(&parts, &mirror_evidence);
+        self.finish(parts, symbols.total, mirror_evidence)
     }
 }
 
@@ -2944,7 +3664,13 @@ impl CandidateTree {
 /// leaves only the patterns to decide. The returned slice is parallel to
 /// `files`, i.e. to the file graph's vertices.
 fn test_zone_marks(tests: &TestPolicy, files: &[FileInfo], nodes: &[Node]) -> Vec<bool> {
-    let mut marks: Vec<bool> = files.iter().map(|file| tests.matches(&file.name)).collect();
+    let mut marks: Vec<bool> = files
+        .iter()
+        .map(|file| {
+            tests.matches(&file.name)
+                || (tests.builtins && TestPolicy::matches_builtin_path(&file.name))
+        })
+        .collect();
     if tests.builtins {
         let mut case_only: BTreeMap<u32, bool> = BTreeMap::new();
         for node in nodes {
@@ -2961,25 +3687,6 @@ fn test_zone_marks(tests: &TestPolicy, files: &[FileInfo], nodes: &[Node]) -> Ve
         }
     }
     marks
-}
-
-/// Strips the test markers from a path's basename down to its subject stem:
-/// the final extension goes (`openai.spec.ts` → `openai.spec`), then a
-/// `.spec`/`.test` infix (`openai.spec` → `openai`), then `test_`/`_test`
-/// affixes (`test_openai`, `openai_test` → `openai`). Comparison is
-/// byte-wise and conservative: anything that does not reduce cleanly pairs
-/// with nothing.
-fn subject_stem(path: &str) -> &str {
-    let base = path.rsplit('/').next().unwrap_or(path);
-    let mut stem = base.rsplit_once('.').map_or(base, |(stem, _)| stem);
-    if let Some(without_marker) = stem
-        .strip_suffix(".spec")
-        .or_else(|| stem.strip_suffix(".test"))
-    {
-        stem = without_marker;
-    }
-    let stem = stem.strip_prefix("test_").unwrap_or(stem);
-    stem.strip_suffix("_test").unwrap_or(stem)
 }
 
 fn build_file_graph(
@@ -3038,12 +3745,35 @@ fn build_file_graph(
 /// summed per directed file pair (every edge, the objective's currency),
 /// spec files (symbols exclusively test cases), the rest of the tie-cut zone
 /// (`[tests]`-pattern matches and test-support helpers), and the folder cap.
+#[cfg(test)]
+#[cfg(test)]
 fn file_facts(
     snapshot: &Snapshot,
     weights: &KindWeights,
     folder_cap: u32,
     files: &[FileInfo],
     test_zone: &[bool],
+) -> FileFacts {
+    file_facts_with_rootedness(snapshot, weights, folder_cap, files, test_zone, true)
+}
+
+fn file_facts_repository_relative(
+    snapshot: &Snapshot,
+    weights: &KindWeights,
+    folder_cap: u32,
+    files: &[FileInfo],
+    test_zone: &[bool],
+) -> FileFacts {
+    file_facts_with_rootedness(snapshot, weights, folder_cap, files, test_zone, false)
+}
+
+fn file_facts_with_rootedness(
+    snapshot: &Snapshot,
+    weights: &KindWeights,
+    folder_cap: u32,
+    files: &[FileInfo],
+    test_zone: &[bool],
+    package_rooted: bool,
 ) -> FileFacts {
     let ir = snapshot.ir();
     let by_id: BTreeMap<u32, &Container> = ir
@@ -3076,7 +3806,13 @@ fn file_facts(
                 .collect();
             let path = dataset.map_or_else(
                 || relative.join("/"),
-                |dataset| project_physical_path(dataset, &relative).join("/"),
+                |dataset| {
+                    if package_rooted {
+                        project_package_rooted_path(dataset, &relative).join("/")
+                    } else {
+                        project_physical_path(dataset, &relative).join("/")
+                    }
+                },
             );
             (container.id.0, path)
         })
@@ -3740,6 +4476,7 @@ fn synthesize_roof_rebuild(
     condensation: &Condensation,
     graph: &Csr,
     test_zone: &[bool],
+    pinned_scc: &[bool],
     base: &Partition,
     names: &mut Vec<SmolStr>,
     synthetic: &mut Vec<bool>,
@@ -3813,6 +4550,7 @@ fn synthesize_roof_rebuild(
             .iter()
             .copied()
             .filter(|&scc| unbonded_scc(scc))
+            .filter(|&scc| !pinned_scc.get(scc as usize).copied().unwrap_or(true))
             .filter(|&scc| {
                 condensation
                     .members
@@ -3879,6 +4617,9 @@ fn synthesize_roof_rebuild(
         // the residents themselves. A lone straggler keeps the original roof —
         // one file under any name is vacuously covered.
         if residual_files >= 2
+            && residual
+                .iter()
+                .all(|scc| !pinned_scc.get(*scc as usize).copied().unwrap_or(true))
             && roof_coherence(&base_name, &residual, condensation, files) < ROOF_COHERENCE_FLOOR
         {
             let label = rebuild_label(
@@ -4780,7 +5521,7 @@ fn capacity_pressure(
         .values()
         .map(|&measure| normalized_overage(measure, capacity.file))
         .sum::<f64>();
-    pressure += physical_folder_entries(tree, Some(namespaces))
+    pressure += physical_folder_entries_repository_relative(tree, Some(namespaces))
         .values()
         .map(|&measure| normalized_overage(measure, capacity.folder))
         .sum::<f64>();
@@ -4878,7 +5619,7 @@ fn physical_binding_pressure(
     namespaces: &BTreeMap<ContainerId, SmolStr>,
     folder_budget: u32,
 ) -> f64 {
-    physical_folder_entries(tree, Some(namespaces))
+    physical_folder_entries_repository_relative(tree, Some(namespaces))
         .values()
         .map(|&measure| normalized_overage(measure, folder_budget))
         .sum()
@@ -6101,6 +6842,10 @@ struct SymbolPass<'a> {
     /// Refuses relocations that would close a path back to a dependant's
     /// pass-start file after an earlier move drained that dependant away.
     pass_start: PassStartGuard,
+    /// Immutable pass-start origins whose declarations cannot leave.
+    forbidden_sources: BTreeSet<ContainerId>,
+    /// Candidate files that no declaration may enter.
+    forbidden_destinations: BTreeSet<ContainerId>,
     /// Nodes already relocated in this pass. A symbol moves at most once per
     /// candidate (FIX12-C), so no reader is ever told two contradictory
     /// destinations for the same name.
@@ -6125,7 +6870,7 @@ struct SymbolPass<'a> {
 impl<'a> SymbolPass<'a> {
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_lines)]
-    fn new(
+    fn new_with_policy(
         snapshot: &'a Snapshot,
         coefficients: &'a Coefficients,
         weights: &'a KindWeights,
@@ -6135,6 +6880,8 @@ impl<'a> SymbolPass<'a> {
         assembled: &'a CandidateTree,
         nodes: &'a [Node],
         edges: &'a [Edge],
+        forbidden_sources: BTreeSet<ContainerId>,
+        forbidden_destinations: BTreeSet<ContainerId>,
     ) -> Self {
         let base = &assembled.placement;
         let mut sloc: BTreeMap<ContainerId, u32> = BTreeMap::new();
@@ -6258,6 +7005,8 @@ impl<'a> SymbolPass<'a> {
             type_only_files,
             file_depth,
             pass_start,
+            forbidden_sources,
+            forbidden_destinations,
             sloc,
             residents,
             native,
@@ -6275,6 +7024,34 @@ impl<'a> SymbolPass<'a> {
         pass.cyclic_base = CycleCounts::from_graph(&crossing);
         pass.vis_base = pass.refresh_visibility();
         pass
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        snapshot: &'a Snapshot,
+        coefficients: &'a Coefficients,
+        weights: &'a KindWeights,
+        same_file_symbol: f64,
+        same_file_type: f64,
+        capacity: CapacityConfig,
+        assembled: &'a CandidateTree,
+        nodes: &'a [Node],
+        edges: &'a [Edge],
+    ) -> Self {
+        Self::new_with_policy(
+            snapshot,
+            coefficients,
+            weights,
+            same_file_symbol,
+            same_file_type,
+            capacity,
+            assembled,
+            nodes,
+            edges,
+            BTreeSet::new(),
+            BTreeSet::new(),
+        )
     }
 
     /// Sweeps every symbol in ascending id order, at most
@@ -6449,7 +7226,13 @@ impl<'a> SymbolPass<'a> {
         let Some(source_file) = self.effective(node.id.0) else {
             return false;
         };
+        if self.forbidden_sources.contains(&source_file) {
+            return false;
+        }
         for destination in self.nominate(node, source_file) {
+            if self.forbidden_destinations.contains(&destination) {
+                continue;
+            }
             // No empty shells: the origin keeps at least one of the
             // production symbols the assembly placed there. Counted over
             // `native`, so an arrival cannot unlock the drain (FIX12-A).
@@ -7902,7 +8685,7 @@ mod tests {
     }
 
     #[test]
-    fn should_serialize_profile_results_as_schema_version_six_without_modes() {
+    fn should_serialize_profile_results_as_schema_version_seven_without_modes() {
         let snapshot = snapshot(
             vec![node(0, "item", 0, Polarity::Production)],
             vec![],
@@ -7918,7 +8701,7 @@ mod tests {
             serialized
                 .get("schemaVersion")
                 .and_then(serde_json::Value::as_u64),
-            Some(6)
+            Some(7)
         );
         assert!(serialized.pointer("/current/tree").is_some());
         assert!(serialized.pointer("/current/sharedFindings").is_some());
@@ -10031,9 +10814,9 @@ mod tests {
     #[test]
     fn should_reject_file_polish_that_only_increases_cyclic_edges() {
         let snapshot = file_polish_edge_budget_snapshot();
-        let tests = TestPolicy::defaults();
         let mut config = AnalyzeConfig::default();
         config.profiles.anchored.capacity.folder = 4;
+        let tests = TestPolicy::defaults();
         let solver = PipelineSolver::new(
             &snapshot,
             &config,
@@ -12134,6 +12917,7 @@ mod tests {
             &condensation,
             &graph,
             &[false, false, false],
+            &[false, false, false],
             &base,
             &mut names,
             &mut synthetic,
@@ -12165,6 +12949,7 @@ mod tests {
             &files,
             &condensation,
             &graph,
+            &[false; 5],
             &[false; 5],
             &base,
             &mut names,
@@ -12343,6 +13128,55 @@ mod tests {
         assert_eq!(
             test_zone_marks(&policy(&tests), &files, &nodes),
             vec![false, true]
+        );
+    }
+
+    #[test]
+    fn should_mark_production_polarity_support_under_a_builtin_test_root() {
+        let nodes = vec![node(0, "shared_fixture", 1, Polarity::Production)];
+        let files = [file_info(1, "tests/support/fixtures.ts", 1)];
+
+        assert_eq!(
+            test_zone_marks(&TestPolicy::defaults(), &files, &nodes),
+            vec![true],
+            "test-support declarations inherit the conventional test root"
+        );
+    }
+
+    #[test]
+    fn should_pin_symbols_in_production_polarity_test_support_by_default() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "shared_fixture", 3, Polarity::Production),
+                node(1, "fixture_resident", 3, Polarity::Production),
+                node(2, "consumer", 4, Polarity::Production),
+            ],
+            vec![edge(2, 0)],
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "tests/support", ScopeLevel::Folder, Some(0)),
+                container(2, "src", ScopeLevel::Folder, Some(0)),
+                container(3, "tests/support/fixtures.ts", ScopeLevel::File, Some(1)),
+                container(4, "src/consumer.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+        let tests = TestPolicy::defaults();
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.profiles.anchored.objective.coefficients(),
+            true,
+            &tests,
+        );
+        let assembled = solver.assemble(&solver.real_partition);
+        let support_file = assembled.placement.get(&0).copied();
+
+        assert!(support_file.is_some(), "support symbol must have a file");
+        assert!(
+            support_file
+                .is_some_and(|file| solver.symbol_source_blocks(&assembled).contains(&file)),
+            "default test-symbol policy must block support declarations before nomination"
         );
     }
 
@@ -14318,6 +15152,84 @@ mod tests {
         assert_eq!(pass.relocations.first().map(|r| r.node), Some(0));
     }
 
+    #[test]
+    fn should_reject_a_pinned_symbol_before_it_can_change_a_later_admission() {
+        let snapshot = snapshot(
+            vec![
+                node(0, "blocked", 2, Polarity::Production),
+                node(1, "blocked_resident", 2, Polarity::Production),
+                node(2, "eligible", 3, Polarity::Production),
+                node(3, "eligible_resident", 3, Polarity::Production),
+                node(4, "owner", 4, Polarity::Production),
+                node(5, "owner_resident", 4, Polarity::Production),
+            ],
+            vec![],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "src", ScopeLevel::Folder, Some(0)),
+                container(2, "src/blocked.ts", ScopeLevel::File, Some(1)),
+                container(3, "src/eligible.ts", ScopeLevel::File, Some(1)),
+                container(4, "src/owner.ts", ScopeLevel::File, Some(1)),
+            ],
+        );
+        let tests = TestPolicy::defaults();
+        let config = AnalyzeConfig::default();
+        let solver = PipelineSolver::new(
+            &snapshot,
+            &config,
+            config.profiles.greenfield.objective.coefficients(),
+            false,
+            &tests,
+        );
+        let assembled = solver.assemble(&solver.real_partition);
+        let ir = snapshot.ir();
+        let blocked_file = assembled.placement.get(&0).copied();
+        assert!(
+            blocked_file.is_some(),
+            "blocked symbol must have a file placement"
+        );
+        let Some(blocked_file) = blocked_file else {
+            return;
+        };
+        let mut pass = SymbolPass::new_with_policy(
+            &snapshot,
+            &solver.coefficients,
+            &solver.weights,
+            solver.same_file_symbol,
+            solver.same_file_type,
+            solver.capacity,
+            &assembled,
+            &ir.nodes,
+            &ir.edges,
+            BTreeSet::from([blocked_file]),
+            BTreeSet::new(),
+        );
+        pass.incident.entry(0).or_default().push((4, 5.0));
+        pass.incident.entry(2).or_default().push((4, 5.0));
+        pass.best = f64::INFINITY;
+
+        let blocked_node = ir.nodes.first();
+        assert!(blocked_node.is_some(), "blocked symbol must exist");
+        let Some(blocked_node) = blocked_node else {
+            return;
+        };
+        assert!(!pass.try_relocate(blocked_node));
+        assert!(
+            pass.overlay.is_empty(),
+            "a pinned trial cannot mutate pass state"
+        );
+        let eligible_node = ir.nodes.get(2);
+        assert!(eligible_node.is_some(), "eligible symbol must exist");
+        let Some(eligible_node) = eligible_node else {
+            return;
+        };
+        assert!(pass.try_relocate(eligible_node));
+        assert_eq!(
+            pass.relocations.iter().map(|r| r.node).collect::<Vec<_>>(),
+            vec![2]
+        );
+    }
+
     /// Zoning by `[tests]` patterns alone (no polarity hint): a file matching
     /// only the configured pattern is equally out of bounds as a destination.
     #[test]
@@ -14410,6 +15322,7 @@ mod tests {
             &condensation,
             &graph,
             &[true, true],
+            &[false, false],
             &base,
             &mut names,
             &mut synthetic,
@@ -14422,12 +15335,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn should_rebuild_unrelated_production_groups_while_a_test_scc_is_pinned() {
+        let graph = Csr::from_weighted_edges(4, &[(2_u32, 3_u32, 1.0_f32)]);
+        let condensation = singleton_condensation(4);
+        let base = Partition::from_assignment(vec![ClusterId(0); 4], 1);
+        let files = vec![
+            file_info(0, "record-read.ts", 1),
+            file_info(1, "record-write.ts", 1),
+            file_info(2, "anchor.ts", 1),
+            file_info(3, "case.spec.ts", 1),
+        ];
+        let mut names = vec![SmolStr::new("misc")];
+        let mut synthetic = vec![false];
+
+        let rebuilt = synthesize_roof_rebuild(
+            &files,
+            &condensation,
+            &graph,
+            &[false, false, false, true],
+            &[false, false, false, true],
+            &base,
+            &mut names,
+            &mut synthetic,
+        );
+        assert!(
+            rebuilt.is_some(),
+            "the unrelated production token group remains eligible"
+        );
+        let Some(rebuilt) = rebuilt else {
+            return;
+        };
+
+        assert_ne!(rebuilt.cluster_of(0), Some(ClusterId(0)));
+        assert_eq!(rebuilt.cluster_of(3), Some(ClusterId(0)));
+    }
+
     /// The spec lives in its own real directory, so the real-dir partition
     /// starts it apart from its twin; the tie-cut prices their bond to zero
     /// so polish never pulls them together. The shadow pass is what joins
     /// them.
     #[test]
-    fn should_shadow_follow_a_spec_to_its_subjects_cluster() {
+    fn should_pin_a_spec_when_its_subject_did_not_move() {
         let nodes = vec![
             node(0, "openai", 3, Polarity::Production),
             node(1, "openai_spec", 4, Polarity::TestCase),
@@ -14473,9 +15422,672 @@ mod tests {
             "setup: real dirs must start the pair apart"
         );
 
+        let before = parts.cluster_of(unit);
         solver.shadow_tests(&mut parts);
 
-        assert_eq!(parts.cluster_of(unit), parts.cluster_of(subject));
+        assert_eq!(parts.cluster_of(unit), before);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn should_price_one_exact_mirror_before_finish_and_replay_idempotently() {
+        let snap = snapshot(
+            vec![
+                node(0, "perform_task", 4, Polarity::Production),
+                node(1, "own_task", 5, Polarity::Production),
+                node(2, "task_spec", 6, Polarity::TestCase),
+            ],
+            vec![edge(0, 1), edge(2, 0)],
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "source/module", ScopeLevel::Folder, Some(0)),
+                container(2, "source/target", ScopeLevel::Folder, Some(0)),
+                container(3, "spec/module", ScopeLevel::Folder, Some(0)),
+                container(4, "source/module/task.ts", ScopeLevel::File, Some(1)),
+                container(5, "source/target/owner.ts", ScopeLevel::File, Some(2)),
+                container(6, "spec/module/task.spec.ts", ScopeLevel::File, Some(3)),
+            ],
+        );
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.relocation.test_mirroring.builtins = false;
+        config.profiles.anchored.relocation.test_mirroring.rules = vec![TestMirrorRule {
+            source: "source/{dir}/{stem}.ts".to_owned(),
+            tests: vec!["spec/{dir}/{stem}.spec.ts".to_owned()],
+        }];
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+        let scc_of = |file: u32| {
+            solver
+                .index_of
+                .get(&file)
+                .and_then(|vertex| solver.condensation.membership.get(*vertex as usize))
+                .map_or(u32::MAX, |scc| scc.0)
+        };
+        let mut before = solver.real_partition.clone();
+        let source = scc_of(4);
+        let owner = scc_of(5);
+        let mirror = scc_of(6);
+        let owner_cluster = before.cluster_of(owner);
+        assert!(owner_cluster.is_some(), "owner is placed");
+        let Some(owner_cluster) = owner_cluster else {
+            return;
+        };
+        assert!(before.move_node(source, owner_cluster));
+
+        let score_before = solver.evaluate(&before);
+        let mut after = before.clone();
+        let evidence = solver.shadow_tests(&mut after);
+        assert_eq!(evidence.outcomes.len(), 1);
+        assert_eq!(
+            evidence.outcomes.first().map(|outcome| outcome.disposition),
+            Some(MirrorDisposition::Applied)
+        );
+        let changed: Vec<usize> = before
+            .assignment()
+            .iter()
+            .zip(after.assignment())
+            .enumerate()
+            .filter_map(|(index, (left, right))| (left != right).then_some(index))
+            .collect();
+        assert_eq!(changed, vec![mirror as usize]);
+
+        let recompute = |parts: &Partition, replay: &MirrorEvidence| {
+            let assembled = solver.assemble_with_mirror_evidence(parts, replay);
+            let placement = |node: &Node| assembled.placement.get(&node.id.0).copied();
+            render_tree(
+                &assembled.tree,
+                &snap.ir().nodes,
+                &placement,
+                &assembled.key_by_id,
+            )
+            .ok()
+            .map(|rendered| {
+                (
+                    solver.evaluate_with_mirror_evidence(parts, replay),
+                    solver.capacity_remainder_with_mirror_evidence(
+                        parts,
+                        replay,
+                        &rendered,
+                        &config.profiles.anchored.capacity,
+                    ),
+                )
+            })
+        };
+        let projected =
+            physical_file_folders(&solver.assemble_with_mirror_evidence(&after, &evidence).tree);
+        let follower_folder = projected
+            .iter()
+            .find(|(path, _)| path.ends_with("spec/module/task.spec.ts"))
+            .map(|(_, folder)| folder);
+        assert!(
+            follower_folder.is_some_and(|folder| {
+                folder.ends_with(&["spec".to_owned(), "target".to_owned()])
+            }),
+            "an applied exact follower is projected under its test root: {projected:?}"
+        );
+        let post = recompute(&after, &evidence);
+        assert!(post.is_some(), "candidate tree renders");
+        let Some(post) = post else {
+            return;
+        };
+        assert!(
+            (post.0 - solver.evaluate_with_mirror_evidence(&after, &evidence)).abs() < f64::EPSILON
+        );
+        assert!(
+            (score_before - post.0).abs() >= f64::EPSILON,
+            "the follower must enter final pricing"
+        );
+
+        let mut replayed = after.clone();
+        let replay_evidence = solver.shadow_tests(&mut replayed);
+        assert_eq!(replayed.assignment(), after.assignment());
+        let replayed_post = recompute(&replayed, &replay_evidence);
+        assert!(replayed_post.is_some(), "replayed candidate tree renders");
+        let Some(replayed_post) = replayed_post else {
+            return;
+        };
+        assert!((replayed_post.0 - post.0).abs() < f64::EPSILON);
+        assert_eq!(replayed_post.1, post.1);
+        assert_eq!(replay_evidence, evidence);
+    }
+
+    #[test]
+    fn should_attempt_mirrors_for_every_physical_source_move() {
+        let snap = snapshot(
+            vec![
+                node(0, "move_by_assignment", 6, Polarity::Production),
+                node(1, "move_by_projection", 7, Polarity::Production),
+                node(2, "receive_source", 8, Polarity::Production),
+                node(3, "assignment_spec", 9, Polarity::TestCase),
+                node(4, "projection_spec", 10, Polarity::TestCase),
+            ],
+            vec![edge(0, 2)],
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "source/assignment", ScopeLevel::Folder, Some(0)),
+                container(2, "source/projection", ScopeLevel::Folder, Some(0)),
+                container(3, "source/target", ScopeLevel::Folder, Some(0)),
+                container(4, "spec/assignment", ScopeLevel::Folder, Some(0)),
+                container(5, "spec/projection", ScopeLevel::Folder, Some(0)),
+                container(
+                    6,
+                    "source/assignment/assignment.ts",
+                    ScopeLevel::File,
+                    Some(1),
+                ),
+                container(
+                    7,
+                    "source/projection/projection.ts",
+                    ScopeLevel::File,
+                    Some(2),
+                ),
+                container(8, "source/target/owner.ts", ScopeLevel::File, Some(3)),
+                container(
+                    9,
+                    "spec/assignment/assignment.spec.ts",
+                    ScopeLevel::File,
+                    Some(4),
+                ),
+                container(
+                    10,
+                    "spec/projection/projection.spec.ts",
+                    ScopeLevel::File,
+                    Some(5),
+                ),
+            ],
+        );
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.relocation.test_mirroring.builtins = false;
+        config.profiles.anchored.relocation.test_mirroring.rules = vec![TestMirrorRule {
+            source: "source/{dir}/{stem}.ts".to_owned(),
+            tests: vec!["spec/{dir}/{stem}.spec.ts".to_owned()],
+        }];
+        let tests = TestPolicy::defaults();
+        let mut solver =
+            PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+        let scc_of = |file: u32| {
+            solver
+                .index_of
+                .get(&file)
+                .and_then(|vertex| solver.condensation.membership.get(*vertex as usize))
+                .map_or(u32::MAX, |scc| scc.0)
+        };
+        let mut parts = solver.real_partition.clone();
+        let target = parts.cluster_of(scc_of(8));
+        assert!(target.is_some(), "target is placed");
+        let Some(target) = target else {
+            return;
+        };
+        assert!(parts.move_node(scc_of(6), target));
+
+        let projected = parts.cluster_of(scc_of(7));
+        assert!(projected.is_some(), "projected source is placed");
+        let Some(projected) = projected else {
+            return;
+        };
+        let Some(name) = solver.real_folder_names.get_mut(projected.0 as usize) else {
+            return;
+        };
+        *name = SmolStr::new("source/projected");
+
+        let evidence = solver.shadow_tests(&mut parts);
+        let applied_sources: BTreeSet<&str> = evidence
+            .outcomes
+            .iter()
+            .filter(|outcome| outcome.disposition == MirrorDisposition::Applied)
+            .map(|outcome| outcome.source_path.as_str())
+            .collect();
+
+        assert_eq!(
+            applied_sources,
+            BTreeSet::from([
+                "workspace/source/assignment/assignment.ts",
+                "workspace/source/projection/projection.ts",
+            ]),
+            "every physical source move attempts its exact mirror"
+        );
+    }
+
+    #[test]
+    fn should_attempt_a_mirror_when_the_source_moves_to_its_namespace_root() {
+        let snap = snapshot(
+            vec![
+                node(0, "nested_source", 3, Polarity::Production),
+                node(1, "root_owner", 4, Polarity::Production),
+                node(2, "nested_spec", 5, Polarity::TestCase),
+            ],
+            vec![edge(0, 1)],
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "source/nested", ScopeLevel::Folder, Some(0)),
+                container(2, "spec/nested", ScopeLevel::Folder, Some(0)),
+                container(3, "source/nested/item.ts", ScopeLevel::File, Some(1)),
+                container(4, "owner.ts", ScopeLevel::File, Some(0)),
+                container(5, "spec/nested/item.spec.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.relocation.test_mirroring.builtins = false;
+        config.profiles.anchored.relocation.test_mirroring.rules = vec![TestMirrorRule {
+            source: "source/{dir}/{stem}.ts".to_owned(),
+            tests: vec!["spec/{dir}/{stem}.spec.ts".to_owned()],
+        }];
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+        let scc_of = |file: u32| {
+            solver
+                .index_of
+                .get(&file)
+                .and_then(|vertex| solver.condensation.membership.get(*vertex as usize))
+                .map_or(u32::MAX, |scc| scc.0)
+        };
+        let mut parts = solver.real_partition.clone();
+        let target = parts.cluster_of(scc_of(4));
+        assert!(target.is_some(), "root owner is placed");
+        let Some(target) = target else {
+            return;
+        };
+        assert!(parts.move_node(scc_of(3), target));
+
+        let evidence = solver.shadow_tests(&mut parts);
+
+        assert_eq!(
+            evidence
+                .outcomes
+                .iter()
+                .map(|outcome| outcome.source_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["workspace/source/nested/item.ts"],
+            "a source moved to its namespace root still attempts its exact mirror"
+        );
+        assert_eq!(
+            evidence
+                .outcomes
+                .first()
+                .map(|outcome| outcome.intended_to.as_str()),
+            Some("workspace/spec"),
+            "a synthetic source-root cluster projects to the test root, not a workspace folder"
+        );
+    }
+
+    fn repeated_root_mirror_evidence(with_collision: bool) -> MirrorEvidence {
+        let mut containers = vec![
+            container(0, "app", ScopeLevel::PackageGroup, None),
+            container(1, "app/source/module", ScopeLevel::Folder, Some(0)),
+            container(2, "app/source/target", ScopeLevel::Folder, Some(0)),
+            container(3, "app/spec/module", ScopeLevel::Folder, Some(0)),
+            container(4, "app/source/module/task.ts", ScopeLevel::File, Some(1)),
+            container(5, "app/source/target/owner.ts", ScopeLevel::File, Some(2)),
+            container(6, "app/spec/module/task.spec.ts", ScopeLevel::File, Some(3)),
+        ];
+        let mut nodes = vec![
+            node(0, "perform_task", 4, Polarity::Production),
+            node(1, "own_task", 5, Polarity::Production),
+            node(2, "task_spec", 6, Polarity::TestCase),
+        ];
+        if with_collision {
+            containers.extend([
+                container(7, "app/spec/target", ScopeLevel::Folder, Some(0)),
+                container(8, "app/spec/target/task.spec.ts", ScopeLevel::File, Some(7)),
+            ]);
+            nodes.push(node(3, "existing_spec", 8, Polarity::TestCase));
+        }
+        let snap = snapshot(nodes, vec![edge(0, 1)], containers);
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.relocation.test_mirroring.builtins = false;
+        config.profiles.anchored.relocation.test_mirroring.rules = vec![TestMirrorRule {
+            source: "app/source/{dir}/{stem}.ts".to_owned(),
+            tests: vec!["app/spec/{dir}/{stem}.spec.ts".to_owned()],
+        }];
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+        let scc = |file: u32| {
+            solver
+                .index_of
+                .get(&file)
+                .and_then(|vertex| solver.condensation.membership.get(*vertex as usize))
+                .map_or(u32::MAX, |scc| scc.0)
+        };
+        let mut parts = solver.pass_start_partition.clone();
+        let target = parts.cluster_of(scc(5)).unwrap_or(ClusterId(0));
+        assert!(parts.move_node(scc(4), target));
+        solver.shadow_tests(&mut parts)
+    }
+
+    #[test]
+    fn should_link_an_exact_mirror_when_a_real_directory_repeats_the_repository_root() {
+        let evidence = repeated_root_mirror_evidence(false);
+        let outcome = evidence.outcomes.first();
+
+        assert_eq!(evidence.outcomes.len(), 1);
+        assert_eq!(
+            outcome.map(|outcome| outcome.disposition),
+            Some(MirrorDisposition::Applied)
+        );
+        assert_eq!(
+            outcome.map(|outcome| outcome.source_path.as_str()),
+            Some("app/app/source/module/task.ts")
+        );
+    }
+
+    #[test]
+    fn should_detect_a_mirror_collision_beneath_a_repeated_repository_root() {
+        let evidence = repeated_root_mirror_evidence(true);
+        let outcome = evidence.outcomes.first();
+
+        assert_eq!(evidence.outcomes.len(), 1);
+        assert_eq!(
+            outcome.map(|outcome| outcome.disposition),
+            Some(MirrorDisposition::Blocked(
+                BlockedMirrorReason::PathCollision
+            ))
+        );
+    }
+
+    #[test]
+    fn should_assemble_a_root_mirror_at_the_repository_root_exactly_once() {
+        let snap = snapshot(
+            vec![
+                node(0, "nested_source", 3, Polarity::Production),
+                node(1, "root_owner", 4, Polarity::Production),
+                node(2, "nested_spec", 5, Polarity::TestCase),
+            ],
+            vec![edge(0, 1)],
+            vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "source/nested", ScopeLevel::Folder, Some(0)),
+                container(2, "nested", ScopeLevel::Folder, Some(0)),
+                container(3, "source/nested/item.ts", ScopeLevel::File, Some(1)),
+                container(4, "owner.ts", ScopeLevel::File, Some(0)),
+                container(5, "nested/item.spec.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.relocation.test_mirroring.builtins = false;
+        config.profiles.anchored.relocation.test_mirroring.rules = vec![TestMirrorRule {
+            source: "source/{dir}/{stem}.ts".to_owned(),
+            tests: vec!["{dir}/{stem}.spec.ts".to_owned()],
+        }];
+        let tests = TestPolicy::defaults();
+        let mut solver =
+            PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+        let scc = |file: u32| {
+            solver
+                .index_of
+                .get(&file)
+                .and_then(|vertex| solver.condensation.membership.get(*vertex as usize))
+                .map_or(u32::MAX, |scc| scc.0)
+        };
+        let mut parts = solver.real_partition.clone();
+        let target = parts.cluster_of(scc(4)).unwrap_or(ClusterId(0));
+        if let Some(folder) = solver.real_folder_names.get_mut(target.0 as usize) {
+            *folder = SmolStr::new("");
+        }
+        assert!(parts.move_node(scc(3), target));
+
+        let evidence = solver.shadow_tests(&mut parts);
+        assert_eq!(
+            evidence.outcomes.first().map(|outcome| outcome.disposition),
+            Some(MirrorDisposition::Applied)
+        );
+        assert_eq!(
+            evidence
+                .outcomes
+                .first()
+                .map(|outcome| outcome.intended_to.as_str()),
+            Some("app")
+        );
+        let assembled = solver.assemble_with_mirror_evidence(&parts, &evidence);
+        let candidate_file = assembled
+            .pass_start_file_by_candidate
+            .iter()
+            .find_map(|(candidate, original)| (original.0 == 5).then_some(*candidate));
+        let by_id: BTreeMap<u32, &Container> = assembled
+            .tree
+            .containers()
+            .iter()
+            .map(|container| (container.id.0, container))
+            .collect();
+        let folder_name = candidate_file
+            .and_then(|file| by_id.get(&file.0))
+            .and_then(|file| file.parent)
+            .and_then(|folder| by_id.get(&folder.0))
+            .map(|folder| folder.name.as_str());
+        assert_eq!(folder_name, Some(""));
+    }
+
+    #[derive(Clone, Copy)]
+    enum MirrorBlockFixture {
+        Ambiguous,
+        Namespace,
+        Capacity,
+        Collision,
+    }
+
+    fn assert_actual_mirror_block(fixture: MirrorBlockFixture, expected: BlockedMirrorReason) {
+        let mut containers = vec![
+            container(0, "workspace", ScopeLevel::PackageGroup, None),
+            container(1, "source/a", ScopeLevel::Folder, Some(0)),
+            container(2, "source/b", ScopeLevel::Folder, Some(0)),
+            container(3, "source/target", ScopeLevel::Folder, Some(0)),
+            container(4, "spec/a", ScopeLevel::Folder, Some(0)),
+            container(5, "spec/target", ScopeLevel::Folder, Some(0)),
+            container(6, "source/a/task.ts", ScopeLevel::File, Some(1)),
+            container(7, "source/b/task.ts", ScopeLevel::File, Some(2)),
+            container(8, "source/target/owner.ts", ScopeLevel::File, Some(3)),
+            container(9, "spec/a/task.spec.ts", ScopeLevel::File, Some(4)),
+        ];
+        let mut nodes = vec![
+            node(0, "perform_task", 6, Polarity::Production),
+            node(1, "alternate_task", 7, Polarity::Production),
+            node(2, "own_task", 8, Polarity::Production),
+            node(3, "task_spec", 9, Polarity::TestCase),
+        ];
+        let mut edges = vec![edge(0, 2)];
+        match fixture {
+            MirrorBlockFixture::Namespace => {
+                containers.push(container(10, "support", ScopeLevel::Folder, Some(0)));
+                containers.push(container(
+                    11,
+                    "support/runtime.ts",
+                    ScopeLevel::File,
+                    Some(10),
+                ));
+                nodes.push(node(4, "support", 11, Polarity::Production));
+                edges.extend([edge(3, 4), edge(4, 3)]);
+            }
+            MirrorBlockFixture::Capacity => {
+                containers.push(container(
+                    10,
+                    "spec/a/support.spec.ts",
+                    ScopeLevel::File,
+                    Some(4),
+                ));
+                nodes.push(node(4, "support_spec", 10, Polarity::TestCase));
+                edges.extend([edge(3, 4), edge(4, 3)]);
+            }
+            MirrorBlockFixture::Collision => {
+                containers.push(container(
+                    10,
+                    "spec/target/task.spec.ts",
+                    ScopeLevel::File,
+                    Some(5),
+                ));
+                nodes.push(node(4, "existing_spec", 10, Polarity::TestCase));
+            }
+            MirrorBlockFixture::Ambiguous => {}
+        }
+        let snap = snapshot(nodes, edges, containers);
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.relocation.test_mirroring.builtins = false;
+        config.profiles.anchored.relocation.test_mirroring.rules =
+            if matches!(fixture, MirrorBlockFixture::Ambiguous) {
+                ["a", "b"]
+                    .into_iter()
+                    .map(|branch| TestMirrorRule {
+                        source: format!("source/{branch}/{{dir}}/{{stem}}.ts"),
+                        tests: vec!["spec/a/{dir}/{stem}.spec.ts".to_owned()],
+                    })
+                    .collect()
+            } else {
+                vec![TestMirrorRule {
+                    source: "source/{dir}/{stem}.ts".to_owned(),
+                    tests: vec!["spec/{dir}/{stem}.spec.ts".to_owned()],
+                }]
+            };
+        if matches!(fixture, MirrorBlockFixture::Capacity) {
+            config.profiles.anchored.capacity.folder = 1;
+        }
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+        let scc = |file: u32| {
+            solver
+                .index_of
+                .get(&file)
+                .and_then(|vertex| solver.condensation.membership.get(*vertex as usize))
+                .map_or(u32::MAX, |scc| scc.0)
+        };
+        let mut parts = solver.pass_start_partition.clone();
+        let target = parts.cluster_of(scc(8));
+        assert!(target.is_some(), "owner is placed");
+        let target = target.unwrap_or(ClusterId(0));
+        assert!(parts.move_node(scc(6), target));
+
+        let evidence = solver.shadow_tests(&mut parts);
+
+        assert_eq!(evidence.outcomes.len(), 1, "one follower was attempted");
+        assert_eq!(
+            evidence.outcomes.first().map(|outcome| outcome.disposition),
+            Some(MirrorDisposition::Blocked(expected))
+        );
+    }
+
+    #[test]
+    fn should_report_actual_ambiguous_mirror_attempt() {
+        assert_actual_mirror_block(
+            MirrorBlockFixture::Ambiguous,
+            BlockedMirrorReason::AmbiguousMapping,
+        );
+    }
+
+    #[test]
+    fn should_report_actual_namespace_mirror_attempt() {
+        assert_actual_mirror_block(
+            MirrorBlockFixture::Namespace,
+            BlockedMirrorReason::NamespaceBoundary,
+        );
+    }
+
+    #[test]
+    fn should_report_actual_capacity_mirror_attempt() {
+        assert_actual_mirror_block(MirrorBlockFixture::Capacity, BlockedMirrorReason::Capacity);
+    }
+
+    #[test]
+    fn should_report_actual_path_collision_mirror_attempt() {
+        assert_actual_mirror_block(
+            MirrorBlockFixture::Collision,
+            BlockedMirrorReason::PathCollision,
+        );
+    }
+
+    #[test]
+    fn should_not_shadow_by_basename_when_exact_mirroring_is_disabled() {
+        let snap = snapshot(
+            vec![
+                node(0, "perform_task", 4, Polarity::Production),
+                node(1, "own_task", 5, Polarity::Production),
+                node(2, "task_spec", 6, Polarity::TestCase),
+            ],
+            vec![edge(0, 1), edge(2, 0)],
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "source/module", ScopeLevel::Folder, Some(0)),
+                container(2, "source/target", ScopeLevel::Folder, Some(0)),
+                container(3, "spec/module", ScopeLevel::Folder, Some(0)),
+                container(4, "source/module/task.ts", ScopeLevel::File, Some(1)),
+                container(5, "source/target/owner.ts", ScopeLevel::File, Some(2)),
+                container(6, "spec/module/task.spec.ts", ScopeLevel::File, Some(3)),
+            ],
+        );
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.relocation.test_mirroring.enabled = false;
+        config.profiles.anchored.relocation.pin_detected_test_files = false;
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+        let scc_of = |file: u32| {
+            solver
+                .index_of
+                .get(&file)
+                .and_then(|vertex| solver.condensation.membership.get(*vertex as usize))
+                .map_or(u32::MAX, |scc| scc.0)
+        };
+        let mut parts = solver.real_partition.clone();
+        let source = scc_of(4);
+        let owner = scc_of(5);
+        let mirror = scc_of(6);
+        let owner_cluster = parts.cluster_of(owner);
+        assert!(owner_cluster.is_some(), "owner is placed");
+        let Some(owner_cluster) = owner_cluster else {
+            return;
+        };
+        assert!(parts.move_node(source, owner_cluster));
+        let before = parts.cluster_of(mirror);
+
+        solver.shadow_tests(&mut parts);
+
+        assert_eq!(parts.cluster_of(mirror), before);
+    }
+
+    #[test]
+    fn should_not_duplicate_an_unfollowed_namespace_during_assembly() {
+        let snap = snapshot(
+            vec![
+                node(0, "subject", 3, Polarity::Production),
+                node(1, "subject_spec", 4, Polarity::TestCase),
+            ],
+            vec![],
+            vec![
+                container(0, "workspace", ScopeLevel::PackageGroup, None),
+                container(1, "src", ScopeLevel::Folder, Some(0)),
+                container(2, "spec", ScopeLevel::Folder, Some(0)),
+                container(3, "src/subject.ts", ScopeLevel::File, Some(1)),
+                container(4, "spec/subject.spec.ts", ScopeLevel::File, Some(2)),
+            ],
+        );
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.relocation.test_mirroring.enabled = false;
+        config.profiles.anchored.relocation.pin_detected_test_files = false;
+        let tests = TestPolicy::defaults();
+        let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+        let scc_of = |file: u32| {
+            solver
+                .index_of
+                .get(&file)
+                .and_then(|vertex| solver.condensation.membership.get(*vertex as usize))
+                .map_or(u32::MAX, |scc| scc.0)
+        };
+        let mut parts = solver.real_partition.clone();
+        let spec_cluster = parts.cluster_of(scc_of(4));
+        assert!(spec_cluster.is_some(), "spec folder is placed");
+        let Some(spec_cluster) = spec_cluster else {
+            return;
+        };
+        assert!(parts.move_node(scc_of(3), spec_cluster));
+
+        let assembled = solver.assemble(&parts);
+        let folders: Vec<&str> = assembled
+            .tree
+            .containers()
+            .iter()
+            .filter(|container| container.level == ScopeLevel::Folder)
+            .map(|container| container.name.as_str())
+            .collect();
+
+        assert!(
+            !folders.iter().any(|folder| folder.contains("spec/spec")),
+            "an ordinary mixed cluster must not manufacture a duplicate namespace: {folders:?}"
+        );
     }
 
     #[test]

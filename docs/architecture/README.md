@@ -16,3 +16,4 @@ departed from spec.
 | [ADR-0008](decisions/0008-physical-layout-governs-relocation-and-capacity.md) | Physical layout governs relocation and capacity | Accepted |
 | [ADR-0011](decisions/0011-relocation-ownership-scoring.md) | Relocation ownership and dependency-only scoring | Accepted |
 | [ADR-0012](decisions/0012-companion-owner-affinity.md) | Conservative companion-owner affinity | Accepted |
+| [ADR-0013](decisions/0013-pinned-relocation-policies-and-test-mirrors.md) | Pinned relocation policies and exact test mirrors | Accepted |

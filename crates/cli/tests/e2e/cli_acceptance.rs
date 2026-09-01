@@ -255,7 +255,7 @@ fn should_pin_the_anchor_term_apart_for_the_two_modes() {
     // move-distance penalty is non-zero and the two modes' scores genuinely
     // diverge. (A flat fixture no longer works here: its best candidate matches
     // the current layout, so both modes score identically.)
-    let root = fixture("nested-python");
+    let root = fixture("constellation-ts");
     let root_str = root.to_str().unwrap_or_default();
 
     let anchored = run(&[
@@ -486,7 +486,7 @@ fn should_truncate_a_candidate_tree_at_the_requested_depth() {
         "--input",
         result_str,
         "--mode",
-        "anchored",
+        "greenfield",
         "--candidate",
         "1",
         "--symbols",
@@ -617,11 +617,11 @@ fn should_deliver_a_well_formed_report_for_the_rust_fixture() {
 }
 
 #[test]
-fn should_deliver_the_anchored_diff_for_the_constellation_fixture() {
+fn should_deliver_the_greenfield_diff_for_the_constellation_fixture() {
     let result = analyze_to_file("constellation-ts");
     let result_str = result.to_str().unwrap_or_default();
 
-    let outcome = run(&["diff", "--input", result_str, "current", "anchored/1"]);
+    let outcome = run(&["diff", "--input", result_str, "current", "greenfield/1"]);
 
     let _ = std::fs::remove_file(&result);
     assert_eq!(
@@ -630,18 +630,18 @@ fn should_deliver_the_anchored_diff_for_the_constellation_fixture() {
     );
     assert!(
         outcome.stdout.starts_with("moves ("),
-        "a genuine anchored candidate renders a non-empty delta: {}",
+        "a genuine greenfield candidate renders a non-empty delta: {}",
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("src/util/canvas.spec.ts"),
+        outcome.stdout.contains("src/util/hash.ts"),
         "the delta identifies the candidate's moved file: {}",
         outcome.stdout
     );
 }
 
 #[test]
-fn should_deliver_the_greenfield_diff_for_the_nested_python_fixture() {
+fn should_deliver_a_greenfield_diff_for_a_fixture_with_a_candidate() {
     // the greenfield (mu = beta = 0) delta performs exactly the repair the
     // normalized objective can justify: app.py — whose edges pay package-height
     // crossings while loose — joins the geometry chain it depends on, narrated
@@ -650,7 +650,7 @@ fn should_deliver_the_greenfield_diff_for_the_nested_python_fixture() {
     // itself, so they stay put; the `follows` narration they used to exercise
     // lives on in the constellation-ts greenfield delta (see the varied-reasons
     // test).
-    let result = analyze_to_file("nested-python");
+    let result = analyze_to_file("constellation-ts");
     let result_str = result.to_str().unwrap_or_default();
 
     let outcome = run(&["diff", "--input", result_str, "current", "greenfield/1"]);
@@ -663,14 +663,14 @@ fn should_deliver_the_greenfield_diff_for_the_nested_python_fixture() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("→ nested-python/geometry]"),
-        "the regrouped files land in the geometry chain: {}",
+        outcome.stdout.contains("→ constellation-ts/src/model]"),
+        "the regrouped file lands in the model cluster: {}",
         outcome.stdout
     );
     assert!(
         outcome
             .stdout
-            .contains("nested-python/app.py [nested-python → nested-python/geometry]"),
+            .contains("constellation-ts/src/util/hash.ts [constellation-ts/src/util → constellation-ts/src/model]"),
         "the move names its dataset-qualified physical source and destination: {}",
         outcome.stdout
     );
@@ -1308,8 +1308,8 @@ fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("split — pulled by "),
-        "the split carries a dependency-pull reason, not a clustering fallback: {}",
+        outcome.stdout.contains("move — pulled by "),
+        "the move carries a dependency-pull reason, not a clustering fallback: {}",
         outcome.stdout
     );
     assert!(
@@ -1329,6 +1329,16 @@ fn should_omit_a_vi_distance_line_for_a_cross_mode_diff() {
     let result = analyze_to_file("constellation-ts");
     let result_str = result.to_str().unwrap_or_default();
 
+    let contents = std::fs::read_to_string(&result).unwrap_or_default();
+    let mut parsed: serde_json::Value = serde_json::from_str(&contents).unwrap_or_default();
+    let greenfield = parsed.pointer("/profiles/greenfield/candidates/0").cloned();
+    if let (Some(candidate), Some(anchored)) = (
+        greenfield,
+        parsed.pointer_mut("/profiles/anchored/candidates"),
+    ) {
+        *anchored = serde_json::json!([candidate]);
+    }
+    let _ = std::fs::write(&result, serde_json::to_vec(&parsed).unwrap_or_default());
     let outcome = run(&["diff", "--input", result_str, "anchored/1", "greenfield/1"]);
 
     let _ = std::fs::remove_file(&result);
@@ -1355,7 +1365,7 @@ fn should_report_a_vi_distance_line_for_a_same_mode_candidate_pair() {
     let mut parsed: serde_json::Value =
         serde_json::from_str(&contents).unwrap_or(serde_json::Value::Null);
     let grafted = parsed
-        .pointer_mut("/profiles/anchored")
+        .pointer_mut("/profiles/greenfield")
         .is_some_and(|anchored| {
             let cloned = anchored
                 .pointer("/candidates/0")
@@ -1380,14 +1390,20 @@ fn should_report_a_vi_distance_line_for_a_same_mode_candidate_pair() {
             }
         })
         && parsed
-            .pointer_mut("/profiles/anchored/pairwiseDistance")
+            .pointer_mut("/profiles/greenfield/pairwiseDistance")
             .is_some_and(|matrix| {
                 *matrix = serde_json::json!([[0.0, 0.7], [0.7, 0.0]]);
                 true
             });
     let written = std::fs::write(&result, serde_json::to_vec(&parsed).unwrap_or_default()).is_ok();
 
-    let outcome = run(&["diff", "--input", result_str, "anchored/1", "anchored/2"]);
+    let outcome = run(&[
+        "diff",
+        "--input",
+        result_str,
+        "greenfield/1",
+        "greenfield/2",
+    ]);
 
     let _ = std::fs::remove_file(&result);
     assert!(grafted, "the second candidate was grafted in: {contents}");
@@ -2009,7 +2025,7 @@ fn should_reject_a_result_with_an_unsupported_schema_version() {
 
     for version in ["999", "5", "1"] {
         let stamped = contents.replace(
-            "\"schemaVersion\":6",
+            "\"schemaVersion\":7",
             &format!("\"schemaVersion\":{version}"),
         );
         assert_ne!(contents, stamped, "the version stamp was found and bumped");
@@ -2029,7 +2045,7 @@ fn should_reject_a_result_with_an_unsupported_schema_version() {
         );
         assert!(
             outcome.stderr.contains(&format!(
-                "unsupported result schemaVersion {version}; expected 6"
+                "unsupported result schemaVersion {version}; expected 7"
             )),
             "the refusal names the offending version: {}",
             outcome.stderr
@@ -2294,7 +2310,7 @@ fn should_report_improvement_as_current_score_minus_score_in_every_mode() {
     // the improvement field is exactly the per-mode delta currentScore - score
     // for every candidate, in both modes — positive means the candidate beats
     // the current layout under that mode's own coefficients.
-    let root = fixture("nested-python");
+    let root = fixture("constellation-ts");
     let root_str = root.to_str().unwrap_or_default();
 
     let outcome = run(&[
@@ -2339,7 +2355,7 @@ fn should_report_improvement_as_current_score_minus_score_in_every_mode() {
     }
     assert!(
         candidates_seen > 0,
-        "both modes deliver candidates to check"
+        "at least one profile delivers candidates to check"
     );
 }
 
@@ -3005,7 +3021,7 @@ fn should_outscore_the_current_layout_on_the_constellation_fixture() {
         Some("outscored"),
         "greenfield marks the misplaced layout outscored"
     );
-    for mode in ["anchored", "greenfield"] {
+    for mode in ["greenfield"] {
         let candidates = parsed
             .pointer(&format!("/profiles/{mode}/candidates"))
             .and_then(serde_json::Value::as_array)

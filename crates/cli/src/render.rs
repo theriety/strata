@@ -17,9 +17,9 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use strata_engine::{
-    AnalyzeResult, Candidate, ContainerNode, CurrentStanding, FileMove, Level, ModeResult, Move,
-    MoveKind, MoveReason, ProfileConfig, ScoreBreakdown, Severity, SymbolKind, SymbolMove,
-    Violation, ViolationKind,
+    AnalyzeResult, BlockedMirror, BlockedMirrorReason, Candidate, ContainerNode, CurrentStanding,
+    FileMove, Level, MirrorMove, ModeResult, Move, MoveKind, MoveReason, ProfileConfig,
+    ScoreBreakdown, Severity, SymbolKind, SymbolMove, Violation, ViolationKind,
 };
 
 /// The output format the `analyze` command renders in.
@@ -621,6 +621,19 @@ pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<St
             p.tests.patterns.len(),
             p.tests.builtins
         ),
+        format!(
+            "   relocation pin-test-files {} · pin-test-symbols {} · file patterns {} · symbol patterns {}",
+            p.relocation.pin_detected_test_files,
+            p.relocation.pin_detected_test_symbols,
+            p.relocation.forbid_file_moves.len(),
+            p.relocation.forbid_symbol_moves.len()
+        ),
+        format!(
+            "              mirroring enabled {} · builtins {} · rules {}",
+            p.relocation.test_mirroring.enabled,
+            p.relocation.test_mirroring.builtins,
+            p.relocation.test_mirroring.rules.len()
+        ),
     ]
 }
 
@@ -825,11 +838,7 @@ fn changes_section(result: &AnalyzeResult) -> Vec<String> {
     let Some((featured_name, featured)) = featured_candidate(result) else {
         return vec!["no candidate this run produced — nothing to change.".to_owned()];
     };
-    let moved: usize = featured
-        .delta_narration
-        .iter()
-        .map(|entry| entry.files.len())
-        .sum();
+    let moved: usize = featured.delta_narration.iter().map(moved_file_count).sum();
     let symbol_count = featured.symbol_moves.len();
 
     let mut lines = Vec::new();
@@ -945,8 +954,22 @@ fn suggestion_block(number: usize, entry: &Move) -> Vec<String> {
         " grain : whole files".to_owned(),
         String::new(),
     ];
+    let linked = !entry.mirrors.is_empty() || !entry.blocked_mirrors.is_empty();
+    if linked {
+        lines.push(" source files".to_owned());
+    }
     let (table, shortened) = change_table(&entry.files, &names, &entry.to);
     lines.extend(table);
+    if !entry.mirrors.is_empty() {
+        lines.push(String::new());
+        lines.push(" mirrored tests".to_owned());
+        lines.extend(mirror_table(&entry.mirrors));
+    }
+    if !entry.blocked_mirrors.is_empty() {
+        lines.push(String::new());
+        lines.push(" blocked mirrors".to_owned());
+        lines.extend(blocked_mirror_table(&entry.blocked_mirrors));
+    }
     if shortened || title_shortened {
         lines.push(
             "          a leading … marks a shortened place name; the run's output carries the \
@@ -963,6 +986,46 @@ fn suggestion_block(number: usize, entry: &Move) -> Vec<String> {
     ));
     lines.push(String::new());
     lines
+}
+
+fn mirror_table(mirrors: &[MirrorMove]) -> Vec<String> {
+    let mut rows = vec![" leaf | before place | after place".to_owned()];
+    rows.extend(mirrors.iter().map(|mirror| {
+        format!(
+            " {} | {} | {}",
+            nq(&mirror.path),
+            nq(&mirror.from),
+            nq(&mirror.to)
+        )
+    }));
+    rows
+}
+
+fn blocked_mirror_table(mirrors: &[BlockedMirror]) -> Vec<String> {
+    let mut rows = vec![" leaf | before place | intended place | reason".to_owned()];
+    rows.extend(mirrors.iter().map(|mirror| {
+        format!(
+            " {} | {} | {} | {}",
+            nq(&mirror.path),
+            nq(&mirror.from),
+            nq(&mirror.intended_to),
+            blocked_mirror_reason(mirror.reason)
+        )
+    }));
+    rows
+}
+
+fn blocked_mirror_reason(reason: BlockedMirrorReason) -> &'static str {
+    match reason {
+        BlockedMirrorReason::AmbiguousMapping => "ambiguous mapping",
+        BlockedMirrorReason::NamespaceBoundary => "namespace boundary",
+        BlockedMirrorReason::Capacity => "capacity",
+        BlockedMirrorReason::PathCollision => "path collision",
+    }
+}
+
+fn moved_file_count(entry: &Move) -> usize {
+    entry.files.len().saturating_add(entry.mirrors.len())
 }
 
 /// Builds the `leaf | before place | after place` table for one suggestion.
@@ -1053,11 +1116,7 @@ fn blast_radius_section(result: &AnalyzeResult) -> Vec<String> {
     let Some((_, featured)) = featured_candidate(result) else {
         return vec!["no candidate this run produced — nothing relocates.".to_owned()];
     };
-    let moved: usize = featured
-        .delta_narration
-        .iter()
-        .map(|entry| entry.files.len())
-        .sum();
+    let moved: usize = featured.delta_narration.iter().map(moved_file_count).sum();
     let rows = blast_rows(&featured.delta_narration);
     if rows.is_empty() || moved == 0 {
         return vec!["nothing relocates — every container keeps its files.".to_owned()];
@@ -1117,6 +1176,10 @@ fn blast_rows(moves: &[Move]) -> Vec<(String, i64)> {
         for file in &entry.files {
             *deltas.entry(file.from.clone()).or_default() -= 1;
             *deltas.entry(entry.to.clone()).or_default() += 1;
+        }
+        for mirror in &entry.mirrors {
+            *deltas.entry(mirror.from.clone()).or_default() -= 1;
+            *deltas.entry(mirror.to.clone()).or_default() += 1;
         }
     }
     let mut rows: Vec<(String, i64)> = deltas
@@ -1432,11 +1495,7 @@ fn candidate_recommendation_lines(
         return Vec::new();
     }
     let mut lines = Vec::new();
-    let files: usize = candidate
-        .delta_narration
-        .iter()
-        .map(|entry| entry.files.len())
-        .sum();
+    let files: usize = candidate.delta_narration.iter().map(moved_file_count).sum();
     if candidate.improvement > 0.0 {
         let mut adopt = format!(
             "candidate {} — {}, gain {}, {} changes relocating {} files (§2).",
@@ -1617,11 +1676,7 @@ pub fn render_diff(candidate: &Candidate, out: &mut impl Write) -> io::Result<()
         )?;
     } else {
         let groups = candidate.delta_narration.len();
-        let files: usize = candidate
-            .delta_narration
-            .iter()
-            .map(|entry| entry.files.len())
-            .sum();
+        let files: usize = candidate.delta_narration.iter().map(moved_file_count).sum();
         writeln!(
             out,
             "moves ({groups} group(s), {files} file(s); {}):",
@@ -1665,6 +1720,22 @@ pub(crate) fn move_step_lines(moves: &[Move]) -> Vec<String> {
             };
             lines.push(format!("  {step}. {} [{from} → {to}]", file.path));
             step = step.saturating_add(1);
+        }
+        for mirror in &entry.mirrors {
+            lines.push(format!(
+                "  {step}. {} [{} → {}] (mirrored test for {})",
+                mirror.path, mirror.from, mirror.to, mirror.source_path
+            ));
+            step = step.saturating_add(1);
+        }
+        for mirror in &entry.blocked_mirrors {
+            lines.push(format!(
+                "  blocked: {} [{} → {}] ({})",
+                mirror.path,
+                mirror.from,
+                mirror.intended_to,
+                blocked_mirror_reason(mirror.reason)
+            ));
         }
     }
     lines
@@ -1888,6 +1959,8 @@ mod tests {
                 .collect(),
             to: to.to_owned(),
             reason,
+            mirrors: Vec::new(),
+            blocked_mirrors: Vec::new(),
         }
     }
 
@@ -2000,6 +2073,8 @@ mod tests {
             ],
             to: format!("root/{long}destination"),
             reason: MoveReason::Clustering,
+            mirrors: Vec::new(),
+            blocked_mirrors: Vec::new(),
         };
 
         let rendered = suggestion_block(1, &entry);
@@ -2180,6 +2255,8 @@ mod tests {
             }],
             to: "sample/src/area/destination".to_owned(),
             reason: MoveReason::Clustering,
+            mirrors: Vec::new(),
+            blocked_mirrors: Vec::new(),
         };
 
         let rendered = suggestion_block(1, &entry).join("\n");
@@ -3140,6 +3217,8 @@ mod tests {
                 ],
                 to: "new".to_owned(),
                 reason: MoveReason::Clustering,
+                mirrors: Vec::new(),
+                blocked_mirrors: Vec::new(),
             }],
             symbol_moves: Vec::new(),
             capacity_remainder: None,

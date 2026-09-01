@@ -89,6 +89,16 @@ patterns = []
 # `patterns` decide; with an empty list nothing is a test file.
 builtins = true
 
+[profiles.anchored.relocation]
+pin-detected-test-files = true
+pin-detected-test-symbols = true
+forbid-file-moves = []
+forbid-symbol-moves = []
+
+[profiles.anchored.relocation.test-mirroring]
+enabled = true
+builtins = true
+
 [profiles.greenfield]
 candidates = 3
 seed = 42
@@ -130,4 +140,14 @@ min-distance = 0.05
 [profiles.greenfield.tests]
 helper-cap = 250
 patterns = []
+builtins = true
+
+[profiles.greenfield.relocation]
+pin-detected-test-files = true
+pin-detected-test-symbols = true
+forbid-file-moves = []
+forbid-symbol-moves = []
+
+[profiles.greenfield.relocation.test-mirroring]
+enabled = true
 builtins = true

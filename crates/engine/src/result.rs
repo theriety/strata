@@ -17,7 +17,7 @@ use crate::config::ProfileConfig;
 ///
 /// Readers of a saved result reject any other version rather than misreading a
 /// future shape.
-pub const RESULT_SCHEMA_VERSION: u32 = 6;
+pub const RESULT_SCHEMA_VERSION: u32 = 7;
 
 /// The top-level analysis result: the snapshot hash, the current tree with its
 /// violations, and the per-mode candidate sets.
@@ -353,6 +353,56 @@ pub struct Move {
     pub to: String,
     /// The dominant reason the change was proposed.
     pub reason: MoveReason,
+    /// Test files that followed this primary source relocation.
+    #[serde(default)]
+    pub mirrors: Vec<MirrorMove>,
+    /// Test files that could not follow without violating a hard constraint.
+    #[serde(default)]
+    pub blocked_mirrors: Vec<BlockedMirror>,
+}
+
+/// One test-file follower attached to its primary source move.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MirrorMove {
+    /// Full pass-start path of the source whose move triggered this follower.
+    pub source_path: String,
+    /// Full pass-start path of the mirrored test.
+    pub path: String,
+    /// Folder the mirrored test leaves.
+    pub from: String,
+    /// Folder the mirrored test joins.
+    pub to: String,
+}
+
+/// One best-effort test follower rejected by a hard constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedMirror {
+    /// Full pass-start path of the source whose move triggered this follower.
+    pub source_path: String,
+    /// Full pass-start path of the mirrored test.
+    pub path: String,
+    /// Folder the mirrored test remains in.
+    pub from: String,
+    /// Folder the mirrored test would have joined.
+    pub intended_to: String,
+    /// Deterministic first hard constraint that rejected the follower.
+    pub reason: BlockedMirrorReason,
+}
+
+/// Stable reason ordering for blocked mirror followers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BlockedMirrorReason {
+    /// More than one immutable source/template pairing claimed the test.
+    AmbiguousMapping,
+    /// The follower would cross its pass-start render namespace.
+    NamespaceBoundary,
+    /// The destination would exceed its configured physical capacity.
+    Capacity,
+    /// Another file already occupies the derived destination path.
+    PathCollision,
 }
 
 /// The dominant reason a narrated change was proposed, first match wins:
@@ -509,7 +559,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn should_serialize_schema_version_six_without_modes() {
+    fn should_serialize_schema_version_seven_without_modes() {
         let result = AnalyzeResult {
             schema_version: RESULT_SCHEMA_VERSION,
             snapshot_hash: "snapshot".to_owned(),
@@ -537,7 +587,7 @@ mod tests {
         assert_eq!(
             json.pointer("/schemaVersion")
                 .and_then(serde_json::Value::as_u64),
-            Some(6)
+            Some(7)
         );
         assert!(json.get("profiles").is_some());
         assert!(json.get("modes").is_none());

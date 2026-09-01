@@ -4,9 +4,9 @@
 --------------------------------------------------------------------------------
  reading rules
 --------------------------------------------------------------------------------
- scores    : four decimals, lower is better            0.1668 → 0.0626
+ scores    : four decimals, lower is better            0.3668 → 0.2296
  gain      : improvement over that parameter profile's own starting point, measured in
-             the same units as the score              +0.1042
+             the same units as the score              +0.1372
  profiles  : anchored and greenfield are complete parameter profiles; by default
              anchored prices path and anchor terms while greenfield sets them to zero
  leaf      : one relocatable unit — a source file plus the symbols it
@@ -34,7 +34,7 @@
 ================================================================================
  §1  The candidates this run produced
 ================================================================================
- candidate count : 2  (anchored profile returned 1 · greenfield profile returned 1)
+ candidate count : 1  (anchored profile returned 0 · greenfield profile returned 1)
  anchored parameter profile (effective):
    search    candidates 3 · seed 42
    capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
@@ -45,6 +45,8 @@
    solver    ilp-threshold 300 · timeout-seconds 60
    diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
    tests     helper-cap 250 · patterns 0 · builtins true
+   relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+              mirroring enabled true · builtins true · rules 0
  greenfield parameter profile (effective):
    search    candidates 3 · seed 42
    capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
@@ -55,9 +57,10 @@
    solver    ilp-threshold 300 · timeout-seconds 60
    diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
    tests     helper-cap 250 · patterns 0 · builtins true
+   relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+              mirroring enabled true · builtins true · rules 0
 
- candidate 1   anchored/1     score  0.0626   gain +0.1042   best score
- candidate 2   greenfield/1   score  0.2201   gain +0.1467   different shape, own baseline
+ candidate 1   greenfield/1   score  0.2296   gain +0.1372   best score
 
  comparability: these two gains have different starting points — anchored prices the current tree
                  at 0.1668 using its effective coefficients; greenfield prices the same tree at
@@ -67,21 +70,19 @@
  note  fewer than the requested candidates survived; the solution space converged.
 
 ================================================================================
- §2  What would change — candidate 1 (anchored)
+ §2  What would change — candidate 1 (greenfield)
 ================================================================================
- greenfield's plan (2 changes) differs from anchored's in detail — only candidate 1 is itemized
- below. Every suggestion relocates whole files (1 in all).
+Every suggestion relocates whole files (1 in all):
 
  --------------------------------------------------------------------------------
- 1 · Move `constellation-ts/src/util/canvas.spec.ts` into `constellation-ts/src/render`
+ 1 · Move `constellation-ts/src/util/hash.ts` into `constellation-ts/src/model`
 --------------------------------------------------------------------------------
  grain : whole files
 
- leaf                                       | before place               | after place
- `constellation-ts/src/util/canvas.spec.ts` | `…nstellation-ts/src/util` | `…ellation-ts/src/render`
-          a leading … marks a shortened place name; the run's output carries the full paths.
+ leaf                                | before place                | after place
+ `constellation-ts/src/util/hash.ts` | `constellation-ts/src/util` | `constellation-ts/src/model`
 
- caption  WHY follows `constellation-ts/src/render/canvas.ts`, which this plan places nearby.
+ caption  WHY pulled toward `constellation-ts/src/model/matrix.ts` — weight 1.0.
 
  The other 27 files are absent because nothing about them changes.
 
@@ -90,8 +91,8 @@
 ================================================================================
  2 containers change as 1 files relocate; the 2 largest:
 
- `constellation-ts/src/render`  +1f
- `constellation-ts/src/util`    -1f
+ `constellation-ts/src/model`  +1f
+ `constellation-ts/src/util`   -1f
 
  the tally balances: every file that leaves a container arrives in one, so the changes sum to zero.
 
@@ -111,14 +112,14 @@
  §5  Score delta — current → candidate 1
 ================================================================================
  term               current       proposal    delta
- cut                 0.3281         0.1901        -0.1380
- imbalance           0.0406         0.0406        +0.0000
- naming             -0.0019        -0.0038        -0.0019
- path               -0.2000        -0.2000        +0.0000
- anchor              0.0000         0.0357        +0.0357
+ cut                 0.3281         0.1875        -0.1406
+ imbalance           0.0406         0.0437        +0.0031
+ naming             -0.0019        -0.0016        +0.0003
+ path               -0.0000        -0.0000        +0.0000
+ anchor              0.0000         0.0000        +0.0000
  dependency-only     0.0000         0.0000        +0.0000
  companion-separation     0.0000         0.0000        +0.0000
- score               0.1668         0.0626        -0.1042   (gain +0.1042)
+ score               0.3668         0.2296        -0.1372   (gain +0.1372)
 
  the seven displayed terms combine into the total score; lower is better.
 
@@ -131,12 +132,10 @@
 ================================================================================
  §6  Recommendation
 ================================================================================
- adopt      candidate 1 — 0.0626, gain +0.1042, 1 changes relocating 1 files (§2). It goes straight
-            at the cut that dominates today's score (0.3281 → 0.1901).
- second     greenfield reaches a related but different shape — 0.2201, gain +0.1467 against its own
-            0.3668 baseline; decide between the two by intent, never across baselines.
- keep       keeping today's layout remains possible — it scores 0.1668 against this proposal's
-            0.0626.
+ adopt      candidate 1 — 0.2296, gain +0.1372, 1 changes relocating 1 files (§2). It goes straight
+            at the cut that dominates today's score (0.3281 → 0.1875).
+ keep       keeping today's layout remains possible — it scores 0.3668 against this proposal's
+            0.2296.
  in part    partial plans are not rescored; apply §2 in its given order, one change at a time.
 
 ================================================================================

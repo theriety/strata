@@ -4,9 +4,9 @@
 --------------------------------------------------------------------------------
  reading rules
 --------------------------------------------------------------------------------
- scores    : four decimals, lower is better            0.4000 → 0.3750
+ scores    : four decimals, lower is better
  gain      : improvement over that parameter profile's own starting point, measured in
-             the same units as the score              +0.0250
+             the same units as the score
  profiles  : anchored and greenfield are complete parameter profiles; by default
              anchored prices path and anchor terms while greenfield sets them to zero
  leaf      : one relocatable unit — a source file plus the symbols it
@@ -34,7 +34,7 @@
 ================================================================================
  §1  The candidates this run produced
 ================================================================================
- candidate count : 2  (anchored profile returned 1 · greenfield profile returned 1)
+ candidate count : 0  (anchored profile returned 0 · greenfield profile returned 0)
  anchored parameter profile (effective):
    search    candidates 3 · seed 42
    capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
@@ -45,6 +45,8 @@
    solver    ilp-threshold 300 · timeout-seconds 60
    diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
    tests     helper-cap 250 · patterns 0 · builtins true
+   relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+              mirroring enabled true · builtins true · rules 0
  greenfield parameter profile (effective):
    search    candidates 3 · seed 42
    capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
@@ -55,44 +57,24 @@
    solver    ilp-threshold 300 · timeout-seconds 60
    diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
    tests     helper-cap 250 · patterns 0 · builtins true
+   relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
+              mirroring enabled true · builtins true · rules 0
 
- candidate 1   anchored/1     score  0.3750   gain +0.0250   best score
- candidate 2   greenfield/1   score  0.0750   gain +0.5250   same shape, own baseline
 
- comparability: these two gains have different starting points — anchored prices the current tree
-                 at 0.4000 using its effective coefficients; greenfield prices the same tree at
-                 0.6000 using its own effective coefficients. Each gain is measured against its own
-                 parameter profile's baseline — never compare across parameter profiles.
+ comparability: neither parameter profile produced a candidate, so there are no score changes to
+                 compare.
 
  note  fewer than the requested candidates survived; the solution space converged.
 
 ================================================================================
- §2  What would change — candidate 1 (anchored)
+ §2  What would change — no candidate this run produced
 ================================================================================
- greenfield's plan matches this one change for change. Every suggestion relocates whole files (1 in
- all). Every suggestion relocates whole files (1 in all).
-
- --------------------------------------------------------------------------------
- 1 · Move `twin-follow-ts/src/specs/openai.spec.ts` into `twin-follow-ts/src/api`
---------------------------------------------------------------------------------
- grain : whole files
-
- leaf                                      | before place               | after place
- `twin-follow-ts/src/specs/openai.spec.ts` | `twin-follow-ts/src/specs` | `twin-follow-ts/src/api`
-
- caption  WHY follows `twin-follow-ts/src/api/openai.ts`, which this plan places nearby.
-
- The other 1 files are absent because nothing about them changes.
+no candidate this run produced — nothing to change.
 
 ================================================================================
  §3  Blast radius — changed containers only
 ================================================================================
- 2 containers change as 1 files relocate; the 2 largest:
-
- `twin-follow-ts/src/api`    +1f
- `twin-follow-ts/src/specs`  -1f
-
- the tally balances: every file that leaves a container arrives in one, so the changes sum to zero.
+no candidate this run produced — nothing relocates.
 
 ================================================================================
  §4  Findings this run raised
@@ -107,35 +89,14 @@
  none
 
 ================================================================================
- §5  Score delta — current → candidate 1
+ §5  Score delta — no candidate this run produced
 ================================================================================
- term               current       proposal    delta
- cut                 0.5000         0.1250        -0.3750
- imbalance           0.1000         0.1000        +0.0000
- naming             -0.0000        -0.1500        -0.1500
- path               -0.2000        -0.2000        +0.0000
- anchor              0.0000         0.5000        +0.5000
- dependency-only     0.0000         0.0000        +0.0000
- companion-separation     0.0000         0.0000        +0.0000
- score               0.4000         0.3750        -0.0250   (gain +0.0250)
-
- the seven displayed terms combine into the total score; lower is better.
-
- term gloss  cut = import connections broken by moving · imbalance = lopsided folder sizes · naming
-             = folder names fit their contents · path = how far things travel · anchor = credit for
-             respecting existing well-placed code · dependency-only = penalty for moving a
-             declaration toward only what it depends on · companion-separation = penalty for
-             keeping a named signature companion away from its owner
+ no candidate this run produced.
 
 ================================================================================
  §6  Recommendation
 ================================================================================
- adopt      candidate 1 — 0.3750, gain +0.0250, 1 changes relocating 1 files (§2). It goes straight
-            at the cut that dominates today's score (0.5000 → 0.1250).
- second     greenfield reaches the same grouping — 0.0750, gain +0.5250 against its own 0.6000
-            baseline; decide between the two by intent, never across baselines.
- keep       keeping today's layout remains possible — it scores 0.4000 against this proposal's
-            0.3750.
+ keep       keep the current layout — the run produced no candidate to weigh against it.
  in part    partial plans are not rescored; apply §2 in its given order, one change at a time.
 
 ================================================================================
