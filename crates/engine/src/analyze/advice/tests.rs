@@ -929,3 +929,66 @@ fn should_change_only_greenfield_scoring_when_only_its_type_affinity_changes() {
     assert_eq!(anchored_before, anchored_after);
     assert_ne!(greenfield_before, greenfield_after);
 }
+
+#[test]
+fn should_keep_lexical_only_consensus_in_review_at_zero_thresholds() -> Result<(), String> {
+    let mut config = consensus_config(0.0, 0.0);
+    for profile in [
+        &mut config.profiles.anchored,
+        &mut config.profiles.greenfield,
+    ] {
+        profile.qualification.weights = crate::config::QualificationWeightsConfig {
+            unique_owner: 0.0,
+            role_affinity: 1.0,
+            source_cohesion: 0.0,
+            destination_cohesion: 0.0,
+            producer_evidence: 0.0,
+            architectural_reach: 0.0,
+        };
+    }
+    let mut ir = consensus_fixture(false).ir().clone();
+    for node in &mut ir.nodes {
+        if node.id == NodeId(1) {
+            node.name = "unrelated_cache_transport_scheduler".into();
+        }
+        if node.id == NodeId(3) || node.id == NodeId(4) {
+            node.name = "assembleRecordParams".into();
+        }
+    }
+    let snapshot = Snapshot::assemble(ir).map_err(|error| error.to_string())?;
+    let result = analyze(&snapshot, &config).map_err(|error| error.to_string())?;
+    let item = result.advice.recommended.iter().chain(&result.advice.review_candidates).find(|item| {
+        matches!(&item.proposal, RelocationProposal::Symbol { relocation } if relocation.symbol == "AssembleRecordParams" && relocation.to_path == "destination/assemble-record.ts")
+    }).ok_or("fixture must produce the actual companion advice")?;
+    assert!(!item.assessments.is_empty());
+    assert!(
+        result.advice.recommended.is_empty(),
+        "lexical-only evidence cannot recommend: {:?}",
+        result.advice
+    );
+    assert!(
+        item.assessments
+            .iter()
+            .all(|assessment| assessment.structural_score == 0.0 && !assessment.qualified)
+    );
+    assert!(
+        item.review_reasons
+            .contains(&ReviewReason::WeakStructuralEvidence)
+    );
+    Ok(())
+}
+
+#[test]
+fn should_qualify_positive_structural_consensus_at_zero_thresholds() -> Result<(), String> {
+    let result = analyze(&consensus_fixture(false), &consensus_config(0.0, 0.0))
+        .map_err(|error| error.to_string())?;
+    let item = result.advice.recommended.iter().find(|item| {
+        matches!(&item.proposal, RelocationProposal::Symbol { relocation } if relocation.symbol == "AssembleRecordParams" && relocation.to_path == "destination/assemble-record.ts")
+    }).ok_or("structurally supported companion must remain recommended")?;
+    assert!(
+        item.assessments
+            .iter()
+            .any(|assessment| assessment.structural_score > 0.0 && assessment.qualified)
+    );
+    Ok(())
+}

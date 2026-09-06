@@ -99,7 +99,9 @@ pub(in crate::analyze) fn build_advice(
             if assessment.weighted_score < assessment.thresholds.minimum_evidence {
                 review_reasons.insert(ReviewReason::WeakEvidence);
             }
-            if assessment.structural_score < assessment.thresholds.minimum_structural {
+            if assessment.structural_score <= 0.0
+                || assessment.structural_score < assessment.thresholds.minimum_structural
+            {
                 review_reasons.insert(ReviewReason::WeakStructuralEvidence);
             }
             if assessment.ambiguity_margin < assessment.thresholds.minimum_ambiguity_margin {
@@ -313,6 +315,7 @@ impl<'a> EvidenceIndex<'a> {
         let ambiguity_margin = (weighted_score - best_score).max(0.0);
         let q = config.qualification;
         let qualified = weighted_score >= q.minimum_evidence
+            && structural_score > 0.0
             && structural_score >= q.minimum_structural
             && ambiguity_margin >= q.minimum_ambiguity_margin
             && weighted_score - best_score > 1e-12;
