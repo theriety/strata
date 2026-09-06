@@ -78,14 +78,22 @@
 ================================================================================
  §2  What would change — candidate 1 (greenfield)
 ================================================================================
+ Evidence: owner means unique ownership; role means role affinity; source and destination mean
+ cohesion at each side; producer means producer evidence; reach means architectural reach.
+ Weighted is the normalized score across all six signals; structural excludes role affinity; margin
+ is the selected destination's lead over the best alternative.
+ The values after weighted and structural, and the margin threshold, are configured minimums.
+ Profiles share analysis-start evidence but apply their own weights and thresholds.
  Recommended (0):
  Review candidate (1):
    - file `nested-ts/src/app.ts` → `nested-ts/src/geometry` · supporting [greenfield] · qualified
    [] · absent [anchored] · conflicts []
      greenfield: owner 0.00 · role 0.00 · source 1.00 · destination 1.00 · producer 0.00 · reach
      0.00 · margin 0.43; weighted 0.50/0.60 · structural 0.56/0.50 · margin threshold 0.15 ·
-     qualified false · best alternative nested-ts/src
-     review reasons: PartialProfileSupport, WeakEvidence, NoMajoritySupport
+     qualified false · best alternative `nested-ts/src`
+     review reasons: selected by only some executed profiles, destination evidence is below the
+     configured minimum, no strict majority of executed profiles provides qualifying support for
+     this destination
 
 Every suggestion relocates whole files (1 in all):
 

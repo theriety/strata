@@ -19,7 +19,8 @@ use std::io::{self, Write};
 use strata_engine::{
     AnalyzeResult, BlockedMirror, BlockedMirrorReason, Candidate, ContainerNode, CurrentStanding,
     FileMove, Level, MirrorMove, ModeResult, Move, MoveKind, MoveReason, ProfileConfig,
-    RelocationProposal, ScoreBreakdown, Severity, SymbolKind, SymbolMove, Violation, ViolationKind,
+    RelocationProposal, ReviewReason, ScoreBreakdown, Severity, SymbolKind, SymbolMove, Violation,
+    ViolationKind,
 };
 
 /// The output format the `analyze` command renders in.
@@ -953,6 +954,29 @@ fn changes_section(result: &AnalyzeResult) -> Vec<String> {
 
 pub(crate) fn advice_lines(result: &AnalyzeResult) -> Vec<String> {
     let mut lines = Vec::new();
+    if result
+        .advice
+        .recommended
+        .iter()
+        .chain(&result.advice.review_candidates)
+        .any(|item| !item.assessments.is_empty())
+    {
+        lines.extend(wrap(
+            "Evidence: owner means unique ownership; role means role affinity; source and destination mean cohesion at each side; producer means producer evidence; reach means architectural reach.",
+            1,
+            1,
+        ));
+        lines.extend(wrap(
+            "Weighted is the normalized score across all six signals; structural excludes role affinity; margin is the selected destination's lead over the best alternative.",
+            1,
+            1,
+        ));
+        lines.extend(wrap(
+            "The values after weighted and structural, and the margin threshold, are configured minimums. Profiles share analysis-start evidence but apply their own weights and thresholds.",
+            1,
+            1,
+        ));
+    }
     for (heading, items) in [
         ("Recommended", result.advice.recommended.as_slice()),
         (
@@ -975,7 +999,7 @@ pub(crate) fn advice_lines(result: &AnalyzeResult) -> Vec<String> {
                         .map(|conflict| format!(
                             "{}→{}",
                             profile_name(conflict.profile),
-                            conflict.destination
+                            nq(&conflict.destination)
                         ))
                         .collect::<Vec<_>>()
                         .join(", "),
@@ -985,6 +1009,10 @@ pub(crate) fn advice_lines(result: &AnalyzeResult) -> Vec<String> {
             ));
             for assessment in &item.assessments {
                 let evidence = assessment.evidence;
+                let best_alternative = assessment
+                    .best_alternative
+                    .as_deref()
+                    .map_or_else(|| "none".to_owned(), nq);
                 lines.extend(wrap(&format!(
                     "{}: owner {:.2} · role {:.2} · source {:.2} · destination {:.2} · producer {:.2} · reach {:.2} · margin {:.2}; weighted {:.2}/{:.2} · structural {:.2}/{:.2} · margin threshold {:.2} · qualified {} · best alternative {}",
                     profile_name(assessment.profile), evidence.unique_owner, evidence.role_affinity,
@@ -992,7 +1020,7 @@ pub(crate) fn advice_lines(result: &AnalyzeResult) -> Vec<String> {
                     evidence.architectural_reach, assessment.ambiguity_margin, assessment.weighted_score,
                     assessment.thresholds.minimum_evidence, assessment.structural_score,
                     assessment.thresholds.minimum_structural, assessment.thresholds.minimum_ambiguity_margin,
-                    assessment.qualified, assessment.best_alternative.as_deref().unwrap_or("none")
+                    assessment.qualified, best_alternative
                 ), 5, 5));
             }
             if !item.review_reasons.is_empty() {
@@ -1001,7 +1029,7 @@ pub(crate) fn advice_lines(result: &AnalyzeResult) -> Vec<String> {
                         "review reasons: {}",
                         item.review_reasons
                             .iter()
-                            .map(|reason| format!("{reason:?}"))
+                            .map(|reason| review_reason_text(*reason))
                             .collect::<Vec<_>>()
                             .join(", ")
                     ),
@@ -1013,6 +1041,21 @@ pub(crate) fn advice_lines(result: &AnalyzeResult) -> Vec<String> {
     }
     lines.push(String::new());
     lines
+}
+
+fn review_reason_text(reason: ReviewReason) -> &'static str {
+    match reason {
+        ReviewReason::PartialProfileSupport => "selected by only some executed profiles",
+        ReviewReason::ConflictingDestinations => "profiles selected different destinations",
+        ReviewReason::WeakEvidence => "destination evidence is below the configured minimum",
+        ReviewReason::WeakStructuralEvidence => "structural evidence is insufficient",
+        ReviewReason::WeakAmbiguityMargin => {
+            "the destination is not sufficiently stronger than the best alternative"
+        }
+        ReviewReason::NoMajoritySupport => {
+            "no strict majority of executed profiles provides qualifying support for this destination"
+        }
+    }
 }
 
 fn profile_name(profile: strata_engine::ProfileName) -> &'static str {
@@ -1226,7 +1269,11 @@ pub(crate) fn symbol_move_line(entry: &SymbolMove) -> String {
     };
     format!(
         " - move{kind} `{}` from {} to {} (delta {:+.4}, {} import(s) to re-point)",
-        entry.symbol, entry.from_path, entry.to_path, entry.delta, entry.broken_imports
+        entry.symbol,
+        nq(&entry.from_path),
+        nq(&entry.to_path),
+        entry.delta,
+        entry.broken_imports
     )
 }
 
@@ -3212,7 +3259,7 @@ mod tests {
             "supporting [anchored]",
             "qualified [anchored]",
             "absent [greenfield]",
-            "greenfield→shared/alternative.ts",
+            "greenfield→`shared/alternative.ts`",
             "owner 1.00",
             "role 0.80",
             "source 0.70",
@@ -3223,8 +3270,8 @@ mod tests {
             "structural 0.65/0.50",
             "margin threshold 0.15",
             "qualified true",
-            "best alternative shared/alternative.ts",
-            "review reasons: PartialProfileSupport",
+            "best alternative `shared/alternative.ts`",
+            "review reasons: selected by only some executed profiles",
             "RecordOptions",
             "origin/options.ts",
         ] {
@@ -3305,8 +3352,8 @@ mod tests {
         let text = report_lines(&result, "dataset").join("\n");
 
         assert!(text.contains("file `dataset/src/origin/unit.ts` → `dataset/src/chosen`"));
-        assert!(text.contains("best alternative dataset/src/alternative"));
-        assert!(!text.contains("best alternative dataset/spec/alternative"));
+        assert!(text.contains("best alternative `dataset/src/alternative`"));
+        assert!(!text.contains("best alternative `dataset/spec/alternative`"));
     }
 
     #[test]

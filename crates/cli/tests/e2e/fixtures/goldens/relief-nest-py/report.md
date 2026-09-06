@@ -7,6 +7,12 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
 ## Relocation advice
 
 ```text
+ Evidence: owner means unique ownership; role means role affinity; source and destination mean
+ cohesion at each side; producer means producer evidence; reach means architectural reach.
+ Weighted is the normalized score across all six signals; structural excludes role affinity; margin
+ is the selected destination's lead over the best alternative.
+ The values after weighted and structural, and the margin threshold, are configured minimums.
+ Profiles share analysis-start evidence but apply their own weights and thresholds.
  Recommended (0):
  Review candidate (12):
    - file `relief-nest-py/hub/ingest_00.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
@@ -17,7 +23,9 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
      greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
      0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
      qualified false · best alternative none
-     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
+     strict majority of executed profiles provides qualifying support for this destination
    - file `relief-nest-py/hub/ingest_01.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
    greenfield] · qualified [] · absent [] · conflicts []
      anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
@@ -26,7 +34,9 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
      greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
      0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
      qualified false · best alternative none
-     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
+     strict majority of executed profiles provides qualifying support for this destination
    - file `relief-nest-py/hub/ingest_02.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
    greenfield] · qualified [] · absent [] · conflicts []
      anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
@@ -35,7 +45,9 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
      greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
      0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
      qualified false · best alternative none
-     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
+     strict majority of executed profiles provides qualifying support for this destination
    - file `relief-nest-py/hub/ingest_03.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
    greenfield] · qualified [] · absent [] · conflicts []
      anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
@@ -44,7 +56,9 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
      greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
      0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
      qualified false · best alternative none
-     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
+     strict majority of executed profiles provides qualifying support for this destination
    - file `relief-nest-py/hub/ingest_04.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
    greenfield] · qualified [] · absent [] · conflicts []
      anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
@@ -53,7 +67,9 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
      greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
      0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
      qualified false · best alternative none
-     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
+     strict majority of executed profiles provides qualifying support for this destination
    - file `relief-nest-py/hub/ingest_05.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
    greenfield] · qualified [] · absent [] · conflicts []
      anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
@@ -62,7 +78,9 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
      greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
      0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
      qualified false · best alternative none
-     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
+     strict majority of executed profiles provides qualifying support for this destination
    - file `relief-nest-py/hub/ingest_06.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
    greenfield] · qualified [] · absent [] · conflicts []
      anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
@@ -71,7 +89,9 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
      greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
      0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
      qualified false · best alternative none
-     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
+     strict majority of executed profiles provides qualifying support for this destination
    - file `relief-nest-py/hub/ingest_07.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
    greenfield] · qualified [] · absent [] · conflicts []
      anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
@@ -80,7 +100,9 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
      greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
      0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
      qualified false · best alternative none
-     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
+     strict majority of executed profiles provides qualifying support for this destination
    - file `relief-nest-py/hub/ingest_08.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
    greenfield] · qualified [] · absent [] · conflicts []
      anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
@@ -89,7 +111,9 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
      greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
      0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
      qualified false · best alternative none
-     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
+     strict majority of executed profiles provides qualifying support for this destination
    - file `relief-nest-py/hub/ingest_09.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
    greenfield] · qualified [] · absent [] · conflicts []
      anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
@@ -98,7 +122,9 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
      greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
      0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
      qualified false · best alternative none
-     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
+     strict majority of executed profiles provides qualifying support for this destination
    - file `relief-nest-py/hub/ingest_10.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
    greenfield] · qualified [] · absent [] · conflicts []
      anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
@@ -107,7 +133,9 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
      greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
      0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
      qualified false · best alternative none
-     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
+     strict majority of executed profiles provides qualifying support for this destination
    - file `relief-nest-py/hub/ingest_11.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
    greenfield] · qualified [] · absent [] · conflicts []
      anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
@@ -116,7 +144,9 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
      greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
      0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
      qualified false · best alternative none
-     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
+     strict majority of executed profiles provides qualifying support for this destination
 
 ```
 

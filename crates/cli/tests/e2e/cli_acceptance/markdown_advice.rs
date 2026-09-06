@@ -115,7 +115,7 @@ fn should_preserve_saved_confidence_and_evidence_in_markdown() -> Result<(), Str
         "supporting [anchored]",
         "qualified [anchored]",
         "absent [greenfield]",
-        "greenfield→shared/alternative.ts",
+        "greenfield→`shared/alternative.ts`",
         "owner 1.00",
         "role 0.80",
         "source 0.70",
@@ -127,8 +127,8 @@ fn should_preserve_saved_confidence_and_evidence_in_markdown() -> Result<(), Str
         "structural 0.65/0.50",
         "margin threshold 0.15",
         "qualified true",
-        "best alternative shared/alternative.ts",
-        "PartialProfileSupport",
+        "best alternative `shared/alternative.ts`",
+        "selected by only some executed profiles",
     ] {
         assert!(
             compact.contains(expected),
@@ -227,5 +227,172 @@ fn should_report_no_moves_only_for_a_truly_empty_candidate() -> Result<(), Strin
         markdown.contains("No moves versus the current layout.") && !markdown.contains("**Moves**"),
         "empty candidates retain explicit no-moves narration: {markdown}"
     );
+    Ok(())
+}
+
+#[test]
+fn should_explain_every_review_reason_in_saved_markdown() -> Result<(), String> {
+    let mut result = saved_result()?;
+    let mut item = advice();
+    item.review_reasons = vec![
+        ReviewReason::PartialProfileSupport,
+        ReviewReason::ConflictingDestinations,
+        ReviewReason::WeakEvidence,
+        ReviewReason::WeakStructuralEvidence,
+        ReviewReason::WeakAmbiguityMargin,
+        ReviewReason::NoMajoritySupport,
+    ];
+    result.advice.recommended.clear();
+    result.advice.review_candidates = vec![item];
+    let markdown = report(&result)?;
+    let compact = markdown.split_whitespace().collect::<Vec<_>>().join(" ");
+    for explanation in [
+        "selected by only some executed profiles",
+        "profiles selected different destinations",
+        "destination evidence is below the configured minimum",
+        "structural evidence is insufficient",
+        "the destination is not sufficiently stronger than the best alternative",
+        "no strict majority of executed profiles provides qualifying support for this destination",
+    ] {
+        assert!(
+            compact.contains(explanation),
+            "missing {explanation:?}: {markdown}"
+        );
+    }
+    for identifier in [
+        "PartialProfileSupport",
+        "ConflictingDestinations",
+        "WeakEvidence",
+        "WeakStructuralEvidence",
+        "WeakAmbiguityMargin",
+        "NoMajoritySupport",
+    ] {
+        assert!(
+            !markdown.contains(identifier),
+            "internal reason leaked: {identifier}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn should_define_evidence_before_scores_and_quote_saved_move_paths() -> Result<(), String> {
+    let mut result = single_candidate()?;
+    result.advice.review_candidates = vec![advice()];
+    let candidate = result
+        .profiles
+        .greenfield
+        .as_mut()
+        .and_then(|profile| profile.candidates.first_mut())
+        .ok_or("missing candidate")?;
+    candidate.delta_narration.clear();
+    candidate.symbol_moves = vec![relocation()];
+    let markdown = report(&result)?;
+    let compact = markdown.split_whitespace().collect::<Vec<_>>().join(" ");
+    let first_score = compact
+        .find("owner 1.00")
+        .ok_or("missing first evidence score")?;
+    for definition in [
+        "owner means unique ownership",
+        "role means role affinity",
+        "source and destination mean cohesion at each side",
+        "producer means producer evidence",
+        "reach means architectural reach",
+        "Weighted is the normalized score across all six signals",
+        "structural excludes role affinity",
+        "margin is the selected destination's lead over the best alternative",
+        "configured minimums",
+        "Profiles share analysis-start evidence but apply their own weights and thresholds",
+    ] {
+        let position = compact
+            .find(definition)
+            .ok_or_else(|| format!("missing definition {definition:?}: {markdown}"))?;
+        assert!(
+            position < first_score,
+            "definition must precede first score: {definition}"
+        );
+    }
+    for path in [
+        "greenfield→`shared/alternative.ts`",
+        "best alternative `shared/alternative.ts`",
+        "from `origin/options.ts` to `shared/owner.ts`",
+    ] {
+        assert!(
+            compact.contains(path),
+            "missing quoted path {path:?}: {markdown}"
+        );
+    }
+    assert!(compact.contains("delta -0.1000, 1 import(s) to re-point"));
+    Ok(())
+}
+
+#[test]
+fn should_explain_advice_in_the_public_summary() -> Result<(), String> {
+    let root = super::fixture("constellation-ts");
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root.to_str().ok_or("non-UTF8 fixture")?,
+        "--config",
+        super::PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let compact = outcome
+        .stdout
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for expected in [
+        "Review candidate (1)",
+        "owner means unique ownership",
+        "Profiles share analysis-start evidence",
+        "selected by only some executed profiles",
+        "no strict majority of executed profiles provides qualifying support for this destination",
+        "best alternative `constellation-ts/src/util`",
+    ] {
+        assert!(
+            compact.contains(expected),
+            "missing summary explanation {expected:?}: {}",
+            outcome.stdout
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn should_distinguish_qualifying_support_from_selection_majority() -> Result<(), String> {
+    let mut result = saved_result()?;
+    let mut item = advice();
+    item.supporting_profiles = vec![ProfileName::Anchored, ProfileName::Greenfield];
+    item.absent_profiles.clear();
+    item.conflicting_destinations.clear();
+    let mut unqualified = item
+        .assessments
+        .first()
+        .ok_or("missing assessment")?
+        .clone();
+    unqualified.profile = ProfileName::Greenfield;
+    unqualified.weighted_score = 0.4;
+    unqualified.qualified = false;
+    item.assessments.push(unqualified);
+    item.review_reasons = vec![ReviewReason::NoMajoritySupport];
+    result.advice.recommended.clear();
+    result.advice.review_candidates = vec![item];
+
+    let markdown = report(&result)?;
+    let compact = markdown.split_whitespace().collect::<Vec<_>>().join(" ");
+    for expected in [
+        "supporting [anchored, greenfield]",
+        "qualified [anchored]",
+        "Review candidate (1)",
+        "no strict majority of executed profiles provides qualifying support for this destination",
+    ] {
+        assert!(
+            compact.contains(expected),
+            "missing {expected:?}: {markdown}"
+        );
+    }
     Ok(())
 }
