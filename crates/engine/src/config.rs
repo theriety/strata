@@ -1156,6 +1156,7 @@ impl AnalyzeConfig {
             + qualification_weights.destination_cohesion
             + qualification_weights.producer_evidence
             + qualification_weights.architectural_reach;
+        non_negative_finite(&key("qualification.weights"), qualification_total)?;
         if qualification_total <= 0.0 {
             return Err(StrataError::ConfigInvalid {
                 key: Some(key("qualification.weights")),
@@ -2056,6 +2057,47 @@ architectural-reach = 0.20
                 "diagnostic should name the invalid key: {error}"
             );
         }
+    }
+
+    fn overflowing_qualification_weights(profile: &str) -> Result<(), String> {
+        let document = format!(
+            "[profiles.{profile}.qualification.weights]\nunique-owner = 1e308\nrole-affinity = 1e308\n"
+        );
+        let config: AnalyzeConfig = toml::from_str(&document).map_err(|error| error.to_string())?;
+        let error = config
+            .validate()
+            .err()
+            .ok_or("finite individual weights with an overflowing total must fail")?
+            .to_string();
+        assert!(
+            error.contains(&format!("profiles.{profile}.qualification.weights")),
+            "{error}"
+        );
+        assert!(error.contains("finite"), "{error}");
+        Ok(())
+    }
+
+    #[test]
+    fn should_reject_anchored_qualification_weight_overflow() -> Result<(), String> {
+        overflowing_qualification_weights("anchored")
+    }
+
+    #[test]
+    fn should_reject_greenfield_qualification_weight_overflow() -> Result<(), String> {
+        overflowing_qualification_weights("greenfield")
+    }
+
+    #[test]
+    fn should_accept_large_finite_qualification_weight_totals() -> Result<(), String> {
+        for profile in ["anchored", "greenfield"] {
+            let document = format!(
+                "[profiles.{profile}.qualification.weights]\nunique-owner = 5e307\nrole-affinity = 5e307\n"
+            );
+            let config: AnalyzeConfig =
+                toml::from_str(&document).map_err(|error| error.to_string())?;
+            config.validate().map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     #[test]

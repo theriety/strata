@@ -396,3 +396,40 @@ fn should_distinguish_qualifying_support_from_selection_majority() -> Result<(),
     }
     Ok(())
 }
+
+#[test]
+fn should_roundtrip_finite_analyzed_advice_through_saved_report() -> Result<(), String> {
+    let result = saved_result()?;
+    let assessments: Vec<_> = result
+        .advice
+        .recommended
+        .iter()
+        .chain(&result.advice.review_candidates)
+        .flat_map(|item| &item.assessments)
+        .collect();
+    assert!(
+        !assessments.is_empty(),
+        "analyzed fixture must exercise scored advice"
+    );
+    assert!(assessments.iter().all(|assessment| {
+        [
+            assessment.weighted_score,
+            assessment.structural_score,
+            assessment.ambiguity_margin,
+            assessment.evidence.unique_owner,
+            assessment.evidence.role_affinity,
+            assessment.evidence.source_cohesion,
+            assessment.evidence.destination_cohesion,
+            assessment.evidence.producer_evidence,
+            assessment.evidence.architectural_reach,
+        ]
+        .into_iter()
+        .all(f64::is_finite)
+    }));
+    let encoded = serde_json::to_vec(&result).map_err(|error| error.to_string())?;
+    let restored: AnalyzeResult =
+        serde_json::from_slice(&encoded).map_err(|error| error.to_string())?;
+    let markdown = report(&restored)?;
+    assert!(markdown.contains("Review candidate (1)") && markdown.contains("weighted 0.70/0.60"));
+    Ok(())
+}
