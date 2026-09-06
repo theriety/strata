@@ -1,15 +1,22 @@
 # Strata configuration — every key is optional and the file itself is optional.
-# Each value below is the built-in default, so an empty file (or no file at all)
-# behaves identically to this one. CLI flags override these; these override the
-# built-in defaults.
+# Values below use built-in defaults except for repository fixture exclusions.
+# CLI flags override these values; these override the built-in defaults.
 
 [adapters]
 # Enabled language adapters. One or more of: typescript, rust, python.
 languages = ["typescript", "rust", "python"]
 # Source-inclusion globs, relative to the analysis root.
 include = ["**/*"]
-# Source-exclusion globs, applied after inclusion.
-exclude = ["**/.git/**", "**/node_modules/**", "**/target/**", "**/.venv/**"]
+# Source-exclusion globs, applied after inclusion. Fixture projects are analysis
+# inputs, including intentionally invalid source, rather than package source.
+exclude = [
+    "**/.git/**",
+    "**/node_modules/**",
+    "**/target/**",
+    "**/.venv/**",
+    "**/tests/**/fixtures/**",
+    "crates/eval/fixtures/**",
+]
 
 [analysis]
 # Complete parameter profiles to execute against the same discovered snapshot.
