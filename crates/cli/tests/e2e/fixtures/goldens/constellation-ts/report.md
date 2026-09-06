@@ -4,6 +4,20 @@ Snapshot `bb8808550c3393fce4a11e7fddbd62e7b41b53ad8f23872c3408571b527ed1fe`.
 
 - 28 symbols, 48 edges, 28 files
 
+## Relocation advice
+
+```text
+ Recommended (0):
+ Review candidate (1):
+   - file `constellation-ts/src/util/hash.ts` → `constellation-ts/src/model` · supporting
+   [greenfield] · qualified [greenfield] · absent [anchored] · conflicts []
+     greenfield: owner 0.00 · role 0.00 · source 1.00 · destination 1.00 · producer 0.00 · reach
+     1.00 · margin 0.69; weighted 0.70/0.60 · structural 0.78/0.50 · margin threshold 0.15 ·
+     qualified true · best alternative constellation-ts/src/util
+     review reasons: PartialProfileSupport, NoMajoritySupport
+
+```
+
 ## Shared findings
 
 ### Violations

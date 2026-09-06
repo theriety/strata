@@ -4,6 +4,14 @@ Snapshot `2932fab8459e42d588351d1accd9d3c7e0c6dce7ae161cf0a465f43d90fe4684`.
 
 - 375 symbols, 0 edges, 3 files
 
+## Relocation advice
+
+```text
+ Recommended (0):
+ Review candidate (0):
+
+```
+
 ## Shared findings
 
 ### Violations

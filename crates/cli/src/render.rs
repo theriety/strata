@@ -951,7 +951,7 @@ fn changes_section(result: &AnalyzeResult) -> Vec<String> {
     qualification
 }
 
-fn advice_lines(result: &AnalyzeResult) -> Vec<String> {
+pub(crate) fn advice_lines(result: &AnalyzeResult) -> Vec<String> {
     let mut lines = Vec::new();
     for (heading, items) in [
         ("Recommended", result.advice.recommended.as_slice()),
@@ -1218,7 +1218,7 @@ fn change_table(files: &[FileMove], names: &[String], to: &str) -> (Vec<String>,
 /// to which file, the objective delta it earned at acceptance, and how many
 /// imports must be re-pointed. Full repo-relative paths — symbol moves name no
 /// folder to abbreviate against.
-fn symbol_move_line(entry: &SymbolMove) -> String {
+pub(crate) fn symbol_move_line(entry: &SymbolMove) -> String {
     let kind = if entry.kind == SymbolKind::Type {
         " type"
     } else {

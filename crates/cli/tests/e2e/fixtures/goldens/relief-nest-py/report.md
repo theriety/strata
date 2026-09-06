@@ -4,6 +4,122 @@ Snapshot `7ebf6d1c547dcf9580fbaf51fe0fb020678583078c443f5f6531987a5dfe21be`.
 
 - 24 symbols, 22 edges, 24 files
 
+## Relocation advice
+
+```text
+ Recommended (0):
+ Review candidate (12):
+   - file `relief-nest-py/hub/ingest_00.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
+   greenfield] · qualified [] · absent [] · conflicts []
+     anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
+     · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 · qualified
+     false · best alternative none
+     greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
+     0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative none
+     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+   - file `relief-nest-py/hub/ingest_01.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
+   greenfield] · qualified [] · absent [] · conflicts []
+     anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
+     · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 · qualified
+     false · best alternative none
+     greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
+     0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative none
+     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+   - file `relief-nest-py/hub/ingest_02.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
+   greenfield] · qualified [] · absent [] · conflicts []
+     anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
+     · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 · qualified
+     false · best alternative none
+     greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
+     0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative none
+     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+   - file `relief-nest-py/hub/ingest_03.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
+   greenfield] · qualified [] · absent [] · conflicts []
+     anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
+     · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 · qualified
+     false · best alternative none
+     greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
+     0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative none
+     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+   - file `relief-nest-py/hub/ingest_04.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
+   greenfield] · qualified [] · absent [] · conflicts []
+     anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
+     · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 · qualified
+     false · best alternative none
+     greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
+     0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative none
+     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+   - file `relief-nest-py/hub/ingest_05.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
+   greenfield] · qualified [] · absent [] · conflicts []
+     anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
+     · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 · qualified
+     false · best alternative none
+     greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
+     0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative none
+     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+   - file `relief-nest-py/hub/ingest_06.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
+   greenfield] · qualified [] · absent [] · conflicts []
+     anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
+     · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 · qualified
+     false · best alternative none
+     greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
+     0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative none
+     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+   - file `relief-nest-py/hub/ingest_07.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
+   greenfield] · qualified [] · absent [] · conflicts []
+     anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
+     · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 · qualified
+     false · best alternative none
+     greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
+     0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative none
+     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+   - file `relief-nest-py/hub/ingest_08.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
+   greenfield] · qualified [] · absent [] · conflicts []
+     anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
+     · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 · qualified
+     false · best alternative none
+     greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
+     0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative none
+     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+   - file `relief-nest-py/hub/ingest_09.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
+   greenfield] · qualified [] · absent [] · conflicts []
+     anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
+     · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 · qualified
+     false · best alternative none
+     greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
+     0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative none
+     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+   - file `relief-nest-py/hub/ingest_10.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
+   greenfield] · qualified [] · absent [] · conflicts []
+     anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
+     · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 · qualified
+     false · best alternative none
+     greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
+     0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative none
+     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+   - file `relief-nest-py/hub/ingest_11.py` → `relief-nest-py/hub/ingest` · supporting [anchored,
+   greenfield] · qualified [] · absent [] · conflicts []
+     anchored: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach 0.00
+     · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 · qualified
+     false · best alternative none
+     greenfield: owner 0.00 · role 0.00 · source 0.00 · destination 0.00 · producer 0.00 · reach
+     0.00 · margin 0.00; weighted 0.00/0.60 · structural 0.00/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative none
+     review reasons: WeakEvidence, WeakStructuralEvidence, WeakAmbiguityMargin, NoMajoritySupport
+
+```
+
 ## Shared findings
 
 ### Violations

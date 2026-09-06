@@ -15,7 +15,7 @@ use strata_engine::{
 };
 
 use crate::commands::read_result;
-use crate::render::effective_parameter_lines;
+use crate::render::{advice_lines, effective_parameter_lines, symbol_move_line};
 
 /// The parsed inputs of a `report` run.
 #[derive(Debug)]
@@ -62,6 +62,13 @@ fn render_markdown(result: &AnalyzeResult) -> String {
         "- {} symbols, {} edges, {} files\n",
         result.summary.symbols, result.summary.edges, result.summary.files
     );
+
+    let _ = writeln!(markdown, "## Relocation advice\n");
+    let _ = writeln!(markdown, "```text");
+    for line in advice_lines(result) {
+        let _ = writeln!(markdown, "{line}");
+    }
+    let _ = writeln!(markdown, "```\n");
 
     let _ = writeln!(markdown, "## Shared findings\n");
     write_violations(&mut markdown, &result.current.shared_findings);
@@ -176,7 +183,7 @@ fn write_candidate(markdown: &mut String, candidate: &Candidate) {
         let _ = writeln!(markdown);
     }
 
-    if candidate.delta_narration.is_empty() {
+    if candidate.delta_narration.is_empty() && candidate.symbol_moves.is_empty() {
         let _ = writeln!(markdown, "No moves versus the current layout.\n");
         return;
     }
@@ -186,6 +193,9 @@ fn write_candidate(markdown: &mut String, candidate: &Candidate) {
     let _ = writeln!(markdown, "```");
     for line in crate::render::move_step_lines(&candidate.delta_narration) {
         let _ = writeln!(markdown, "{line}");
+    }
+    for entry in &candidate.symbol_moves {
+        let _ = writeln!(markdown, "{}", symbol_move_line(entry));
     }
     let _ = writeln!(markdown, "```\n");
 }

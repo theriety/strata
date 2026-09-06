@@ -4,6 +4,20 @@ Snapshot `d6148cfe4411734862d94e4add3a70b0a8ac70d0524143a57e21f0f9660b1141`.
 
 - 12 symbols, 13 edges, 6 files
 
+## Relocation advice
+
+```text
+ Recommended (0):
+ Review candidate (1):
+   - file `nested-ts/src/app.ts` → `nested-ts/src/geometry` · supporting [greenfield] · qualified
+   [] · absent [anchored] · conflicts []
+     greenfield: owner 0.00 · role 0.00 · source 1.00 · destination 1.00 · producer 0.00 · reach
+     0.00 · margin 0.43; weighted 0.50/0.60 · structural 0.56/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative nested-ts/src
+     review reasons: PartialProfileSupport, WeakEvidence, NoMajoritySupport
+
+```
+
 ## Shared findings
 
 ### Violations

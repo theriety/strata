@@ -4,6 +4,14 @@ Snapshot `a796634250f1de8a466fe7acac2cb579eb4f6dce97b7ce5260598fcf732dca0b`.
 
 - 14 symbols, 13 edges, 3 files
 
+## Relocation advice
+
+```text
+ Recommended (0):
+ Review candidate (0):
+
+```
+
 ## Shared findings
 
 ### Violations

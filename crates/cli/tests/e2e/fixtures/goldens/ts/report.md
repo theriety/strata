@@ -4,6 +4,14 @@ Snapshot `5ee1547b186df10f1fbc5ae25beaeabc98d262261cf5a5c05c7bc6102d992467`.
 
 - 4 symbols, 4 edges, 2 files
 
+## Relocation advice
+
+```text
+ Recommended (0):
+ Review candidate (0):
+
+```
+
 ## Shared findings
 
 ### Violations

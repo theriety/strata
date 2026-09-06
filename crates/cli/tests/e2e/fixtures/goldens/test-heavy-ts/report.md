@@ -4,6 +4,14 @@ Snapshot `239f144d4358c3e62cb1eb8bf76b048a052e3d3953f2152d805cdc392bb3d886`.
 
 - 9 symbols, 9 edges, 6 files
 
+## Relocation advice
+
+```text
+ Recommended (0):
+ Review candidate (0):
+
+```
+
 ## Shared findings
 
 ### Violations

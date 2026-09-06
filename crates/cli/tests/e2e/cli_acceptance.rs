@@ -30,6 +30,9 @@ use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 
+#[path = "cli_acceptance/markdown_advice.rs"]
+mod markdown_advice;
+
 /// A non-existent config path, forcing the binary onto its built-in defaults so
 /// the output is identical no matter which directory the harness runs from. A
 /// configured `strata.toml` in a parent directory must never leak into a run.

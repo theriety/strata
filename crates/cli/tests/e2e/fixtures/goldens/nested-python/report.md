@@ -4,6 +4,33 @@ Snapshot `908dd56719a4dd47cdb57e3c77b0a96aadd6b26edac973edda49371019b2da15`.
 
 - 12 symbols, 15 edges, 6 files
 
+## Relocation advice
+
+```text
+ Recommended (0):
+ Review candidate (3):
+   - file `nested-python/app.py` → `nested-python/geometry` · supporting [greenfield] · qualified
+   [] · absent [anchored] · conflicts []
+     greenfield: owner 0.00 · role 0.00 · source 1.00 · destination 1.00 · producer 0.00 · reach
+     0.00 · margin 0.48; weighted 0.50/0.60 · structural 0.56/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative nested-python
+     review reasons: PartialProfileSupport, WeakEvidence, NoMajoritySupport
+   - `describe` from `geometry/rectangle.py` → `app.py` · supporting [greenfield] · qualified [] ·
+   absent [anchored] · conflicts []
+     greenfield: owner 0.00 · role 0.00 · source 1.00 · destination 0.38 · producer 0.00 · reach
+     0.00 · margin 0.07; weighted 0.35/0.60 · structural 0.38/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative geometry/shape.py
+     review reasons: PartialProfileSupport, WeakEvidence, WeakStructuralEvidence,
+     WeakAmbiguityMargin, NoMajoritySupport
+   - type `Shape` from `geometry/shape.py` → `geometry/rectangle.py` · supporting [greenfield] ·
+   qualified [] · absent [anchored] · conflicts []
+     greenfield: owner 0.00 · role 0.00 · source 1.00 · destination 0.78 · producer 0.00 · reach
+     0.00 · margin 0.17; weighted 0.45/0.60 · structural 0.50/0.50 · margin threshold 0.15 ·
+     qualified false · best alternative app.py
+     review reasons: PartialProfileSupport, WeakEvidence, WeakStructuralEvidence, NoMajoritySupport
+
+```
+
 ## Shared findings
 
 ### Violations
@@ -93,5 +120,7 @@ _Fewer than the requested candidates survived; the solution space converged._
 ```
 move — pulled by rectangle.py (w 2.0)
   1. nested-python/app.py [nested-python → nested-python/geometry]
+ - move `describe` from geometry/rectangle.py to app.py (delta -0.0122, 2 import(s) to re-point)
+ - move type `Shape` from geometry/shape.py to geometry/rectangle.py (delta -0.0017, 2 import(s) to re-point)
 ```
 

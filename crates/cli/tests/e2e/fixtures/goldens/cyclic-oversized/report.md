@@ -4,6 +4,14 @@ Snapshot `55784e8d4ae083e616cd25e5fb9c5c3a94ea39ee8dbb7bc6dfe7ad6e1da7312c`.
 
 - 3 symbols, 3 edges, 3 files
 
+## Relocation advice
+
+```text
+ Recommended (0):
+ Review candidate (0):
+
+```
+
 ## Shared findings
 
 ### Violations
