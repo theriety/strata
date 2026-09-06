@@ -97,8 +97,8 @@ no candidate this run produced — nothing relocates.
 
  visibility (2) — declared visibility wider than the derived scope today:
 
- `double` is exported at Package but needed only at File
- `halve` is exported at Package but needed only at File
+ `double` in `src/lib.rs` is exported at Package but needed only at File
+ `halve` in `src/lib.rs` is exported at Package but needed only at File
 
  anchored-only findings:
  none

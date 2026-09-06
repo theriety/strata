@@ -701,7 +701,9 @@ fn should_flag_visibility_violations_for_the_over_exported_rust_fixture() {
         "violations are findings, not failures, without --fail-on"
     );
     assert!(
-        outcome.stdout.contains("visibility [violation] Shape"),
+        outcome
+            .stdout
+            .contains("visibility [violation] src/lib.rs, Shape"),
         "an over-exported symbol is flagged"
     );
 }

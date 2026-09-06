@@ -16,10 +16,10 @@ Snapshot `a796634250f1de8a466fe7acac2cb579eb4f6dce97b7ce5260598fcf732dca0b`.
 
 ### Violations
 
-- **Visibility** (Violation) at ReMeasure: `ReMeasure` is exported at Package but needed only at File
-- **Visibility** (Violation) at Report: `Report` is exported at Package but needed only at File
-- **Visibility** (Violation) at combined_total: `combined_total` is exported at Package but needed only at File
-- **Visibility** (Violation) at describe: `describe` is exported at Package but needed only at File
+- **Visibility** (Violation) at crates/app/src/lib.rs, ReMeasure: `ReMeasure` in `crates/app/src/lib.rs` is exported at Package but needed only at File
+- **Visibility** (Violation) at crates/app/src/lib.rs, combined_total: `combined_total` in `crates/app/src/lib.rs` is exported at Package but needed only at File
+- **Visibility** (Violation) at crates/app/src/lib.rs, describe: `describe` in `crates/app/src/lib.rs` is exported at Package but needed only at File
+- **Visibility** (Violation) at crates/core/src/lib.rs, Report: `Report` in `crates/core/src/lib.rs` is exported at Package but needed only at File
 
 ## Anchored parameter profile
 

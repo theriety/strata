@@ -433,3 +433,73 @@ fn should_roundtrip_finite_analyzed_advice_through_saved_report() -> Result<(), 
     assert!(markdown.contains("Review candidate (1)") && markdown.contains("weighted 0.70/0.60"));
     Ok(())
 }
+
+#[test]
+fn should_preserve_distinct_visibility_sources_in_cli_outputs() -> Result<(), String> {
+    let root = std::env::temp_dir().join(format!(
+        "strata-visibility-{}-{}",
+        std::process::id(),
+        nanos()
+    ));
+    fs::create_dir_all(root.join("src")).map_err(|error| error.to_string())?;
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"visibility-fixture\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    )
+    .map_err(|error| error.to_string())?;
+    fs::write(root.join("src/lib.rs"), "mod left;\nmod right;\n")
+        .map_err(|error| error.to_string())?;
+    for name in ["left", "right"] {
+        fs::write(
+            root.join(format!("src/{name}.rs")),
+            "pub fn duplicate() {}\n",
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    let json = run(&[
+        "analyze",
+        "--root",
+        root.to_str().ok_or("non-UTF8 root")?,
+        "--config",
+        super::PURE_DEFAULTS,
+        "--format",
+        "json",
+    ]);
+    let summary = run(&[
+        "analyze",
+        "--root",
+        root.to_str().ok_or("non-UTF8 root")?,
+        "--config",
+        super::PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
+    let _ = fs::remove_dir_all(&root);
+    assert_eq!(json.code, 0, "{}", json.stderr);
+    assert_eq!(summary.code, 0, "{}", summary.stderr);
+    let result: AnalyzeResult =
+        serde_json::from_str(&json.stdout).map_err(|error| error.to_string())?;
+    let markdown = report(&result)?;
+    let findings: Vec<_> = result
+        .current
+        .shared_findings
+        .iter()
+        .filter(|finding| finding.kind == strata_engine::ViolationKind::Visibility)
+        .collect();
+    assert_eq!(findings.len(), 2, "{findings:?}");
+    for path in ["src/left.rs", "src/right.rs"] {
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.location == [path, "duplicate"]),
+            "{findings:?}"
+        );
+        for output in [&summary.stdout, &markdown] {
+            assert!(
+                output.contains(&format!("`{path}`")),
+                "missing quoted {path}: {output}"
+            );
+        }
+    }
+    Ok(())
+}

@@ -97,10 +97,10 @@ no candidate this run produced — nothing relocates.
 
  visibility (4) — declared visibility wider than the derived scope today:
 
- `ReMeasure` is exported at Package but needed only at File
- `Report` is exported at Package but needed only at File
- `combined_total` is exported at Package but needed only at File
- `describe` is exported at Package but needed only at File
+ `ReMeasure` in `crates/app/src/lib.rs` is exported at Package but needed only at File
+ `combined_total` in `crates/app/src/lib.rs` is exported at Package but needed only at File
+ `describe` in `crates/app/src/lib.rs` is exported at Package but needed only at File
+ `Report` in `crates/core/src/lib.rs` is exported at Package but needed only at File
 
  anchored-only findings:
  none

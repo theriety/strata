@@ -724,3 +724,71 @@ fn should_count_only_hard_capacity_findings_as_breaks() {
     assert_eq!(hard_capacity_breaks(&violations), 2);
     assert_eq!(hard_capacity_breaks(&[]), 0);
 }
+
+#[test]
+fn should_distinguish_same_named_visibility_findings_by_original_file() -> Result<(), String> {
+    let mut left = node(0, "duplicate", 1, Polarity::Production);
+    let mut right = node(1, "duplicate", 2, Polarity::Production);
+    left.visibility = ScopeLevel::Package;
+    right.visibility = ScopeLevel::Package;
+    let snapshot = snapshot(
+        vec![left, right],
+        vec![],
+        vec![
+            container(0, "workspace", ScopeLevel::PackageGroup, None),
+            container(1, "src/left.rs", ScopeLevel::File, Some(0)),
+            container(2, "src/right.rs", ScopeLevel::File, Some(0)),
+        ],
+    );
+    let config = AnalyzeConfig::default();
+    let result = analyze(&snapshot, &config).map_err(|error| error.to_string())?;
+    let visibility: Vec<_> = result
+        .current
+        .shared_findings
+        .iter()
+        .filter(|finding| finding.kind == ViolationKind::Visibility)
+        .collect();
+    assert_eq!(visibility.len(), 2, "same-name findings must not collapse");
+    for path in ["src/left.rs", "src/right.rs"] {
+        let finding = visibility
+            .iter()
+            .find(|finding| finding.location == [path, "duplicate"])
+            .ok_or_else(|| format!("missing original identity {path}: {visibility:?}"))?;
+        assert!(
+            finding.detail.contains(&format!("`{path}`")),
+            "{}",
+            finding.detail
+        );
+    }
+    let repeated = analyze(&snapshot, &config).map_err(|error| error.to_string())?;
+    assert_eq!(
+        result.current.shared_findings,
+        repeated.current.shared_findings
+    );
+    Ok(())
+}
+
+#[test]
+fn should_retain_visibility_identity_without_a_file_container() -> Result<(), String> {
+    let mut exported = node(0, "orphan", 0, Polarity::Production);
+    exported.visibility = ScopeLevel::Package;
+    let snapshot = snapshot(
+        vec![exported],
+        vec![],
+        vec![container(0, "folder", ScopeLevel::Folder, None)],
+    );
+    let result =
+        analyze(&snapshot, &AnalyzeConfig::default()).map_err(|error| error.to_string())?;
+    let finding = result
+        .current
+        .shared_findings
+        .iter()
+        .find(|finding| finding.kind == ViolationKind::Visibility)
+        .ok_or("missing folder-container visibility finding")?;
+    assert_eq!(finding.location, ["orphan"]);
+    assert_eq!(
+        finding.detail,
+        "`orphan` is exported at Package but needed only at Folder"
+    );
+    Ok(())
+}

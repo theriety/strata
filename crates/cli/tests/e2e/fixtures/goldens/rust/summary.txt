@@ -97,10 +97,10 @@ no candidate this run produced — nothing relocates.
 
  visibility (4) — declared visibility wider than the derived scope today:
 
- `Rectangle` is exported at Package but needed only at File
- `Shape` is exported at Package but needed only at File
- `describe_shape` is exported at Package but needed only at File
- `summarize` is exported at Package but needed only at File
+ `Rectangle` in `src/lib.rs` is exported at Package but needed only at File
+ `Shape` in `src/lib.rs` is exported at Package but needed only at File
+ `describe_shape` in `src/lib.rs` is exported at Package but needed only at File
+ `summarize` in `src/lib.rs` is exported at Package but needed only at File
 
  anchored-only findings:
  none

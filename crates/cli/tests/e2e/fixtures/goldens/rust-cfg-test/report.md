@@ -16,8 +16,8 @@ Snapshot `f99674b9641890cfcd2e47a396178db0016f6722c6e97085f8c8e5dbd6c1b2e7`.
 
 ### Violations
 
-- **Visibility** (Violation) at double: `double` is exported at Package but needed only at File
-- **Visibility** (Violation) at halve: `halve` is exported at Package but needed only at File
+- **Visibility** (Violation) at src/lib.rs, double: `double` in `src/lib.rs` is exported at Package but needed only at File
+- **Visibility** (Violation) at src/lib.rs, halve: `halve` in `src/lib.rs` is exported at Package but needed only at File
 
 ## Anchored parameter profile
 

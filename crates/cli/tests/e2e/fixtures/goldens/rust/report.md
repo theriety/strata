@@ -16,10 +16,10 @@ Snapshot `39ca50f3205b8509d6b96e0c724c4aaaf428484346034abae35c204ac0f50cdc`.
 
 ### Violations
 
-- **Visibility** (Violation) at Rectangle: `Rectangle` is exported at Package but needed only at File
-- **Visibility** (Violation) at Shape: `Shape` is exported at Package but needed only at File
-- **Visibility** (Violation) at describe_shape: `describe_shape` is exported at Package but needed only at File
-- **Visibility** (Violation) at summarize: `summarize` is exported at Package but needed only at File
+- **Visibility** (Violation) at src/lib.rs, Rectangle: `Rectangle` in `src/lib.rs` is exported at Package but needed only at File
+- **Visibility** (Violation) at src/lib.rs, Shape: `Shape` in `src/lib.rs` is exported at Package but needed only at File
+- **Visibility** (Violation) at src/lib.rs, describe_shape: `describe_shape` in `src/lib.rs` is exported at Package but needed only at File
+- **Visibility** (Violation) at src/lib.rs, summarize: `summarize` in `src/lib.rs` is exported at Package but needed only at File
 
 ## Anchored parameter profile
 

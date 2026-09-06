@@ -301,20 +301,46 @@ pub(in crate::analyze) fn visibility_violations(snapshot: &Snapshot) -> Vec<Viol
     let ir = snapshot.ir();
     let result = derive_visibility(&ir.containers, &ir.nodes, &ir.edges);
     let names = node_names(snapshot);
+    let nodes: BTreeMap<u32, &Node> = ir.nodes.iter().map(|node| (node.id.0, node)).collect();
+    let files: BTreeMap<u32, String> = ir
+        .containers
+        .containers()
+        .iter()
+        .filter(|container| container.level == ScopeLevel::File)
+        .map(|container| (container.id.0, container.name.to_string()))
+        .collect();
 
     result
         .findings
         .iter()
         .map(|finding| {
             let name = names.get(&finding.node.0).cloned().unwrap_or_default();
+            let source_path = nodes
+                .get(&finding.node.0)
+                .and_then(|node| files.get(&node.container.0));
+            let detail = source_path.map_or_else(
+                || {
+                    format!(
+                        "`{name}` is exported at {:?} but needed only at {:?}",
+                        finding.declared, finding.derived
+                    )
+                },
+                |path| {
+                    format!(
+                        "`{name}` in `{path}` is exported at {:?} but needed only at {:?}",
+                        finding.declared, finding.derived
+                    )
+                },
+            );
+            let location = source_path.map_or_else(
+                || vec![name.clone()],
+                |path| vec![path.clone(), name.clone()],
+            );
             Violation {
                 kind: ViolationKind::Visibility,
                 severity: Severity::Violation,
-                detail: format!(
-                    "`{name}` is exported at {:?} but needed only at {:?}",
-                    finding.declared, finding.derived
-                ),
-                location: vec![name],
+                detail,
+                location,
                 break_suggestions: None,
                 capacity: None,
             }
