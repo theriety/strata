@@ -15,7 +15,8 @@ use crate::analyze::layout::{real_dir_partition, relieve_over_capacity, synthesi
 use crate::analyze::relocation::mirror::{MirrorEvidence, mirror_rules};
 use crate::analyze::relocation::{
     CandidateTree, FileInfo, POLISH_SWEEPS, POLISH_TARGETS, PipelineSolver,
-    RelocationIdentityGuard, TestPolicy, file_facts_repository_relative, file_inventory,
+    RelocationIdentityGuard, TestPolicy, cycle_homes, file_facts_repository_relative,
+    file_inventory,
 };
 use crate::analyze::scoring::{
     CycleCounts, ProfileSource, level_caps, move_distance, score_candidate,
@@ -227,6 +228,7 @@ impl<'a> PipelineSolver<'a> {
         // directory — so anchored seeding just clones it.
         let (identity_partition, identity_names, identity_synthetic) =
             real_dir_partition(&files, &condensation);
+        let cycle_home_by_vertex = cycle_homes(&files, &condensation);
         let identity = seed_identity.then(|| identity_partition.clone());
 
         // FIX03 relieves over-capacity binding in the search grain itself: a
@@ -324,8 +326,8 @@ impl<'a> PipelineSolver<'a> {
             same_file_symbol: profile.weights.same_file_symbol,
             same_file_type: profile.weights.same_file_type,
             identity,
-            #[cfg(test)]
             pass_start_partition: identity_partition,
+            cycle_home_by_vertex,
             real_is_identity,
             real_partition: search_partition,
             real_folder_names: folder_names,

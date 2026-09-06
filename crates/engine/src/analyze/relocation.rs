@@ -14,7 +14,8 @@ use strata_ir::{
 
 use crate::analyze::layout::{
     ContainerArena, LaminarHome, NameTally, anchor_min, cluster_level, elect, home_affinity,
-    laminar_home, plurality, qualify_elected, record_undecorated_key, render_namespace, vote,
+    laminar_home, plurality, qualify_elected, qualify_folder_names, record_undecorated_key,
+    render_namespace, vote,
 };
 use crate::analyze::rendering::render_tree;
 use crate::analyze::scoring::{
@@ -155,6 +156,31 @@ pub(in crate::analyze) struct FileInfo {
     pub(in crate::analyze) home: LaminarHome,
     /// Opaque path prefix removed by the laminar render normalization.
     pub(in crate::analyze) namespace: SmolStr,
+}
+
+/// Keeps physical homes separate from the dominant representative used to
+/// search a cross-directory SCC as one atomic unit.
+fn cycle_homes(files: &[FileInfo], condensation: &Condensation) -> BTreeMap<u32, SmolStr> {
+    let homes: BTreeSet<LaminarHome> = files.iter().map(|file| file.home.clone()).collect();
+    let names = qualify_folder_names(&homes);
+    let name_by_home: BTreeMap<_, _> = homes.into_iter().zip(names).collect();
+    let mut retained = BTreeMap::new();
+    for members in &condensation.members {
+        let member_homes: BTreeSet<_> = members
+            .iter()
+            .filter_map(|member| files.get(member.0 as usize).map(|file| &file.home))
+            .collect();
+        if member_homes.len() > 1 {
+            for member in members {
+                if let Some(file) = files.get(member.0 as usize)
+                    && let Some(name) = name_by_home.get(&file.home)
+                {
+                    retained.insert(member.0, name.clone());
+                }
+            }
+        }
+    }
+    retained
 }
 
 /// Preserves pass-start render namespaces and namespace-scoped leaf identity.
@@ -444,10 +470,11 @@ pub(in crate::analyze) struct PipelineSolver<'a> {
     /// The identity partition (anchored mode on a cap-clean tree), else `None`.
     /// Cloned before relief, so it always mirrors the current tree exactly.
     pub(in crate::analyze) identity: Option<Partition>,
-    /// Immutable pass-start folder placement used to ensure tests only follow
-    /// an actual source relocation, never optimize independently.
-    #[cfg(test)]
+    /// Immutable SCC representatives, distinguishing actual moves from unchanged
+    /// cycles whose members occupy several physical directories.
     pass_start_partition: Partition,
+    /// Original folder keys for members of cross-directory file cycles.
+    cycle_home_by_vertex: BTreeMap<u32, SmolStr>,
     /// Whether relief left the search's real-directory partition identical to
     /// the current tree — the mode-independent "nothing changed yet" shape. The
     /// faithful candidate exit (FIX05) keys on this so greenfield reports an
@@ -788,9 +815,17 @@ impl PipelineSolver<'_> {
         );
 
         let mut file_ids: BTreeMap<u32, ContainerId> = BTreeMap::new();
+        let mut folder_ids = BTreeMap::new();
+        let mut restored_ids = BTreeMap::new();
         let mut zone_by_file: BTreeMap<ContainerId, bool> = BTreeMap::new();
         let mut namespace_by_file: BTreeMap<ContainerId, SmolStr> = BTreeMap::new();
         let mut pass_start_file_by_candidate: BTreeMap<ContainerId, ContainerId> = BTreeMap::new();
+        let cluster_by_folder: BTreeMap<&SmolStr, u32> = self
+            .real_folder_names
+            .iter()
+            .enumerate()
+            .map(|(cluster, name)| (name, u32::try_from(cluster).unwrap_or(u32::MAX)))
+            .collect();
         for (&folder, members) in members_of {
             let Some(&(domain, _, _)) = chain_of.get(&folder) else {
                 continue;
@@ -807,30 +842,39 @@ impl PipelineSolver<'_> {
                 .get(folder as usize)
                 .cloned()
                 .unwrap_or_else(|| SmolStr::new("workspace"));
-            let mut members_by_folder: BTreeMap<SmolStr, Vec<u32>> = BTreeMap::new();
-            for &vertex in members {
-                members_by_folder
-                    .entry(
-                        self.projected_folder_for_vertex(parts, vertex, mirror_evidence)
-                            .map_or_else(
-                                || key.clone(),
-                                |projected| projected.repository_relative(self.root_name.as_str()),
-                            ),
-                    )
-                    .or_default()
-                    .push(vertex);
-            }
+            let members_by_folder =
+                self.projected_folder_members(parts, members, mirror_evidence, &key);
             for (projected_key, namespace_members) in members_by_folder {
-                let parent = domain_ids.get(&domain).copied();
-                let folder_id = arena.push(ContainerSpec {
-                    name: &projected_key,
-                    level: ScopeLevel::Folder,
-                    parent,
-                    synthetic: self
-                        .real_folder_synthetic
-                        .get(folder as usize)
-                        .copied()
-                        .unwrap_or(false),
+                let projected_cluster = cluster_by_folder.get(&projected_key).copied();
+                // A cycle can be the only resident of its nondominant home.
+                // Such a home has no solver cluster: restore its original
+                // ancestor chain, including transparent/synthetic containers.
+                let restored_folder = namespace_members.first().and_then(|&vertex| {
+                    (projected_cluster.is_none()
+                        && self.retained_cycle_home(parts, vertex, mirror_evidence)
+                            == Some(&projected_key))
+                    .then(|| self.restore_cycle_folder(vertex, &mut arena, &mut restored_ids))
+                    .flatten()
+                });
+                let projected_domain = projected_cluster
+                    .and_then(|cluster| chain_of.get(&cluster))
+                    .map_or(domain, |&(projected_domain, _, _)| projected_domain);
+                let parent = domain_ids.get(&projected_domain).copied();
+                let folder_id = restored_folder.unwrap_or_else(|| {
+                    *folder_ids
+                        .entry((parent, projected_key.clone()))
+                        .or_insert_with(|| {
+                            arena.push(ContainerSpec {
+                                name: &projected_key,
+                                level: ScopeLevel::Folder,
+                                parent,
+                                synthetic: self
+                                    .real_folder_synthetic
+                                    .get(projected_cluster.unwrap_or(folder) as usize)
+                                    .copied()
+                                    .unwrap_or(false),
+                            })
+                        })
                 });
                 for vertex in namespace_members {
                     let Some(file) = self.files.get(vertex as usize) else {
@@ -864,6 +908,83 @@ impl PipelineSolver<'_> {
             namespace_by_file,
             key_by_id,
         }
+    }
+
+    /// Groups physical members independently of their atomic solver representative.
+    fn projected_folder_members(
+        &self,
+        parts: &Partition,
+        members: &[u32],
+        mirror_evidence: &MirrorEvidence,
+        fallback: &SmolStr,
+    ) -> BTreeMap<SmolStr, Vec<u32>> {
+        let mut groups: BTreeMap<SmolStr, Vec<u32>> = BTreeMap::new();
+        for &vertex in members {
+            let key = self
+                .projected_folder_for_vertex(parts, vertex, mirror_evidence)
+                .map_or_else(
+                    || fallback.clone(),
+                    |projected| projected.repository_relative(self.root_name.as_str()),
+                );
+            groups.entry(key).or_default().push(vertex);
+        }
+        groups
+    }
+
+    /// Reuses the original ancestor chain for a physical cycle home with no
+    /// representative cluster. Exact existing containers are reused so the
+    /// restored files share their package and domain with ordinary residents.
+    fn restore_cycle_folder(
+        &self,
+        vertex: u32,
+        arena: &mut ContainerArena,
+        restored_ids: &mut BTreeMap<ContainerId, ContainerId>,
+    ) -> Option<ContainerId> {
+        let file = self.files.get(vertex as usize)?;
+        let by_id: BTreeMap<_, _> = self
+            .snapshot
+            .ir()
+            .containers
+            .containers()
+            .iter()
+            .map(|container| (container.id, container))
+            .collect();
+        let mut current = by_id.get(&ContainerId(file.container))?.parent;
+        let mut ancestors = Vec::new();
+        while let Some(id) = current {
+            let container = by_id.get(&id)?;
+            ancestors.push(*container);
+            current = container.parent;
+        }
+        let mut parent = None;
+        for container in ancestors.into_iter().rev() {
+            let id = restored_ids
+                .get(&container.id)
+                .copied()
+                .or_else(|| {
+                    arena
+                        .containers
+                        .iter()
+                        .find(|existing| {
+                            existing.parent == parent
+                                && existing.level == container.level
+                                && existing.name == container.name
+                                && existing.synthetic == container.synthetic
+                        })
+                        .map(|existing| existing.id)
+                })
+                .unwrap_or_else(|| {
+                    arena.push(ContainerSpec {
+                        name: &container.name,
+                        level: container.level,
+                        parent,
+                        synthetic: container.synthetic,
+                    })
+                });
+            restored_ids.insert(container.id, id);
+            parent = Some(id);
+        }
+        parent
     }
 
     /// Interns the upper naming ladder — package groups over packages over
