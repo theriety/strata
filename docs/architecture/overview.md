@@ -213,7 +213,7 @@ Cycle findings resolve every member to repository-relative paths and explain the
 - **`Snapshot` / `IntermediateRepresentation`** (`crates/ir/src/snapshot.rs`): the validated, content-addressed contract between adapters and the engine — the single source of truth the analysis runs on.
 - **`Adapter` trait** (`crates/ir/src/adapter.rs`): the two-phase `parse`/`bind` interface every language adapter implements, isolating all language knowledge from the engine.
 - **`analyze`** (`crates/engine/src/analyze.rs`): the pure entry point that drives the pipeline per parameter profile and seed and returns an `AnalyzeResult`.
-- **`EvidenceIndex` and advice aggregation** (`crates/engine/src/analyze.rs`): immutable pass-start evidence qualification followed by deterministic cross-profile grouping into recommended and review-candidate advice.
+- **`EvidenceIndex` and advice aggregation** (`crates/engine/src/analyze/advice.rs`): immutable pass-start evidence qualification followed by deterministic cross-profile grouping into recommended and review-candidate advice.
 - **`snapshot_from_root`** (`crates/engine/src/snapshot.rs`): source discovery, adapter dispatch by file extension, fragment merging, and re-export normalization.
 - **`AnalyzeConfig` / `load_config`** (`crates/engine/src/config.rs`): the `strata.toml` schema and validation, mapping config sections to objective weights, capacities, and solver budgets.
 - **`StrataError`** (`crates/engine/src/error.rs`): the typed error surface with stable remedy codes that the CLI maps to exit code `1`.
