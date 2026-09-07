@@ -25,6 +25,10 @@ fn saved_result() -> Result<AnalyzeResult, String> {
 }
 
 fn report(result: &AnalyzeResult) -> Result<String, String> {
+    report_with_detail(result, false)
+}
+
+fn report_with_detail(result: &AnalyzeResult, verbose: bool) -> Result<String, String> {
     static NEXT_REPORT: AtomicUsize = AtomicUsize::new(0);
     let path = std::env::temp_dir().join(format!(
         "strata-markdown-{}-{}-{}.json",
@@ -37,11 +41,15 @@ fn report(result: &AnalyzeResult) -> Result<String, String> {
         serde_json::to_vec(result).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    let outcome = run(&[
+    let mut args = vec![
         "report",
         "--input",
         path.to_str().ok_or("non-UTF8 input path")?,
-    ]);
+    ];
+    if verbose {
+        args.push("--verbose");
+    }
+    let outcome = run(&args);
     let _ = fs::remove_file(path);
     if outcome.code != 0 {
         return Err(outcome.stderr);
@@ -105,7 +113,7 @@ fn should_preserve_saved_confidence_and_evidence_in_markdown() -> Result<(), Str
     result.advice.recommended = vec![advice()];
     result.advice.review_candidates = vec![advice()];
 
-    let markdown = report(&result)?;
+    let markdown = report_with_detail(&result, true)?;
     let compact = markdown.split_whitespace().collect::<Vec<_>>().join(" ");
     for expected in [
         "Recommended (1):",
@@ -201,8 +209,11 @@ fn should_report_both_file_and_symbol_moves_in_markdown() -> Result<(), String> 
     let markdown = report(&result)?;
 
     assert!(
-        markdown.contains(&file_path)
-            && markdown.contains("RecordOptions")
+        markdown.contains(
+            file_path
+                .strip_prefix("constellation-ts/")
+                .unwrap_or(&file_path)
+        ) && markdown.contains("RecordOptions")
             && !markdown.contains("No moves versus"),
         "mixed moves must both render: {markdown}"
     );
@@ -287,7 +298,7 @@ fn should_define_evidence_before_scores_and_quote_saved_move_paths() -> Result<(
         .ok_or("missing candidate")?;
     candidate.delta_narration.clear();
     candidate.symbol_moves = vec![relocation()];
-    let markdown = report(&result)?;
+    let markdown = report_with_detail(&result, true)?;
     let compact = markdown.split_whitespace().collect::<Vec<_>>().join(" ");
     let first_score = compact
         .find("owner 1.00")
@@ -315,14 +326,14 @@ fn should_define_evidence_before_scores_and_quote_saved_move_paths() -> Result<(
     for path in [
         "greenfield→`shared/alternative.ts`",
         "best alternative `shared/alternative.ts`",
-        "from `origin/options.ts` to `shared/owner.ts`",
+        "from `origin/options.ts` → `shared/owner.ts`",
     ] {
         assert!(
             compact.contains(path),
             "missing quoted path {path:?}: {markdown}"
         );
     }
-    assert!(compact.contains("delta -0.1000, 1 import(s) to re-point"));
+    assert!(compact.contains("Objective delta -0.1000; 1 imports to repoint."));
     Ok(())
 }
 
@@ -337,6 +348,7 @@ fn should_explain_advice_in_the_public_summary() -> Result<(), String> {
         super::PURE_DEFAULTS,
         "--format",
         "summary",
+        "--verbose",
     ]);
     assert_eq!(outcome.code, 0, "{}", outcome.stderr);
     let compact = outcome
@@ -350,7 +362,7 @@ fn should_explain_advice_in_the_public_summary() -> Result<(), String> {
         "Profiles share analysis-start evidence",
         "selected by only some executed profiles",
         "no strict majority of executed profiles provides qualifying support for this destination",
-        "best alternative `constellation-ts/src/util`",
+        "best alternative `src/util`",
     ] {
         assert!(
             compact.contains(expected),
@@ -429,7 +441,7 @@ fn should_roundtrip_finite_analyzed_advice_through_saved_report() -> Result<(), 
     let encoded = serde_json::to_vec(&result).map_err(|error| error.to_string())?;
     let restored: AnalyzeResult =
         serde_json::from_slice(&encoded).map_err(|error| error.to_string())?;
-    let markdown = report(&restored)?;
+    let markdown = report_with_detail(&restored, true)?;
     assert!(markdown.contains("Review candidate (1)") && markdown.contains("weighted 0.70/0.60"));
     Ok(())
 }

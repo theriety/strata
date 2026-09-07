@@ -1,167 +1,62 @@
-================================================================================
- dataset   : constellation-ts
- census    : 28 symbols · 48 edges · 28 files (typescript)
---------------------------------------------------------------------------------
- reading rules
---------------------------------------------------------------------------------
- scores    : four decimals, lower is better            0.3668 → 0.2296
- gain      : improvement over that parameter profile's own starting point, measured in
-             the same units as the score              +0.1372
- profiles  : anchored and greenfield are complete parameter profiles; by default
-             anchored prices path and anchor terms while greenfield sets them to zero
- leaf      : one relocatable unit — a source file plus the symbols it
-             carries; moving it moves both. A table's leaf is whichever unit
-             that suggestion acts on: usually the whole file, sometimes one
-             symbol or one call.
- weight    : strength of the import relationship the move satisfies —
-             roughly how many import connections it honors; a bigger number
-             is more valuable to honor
- comparability: candidate scores are comparable only within one parameter profile
-             of one project. When two candidates share one structure, decide
-             between them by intent, never by raw score.
- rounding  : columns round independently to four decimals; totals compute unrounded
- truncation: always explicit (… +N more); nothing is cut silently
- grain     : every suggestion states what it relocates — whole files, or
-             symbols within one file; a suggestion that changes no placement
-             says so instead of shipping a table. Prose under each table is
-             its caption and carries the why.
- names     : file, folder and symbol names always appear in `backticks`
- future    : anything today's strata cannot yet emit keeps the literal label
-             "future capability — not in current output" (none apply here) —
-             the label marks capability, never whether the advice is real
- grid      : 100 columns · monospace · no color · no links · scroll only
+Strata report — constellation-ts
+28 files · 28 symbols · 48 edges
+Snapshot `bb8808550c3393fce4a11e7fddbd62e7b41b53ad8f23872c3408571b527ed1fe`
 
-================================================================================
- §1  The candidates this run produced
-================================================================================
- candidate count : 1  (anchored profile returned 0 · greenfield profile returned 1)
- anchored parameter profile (effective):
-   search    candidates 3 · seed 42
-   capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
-   objective imbalance 0.1 · naming 0.3 · path 0.2 · anchor 1.0 · capacity 4.0
-             dependency-only 0.05 · companion-separation 0.05
-   weights   value-import 1.0 · inheritance 1.5 · call 1.0 · type-reference 0.3 · re-export 0.0
-             same-file-symbol 1.0 · same-file-type 3.0
-   solver    ilp-threshold 300 · timeout-seconds 60
-   diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
-   tests     helper-cap 250 · patterns 0 · builtins true
-   relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
-              mirroring enabled true · builtins true · rules 0
-   qualification evidence 0.6 · structural 0.5 · ambiguity-margin 0.15
-                 owner 0.1 · role 0.1 · source 0.25 · destination 0.25
-                 producer 0.1 · architectural-reach 0.2
- greenfield parameter profile (effective):
-   search    candidates 3 · seed 42
-   capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
-   objective imbalance 0.1 · naming 0.3 · path 0.0 · anchor 0.0 · capacity 4.0
-             dependency-only 0.05 · companion-separation 0.05
-   weights   value-import 1.0 · inheritance 1.5 · call 1.0 · type-reference 0.3 · re-export 0.0
-             same-file-symbol 1.0 · same-file-type 3.0
-   solver    ilp-threshold 300 · timeout-seconds 60
-   diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
-   tests     helper-cap 250 · patterns 0 · builtins true
-   relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
-              mirroring enabled true · builtins true · rules 0
-   qualification evidence 0.6 · structural 0.5 · ambiguity-margin 0.15
-                 owner 0.1 · role 0.1 · source 0.25 · destination 0.25
-                 producer 0.1 · architectural-reach 0.2
+Structural findings
+Shared findings (0)
+  None.
 
- candidate 1   greenfield/1   score  0.2296   gain +0.1372   best score
+anchored profile-specific findings (0)
+  None.
 
- comparability: these two gains have different starting points — anchored prices the current tree
-                 at 0.1668 using its effective coefficients; greenfield prices the same tree at
-                 0.3668 using its own effective coefficients. Each gain is measured against its own
-                 parameter profile's baseline — never compare across parameter profiles.
+greenfield profile-specific findings (0)
+  None.
 
- note  fewer than the requested candidates survived; the solution space converged.
 
-================================================================================
- §2  What would change — candidate 1 (greenfield)
-================================================================================
- Evidence: owner means unique ownership; role means role affinity; source and destination mean
- cohesion at each side; producer means producer evidence; reach means architectural reach.
- Weighted is the normalized score across all six signals; structural excludes role affinity; margin
- is the selected destination's lead over the best alternative.
- The values after weighted and structural, and the margin threshold, are configured minimums.
- Profiles share analysis-start evidence but apply their own weights and thresholds.
+Candidate layouts
+Lower scores are better. Compare scores only within one parameter profile of one project. A 
+candidate is a proposed layout; inclusion does not make a move Recommended. Partial plans are not 
+rescored.
+
+anchored — 0 candidate(s)
+Baseline score: 0.1668
+Fewer than the requested candidates survived; the solution space converged.
+Current layout is already optimal under this profile's search.
+No candidates were produced.
+
+greenfield — 1 candidate(s)
+Baseline score: 0.3668
+Fewer than the requested candidates survived; the solution space converged.
+
+greenfield — candidate 1
+  Score: 0.3668 → 0.2296; improvement +0.1372
+  Proposed moves
+    - Move file `src/util/hash.ts` → `src/model/hash.ts`
+      Why: pulled toward `src/model/matrix.ts` — weight 1.0.
+  Folder impacts
+    `src/model`: 0 file(s) leaving · 1 entering
+    `src/util`: 1 file(s) leaving · 0 entering
+  Before
+    constellation-ts/
+    └── src/
+        └── util/
+            └── hash.ts *
+  After
+    constellation-ts/
+    └── src/
+        └── model/
+            └── hash.ts *
+  * File moved or its symbol contents changed.
+  Unchanged branches and symbols omitted; excluded files are not shown.
+
+Advice
+Supporting profiles selected the destination; qualified profiles also passed the evidence 
+thresholds; absent profiles did not select the move; conflicts name alternative destinations. 
+Advice consolidates the best candidate from each executed profile.
  Recommended (0):
  Review candidate (1):
-   - file `constellation-ts/src/util/hash.ts` → `constellation-ts/src/model` · supporting
-   [greenfield] · qualified [greenfield] · absent [anchored] · conflicts []
-     greenfield: owner 0.00 · role 0.00 · source 1.00 · destination 1.00 · producer 0.00 · reach
-     1.00 · margin 0.69; weighted 0.70/0.60 · structural 0.78/0.50 · margin threshold 0.15 ·
-     qualified true · best alternative `constellation-ts/src/util`
-     review reasons: selected by only some executed profiles, no strict majority of executed
+   - file `src/util/hash.ts` → `src/model` · supporting [greenfield] · qualified [greenfield] · 
+   absent [anchored] · conflicts []
+     review reasons: selected by only some executed profiles, no strict majority of executed 
      profiles provides qualifying support for this destination
 
-Every suggestion relocates whole files (1 in all):
-
- --------------------------------------------------------------------------------
- 1 · Move `constellation-ts/src/util/hash.ts` into `constellation-ts/src/model`
---------------------------------------------------------------------------------
- grain : whole files
-
- leaf                                | before place                | after place
- `constellation-ts/src/util/hash.ts` | `constellation-ts/src/util` | `constellation-ts/src/model`
-
- caption  WHY pulled toward `constellation-ts/src/model/matrix.ts` — weight 1.0.
-
- The other 27 files are absent because nothing about them changes.
-
-================================================================================
- §3  Blast radius — changed containers only
-================================================================================
- 2 containers change as 1 files relocate; the 2 largest:
-
- `constellation-ts/src/model`  +1f
- `constellation-ts/src/util`   -1f
-
- the tally balances: every file that leaves a container arrives in one, so the changes sum to zero.
-
-================================================================================
- §4  Findings this run raised
-================================================================================
- shared findings:
- none
-
- anchored-only findings:
- none
-
- greenfield-only findings:
- none
-
-================================================================================
- §5  Score delta — current → candidate 1
-================================================================================
- term               current       proposal    delta
- cut                 0.3281         0.1875        -0.1406
- imbalance           0.0406         0.0437        +0.0031
- naming             -0.0019        -0.0016        +0.0003
- path               -0.0000        -0.0000        +0.0000
- anchor              0.0000         0.0000        +0.0000
- dependency-only     0.0000         0.0000        +0.0000
- companion-separation     0.0000         0.0000        +0.0000
- score               0.3668         0.2296        -0.1372   (gain +0.1372)
-
- the seven displayed terms combine into the total score; lower is better.
-
- term gloss  cut = import connections broken by moving · imbalance = lopsided folder sizes · naming
-             = folder names fit their contents · path = how far things travel · anchor = credit for
-             respecting existing well-placed code · dependency-only = penalty for moving a
-             declaration toward only what it depends on · companion-separation = penalty for
-             keeping a named signature companion away from its owner
-
-================================================================================
- §6  Recommendation
-================================================================================
- review     candidate 1 — 0.2296, gain +0.1372, 1 changes relocating 1 files (§2). It goes straight
-            at the cut that dominates today's score (0.3281 → 0.1875). Consensus classifies 0
-            relocation(s) as Recommended and 1 as Review candidate; human review is required before
-            adopting the plan.
- keep       keeping today's layout remains possible — it scores 0.3668 against this proposal's
-            0.2296.
- in part    partial plans are not rescored; apply §2 in its given order, one change at a time.
-
-================================================================================
- end of report · constellation-ts
-================================================================================

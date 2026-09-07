@@ -1,3 +1,9 @@
+> **Status:** Superseded
+>
+> **Superseded by:** [ADR-0015 — Consistent reports and change trees](../0015-consistent-reports-and-change-trees.md)
+>
+> **What changed:** Partial supersession: retain explicit action vocabulary and deterministic output, with shared report ordering, verbosity, and before/after affected-branch trees with change markers.
+
 # ADR-0002: Report format — suggested action list
 
 - **Status:** Accepted

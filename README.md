@@ -48,15 +48,20 @@ strata report  --input analysis.json --output report.md
 
 (omit `--output` on `report` to print the Markdown to stdout.)
 
-### Recommended structures
+### Comparing candidate layouts
 
-Add `--show-suggestions` to print the best candidate's proposed structure for each selected parameter profile directly in the summary face:
+Terminal summaries and Markdown reports show the same content in the same order: **Structural findings**, **Candidate layouts**, then **Advice**. Each candidate includes its baseline and resulting score, improvement, exact proposed moves, folder impacts, and before/after trees of affected branches. Scores compare only within the same parameter profile and project; lower is better.
+
+Changed filenames in the trees end in `*`. Moved symbols appear beneath their source file in the before tree and their destination file in the after tree. Unchanged branches and symbols are explicitly omitted; this is a view of the affected analyzed files, not a complete listing of the repository. Candidate moves are proposals; the final Advice section separately explains their confidence.
+
+Add `--verbose` for score-component deltas, numerical advice evidence and thresholds, and effective configuration:
 
 ```sh
-strata analyze --root path/to/repo --show-suggestions
+strata analyze --root path/to/repo --format summary --verbose
+strata report --input analysis.json --verbose --output report.md
 ```
 
-The flag is a no-op for `--format json`, which already serializes every candidate tree.
+Verbosity does not change JSON output or analysis results. Default reports retain all candidate moves, structural findings, profile agreement, review reasons, and conditional prerequisites.
 
 ### Reading relocation advice
 
@@ -93,7 +98,7 @@ The ambiguity comparison deliberately over-approximates alternatives from pass-s
 | `--jobs <n>` | Parallelism for parsing and shattering (`0` = all cores; never affects results). |
 | `--format <summary\|json>` | Force the output face (defaults to summary on a TTY, JSON when piped). |
 | `--output <path>` | Write the result to a file instead of stdout. |
-| `--show-suggestions` | Print the best candidate's recommended structure per selected parameter profile (summary face only). |
+| `--verbose` | Include numerical evidence, score-component deltas, and effective configuration in human-readable output. Also available on `report`; JSON is unchanged. |
 
 ## Commands
 

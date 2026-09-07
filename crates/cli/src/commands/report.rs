@@ -1,21 +1,16 @@
 //! `strata report`: a saved analysis rendered as a Markdown report.
 //!
-//! The command reads an [`AnalyzeResult`] JSON and renders the full narrative —
-//! the snapshot census, the current-tree violations and score, then each mode's
-//! candidates with their score breakdowns, conditional splits (and the
-//! preconditions that make them legal), and delta narration. The report is plain
-//! Markdown so it drops straight into a PR or a docs site.
+//! The command reads saved analysis data and uses the same ordered presentation
+//! as terminal reports: findings, candidate layouts with before/after trees,
+//! and qualified advice. Verbose detail adds scores, evidence, and configuration.
 
-use std::fmt::Write as _;
 use std::io::Write;
 use std::path::PathBuf;
 
-use strata_engine::{
-    AnalyzeResult, Candidate, CurrentStanding, ModeResult, ScoreBreakdown, StrataError, Violation,
-};
+use strata_engine::StrataError;
 
 use crate::commands::read_result;
-use crate::render::{advice_lines, effective_parameter_lines, symbol_move_line};
+use crate::render::{self, RenderOptions};
 
 /// The parsed inputs of a `report` run.
 #[derive(Debug)]
@@ -33,8 +28,20 @@ pub struct ReportArgs {
 /// Returns [`StrataError::InputUnreadable`] when the input cannot be read or the
 /// output cannot be written.
 pub fn run(args: &ReportArgs, out: &mut impl Write) -> Result<(), StrataError> {
+    run_with_options(args, RenderOptions::default(), out)
+}
+
+/// Renders a saved analysis with explicit report detail.
+///
+/// # Errors
+/// Returns input or output errors.
+pub fn run_with_options(
+    args: &ReportArgs,
+    options: RenderOptions,
+    out: &mut impl Write,
+) -> Result<(), StrataError> {
     let result = read_result(&args.input)?;
-    let markdown = render_markdown(&result);
+    let markdown = render::markdown(&result, options);
 
     match &args.output {
         Some(path) => std::fs::write(path, markdown.as_bytes()).map_err(|error| {
@@ -52,169 +59,6 @@ pub fn run(args: &ReportArgs, out: &mut impl Write) -> Result<(), StrataError> {
     }
 }
 
-/// Renders the full Markdown report of `result`.
-fn render_markdown(result: &AnalyzeResult) -> String {
-    let mut markdown = String::new();
-    let _ = writeln!(markdown, "# Strata report\n");
-    let _ = writeln!(markdown, "Snapshot `{}`.\n", result.snapshot_hash);
-    let _ = writeln!(
-        markdown,
-        "- {} symbols, {} edges, {} files\n",
-        result.summary.symbols, result.summary.edges, result.summary.files
-    );
-
-    let _ = writeln!(markdown, "## Relocation advice\n");
-    let _ = writeln!(markdown, "```text");
-    for line in advice_lines(result) {
-        let _ = writeln!(markdown, "{line}");
-    }
-    let _ = writeln!(markdown, "```\n");
-
-    let _ = writeln!(markdown, "## Shared findings\n");
-    write_violations(&mut markdown, &result.current.shared_findings);
-
-    if let Some(mode) = &result.profiles.anchored {
-        write_mode(&mut markdown, "Anchored", mode);
-    }
-    if let Some(mode) = &result.profiles.greenfield {
-        write_mode(&mut markdown, "Greenfield", mode);
-    }
-    markdown
-}
-
-/// Writes the violation listing section.
-fn write_violations(markdown: &mut String, violations: &[Violation]) {
-    let _ = writeln!(markdown, "### Violations\n");
-    if violations.is_empty() {
-        let _ = writeln!(markdown, "None.\n");
-        return;
-    }
-    for violation in violations {
-        let _ = writeln!(
-            markdown,
-            "- **{:?}** ({:?}) at {}: {}",
-            violation.kind,
-            violation.severity,
-            violation.location.join(", "),
-            violation.detail
-        );
-    }
-    let _ = writeln!(markdown);
-}
-
-/// Writes one mode's candidate sections.
-fn write_mode(markdown: &mut String, name: &str, mode: &ModeResult) {
-    let _ = writeln!(markdown, "## {name} parameter profile\n");
-    let _ = writeln!(markdown, "### Effective parameters\n");
-    let _ = writeln!(markdown, "```text");
-    for line in effective_parameter_lines(&name.to_ascii_lowercase(), &mode.parameters) {
-        let _ = writeln!(markdown, "{}", line.trim_start());
-    }
-    let _ = writeln!(markdown, "```\n");
-    let _ = writeln!(markdown, "Current score `{:.4}`.\n", mode.current.score);
-    write_breakdown(markdown, &mode.current.score_breakdown);
-    let _ = writeln!(markdown, "### Profile-specific findings\n");
-    write_violations(markdown, &mode.current.unique_findings);
-    let _ = writeln!(markdown, "### Candidates\n");
-    if mode.solution_space_converged {
-        let _ = writeln!(
-            markdown,
-            "_Fewer than the requested candidates survived; the solution space converged._\n"
-        );
-    }
-    match mode.current.standing {
-        CurrentStanding::Optimal => {
-            let _ = writeln!(
-                markdown,
-                "_Current layout is already optimal; candidate 1 is the current tree._\n"
-            );
-        }
-        CurrentStanding::Infeasible => match mode
-            .candidates
-            .first()
-            .and_then(|candidate| candidate.capacity_remainder)
-        {
-            Some(capacity) => {
-                let current_capacity = mode.current.capacity_breaks;
-                let resolved = current_capacity.saturating_sub(capacity.remaining);
-                let _ = writeln!(
-                    markdown,
-                    "_Current layout violates capacity caps; best candidate resolves {resolved} of {current_capacity} capacity finding(s)._\n"
-                );
-                if capacity.file_level > 0 {
-                    let _ = writeln!(
-                        markdown,
-                        "_{} file-level breach(es) exceed the file cap; only conditional splits can fix them._\n",
-                        capacity.file_level
-                    );
-                }
-            }
-            None => {
-                let _ = writeln!(markdown, "_Current layout violates capacity caps._\n");
-            }
-        },
-        CurrentStanding::Outscored => {}
-    }
-    for candidate in &mode.candidates {
-        write_candidate(markdown, candidate);
-    }
-}
-
-/// Writes one candidate's score, splits, and narration.
-fn write_candidate(markdown: &mut String, candidate: &Candidate) {
-    let _ = writeln!(
-        markdown,
-        "### Candidate {} (improvement `{:+.4}`, score `{:.4}`)\n",
-        candidate.index, candidate.improvement, candidate.score
-    );
-    write_breakdown(markdown, &candidate.score_breakdown);
-
-    if !candidate.conditional_splits.is_empty() {
-        let _ = writeln!(markdown, "**Conditional splits**\n");
-        for split in &candidate.conditional_splits {
-            let _ = writeln!(
-                markdown,
-                "- SCC `{}` -> {} files once {} edge(s) are broken",
-                split.scc.join(", "),
-                split.resulting_files,
-                split.preconditions.len()
-            );
-        }
-        let _ = writeln!(markdown);
-    }
-
-    if candidate.delta_narration.is_empty() && candidate.symbol_moves.is_empty() {
-        let _ = writeln!(markdown, "No moves versus the current layout.\n");
-        return;
-    }
-    // the same numbered per-file steps the `diff` face prints, fenced so the
-    // Markdown renders them monospaced without re-wrapping the arrows.
-    let _ = writeln!(markdown, "**Moves**\n");
-    let _ = writeln!(markdown, "```");
-    for line in crate::render::move_step_lines(&candidate.delta_narration) {
-        let _ = writeln!(markdown, "{line}");
-    }
-    for entry in &candidate.symbol_moves {
-        let _ = writeln!(markdown, "{}", symbol_move_line(entry));
-    }
-    let _ = writeln!(markdown, "```\n");
-}
-
-/// Writes a per-term score breakdown bullet list.
-fn write_breakdown(markdown: &mut String, breakdown: &ScoreBreakdown) {
-    let _ = writeln!(
-        markdown,
-        "- cut `{:.4}`, imbalance `{:.4}`, naming `{:.4}`, path `{:.4}`, anchor `{:.4}`, dependency-only `{:.4}`, companion-separation `{:.4}`\n",
-        breakdown.cut,
-        breakdown.imbalance,
-        breakdown.naming,
-        breakdown.path,
-        breakdown.anchor,
-        breakdown.dependency_only,
-        breakdown.companion_separation
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -225,6 +69,13 @@ mod tests {
     };
 
     use super::*;
+    use strata_engine::{
+        AnalyzeResult, Candidate, CurrentStanding, ModeResult, ScoreBreakdown, Violation,
+    };
+
+    fn render_markdown(result: &AnalyzeResult) -> String {
+        render::markdown(result, RenderOptions { verbose: true })
+    }
 
     /// Builds a result with one anchored candidate and a cycle violation.
     fn sample() -> AnalyzeResult {
@@ -335,9 +186,9 @@ mod tests {
 
         assert!(markdown.contains("# Strata report"));
         assert!(markdown.contains("Snapshot `abc123`"));
-        assert!(markdown.contains("### Violations"));
-        assert!(markdown.contains("## Anchored parameter profile"));
-        assert!(markdown.contains("### Effective parameters"));
+        assert!(markdown.contains("## Structural findings"));
+        assert!(markdown.contains("anchored — candidate 1"));
+        assert!(markdown.contains("## Effective configuration"));
         assert!(markdown.contains("capacity  file 250 · folder 20"));
         assert!(markdown.contains("objective imbalance 0.1 · naming 0.3"));
         assert!(markdown.contains("dependency-only 0.05"));
@@ -345,13 +196,13 @@ mod tests {
         assert!(markdown.contains("solver    ilp-threshold 300"));
         assert!(markdown.contains("diversity seeds-per-candidate 10"));
         assert!(markdown.contains("tests     helper-cap 250"));
-        assert!(markdown.contains("### Candidate 1 (improvement `+1.0000`, score `1.0000`)"));
-        assert!(markdown.contains("Conditional splits"));
+        assert!(markdown.contains("Score: 2.0000 → 1.0000; improvement +1.0000"));
+        assert!(markdown.contains("Conditional split"));
         assert!(markdown.contains("solution space converged"));
     }
 
     #[test]
-    fn should_number_each_file_of_a_large_move_group_as_a_step() {
+    fn should_list_each_file_of_a_large_move_group() {
         let mut result = sample();
         if let Some(mode) = result.profiles.anchored.as_mut()
             && let Some(subject) = mode.candidates.first_mut()
@@ -374,15 +225,14 @@ mod tests {
 
         let markdown = render_markdown(&result);
 
-        // the moves render as a fenced block of numbered per-file steps, the
-        // same voice the `diff` face speaks.
+        // the moves render as explicit per-file actions with their shared reason.
         assert!(
-            markdown.contains("merge — regrouped by clustering\n"),
+            markdown.contains("Why: clusters files that already import each other heavily."),
             "the group header names its reason: {markdown}"
         );
-        for (step, file) in ["a.ts", "b.ts", "c.ts", "d.ts"].into_iter().enumerate() {
+        for file in ["a.ts", "b.ts", "c.ts", "d.ts"] {
             assert!(
-                markdown.contains(&format!("  {}. {file} [old → new]\n", step + 1)),
+                markdown.contains(&format!("- Move file `{file}` → `new/{file}`")),
                 "{file}: {markdown}"
             );
         }

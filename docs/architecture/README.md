@@ -30,7 +30,6 @@ The public result has two groups. `Recommended` requires sufficient evidence and
 | Document | Title | Status |
 | --- | --- | --- |
 | [ADR-0001](decisions/0001-recommendations-only.md) | Recommendations only — strata never delivers or executes move scripts | Accepted |
-| [ADR-0002](decisions/0002-report-format-action-list.md) | Report format — suggested action list vocabulary for all suggestion faces | Accepted |
 | [ADR-0005](decisions/0005-pass-start-dependencies-govern-symbol-moves.md) | Pass-start dependencies govern symbol moves | Accepted |
 | [ADR-0006](decisions/0006-symbol-destination-guardrails.md) | Symbol destinations obey pass-start guardrails | Accepted |
 | [ADR-0008](decisions/0008-physical-layout-governs-relocation-and-capacity.md) | Physical layout governs relocation and capacity | Accepted |
@@ -38,3 +37,4 @@ The public result has two groups. `Recommended` requires sufficient evidence and
 | [ADR-0012](decisions/0012-companion-owner-affinity.md) | Conservative companion-owner affinity | Accepted |
 | [ADR-0013](decisions/0013-pinned-relocation-policies-and-test-mirrors.md) | Pinned relocation policies and exact test mirrors | Accepted |
 | [ADR-0014](decisions/0014-profile-consensus.md) | Evidence-qualified profile consensus | Accepted |
+| [ADR-0015](decisions/0015-consistent-reports-and-change-trees.md) | Consistent reports — shared content, verbosity, and before/after change trees | Accepted |

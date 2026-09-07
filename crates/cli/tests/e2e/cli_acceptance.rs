@@ -169,25 +169,23 @@ fn should_deliver_the_analyze_summary_for_the_rust_fixture() {
     );
     // the census and the claimed-vs-listed candidate counts are the contracted surface.
     assert!(
-        outcome
-            .stdout
-            .contains("census    : 6 symbols · 4 edges · 1 files"),
+        outcome.stdout.contains("1 files · 6 symbols · 4 edges"),
         "the expected node/edge census is delivered"
     );
     assert!(
-        outcome.stdout.contains("candidate count : 0"),
+        outcome.stdout.contains("No candidates were produced."),
         "the printed claim reports that no strict improvement survived"
     );
     assert!(
-        outcome.stdout.contains("anchored profile returned 0")
-            && outcome.stdout.contains("greenfield profile returned 0"),
+        outcome.stdout.contains("anchored — 0 candidate(s)")
+            && outcome.stdout.contains("greenfield — 0 candidate(s)"),
         "each profile's empty contribution is stated"
     );
 }
 
 #[test]
 fn should_itemize_suggestions_in_the_report_without_a_flag() {
-    // The printed report always itemizes §2. With no strict improvement it
+    // The printed report always includes candidate layouts. With no strict improvement it
     // reports an empty candidate set instead of inventing an identity plan.
     let root = fixture("rust");
     let root_str = root.to_str().unwrap_or_default();
@@ -206,16 +204,12 @@ fn should_itemize_suggestions_in_the_report_without_a_flag() {
 
     assert_eq!(outcome.code, 0, "the report run exits 0");
     assert!(
-        outcome
-            .stdout
-            .contains("What would change — no candidate this run produced"),
+        outcome.stdout.contains("Candidate layouts"),
         "the itemization section names the empty result: {}",
         outcome.stdout
     );
     assert!(
-        outcome
-            .stdout
-            .contains("no candidate this run produced — nothing to change"),
+        outcome.stdout.contains("No candidates were produced."),
         "the absence of an improving plan is declared honestly"
     );
 }
@@ -242,9 +236,7 @@ fn should_deliver_the_analyze_summary_for_the_python_fixture() {
         "a clean multi-file fixture analyzes and exits 0"
     );
     assert!(
-        outcome
-            .stdout
-            .contains("census    : 4 symbols · 4 edges · 2 files"),
+        outcome.stdout.contains("2 files · 4 symbols · 4 edges"),
         "the two-file census is delivered"
     );
 }
@@ -271,6 +263,7 @@ fn should_pin_the_anchor_term_apart_for_the_two_modes() {
         "anchored",
         "--format",
         "summary",
+        "--verbose",
     ]);
     let greenfield = run(&[
         "analyze",
@@ -282,6 +275,7 @@ fn should_pin_the_anchor_term_apart_for_the_two_modes() {
         "greenfield",
         "--format",
         "summary",
+        "--verbose",
     ]);
 
     assert_eq!(anchored.code, 0, "anchored mode exits 0");
@@ -295,11 +289,11 @@ fn should_pin_the_anchor_term_apart_for_the_two_modes() {
         "the effective profiles expose distinct path and anchor coefficients"
     );
     assert!(
-        !anchored.stdout.contains("mode greenfield"),
+        !anchored.stdout.contains("greenfield —"),
         "an anchored-only run emits only anchored"
     );
     assert!(
-        !greenfield.stdout.contains("mode anchored"),
+        !greenfield.stdout.contains("anchored —"),
         "a greenfield-only run emits only greenfield"
     );
 }
@@ -598,22 +592,22 @@ fn should_deliver_a_well_formed_report_for_the_rust_fixture() {
         "the title heading leads"
     );
     assert!(
-        outcome.stdout.contains("## Shared findings"),
+        outcome.stdout.contains("## Structural findings"),
         "the shared findings section is present"
     );
     assert!(
-        outcome.stdout.contains("## Anchored parameter profile"),
+        outcome.stdout.contains("anchored — 0 candidate(s)"),
         "the anchored section is present"
     );
     assert!(
-        outcome.stdout.contains("## Greenfield parameter profile"),
+        outcome.stdout.contains("greenfield — 0 candidate(s)"),
         "the greenfield section is present"
     );
     // the objective J(T) is surfaced per layout as a fixed-precision score line; the
     // exact score bytes are pinned by the `report.md` golden, so here we assert only
     // the structural invariant that the current-layout score line is present.
     assert!(
-        outcome.stdout.contains("Current score `"),
+        outcome.stdout.contains("Baseline score: "),
         "the current layout reports its objective J(T) as a score line: {}",
         outcome.stdout
     );
@@ -1650,13 +1644,12 @@ fn should_omit_the_anchored_section_for_a_greenfield_only_run() {
 
     assert_eq!(outcome.code, 0, "a greenfield-only run exits 0");
     assert!(
-        outcome.stdout.contains("greenfield profile returned"),
+        outcome.stdout.contains("greenfield —"),
         "the greenfield claim is present: {}",
         outcome.stdout
     );
     assert!(
-        !outcome.stdout.contains("anchored profile returned")
-            && !outcome.stdout.contains("anchored/"),
+        !outcome.stdout.contains("anchored —") && !outcome.stdout.contains("anchored/"),
         "a greenfield-only run omits the anchored candidates"
     );
 }
@@ -2413,14 +2406,14 @@ fn should_emit_no_candidate_when_the_current_layout_is_optimal() {
         "an optimal baseline has no strictly improving anchored candidate"
     );
     assert!(
-        summary.stdout.contains("no candidate this run produced"),
+        summary.stdout.contains("No candidates were produced."),
         "the report face announces the empty candidate set honestly: {}",
         summary.stdout
     );
     assert!(
-        summary.stdout.contains(
-            "keep the current layout — the run produced no candidate to weigh against it."
-        ),
+        summary
+            .stdout
+            .contains("Current layout is already optimal under this profile's search."),
         "the recommendation keeps the optimal layout: {}",
         summary.stdout
     );
@@ -2468,14 +2461,12 @@ fn should_mark_a_cap_violating_layout_infeasible_with_the_resolution_notice() {
         );
     }
     assert!(
-        summary
-            .stdout
-            .contains("today's layout as infeasible — it breaks"),
+        summary.stdout.contains("Current layout violates"),
         "the report face names the infeasibility and its finding count: {}",
         summary.stdout
     );
     assert!(
-        summary.stdout.contains(" capacity finding"),
+        summary.stdout.contains(" capacity cap(s)."),
         "the infeasibility is counted in capacity findings: {}",
         summary.stdout
     );
