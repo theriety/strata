@@ -319,14 +319,20 @@ pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<St
 fn advice_with_options(result: &AnalyzeResult, options: RenderOptions) -> Vec<String> {
     let paths = changes::Changes::paths(result);
     let mut lines = Vec::new();
-    if options.verbose
-        && result
-            .advice
-            .recommended
-            .iter()
-            .chain(&result.advice.review_candidates)
-            .any(|item| !item.assessments.is_empty())
-    {
+    let has_assessments = result
+        .advice
+        .recommended
+        .iter()
+        .chain(&result.advice.review_candidates)
+        .any(|item| !item.assessments.is_empty());
+    if has_assessments {
+        lines.extend(wrap(
+            "Profiles share analysis-start evidence but apply their own weights and thresholds.",
+            1,
+            1,
+        ));
+    }
+    if options.verbose && has_assessments {
         lines.extend(wrap(
             "Evidence: owner means unique ownership; role means role affinity; source and destination mean cohesion at each side; producer means producer evidence; reach means architectural reach.",
             1,
@@ -338,7 +344,7 @@ fn advice_with_options(result: &AnalyzeResult, options: RenderOptions) -> Vec<St
             1,
         ));
         lines.extend(wrap(
-            "The values after weighted and structural, and the margin threshold, are configured minimums. Profiles share analysis-start evidence but apply their own weights and thresholds.",
+            "The values after weighted and structural, and the margin threshold, are configured minimums.",
             1,
             1,
         ));
@@ -855,6 +861,19 @@ mod tests {
             greenfield: None,
         };
         result
+    }
+
+    #[test]
+    fn should_follow_combined_multi_package_moves_in_terminal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut result = result_with_candidate();
+        super::combined_package_moves::configure(&mut result)?;
+        let mut buffer = Vec::new();
+
+        render(&result, Format::Summary, "workspace", &mut buffer)?;
+
+        super::combined_package_moves::assert_paths(&String::from_utf8(buffer)?)?;
+        Ok(())
     }
 
     /// Builds a zeroed score breakdown.
@@ -1964,3 +1983,7 @@ mod tests {
         assert!(text.contains("  2. b.ts [two → new]\n"), "{text}");
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/combined_package_moves.rs"]
+mod combined_package_moves;

@@ -619,3 +619,16 @@ fn should_preserve_literal_repeated_spaces_and_backticks_in_move_paths() -> Test
     assert!(report.contains("a`  b.ts *") && report.contains("c  d.ts *"));
     Ok(())
 }
+
+#[path = "support/combined_package_moves.rs"]
+mod combined_package_moves;
+
+#[test]
+fn should_follow_combined_multi_package_moves_in_markdown() -> TestResult {
+    let mut result: AnalyzeResult = serde_json::from_str(&analyze("json", false)?)?;
+    result.profiles.anchored = None;
+    combined_package_moves::configure(&mut result)?;
+
+    combined_package_moves::assert_paths(&saved_report(&result, false)?)?;
+    Ok(())
+}

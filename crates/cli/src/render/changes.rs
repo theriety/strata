@@ -53,8 +53,14 @@ impl Changes {
     }
 
     pub(super) fn paths(result: &AnalyzeResult) -> Self {
-        let mut roots = BTreeSet::new();
-        collect_roots(&result.current.tree, &mut roots);
+        let mut dataset_roots = BTreeSet::new();
+        let mut package_roots = BTreeSet::new();
+        collect_roots(&result.current.tree, &mut dataset_roots, &mut package_roots);
+        let roots = if dataset_roots.is_empty() {
+            package_roots
+        } else {
+            dataset_roots
+        };
         let root = if roots.len() == 1 {
             roots.first().cloned()
         } else {
@@ -151,13 +157,22 @@ impl Changes {
     }
 }
 
-fn collect_roots(node: &ContainerNode, roots: &mut BTreeSet<String>) {
-    if node.level == Level::Package {
-        roots.insert(node.name.clone());
-        return;
+fn collect_roots(
+    node: &ContainerNode,
+    dataset_roots: &mut BTreeSet<String>,
+    package_roots: &mut BTreeSet<String>,
+) {
+    match node.level {
+        Level::PackageGroup => {
+            dataset_roots.insert(node.name.clone());
+        }
+        Level::Package => {
+            package_roots.insert(node.name.clone());
+        }
+        _ => {}
     }
     for child in node.children.iter().flatten() {
-        collect_roots(child, roots);
+        collect_roots(child, dataset_roots, package_roots);
     }
 }
 

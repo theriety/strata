@@ -515,3 +515,52 @@ fn should_preserve_distinct_visibility_sources_in_cli_outputs() -> Result<(), St
     }
     Ok(())
 }
+
+#[test]
+fn should_warn_about_correlated_profiles_in_default_markdown() -> Result<(), String> {
+    let result = saved_result()?;
+
+    let markdown = report(&result)?;
+    let compact = markdown.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    assert!(
+        compact.contains("Profiles share analysis-start evidence"),
+        "missing confidence qualification: {markdown}"
+    );
+    assert!(
+        !compact.contains("owner means unique ownership"),
+        "numerical evidence remains verbose-only"
+    );
+    Ok(())
+}
+
+#[test]
+fn should_warn_about_correlated_profiles_in_default_terminal() -> Result<(), String> {
+    let root = super::fixture("constellation-ts");
+    let outcome = run(&[
+        "analyze",
+        "--root",
+        root.to_str().ok_or("non-UTF8 fixture")?,
+        "--config",
+        super::PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
+    assert_eq!(outcome.code, 0, "{}", outcome.stderr);
+    let compact = outcome
+        .stdout
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    assert!(
+        compact.contains("Profiles share analysis-start evidence"),
+        "missing confidence qualification: {}",
+        outcome.stdout
+    );
+    assert!(
+        !compact.contains("owner means unique ownership"),
+        "numerical evidence remains verbose-only"
+    );
+    Ok(())
+}

@@ -61,6 +61,7 @@ greenfield — candidate 1
 Supporting profiles selected the destination; qualified profiles also passed the evidence 
 thresholds; absent profiles did not select the move; conflicts name alternative destinations. 
 Advice consolidates the best candidate from each executed profile.
+ Profiles share analysis-start evidence but apply their own weights and thresholds.
  Recommended (0):
  Review candidate (1):
    - file `src/app.ts` → `src/geometry` · supporting [greenfield] · qualified [] · absent 
