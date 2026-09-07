@@ -639,14 +639,12 @@ pub fn render_diff(candidate: &Candidate, out: &mut impl Write) -> io::Result<()
     Ok(())
 }
 
-/// Renders a candidate's moves as numbered per-file steps — the shared body of
-/// the `diff` and `report` faces so both speak in one voice.
+/// Renders a candidate's moves as numbered per-file steps for `diff`.
 ///
 /// Each group prints a header (`{kind} — {reason}`), then one numbered step per
 /// moved file reading `{path} [{from} → {to}]`; step numbers run continuously
 /// across the candidate so the whole change reads as one ordered plan. Lines
-/// carry no trailing newline: `diff` prints them raw, `report` wraps them in a
-/// fenced block. An empty source or destination renders as `(root)`.
+/// carry no trailing newline. An empty source or destination renders as `(root)`.
 pub(crate) fn move_step_lines(moves: &[Move]) -> Vec<String> {
     let mut lines = Vec::new();
     let mut step = 1_usize;
@@ -1070,8 +1068,6 @@ mod tests {
         assert_eq!(f4(10.23876), "10.2388");
         assert_eq!(f4(10.23874), "10.2387");
     }
-
-    /// An owned name list for title expectations.
 
     #[test]
     fn should_caption_each_reason_in_the_approved_voice() {
@@ -1525,8 +1521,8 @@ mod tests {
     fn should_count_only_hard_capacity_findings_as_breaks() {
         let mut result = result_with_candidate();
         // Two hard breaches plus a borderline observation: the note counts the
-        // breaks from the engine's `capacity_breaks`, while §4 still lists all
-        // three findings with their severity tags.
+        // breaks from the engine's `capacity_breaks`, while Structural findings
+        // lists all three findings with their severity tags.
         result.current.shared_findings = vec![
             capacity_violation("big_folder"),
             capacity_violation("huge_file"),
