@@ -19,6 +19,7 @@ use std::path::Path;
 use ra_ap_ide::{AnalysisHost, FilePosition, GotoDefinitionConfig, RaFixtureConfig, TextSize};
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::{CargoConfig, RustLibSource};
+use ra_ap_syntax::{AstNode as _, T, algo::previous_non_trivia_token};
 use ra_ap_vfs::Vfs;
 use smol_str::SmolStr;
 use strata_ir::{
@@ -105,6 +106,14 @@ struct Database {
     vfs: Vfs,
 }
 
+/// A semantic target, including definitions outside the analyzed workspace.
+enum ResolvedTarget {
+    /// A definition that can be looked up in the snapshot's node assignment.
+    Workspace { path: SmolStr, offset: u32 },
+    /// A known definition outside the workspace, never a name-fallback candidate.
+    External,
+}
+
 impl Database {
     /// Loads the workspace whose manifest is at `manifest`.
     fn load(manifest: &Path) -> Result<Self, BindOutcome> {
@@ -132,9 +141,9 @@ impl Database {
     }
 
     /// Resolves the reference at `(relative_path, offset)` to the definition's
-    /// repository-relative path and byte offset, if `goto_definition` lands on a
-    /// known in-workspace target.
-    fn resolve(&self, path: &str, offset: u32, workspace_root: &Path) -> Option<(SmolStr, u32)> {
+    /// workspace location or an external target. Only absent semantic targets
+    /// return `None`; a known external definition must not trigger name fallback.
+    fn resolve(&self, path: &str, offset: u32, workspace_root: &Path) -> Option<ResolvedTarget> {
         let file_id = self.file_id_for(path, workspace_root)?;
         let analysis = self.host.analysis();
         let position = FilePosition {
@@ -149,9 +158,39 @@ impl Database {
         };
         let range_info = analysis.goto_definition(position, &config).ok()??;
         let target = range_info.info.into_iter().next()?;
-        let target_path = self.relative_path(target.file_id, workspace_root)?;
-        let target_offset = u32::from(target.full_range.start());
-        Some((target_path, target_offset))
+        Some(self.relative_path(target.file_id, workspace_root).map_or(
+            ResolvedTarget::External,
+            |target_path| ResolvedTarget::Workspace {
+                path: target_path,
+                offset: u32::from(target.full_range.start()),
+            },
+        ))
+    }
+
+    /// Allows fallback only for a verified nonreceiver reference token. Token
+    /// inspection also covers method names inside unexpanded macro arguments.
+    fn allows_name_fallback(
+        &self,
+        path: &str,
+        reference: &Reference,
+        workspace_root: &Path,
+    ) -> bool {
+        let Some(file_id) = self.file_id_for(path, workspace_root) else {
+            return false;
+        };
+        let Ok(parsed) = self.host.analysis().parse(file_id) else {
+            return false;
+        };
+        let offset = TextSize::new(reference.offset);
+        if !parsed.syntax().text_range().contains(offset) {
+            return false;
+        }
+        let Some(token) = parsed.syntax().token_at_offset(offset).right_biased() else {
+            return false;
+        };
+        token.text_range().start() == offset
+            && token.text() == reference.name.as_str()
+            && previous_non_trivia_token(token).is_none_or(|previous| previous.kind() != T![.])
     }
 
     /// Maps a repository-relative source path to its vfs file id.
@@ -215,25 +254,29 @@ fn resolve_reference(
 ) {
     let (kind, hardness) = edge_shape(reference.kind);
 
-    // The semantic database is authoritative: when `goto_definition` lands on a
-    // known declaration, emit that edge with full (or macro-reduced) confidence.
-    if let Some((target_path, target_offset)) =
-        database.resolve(path, reference.offset, workspace_root)
-        && let Some(target) = assignment.node_at(&target_path, target_offset)
-    {
-        let confidence = if reference.macro_expanded {
-            CONFIDENCE_MACRO
-        } else {
-            CONFIDENCE_STATIC
-        };
-        push_edge(edges, source, target, kind, hardness, confidence);
+    // a known definition stays authoritative even when absent from this snapshot.
+    if let Some(resolved) = database.resolve(path, reference.offset, workspace_root) {
+        if let ResolvedTarget::Workspace {
+            path: target_path,
+            offset: target_offset,
+        } = resolved
+            && let Some(target) = assignment.node_at(&target_path, target_offset)
+        {
+            let confidence = if reference.macro_expanded {
+                CONFIDENCE_MACRO
+            } else {
+                CONFIDENCE_STATIC
+            };
+            push_edge(edges, source, target, kind, hardness, confidence);
+        }
         return;
     }
 
-    // Fallback: when resolution comes up empty (intra-crate references RA cannot
-    // pin, module paths, out-of-tree noise), a uniquely-named in-workspace
-    // declaration is a likely target — emitted soft, at reduced confidence.
-    if let Some(target) = assignment.unique_node_named(&reference.name) {
+    // unresolved receiver calls require type information; a matching global
+    // name alone cannot identify their target.
+    if database.allows_name_fallback(path, reference, workspace_root)
+        && let Some(target) = assignment.unique_node_named(&reference.name)
+    {
         push_edge(
             edges,
             source,
@@ -257,12 +300,12 @@ fn resolve_re_exports(
     edges: &mut Vec<Edge>,
 ) {
     for link in &assignment.re_export_links {
-        let Some((target_path, target_offset)) =
+        let Some(ResolvedTarget::Workspace { path, offset }) =
             database.resolve(&link.path, link.offset, workspace_root)
         else {
             continue;
         };
-        let Some(target) = assignment.node_at(&target_path, target_offset) else {
+        let Some(target) = assignment.node_at(&path, offset) else {
             continue;
         };
         push_edge(

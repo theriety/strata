@@ -1,6 +1,6 @@
 # strata — Architecture
 
-`strata` is a read-only static-analysis tool that proposes a hierarchical, acyclic module decomposition for a codebase. Architecturally it is a two-stage pipeline: language-specific **adapters** turn source files into a single language-agnostic **IR snapshot**, and a pure, deterministic **engine** runs an eleven-phase decomposition over that snapshot. The engine never reads source code — the snapshot is the only contract it understands — which is what lets the same core reason identically about TypeScript, Rust, and Python.
+`strata` is a read-only static-analysis tool that proposes a hierarchical, acyclic module decomposition for a codebase. Architecturally it is a two-stage pipeline: language-specific **adapters** turn source files into a single language-agnostic **IR snapshot**, and a pure, deterministic **engine** runs an eleven-phase decomposition followed by evidence qualification and cross-profile advice aggregation. The engine never reads source code — the snapshot is the only contract it understands — which is what lets the same core reason identically about TypeScript, Rust, and Python.
 
 ## Crate layout
 
@@ -139,7 +139,7 @@ The pipeline honors a fixed constraint priority — **acyclicity > test polarity
 
 ## Anchored and greenfield parameter profiles
 
-There is no profile-specific algorithm. Anchored and greenfield are complete parameter profiles (`crates/engine/src/config.rs`) executed over the same discovered snapshot. Each owns its candidate count, seed, capacities, objective coefficients, dependency and same-file weights, solver budget, diversification policy, and test policy. Adapter discovery and the process-wide `jobs` hint remain global.
+There is no profile-specific algorithm. Anchored and greenfield are complete parameter profiles (`crates/engine/src/config.rs`) executed over the same discovered snapshot. Each owns its candidate count, seed, capacities, objective coefficients, evidence-qualification thresholds and weights, dependency and same-file weights, solver budget, diversification policy, and test policy. Adapter discovery and the process-wide `jobs` hint remain global.
 
 Both profiles evaluate the same objective form:
 
@@ -162,9 +162,19 @@ Adapters may emit language-neutral companion-owner affinities separately from de
 
 Symbol admission separately protects shared ownership. Incoming consumers are resolved to their analysis-start physical folders. If consumers span multiple child-folder branches beneath their lowest common ancestor, a declaration cannot move into only one of those branches, even when unrelated pass-start dependencies already connect the folders. Moves remain eligible when there is one consumer, all consumers occupy one folder, or the destination is a neutral shared branch or the consumers' common ancestor.
 
+## Evidence-qualified profile consensus
+
+Candidate search and scoring remain profile-local. After each executed profile has constructed and ranked its candidates, the engine atomizes the first candidate into individual file and symbol proposals. An immutable `EvidenceIndex` built from the analysis-start snapshot evaluates each selected destination using six weighted signals: unique owner, role affinity, source cohesion, destination cohesion, producer evidence, and architectural reach. The evidence score uses all six signals; a separate structural score excludes role affinity so a name match cannot satisfy the structural gate. The ambiguity margin compares the selected destination with the strongest conservative pass-start alternative.
+
+Alternative destinations are drawn from the current source, incident production-neighbor homes, explicit owner homes, and the consumers' common physical folder. This set intentionally over-approximates plausible alternatives instead of reconstructing all optimizer admission checks. Consequently, an alternative that would not survive search may lower the margin and demote advice to review, but the qualification stage cannot promote a move or remove it from the raw profile candidate.
+
+Qualification thresholds and evidence weights belong to the parameter profile. The defaults are `minimum-evidence = 0.60`, `minimum-structural = 0.50`, and `minimum-ambiguity-margin = 0.15`, with weights `0.10`, `0.10`, `0.25`, `0.25`, `0.10`, and `0.20` in the signal order above. These are soft confidence parameters. Namespace, reach, file-role, dependency-envelope, and relocation-policy guards remain shared structural constraints and run before qualification.
+
+Cross-profile aggregation gives each executed profile at most one vote per relocation identity from its first candidate. A destination becomes `Recommended` only when the selecting profiles qualify it and those qualified votes form a strict majority of every executed profile. Two profiles therefore require agreement from both. Safe proposals with weak evidence, a weak structural score, an insufficient ambiguity margin, partial support, or conflicting destinations remain `Review candidate` advice. A single-profile run may recommend a move only after its evidence gates pass. Ordinary non-moves are absent; the result has no rejected group.
+
 ## Analysis result contract
 
-Result schema version 7 separates facts shared by the executed profiles from profile-specific evaluation, records both relocation-policy objective terms, and links exact test followers to their primary file move:
+Result schema version 8 separates facts shared by the executed profiles from profile-specific evaluation, records both relocation-policy objective terms, links exact test followers to their primary file move, and adds evidence-qualified advice:
 
 ```text
 AnalyzeResult
@@ -172,6 +182,9 @@ AnalyzeResult
 ├── current
 │   ├── tree
 │   └── sharedFindings
+├── advice
+│   ├── recommended
+│   └── reviewCandidates
 └── profiles
     ├── anchored
     │   ├── parameters
@@ -187,6 +200,8 @@ Each primary file `Move` carries `mirrors` and `blockedMirrors`. A successful mi
 
 Each profile's score breakdown serializes the additional terms as `dependencyOnly` and `companionSeparation`. Configuration and human output use `dependency-only` and `companion-separation`. Readers reject earlier result schema versions instead of inferring missing score components.
 
+Each advice item retains the underlying file or symbol relocation and records its destination, supporting and qualifying profiles, absent profiles, conflicting destinations, per-profile assessments, and deterministic review reasons. An assessment exposes the six raw evidence signals, normalized evidence and structural scores, ambiguity margin and best alternative, effective thresholds, and qualification result. Raw profile candidates remain present so advice classification does not replace the optimizer's detailed output.
+
 A finding is shared only when its complete serialized content is identical in both executed profiles. Each profile's `uniqueFindings` excludes that exact intersection. A single-profile run leaves `sharedFindings` empty, while deterministic sorting and deduplication keep JSON and human output stable. Profile gains are compared only with that profile's current score.
 
 Capacity findings are profile-dependent because caps belong to profiles. A physical folder measures direct files plus immediate child folders; descendants below those children do not inflate it. Measures at or below the cap produce no finding, values above the cap through 110% are `Borderline`, and larger values are `Violation`.
@@ -198,9 +213,10 @@ Cycle findings resolve every member to repository-relative paths and explain the
 - **`Snapshot` / `IntermediateRepresentation`** (`crates/ir/src/snapshot.rs`): the validated, content-addressed contract between adapters and the engine — the single source of truth the analysis runs on.
 - **`Adapter` trait** (`crates/ir/src/adapter.rs`): the two-phase `parse`/`bind` interface every language adapter implements, isolating all language knowledge from the engine.
 - **`analyze`** (`crates/engine/src/analyze.rs`): the pure entry point that drives the pipeline per parameter profile and seed and returns an `AnalyzeResult`.
+- **`EvidenceIndex` and advice aggregation** (`crates/engine/src/analyze/advice.rs`): immutable pass-start evidence qualification followed by deterministic cross-profile grouping into recommended and review-candidate advice.
 - **`snapshot_from_root`** (`crates/engine/src/snapshot.rs`): source discovery, adapter dispatch by file extension, fragment merging, and re-export normalization.
 - **`AnalyzeConfig` / `load_config`** (`crates/engine/src/config.rs`): the `strata.toml` schema and validation, mapping config sections to objective weights, capacities, and solver budgets.
 - **`StrataError`** (`crates/engine/src/error.rs`): the typed error surface with stable remedy codes that the CLI maps to exit code `1`.
 - **Decomposition algorithms** (`crates/core/src`): `condense`, `shatter`, `layer`, `cluster`, `pack`, `visibility`, `project`, `score`, and `diversify` — each a pure phase over the IR.
-- **CLI dispatch and rendering** (`crates/cli/src/main.rs`, `crates/cli/src/render.rs`): clap-derived flag parsing, subcommand dispatch, the TTY-aware summary/JSON face, and the fixed exit-code mapping (`0`/`1`/`2`).
+- **CLI dispatch and rendering** (`crates/cli/src/main.rs`, `crates/cli/src/render.rs`): clap-derived flag parsing, subcommand dispatch, the plain-text default with explicit JSON selection, and the fixed exit-code mapping (`0`/`1`/`2`). Terminal and Markdown reports consume one private report representation assembled from the saved result. Candidate change trees compare saved file identities and recorded moves to show physical before/after paths; virtual grouping labels are not treated as directories. Presentation options control numerical detail without changing the analysis payload.
 - **Language adapters** (`crates/adapter-typescript`, `crates/adapter-rust`, `crates/adapter-python`): swc-, syn+rust-analyzer-, and rustpython-based front ends, each pairing a `parse` module with a `bind` reference resolver and an `sloc` size counter.

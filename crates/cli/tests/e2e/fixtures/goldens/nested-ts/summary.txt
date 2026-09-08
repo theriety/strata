@@ -1,143 +1,63 @@
-================================================================================
- dataset   : nested-ts
- census    : 12 symbols · 13 edges · 6 files (typescript)
---------------------------------------------------------------------------------
- reading rules
---------------------------------------------------------------------------------
- scores    : four decimals, lower is better            0.4553 → 0.3654
- gain      : improvement over that parameter profile's own starting point, measured in
-             the same units as the score              +0.0899
- profiles  : anchored and greenfield are complete parameter profiles; by default
-             anchored prices path and anchor terms while greenfield sets them to zero
- leaf      : one relocatable unit — a source file plus the symbols it
-             carries; moving it moves both. A table's leaf is whichever unit
-             that suggestion acts on: usually the whole file, sometimes one
-             symbol or one call.
- weight    : strength of the import relationship the move satisfies —
-             roughly how many import connections it honors; a bigger number
-             is more valuable to honor
- comparability: candidate scores are comparable only within one parameter profile
-             of one project. When two candidates share one structure, decide
-             between them by intent, never by raw score.
- rounding  : columns round independently to four decimals; totals compute unrounded
- truncation: always explicit (… +N more); nothing is cut silently
- grain     : every suggestion states what it relocates — whole files, or
-             symbols within one file; a suggestion that changes no placement
-             says so instead of shipping a table. Prose under each table is
-             its caption and carries the why.
- names     : file, folder and symbol names always appear in `backticks`
- future    : anything today's strata cannot yet emit keeps the literal label
-             "future capability — not in current output" (none apply here) —
-             the label marks capability, never whether the advice is real
- grid      : 100 columns · monospace · no color · no links · scroll only
+Strata report — nested-ts
+6 files · 12 symbols · 13 edges
+Snapshot `d6148cfe4411734862d94e4add3a70b0a8ac70d0524143a57e21f0f9660b1141`
 
-================================================================================
- §1  The candidates this run produced
-================================================================================
- candidate count : 1  (anchored profile returned 0 · greenfield profile returned 1)
- anchored parameter profile (effective):
-   search    candidates 3 · seed 42
-   capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
-   objective imbalance 0.1 · naming 0.3 · path 0.2 · anchor 1.0 · capacity 4.0
-             dependency-only 0.05 · companion-separation 0.05
-   weights   value-import 1.0 · inheritance 1.5 · call 1.0 · type-reference 0.3 · re-export 0.0
-             same-file-symbol 1.0 · same-file-type 3.0
-   solver    ilp-threshold 300 · timeout-seconds 60
-   diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
-   tests     helper-cap 250 · patterns 0 · builtins true
-   relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
-              mirroring enabled true · builtins true · rules 0
- greenfield parameter profile (effective):
-   search    candidates 3 · seed 42
-   capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
-   objective imbalance 0.1 · naming 0.3 · path 0.0 · anchor 0.0 · capacity 4.0
-             dependency-only 0.05 · companion-separation 0.05
-   weights   value-import 1.0 · inheritance 1.5 · call 1.0 · type-reference 0.3 · re-export 0.0
-             same-file-symbol 1.0 · same-file-type 3.0
-   solver    ilp-threshold 300 · timeout-seconds 60
-   diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
-   tests     helper-cap 250 · patterns 0 · builtins true
-   relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
-              mirroring enabled true · builtins true · rules 0
+Structural findings
+Shared findings (0)
+  None.
 
- candidate 1   greenfield/1   score  0.3654   gain +0.0899   best score
+anchored profile-specific findings (0)
+  None.
 
- comparability: these two gains have different starting points — anchored prices the current tree
-                 at 0.2553 using its effective coefficients; greenfield prices the same tree at
-                 0.4553 using its own effective coefficients. Each gain is measured against its own
-                 parameter profile's baseline — never compare across parameter profiles.
+greenfield profile-specific findings (0)
+  None.
 
- note  fewer than the requested candidates survived; the solution space converged.
 
-================================================================================
- §2  What would change — candidate 1 (greenfield)
-================================================================================
-Every suggestion relocates whole files (1 in all):
+Candidate layouts
+Lower scores are better. Compare scores only within one parameter profile of one project. A 
+candidate is a proposed layout; inclusion does not make a move Recommended. Partial plans are not 
+rescored.
 
- --------------------------------------------------------------------------------
- 1 · Move `nested-ts/src/app.ts` into `nested-ts/src/geometry`
---------------------------------------------------------------------------------
- grain : whole files
+anchored — 0 candidate(s)
+Baseline score: 0.2553
+Fewer than the requested candidates survived; the solution space converged.
+Current layout is already optimal under this profile's search.
+No candidates were produced.
 
- leaf                   | before place    | after place
- `nested-ts/src/app.ts` | `nested-ts/src` | `nested-ts/src/geometry`
+greenfield — 1 candidate(s)
+Baseline score: 0.4553
+Fewer than the requested candidates survived; the solution space converged.
 
- caption  WHY pulled toward `nested-ts/src/geometry/rectangle.ts` — weight 2.0.
+greenfield — candidate 1
+  Score: 0.4553 → 0.3654; improvement +0.0899
+  Proposed moves
+    - Move file `src/app.ts` → `src/geometry/app.ts`
+      Why: pulled toward `src/geometry/rectangle.ts` — weight 2.0.
+  Folder impacts
+    `src`: 1 file(s) leaving · 0 entering
+    `src/geometry`: 0 file(s) leaving · 1 entering
+  Before
+    nested-ts/
+    └── src/
+        └── app.ts *
+  After
+    nested-ts/
+    └── src/
+        └── geometry/
+            └── app.ts *
+  * File moved or its symbol contents changed.
+  Unchanged branches and symbols omitted; excluded files are not shown.
 
- The other 5 files are absent because nothing about them changes.
+Advice
+Supporting profiles selected the destination; qualified profiles also passed the evidence 
+thresholds; absent profiles did not select the move; conflicts name alternative destinations. 
+Advice consolidates the best candidate from each executed profile.
+ Profiles share analysis-start evidence but apply their own weights and thresholds.
+ Recommended (0):
+ Review candidate (1):
+   - file `src/app.ts` → `src/geometry` · supporting [greenfield] · qualified [] · absent 
+   [anchored] · conflicts []
+     review reasons: selected by only some executed profiles, destination evidence is below the 
+     configured minimum, no strict majority of executed profiles provides qualifying support for 
+     this destination
 
-================================================================================
- §3  Blast radius — changed containers only
-================================================================================
- 2 containers change as 1 files relocate; the 2 largest:
-
- `nested-ts/src`           -1f
- `nested-ts/src/geometry`  +1f
-
- the tally balances: every file that leaves a container arrives in one, so the changes sum to zero.
-
-================================================================================
- §4  Findings this run raised
-================================================================================
- shared findings:
- none
-
- anchored-only findings:
- none
-
- greenfield-only findings:
- none
-
-================================================================================
- §5  Score delta — current → candidate 1
-================================================================================
- term               current       proposal    delta
- cut                 0.3363         0.2306        -0.1056
- imbalance           0.1190         0.1347        +0.0157
- naming             -0.0000        -0.0000        +0.0000
- path               -0.0000        -0.0000        +0.0000
- anchor              0.0000         0.0000        +0.0000
- dependency-only     0.0000         0.0000        +0.0000
- companion-separation     0.0000         0.0000        +0.0000
- score               0.4553         0.3654        -0.0899   (gain +0.0899)
-
- the seven displayed terms combine into the total score; lower is better.
-
- term gloss  cut = import connections broken by moving · imbalance = lopsided folder sizes · naming
-             = folder names fit their contents · path = how far things travel · anchor = credit for
-             respecting existing well-placed code · dependency-only = penalty for moving a
-             declaration toward only what it depends on · companion-separation = penalty for
-             keeping a named signature companion away from its owner
-
-================================================================================
- §6  Recommendation
-================================================================================
- adopt      candidate 1 — 0.3654, gain +0.0899, 1 changes relocating 1 files (§2). It goes straight
-            at the cut that dominates today's score (0.3363 → 0.2306).
- keep       keeping today's layout remains possible — it scores 0.4553 against this proposal's
-            0.3654.
- in part    partial plans are not rescored; apply §2 in its given order, one change at a time.
-
-================================================================================
- end of report · nested-ts
-================================================================================

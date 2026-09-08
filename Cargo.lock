@@ -3219,6 +3219,7 @@ dependencies = [
  "clap",
  "serde_json",
  "strata-engine",
+ "unicode-width",
 ]
 
 [[package]]

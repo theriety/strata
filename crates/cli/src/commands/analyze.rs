@@ -5,18 +5,18 @@
 //! the canonical producer of the `AnalyzeResult` JSON the other commands consume.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use strata_engine::{StrataError, analyze, snapshot_from_root};
 
 use crate::commands::{ConfigOverrides, resolve_config};
-use crate::render::{Format, render};
+use crate::render::{Format, RenderOptions, render, render_with_options};
 
 /// The parsed inputs of an `analyze` run.
 ///
-/// `format` is the already-resolved effective format (TTY resolution happens in
-/// the caller, which knows whether the sink is a terminal); `overrides` carries
-/// the CLI flags that layer over the config file.
+/// `format` is the effective format, resolved by the caller from an explicit
+/// selection or the default human-readable format; `overrides` carries the CLI
+/// flags that layer over the config file.
 #[derive(Debug)]
 pub struct AnalyzeArgs {
     /// The repository root to analyze.
@@ -31,8 +31,8 @@ pub struct AnalyzeArgs {
 
 /// Runs `analyze`, writing the rendered or serialized result to `out`.
 ///
-/// The printed-report face names its project after the analyzed root's final
-/// path component; an unresolvable root keeps the given form verbatim.
+/// The printed report names its project from the saved current layout so that
+/// saved-result replay uses the same project identity.
 ///
 /// # Errors
 ///
@@ -40,25 +40,36 @@ pub struct AnalyzeArgs {
 /// an I/O failure writing the result surfaces as [`StrataError::InputUnreadable`]
 /// keyed at the root.
 pub fn run(args: &AnalyzeArgs, out: &mut impl Write) -> Result<(), StrataError> {
+    run_with_options(args, RenderOptions::default(), out)
+}
+
+/// Runs analysis with explicit report detail; JSON remains unchanged.
+///
+/// # Errors
+/// Returns config, snapshot, analysis, or output errors.
+pub fn run_with_options(
+    args: &AnalyzeArgs,
+    options: RenderOptions,
+    out: &mut impl Write,
+) -> Result<(), StrataError> {
     let config = resolve_config(&args.config, args.overrides)?;
     let snapshot = snapshot_from_root(&args.root, &config)?;
     let result = analyze(&snapshot, &config)?;
-    render(&result, args.format, &project_name(&args.root), out).map_err(|error| {
-        StrataError::InputUnreadable {
-            path: args.root.clone(),
-            reason: error.to_string(),
-        }
+    let output = if options.verbose {
+        render_with_options(
+            &result,
+            args.format,
+            &result.current.tree.name,
+            options,
+            out,
+        )
+    } else {
+        render(&result, args.format, &result.current.tree.name, out)
+    };
+    output.map_err(|error| StrataError::InputUnreadable {
+        path: args.root.clone(),
+        reason: error.to_string(),
     })
-}
-
-/// Derives the report banner's project name from the analyzed root: the final
-/// path component of the canonicalized root, falling back to the literal input.
-fn project_name(root: &Path) -> String {
-    let resolved = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    resolved.file_name().map_or_else(
-        || "project".to_owned(),
-        |name| name.to_string_lossy().into_owned(),
-    )
 }
 
 #[cfg(test)]
@@ -105,22 +116,5 @@ mod tests {
         assert!(outcome.is_ok());
         let text = String::from_utf8(buffer).unwrap_or_default();
         assert!(text.contains("snapshotHash"));
-    }
-
-    #[test]
-    fn should_derive_the_project_name_from_the_root_basename() {
-        let root = fixture(&[("a.py", "def alpha():\n    return 1\n")]);
-
-        let name = project_name(&root);
-
-        let _ = fs::remove_dir_all(&root);
-        assert!(!name.is_empty());
-        assert!(!name.contains('/'), "the name is a bare basename: {name}");
-    }
-
-    #[test]
-    fn should_keep_the_literal_form_when_the_root_is_unresolvable() {
-        assert_eq!(project_name(Path::new("/nonexistent/repo/acme")), "acme");
-        assert_eq!(project_name(Path::new("/")), "project");
     }
 }

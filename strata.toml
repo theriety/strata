@@ -1,15 +1,22 @@
 # Strata configuration — every key is optional and the file itself is optional.
-# Each value below is the built-in default, so an empty file (or no file at all)
-# behaves identically to this one. CLI flags override these; these override the
-# built-in defaults.
+# Values below use built-in defaults except for repository fixture exclusions.
+# CLI flags override these values; these override the built-in defaults.
 
 [adapters]
 # Enabled language adapters. One or more of: typescript, rust, python.
 languages = ["typescript", "rust", "python"]
 # Source-inclusion globs, relative to the analysis root.
 include = ["**/*"]
-# Source-exclusion globs, applied after inclusion.
-exclude = ["**/.git/**", "**/node_modules/**", "**/target/**", "**/.venv/**"]
+# Source-exclusion globs, applied after inclusion. Fixture projects are analysis
+# inputs, including intentionally invalid source, rather than package source.
+exclude = [
+    "**/.git/**",
+    "**/node_modules/**",
+    "**/target/**",
+    "**/.venv/**",
+    "**/tests/**/fixtures/**",
+    "crates/eval/fixtures/**",
+]
 
 [analysis]
 # Complete parameter profiles to execute against the same discovered snapshot.
@@ -99,6 +106,19 @@ forbid-symbol-moves = []
 enabled = true
 builtins = true
 
+[profiles.anchored.qualification]
+minimum-evidence = 0.60
+minimum-structural = 0.50
+minimum-ambiguity-margin = 0.15
+
+[profiles.anchored.qualification.weights]
+unique-owner = 0.10
+role-affinity = 0.10
+source-cohesion = 0.25
+destination-cohesion = 0.25
+producer-evidence = 0.10
+architectural-reach = 0.20
+
 [profiles.greenfield]
 candidates = 3
 seed = 42
@@ -151,3 +171,16 @@ forbid-symbol-moves = []
 [profiles.greenfield.relocation.test-mirroring]
 enabled = true
 builtins = true
+
+[profiles.greenfield.qualification]
+minimum-evidence = 0.60
+minimum-structural = 0.50
+minimum-ambiguity-margin = 0.15
+
+[profiles.greenfield.qualification.weights]
+unique-owner = 0.10
+role-affinity = 0.10
+source-cohesion = 0.25
+destination-cohesion = 0.25
+producer-evidence = 0.10
+architectural-reach = 0.20

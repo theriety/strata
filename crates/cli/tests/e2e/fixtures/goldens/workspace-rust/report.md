@@ -1,85 +1,56 @@
-# Strata report
+# Strata report — workspace-rust
 
-Snapshot `a796634250f1de8a466fe7acac2cb579eb4f6dce97b7ce5260598fcf732dca0b`.
+3 files · 14 symbols · 13 edges
+Snapshot `a796634250f1de8a466fe7acac2cb579eb4f6dce97b7ce5260598fcf732dca0b`
 
-- 14 symbols, 13 edges, 3 files
-
-## Shared findings
-
-### Violations
-
-- **Visibility** (Violation) at ReMeasure: `ReMeasure` is exported at Package but needed only at File
-- **Visibility** (Violation) at Report: `Report` is exported at Package but needed only at File
-- **Visibility** (Violation) at combined_total: `combined_total` is exported at Package but needed only at File
-- **Visibility** (Violation) at describe: `describe` is exported at Package but needed only at File
-
-## Anchored parameter profile
-
-### Effective parameters
+## Structural findings
 
 ```text
-anchored parameter profile (effective):
-search    candidates 3 · seed 42
-capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
-objective imbalance 0.1 · naming 0.3 · path 0.2 · anchor 1.0 · capacity 4.0
-dependency-only 0.05 · companion-separation 0.05
-weights   value-import 1.0 · inheritance 1.5 · call 1.0 · type-reference 0.3 · re-export 0.0
-same-file-symbol 1.0 · same-file-type 3.0
-solver    ilp-threshold 300 · timeout-seconds 60
-diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
-tests     helper-cap 250 · patterns 0 · builtins true
-relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
-mirroring enabled true · builtins true · rules 0
+Shared findings (4)
+  - visibility [violation] at `crates/app/src/lib.rs`, `ReMeasure`: `ReMeasure` in 
+    `crates/app/src/lib.rs` is exported at Package but needed only at File
+  - visibility [violation] at `crates/app/src/lib.rs`, `combined_total`: `combined_total` in 
+    `crates/app/src/lib.rs` is exported at Package but needed only at File
+  - visibility [violation] at `crates/app/src/lib.rs`, `describe`: `describe` in 
+    `crates/app/src/lib.rs` is exported at Package but needed only at File
+  - visibility [violation] at `crates/core/src/lib.rs`, `Report`: `Report` in 
+    `crates/core/src/lib.rs` is exported at Package but needed only at File
+
+anchored profile-specific findings (0)
+  None.
+
+greenfield profile-specific findings (0)
+  None.
+
 ```
 
-Current score `0.6810`.
-
-- cut `0.8756`, imbalance `0.0054`, naming `-0.0000`, path `-0.2000`, anchor `0.0000`, dependency-only `0.0000`, companion-separation `0.0000`
-
-### Profile-specific findings
-
-### Violations
-
-None.
-
-### Candidates
-
-_Fewer than the requested candidates survived; the solution space converged._
-
-_Current layout is already optimal; candidate 1 is the current tree._
-
-## Greenfield parameter profile
-
-### Effective parameters
+## Candidate layouts
 
 ```text
-greenfield parameter profile (effective):
-search    candidates 3 · seed 42
-capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
-objective imbalance 0.1 · naming 0.3 · path 0.0 · anchor 0.0 · capacity 4.0
-dependency-only 0.05 · companion-separation 0.05
-weights   value-import 1.0 · inheritance 1.5 · call 1.0 · type-reference 0.3 · re-export 0.0
-same-file-symbol 1.0 · same-file-type 3.0
-solver    ilp-threshold 300 · timeout-seconds 60
-diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
-tests     helper-cap 250 · patterns 0 · builtins true
-relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
-mirroring enabled true · builtins true · rules 0
+Lower scores are better. Compare scores only within one parameter profile of one project. A 
+candidate is a proposed layout; inclusion does not make a move Recommended. Partial plans are not 
+rescored.
+
+anchored — 0 candidate(s)
+Baseline score: 0.6810
+Fewer than the requested candidates survived; the solution space converged.
+Current layout is already optimal under this profile's search.
+No candidates were produced.
+
+greenfield — 0 candidate(s)
+Baseline score: 0.8810
+Fewer than the requested candidates survived; the solution space converged.
+Current layout is already optimal under this profile's search.
+No candidates were produced.
 ```
 
-Current score `0.8810`.
+## Advice
 
-- cut `0.8756`, imbalance `0.0054`, naming `-0.0000`, path `-0.0000`, anchor `0.0000`, dependency-only `0.0000`, companion-separation `0.0000`
+```text
+Supporting profiles selected the destination; qualified profiles also passed the evidence 
+thresholds; absent profiles did not select the move; conflicts name alternative destinations. 
+Advice consolidates the best candidate from each executed profile.
+ Recommended (0):
+ Review candidate (0):
 
-### Profile-specific findings
-
-### Violations
-
-None.
-
-### Candidates
-
-_Fewer than the requested candidates survived; the solution space converged._
-
-_Current layout is already optimal; candidate 1 is the current tree._
-
+```

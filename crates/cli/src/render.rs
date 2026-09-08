@@ -1,25 +1,23 @@
-//! TTY-aware rendering of an [`AnalyzeResult`] into human-readable text.
+//! Sink-independent rendering of an [`AnalyzeResult`] into human-readable text.
 //!
 //! Rendering is a pure function of the result and an output sink: the same result
 //! always renders the same bytes, and `--format json` bypasses this module
 //! entirely (the JSON path serializes the library value verbatim, the AD-5
-//! parity guarantee). The summary face is the printed report the design rounds
-//! approved: a deterministic, monospace-safe plain-text report — no color, no
-//! links, no terminal escapes, every line inside the 100-column grid — so
-//! piping a rendered view into a file is stable and diffable. Its vocabulary is
-//! normative: suggested actions only, a grain label on every suggestion,
-//! three-column change tables (`leaf | before place | after place`) with no
-//! marker column, backticks around every file, folder, and symbol name,
-//! explicit truncation markers, and candidate-count honesty.
+//! parity guarantee). Terminal and Markdown share deterministic report content:
+//! project metadata, structural findings, candidate layouts, and qualified advice.
+//! Candidates include exact actions and paired affected-branch trees. Human text
+//! uses no terminal escapes and wraps losslessly within 100 display columns.
 
-use std::collections::BTreeMap;
+mod changes;
+mod report;
+
 use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use strata_engine::{
-    AnalyzeResult, BlockedMirror, BlockedMirrorReason, Candidate, ContainerNode, CurrentStanding,
-    FileMove, Level, MirrorMove, ModeResult, Move, MoveKind, MoveReason, ProfileConfig,
-    ScoreBreakdown, Severity, SymbolKind, SymbolMove, Violation, ViolationKind,
+    AnalyzeResult, BlockedMirrorReason, Candidate, ContainerNode, Level, ModeResult, Move,
+    MoveKind, MoveReason, ProfileConfig, RelocationProposal, ReviewReason, ScoreBreakdown,
+    Severity, SymbolKind, SymbolMove, Violation, ViolationKind,
 };
 
 /// The output format the `analyze` command renders in.
@@ -37,44 +35,57 @@ pub enum Format {
 }
 
 impl Format {
-    /// Resolves the effective format from an optional explicit choice and whether
-    /// the sink is a terminal.
+    /// Resolves the effective format from an optional explicit choice.
     ///
-    /// With no explicit choice the format is TTY-aware: a terminal gets the
-    /// human-readable `default_human` face, a pipe gets [`Format::Json`]. An
-    /// explicit choice always wins.
+    /// An explicit choice wins; otherwise every sink uses `default_human`.
+    /// The terminal argument is retained for API compatibility and is ignored.
     #[must_use]
-    pub fn resolve(explicit: Option<Format>, is_terminal: bool, default_human: Format) -> Format {
-        match explicit {
-            Some(format) => format,
-            None if is_terminal => default_human,
-            None => Format::Json,
-        }
+    pub fn resolve(explicit: Option<Format>, _is_terminal: bool, default_human: Format) -> Format {
+        explicit.unwrap_or(default_human)
     }
 }
 
 /// Renders the analysis `result` in `format` to `out`.
 ///
 /// The JSON face is the parity-pinned serialization of the library result; the
-/// summary face is the approved printed report — header and reading rules, the
-/// run's candidates, the itemized suggestions of the recommended candidate, the
-/// blast radius, the findings, the score delta, and the recommendation.
-/// `project` names the analyzed repository and banners the report; the caller
-/// derives it from the analyzed root.
-///
-/// # Errors
-///
-/// Returns the underlying [`io::Error`] if writing to `out` fails.
+/// summary face presents findings, candidate layouts, and qualified advice.
+/// `project` names the saved analyzed repository and banners the report.
 pub fn render(
     result: &AnalyzeResult,
     format: Format,
     project: &str,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    render_with_options(result, format, project, RenderOptions::default(), out)
+}
+
+/// Human-readable report detail. JSON serialization ignores these options.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RenderOptions {
+    /// Includes numerical evidence, score components, and effective parameters.
+    pub verbose: bool,
+}
+
+/// Renders an analysis with explicit human-readable detail options.
+///
+/// # Errors
+/// Returns the output sink's I/O error.
+pub fn render_with_options(
+    result: &AnalyzeResult,
+    format: Format,
+    project: &str,
+    options: RenderOptions,
+    out: &mut impl Write,
+) -> io::Result<()> {
     match format {
         Format::Json => write_json(result, out),
-        Format::Summary => write_report(result, project, out),
+        Format::Summary => report::Report::build(result, project, options).write_text(out),
     }
+}
+
+/// Renders the same report content as Markdown, using the saved project name.
+pub(crate) fn markdown(result: &AnalyzeResult, options: RenderOptions) -> String {
+    report::Report::build(result, &result.current.tree.name, options).markdown()
 }
 
 /// Serializes `result` as pretty JSON to `out`.
@@ -86,72 +97,6 @@ pub fn write_json(result: &AnalyzeResult, out: &mut impl Write) -> io::Result<()
     let json = serde_json::to_vec(result).map_err(io::Error::other)?;
     out.write_all(&json)?;
     out.write_all(b"\n")
-}
-
-/// Writes the printed report of `result` to `out`.
-///
-/// # Errors
-///
-/// Returns an [`io::Error`] if writing fails.
-fn write_report(result: &AnalyzeResult, project: &str, out: &mut impl Write) -> io::Result<()> {
-    for line in report_lines(result, project) {
-        writeln!(out, "{line}")?;
-    }
-    Ok(())
-}
-
-/// Builds the complete printed report as one line per element, right-trimmed.
-///
-/// Pure so the unit suite can pin vocabulary, widths, and arithmetic without an
-/// output sink; [`write_report`] only adds newlines.
-fn report_lines(result: &AnalyzeResult, project: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    lines.extend(header_lines(result, project));
-    lines.push(String::new());
-    lines.extend(section_bars("§1  The candidates this run produced"));
-    lines.extend(candidates_section(result));
-    lines.push(String::new());
-    lines.extend(section_bars(&format!(
-        "§2  What would change — {}",
-        featured_title(result)
-    )));
-    lines.extend(changes_section(result));
-    lines.push(String::new());
-    lines.extend(section_bars("§3  Blast radius — changed containers only"));
-    lines.extend(blast_radius_section(result));
-    lines.push(String::new());
-    lines.extend(section_bars("§4  Findings this run raised"));
-    lines.extend(findings_section(result));
-    lines.push(String::new());
-    lines.extend(section_bars(&format!(
-        "§5  Score delta — {}",
-        delta_title(result)
-    )));
-    lines.extend(score_delta_section(result));
-    lines.push(String::new());
-    lines.extend(section_bars("§6  Recommendation"));
-    lines.extend(recommendation_section(result));
-    lines.push(String::new());
-    lines.push(BAR.to_owned());
-    lines.push(format!(" end of report · {project}"));
-    lines.push(BAR.to_owned());
-    lines
-        .into_iter()
-        .map(|line| line.trim_end().to_owned())
-        .collect()
-}
-
-/// The heavy section separator.
-const BAR: &str =
-    "================================================================================";
-
-/// The light section separator.
-const SUB: &str =
-    "--------------------------------------------------------------------------------";
-
-/// Frames `title` between heavy bars.
-fn section_bars(title: &str) -> Vec<String> {
-    vec![BAR.to_owned(), format!(" {title}"), BAR.to_owned()]
 }
 
 /// Formats a score figure with four decimals.
@@ -179,11 +124,6 @@ fn improvement_summary(improvement: f64) -> String {
     }
 }
 
-/// Rounds to four decimals the way the delta column prints.
-fn round4(value: f64) -> f64 {
-    (value * 10_000.0).round() / 10_000.0
-}
-
 /// Formats a pull weight: at least one decimal, trailing zeros trimmed.
 fn weight(value: f64) -> String {
     let mut text = format!("{value:.4}");
@@ -206,20 +146,19 @@ fn nq(name: &str) -> String {
 ///
 /// `first_pad` indents the first line, `cont_pad` every continuation; both are
 /// counted against the budget, mirroring the approved artifact's geometry.
+/// Original separator whitespace is retained at line ends, including whitespace
+/// inside source names containing literal backticks.
 fn wrap(text: &str, first_pad: usize, cont_pad: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut indent = " ".repeat(first_pad);
-    for word in text.split_whitespace() {
-        let grown = cur.chars().count() + usize::from(!cur.is_empty()) + word.chars().count();
+    for word in text.split_inclusive(char::is_whitespace) {
+        let grown = cur.chars().count() + word.chars().count();
         if !cur.is_empty() && indent.chars().count() + grown > 99 {
             lines.push(format!("{indent}{cur}"));
             word.clone_into(&mut cur);
             indent = " ".repeat(cont_pad);
         } else {
-            if !cur.is_empty() {
-                cur.push(' ');
-            }
             cur.push_str(word);
         }
     }
@@ -229,166 +168,9 @@ fn wrap(text: &str, first_pad: usize, cont_pad: usize) -> Vec<String> {
     lines
 }
 
-/// Renders a labeled prose block: `label` prefixes the first line, continuation
-/// lines indent to `cont_pad`; `strip` is the wrapper padding the label replaces.
-fn labeled_block(label: &str, strip: usize, cont_pad: usize, text: &str) -> Vec<String> {
-    let mut lines = wrap(text, strip, cont_pad);
-    if let Some(first) = lines.first_mut() {
-        let body: String = first.chars().skip(strip).collect();
-        *first = format!("{label}{body}");
-    }
-    lines
-}
-
-/// Shortens `name` to `budget` display characters with a leading ellipsis;
-/// shorter names pass through untouched.
-fn tail(name: &str, budget: usize) -> String {
-    let count = name.chars().count();
-    if count <= budget {
-        return name.to_owned();
-    }
-    if budget <= 1 {
-        return "…".repeat(budget);
-    }
-    let kept: String = name.chars().skip(count - (budget - 1)).collect();
-    format!("…{kept}")
-}
-
-/// Derives each moved file's displayed leaf name.
-///
-/// The basename is the default; when basenames collide inside one table the
-/// path suffix grows from the end until every colliding member is unique, and
-/// if duplicates survive that, every leaf falls back to its full relative path.
-#[cfg(test)]
-fn leaf_names(files: &[FileMove]) -> Vec<String> {
-    let base = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
-    let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
-
-    // A basename shared with a peer needs suffix growth; unique ones pass through.
-    let grown: Vec<String> = paths
-        .iter()
-        .map(|path| {
-            let name = base(path);
-            let shared = paths
-                .iter()
-                .any(|other| other != path && base(other) == name);
-            if !shared {
-                return name;
-            }
-            let total_segments = path.split('/').count();
-            let mut depth = 1_usize;
-            loop {
-                let suffix = |p: &str| {
-                    let segments: Vec<&str> = p.split('/').collect();
-                    segments
-                        .iter()
-                        .rev()
-                        .take(depth)
-                        .rev()
-                        .copied()
-                        .collect::<Vec<_>>()
-                        .join("/")
-                };
-                let candidate = suffix(path);
-                let clash = paths.iter().any(|other| {
-                    other != path && base(other) == name && suffix(other) == candidate
-                });
-                depth += 1;
-                if total_segments < depth || !clash {
-                    break candidate;
-                }
-            }
-        })
-        .collect();
-
-    // If duplicates survive even at full-path length (identical paths), every
-    // leaf falls back to its full relative path.
-    let collapsed = grown
-        .iter()
-        .any(|name| grown.iter().filter(|other| *other == name).count() > 1);
-    if collapsed { paths } else { grown }
-}
-
-/// Bounds a composed suggestion title so `prefix` plus the title stays inside
-/// the grid: the widest quoted name shortens one character at a time with a
-/// leading-ellipsis tail, and the flag reports that anything was cut.
-fn fit_title(prefix: &str, title: &str, limit: usize) -> (String, bool) {
-    let mut current = title.to_owned();
-    let mut shortened = false;
-    let prefix_width = prefix.chars().count();
-    while prefix_width + current.chars().count() > limit {
-        if let Some(shrunk) = shrink_longest_quoted(&current) {
-            current = shrunk;
-            shortened = true;
-        } else {
-            let budget = limit.saturating_sub(prefix_width).max(1);
-            return (tail(&current, budget), true);
-        }
-    }
-    (current, shortened)
-}
-
-/// Shortens the widest backtick-quoted name in `title` by one character with a
-/// leading-ellipsis tail; `None` when no quoted name can shrink further.
-fn shrink_longest_quoted(title: &str) -> Option<String> {
-    let parts: Vec<&str> = title.split('`').collect();
-    let (widest_position, widest) = parts
-        .iter()
-        .enumerate()
-        .filter(|(position, _)| position % 2 == 1)
-        .max_by_key(|(_, part)| part.chars().count())?;
-    let widest = *widest;
-    let shrunk = tail(widest, widest.chars().count().saturating_sub(1));
-    if shrunk == widest {
-        return None;
-    }
-    let rebuilt = parts
-        .iter()
-        .enumerate()
-        .map(|(position, part)| {
-            if position == widest_position {
-                shrunk.clone()
-            } else {
-                (*part).to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("`");
-    Some(rebuilt)
-}
-
-/// Builds a suggestion title: action verb, the named leaves (spelled out for
-/// one or two, counted beyond), the preposition, and the quoted destination.
-fn suggestion_title(kind: MoveKind, names: &[String], to: &str) -> String {
-    let dest = nq(if to.is_empty() { "(root)" } else { to });
-    match kind {
-        MoveKind::Move => {
-            let leaf = names.first().map(|name| nq(name)).unwrap_or_default();
-            format!("Move {leaf} into {dest}")
-        }
-        MoveKind::Merge => counted_title("Merge", names, "into", &dest),
-        MoveKind::Split => counted_title("Split", names, "out into", &dest),
-    }
-}
-
-/// The merge/split title body: spelled-out leaves for one or two, a file count
-/// beyond.
-fn counted_title(verb: &str, names: &[String], prep: &str, dest: &str) -> String {
-    if names.len() <= 2 {
-        let shown = names
-            .iter()
-            .map(|name| nq(name))
-            .collect::<Vec<_>>()
-            .join(" and ");
-        format!("{verb} {shown} {prep} {dest}")
-    } else {
-        format!("{verb} {} files {prep} {dest}", names.len())
-    }
-}
-
 /// Builds a suggestion caption from the move's dominant reason.
 ///
-/// Every caption opens with the `WHY` anchor and quotes the name tokens it
+/// Every caption opens with the `Why:` anchor and quotes the name tokens it
 /// cites; the clustering fallback speaks of import-heavy regrouping, and the
 /// naming-cohesion reason (which the approved artifact never had occasion to
 /// print) borrows the term-gloss language for names fitting contents.
@@ -399,7 +181,7 @@ fn caption_for(reason: &MoveReason) -> String {
             weight: pull,
         } => {
             format!(
-                "WHY pulled toward {} — weight {}.",
+                "Why: pulled toward {} — weight {}.",
                 nq(partner),
                 weight(*pull)
             )
@@ -409,116 +191,22 @@ fn caption_for(reason: &MoveReason) -> String {
             count,
             cap,
         } => format!(
-            "WHY relieves {}, which holds {count} against a cap of {cap}.",
+            "Why: relieves {}, which holds {count} against a cap of {cap}.",
             nq(container)
         ),
         MoveReason::Follows { subject } => {
             format!(
-                "WHY follows {}, which this plan places nearby.",
+                "Why: follows {}, which this plan places nearby.",
                 nq(subject)
             )
         }
         MoveReason::NamingCohesion { .. } => {
-            "WHY clusters files whose names fit their destination.".to_owned()
+            "Why: clusters files whose names fit their destination.".to_owned()
         }
         MoveReason::Clustering => {
-            "WHY clusters files that already import each other heavily.".to_owned()
+            "Why: clusters files that already import each other heavily.".to_owned()
         }
     }
-}
-
-/// The dataset line, census, and reading rules — the approved header geometry.
-fn header_lines(result: &AnalyzeResult, project: &str) -> Vec<String> {
-    let mut lines = vec![BAR.to_owned(), format!(" dataset   : {project}")];
-    let languages = result
-        .summary
-        .files_by_language
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
-    let languages_suffix = if languages.is_empty() {
-        String::new()
-    } else {
-        format!(" ({languages})")
-    };
-    let census = format!(
-        " census    : {} symbols · {} edges · {} files{languages_suffix}",
-        result.summary.symbols, result.summary.edges, result.summary.files
-    );
-    lines.push(census);
-    lines.push(SUB.to_owned());
-    lines.push(" reading rules".to_owned());
-    lines.push(SUB.to_owned());
-    lines.extend(reading_rules(result));
-    lines
-}
-
-/// The reading-rules block: the owner-approved copy verbatim, with the run's
-/// headline figures riding their fixed positions.
-fn reading_rules(result: &AnalyzeResult) -> Vec<String> {
-    let mut lines = Vec::new();
-    if let Some((_, profile, candidate)) = featured_entry(result) {
-        lines.push(format!(
-            " scores    : four decimals, lower is better            {} → {}",
-            f4(profile.current.score),
-            f4(candidate.score)
-        ));
-        if candidate.improvement > 0.0 {
-            lines.push(
-                " gain      : improvement over that parameter profile's own starting point, measured in".to_owned(),
-            );
-            lines.push(format!(
-                "             the same units as the score              {}",
-                sf(candidate.improvement)
-            ));
-        } else {
-            lines.push(
-                " change    : the candidate does not improve that parameter profile's starting score"
-                    .to_owned(),
-            );
-            lines.push(format!(
-                "             {}",
-                improvement_summary(candidate.improvement)
-            ));
-        }
-    } else {
-        lines.push(" scores    : four decimals, lower is better".to_owned());
-        lines.push(
-            " gain      : improvement over that parameter profile's own starting point, measured in".to_owned(),
-        );
-        lines.push("             the same units as the score".to_owned());
-    }
-    lines.extend([
-        " profiles  : anchored and greenfield are complete parameter profiles; by default"
-            .to_owned(),
-        "             anchored prices path and anchor terms while greenfield sets them to zero"
-            .to_owned(),
-        " leaf      : one relocatable unit — a source file plus the symbols it".to_owned(),
-        "             carries; moving it moves both. A table's leaf is whichever unit".to_owned(),
-        "             that suggestion acts on: usually the whole file, sometimes one".to_owned(),
-        "             symbol or one call.".to_owned(),
-        " weight    : strength of the import relationship the move satisfies —".to_owned(),
-        "             roughly how many import connections it honors; a bigger number".to_owned(),
-        "             is more valuable to honor".to_owned(),
-        " comparability: candidate scores are comparable only within one parameter profile"
-            .to_owned(),
-        "             of one project. When two candidates share one structure, decide".to_owned(),
-        "             between them by intent, never by raw score.".to_owned(),
-        " rounding  : columns round independently to four decimals; totals compute unrounded"
-            .to_owned(),
-        " truncation: always explicit (… +N more); nothing is cut silently".to_owned(),
-        " grain     : every suggestion states what it relocates — whole files, or".to_owned(),
-        "             symbols within one file; a suggestion that changes no placement".to_owned(),
-        "             says so instead of shipping a table. Prose under each table is".to_owned(),
-        "             its caption and carries the why.".to_owned(),
-        " names     : file, folder and symbol names always appear in `backticks`".to_owned(),
-        " future    : anything today's strata cannot yet emit keeps the literal label".to_owned(),
-        "             \"future capability — not in current output\" (none apply here) —".to_owned(),
-        "             the label marks capability, never whether the advice is real".to_owned(),
-        " grid      : 100 columns · monospace · no color · no links · scroll only".to_owned(),
-    ]);
-    lines
 }
 
 /// The modes present in `result`, in their fixed report order.
@@ -531,39 +219,6 @@ fn present_modes(result: &AnalyzeResult) -> Vec<(&'static str, &ModeResult)> {
         modes.push(("greenfield", mode));
     }
     modes
-}
-
-fn featured_entry(result: &AnalyzeResult) -> Option<(&'static str, &ModeResult, &Candidate)> {
-    present_modes(result)
-        .into_iter()
-        .find_map(|(name, profile)| {
-            profile
-                .candidates
-                .first()
-                .map(|candidate| (name, profile, candidate))
-        })
-}
-
-/// The recommended candidate: the best of anchored when present, else of
-/// greenfield. Candidates arrive best-score-first, so the head is the pick.
-fn featured_candidate(result: &AnalyzeResult) -> Option<(&'static str, &Candidate)> {
-    featured_entry(result).map(|(name, _, candidate)| (name, candidate))
-}
-
-/// The `§2` title tail naming the itemized candidate.
-fn featured_title(result: &AnalyzeResult) -> String {
-    match featured_candidate(result) {
-        Some((name, candidate)) => format!("candidate {} ({})", candidate.index, name),
-        None => "no candidate this run produced".to_owned(),
-    }
-}
-
-/// The `§5` title tail naming the compared candidate.
-fn delta_title(result: &AnalyzeResult) -> String {
-    match featured_candidate(result) {
-        Some((_, candidate)) => format!("current → candidate {}", candidate.index),
-        None => "no candidate this run produced".to_owned(),
-    }
 }
 
 /// Renders every effective value in one selected parameter profile.
@@ -634,385 +289,181 @@ pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<St
             p.relocation.test_mirroring.builtins,
             p.relocation.test_mirroring.rules.len()
         ),
+        format!(
+            "   qualification evidence {} · structural {} · ambiguity-margin {}",
+            weight(p.qualification.minimum_evidence),
+            weight(p.qualification.minimum_structural),
+            weight(p.qualification.minimum_ambiguity_margin)
+        ),
+        format!(
+            "                 owner {} · role {} · source {} · destination {}",
+            weight(p.qualification.weights.unique_owner),
+            weight(p.qualification.weights.role_affinity),
+            weight(p.qualification.weights.source_cohesion),
+            weight(p.qualification.weights.destination_cohesion)
+        ),
+        format!(
+            "                 producer {} · architectural-reach {}",
+            weight(p.qualification.weights.producer_evidence),
+            weight(p.qualification.weights.architectural_reach)
+        ),
     ]
 }
 
-/// The `§1` candidate list: the printed claim line, every candidate named and
-/// scored, the comparability note beside the list, and the run's notices.
-fn candidates_section(result: &AnalyzeResult) -> Vec<String> {
-    let modes = present_modes(result);
-    if modes.is_empty() {
-        return vec![" candidate count : 0".to_owned()];
-    }
-    let total: usize = modes.iter().map(|(_, mode)| mode.candidates.len()).sum();
-
-    let clauses = modes
-        .iter()
-        .map(|(name, mode)| format!("{name} profile returned {}", mode.candidates.len()))
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let mut lines = vec![format!(" candidate count : {total}  ({clauses})")];
-    for (name, profile) in &modes {
-        lines.extend(effective_parameter_lines(name, &profile.parameters));
-    }
-    lines.push(String::new());
-
-    let tags: Vec<(String, &Candidate, &'static str)> = modes
-        .iter()
-        .flat_map(|(name, mode)| {
-            mode.candidates
-                .iter()
-                .map(move |candidate| (format!("{name}/{}", candidate.index), candidate, *name))
-        })
-        .collect();
-    let tag_width = tags
-        .iter()
-        .map(|(tag, _, _)| tag.chars().count())
-        .max()
-        .unwrap_or(1);
-
-    let featured = featured_candidate(result);
-    for (row, (tag, candidate, mode_name)) in tags.iter().enumerate() {
-        let annotation = match featured {
-            Some((featured_name, picked))
-                if *mode_name == featured_name && candidate.index == picked.index =>
-            {
-                "best score"
-            }
-            _ if is_head_of_mode(modes.as_slice(), mode_name, candidate.index)
-                && featured.is_some_and(|(featured_name, _)| *mode_name != featured_name) =>
-            {
-                match featured {
-                    Some((_, picked)) if candidate.tree == picked.tree => {
-                        "same shape, own baseline"
-                    }
-                    _ => "different shape, own baseline",
-                }
-            }
-            _ => "",
-        };
-        let suffix = if annotation.is_empty() {
-            String::new()
-        } else {
-            format!("   {annotation}")
-        };
-        lines.push(format!(
-            " candidate {}   {tag:<tag_width$}   score  {}   {}{suffix}",
-            row + 1,
-            f4(candidate.score),
-            improvement_summary(candidate.improvement),
-        ));
-    }
-
-    lines.push(String::new());
-    if let [(anchored_name, anchored), (greenfield_name, greenfield)] = modes.as_slice() {
-        let text = profile_comparison_text(
-            anchored_name,
-            anchored,
-            greenfield_name,
-            greenfield,
-            tags.as_slice(),
-        );
-        lines.extend(labeled_block(" comparability: ", 17, 17, &text));
-    } else {
-        lines.extend(labeled_block(
-            " comparability: ",
-            17,
-            17,
-            "candidate scores are comparable only within one parameter profile of one project.",
-        ));
-    }
-
-    if modes.iter().any(|(_, mode)| mode.solution_space_converged) {
-        lines.push(String::new());
-        lines.extend(labeled_block(
-            " note  ",
-            7,
-            7,
-            "fewer than the requested candidates survived; the solution space converged.",
-        ));
-    }
-    if let Some(note) = infeasibility_note(result) {
-        lines.push(String::new());
-        lines.extend(labeled_block(" note  ", 7, 7, &note));
-    }
-    lines
-}
-
-/// Compares two profile baselines without claiming gains for empty or regressing sets.
-fn profile_comparison_text(
-    anchored_name: &str,
-    anchored: &ModeResult,
-    greenfield_name: &str,
-    greenfield: &ModeResult,
-    candidates: &[(String, &Candidate, &'static str)],
-) -> String {
-    if candidates.is_empty() {
-        return "neither parameter profile produced a candidate, so there are no score changes to compare."
-            .to_owned();
-    }
-    let all_improving = candidates
-        .iter()
-        .all(|(_, candidate, _)| candidate.improvement > 0.0);
-    let (changes, each) = if all_improving {
-        ("gains", "gain")
-    } else {
-        ("score changes", "change")
-    };
-    format!(
-        "these two {changes} have different starting points — {anchored_name} prices the \
-         current tree at {} using its effective coefficients; {greenfield_name} prices the \
-         same tree at {} using its own effective coefficients. Each {each} is measured against \
-         its own parameter profile's baseline — never compare across parameter profiles.",
-        f4(anchored.current.score),
-        f4(greenfield.current.score),
-    )
-}
-
-/// Whether `index` names the head candidate of the named mode.
-fn is_head_of_mode(modes: &[(&'static str, &ModeResult)], name: &str, index: u32) -> bool {
-    modes
-        .iter()
-        .find(|(mode_name, _)| *mode_name == name)
-        .and_then(|(_, mode)| mode.candidates.first())
-        .is_some_and(|head| head.index == index)
-}
-
-/// Builds the infeasibility note: which modes mark today's layout infeasible,
-/// how many capacity findings it breaks, and — when the best candidate reports
-/// a remainder — what survives the proposal, stated directly. `None` when no
-/// mode is infeasible.
-fn infeasibility_note(result: &AnalyzeResult) -> Option<String> {
-    let infeasible: Vec<&str> = present_modes(result)
-        .into_iter()
-        .filter(|(_, mode)| mode.current.standing == CurrentStanding::Infeasible)
-        .map(|(name, _)| name)
-        .collect();
-    let first = *infeasible.first()?;
-    let subject = match infeasible.len() {
-        1 => format!("the {first} parameter profile records"),
-        _ => "both parameter profiles record".to_owned(),
-    };
-    // The engine owns the count: hard capacity breaches only (borderline
-    // observations stay listed in §4 but never count as breaks).
-    let findings = present_modes(result)
-        .into_iter()
-        .find(|(name, _)| *name == first)
-        .map_or(0, |(_, profile)| profile.current.capacity_breaks);
-    let plural = if findings == 1 { "" } else { "s" };
-    let mut note = format!(
-        "{subject} today's layout as infeasible — it breaks {findings} capacity \
-         finding{plural} (§4), so keeping everything as-is is not a result this run offers."
-    );
-    if let Some((_, candidate)) = featured_candidate(result)
-        && let Some(remainder) = candidate.capacity_remainder
-    {
-        if remainder.remaining == 0 {
-            let _ = write!(
-                note,
-                " Candidate {} clears every one of them.",
-                candidate.index
-            );
-        } else {
-            let _ = write!(
-                note,
-                " Candidate {} still leaves {} of them above their caps",
-                candidate.index, remainder.remaining
-            );
-            if remainder.file_level > 0 {
-                let _ = write!(
-                    note,
-                    " ({} at file level, where only conditional splits can help)",
-                    remainder.file_level
-                );
-            }
-            note.push('.');
-        }
-    }
-    Some(note)
-}
-
-/// The `§2` itemization: the preamble, one block per narrated change, and the
-/// unchanged-files honesty line.
-fn changes_section(result: &AnalyzeResult) -> Vec<String> {
-    let Some((featured_name, featured)) = featured_candidate(result) else {
-        return vec!["no candidate this run produced — nothing to change.".to_owned()];
-    };
-    let moved: usize = featured.delta_narration.iter().map(moved_file_count).sum();
-    let symbol_count = featured.symbol_moves.len();
-
+fn advice_with_options(result: &AnalyzeResult, options: RenderOptions) -> Vec<String> {
+    let paths = changes::Changes::paths(result);
     let mut lines = Vec::new();
-    if moved == 0 && symbol_count == 0 {
-        lines.push(format!(
-            "no change suggested — candidate {} matches today's layout, file for file.",
-            featured.index
-        ));
-        return lines;
-    }
-
-    let other_head = present_modes(result)
-        .into_iter()
-        .find(|(name, _)| *name != featured_name)
-        .and_then(|(_, mode)| mode.candidates.first());
-    let plans_differ = |other: &Candidate| {
-        other.delta_narration != featured.delta_narration
-            || other.symbol_moves != featured.symbol_moves
-    };
-    let lead = match other_head {
-        Some(other) if plans_differ(other) => format!(
-            "{}'s plan ({} changes) differs from {featured_name}'s in detail — only candidate \
-             {} is itemized below.",
-            other_mode_name(result, featured_name),
-            other.delta_narration.len(),
-            featured.index
-        ),
-        Some(_) => format!(
-            "{}'s plan matches this one change for change. Every suggestion relocates whole \
-             files ({moved} in all).",
-            other_mode_name(result, featured_name)
-        ),
-        None => String::new(),
-    };
-    // FIX08: when the candidate carries symbol-grain relocations the preamble
-    // must claim them — "relocates whole files" alone would under-report the
-    // plan. The note is appended only when symbols actually moved, so
-    // file-only candidates keep their prior wording byte for byte.
-    let symbols_note = if symbol_count > 0 {
-        format!(" The plan also relocates {symbol_count} symbol(s) between files, itemized below.")
-    } else {
-        String::new()
-    };
-    if lead.is_empty() && symbols_note.is_empty() {
-        lines.push(format!(
-            "Every suggestion relocates whole files ({moved} in all):"
-        ));
-    } else if lead.is_empty() {
+    let has_assessments = result
+        .advice
+        .recommended
+        .iter()
+        .chain(&result.advice.review_candidates)
+        .any(|item| !item.assessments.is_empty());
+    if has_assessments {
         lines.extend(wrap(
-            &format!("Every suggestion relocates whole files ({moved} in all).{symbols_note}"),
+            "Profiles share analysis-start evidence but apply their own weights and thresholds.",
             1,
             1,
         ));
-    } else {
+    }
+    if options.verbose && has_assessments {
         lines.extend(wrap(
-            &format!(
-                "{lead} Every suggestion relocates whole files ({moved} in all).{symbols_note}"
-            ),
+            "Evidence: owner means unique ownership; role means role affinity; source and destination mean cohesion at each side; producer means producer evidence; reach means architectural reach.",
+            1,
+            1,
+        ));
+        lines.extend(wrap(
+            "Weighted is the normalized score across all six signals; structural excludes role affinity; margin is the selected destination's lead over the best alternative.",
+            1,
+            1,
+        ));
+        lines.extend(wrap(
+            "The values after weighted and structural, and the margin threshold, are configured minimums.",
             1,
             1,
         ));
     }
-    lines.push(String::new());
-
-    for (step, entry) in featured.delta_narration.iter().enumerate() {
-        lines.extend(suggestion_block(step + 1, entry));
-    }
-
-    // FIX08: the symbol-grain itemization rides after the whole-file blocks —
-    // same static-text dump, one prose line per relocation.
-    if symbol_count > 0 {
-        lines.push(String::new());
-        lines.push(format!(" Symbol moves ({symbol_count} in all):"));
-        for entry in &featured.symbol_moves {
-            lines.push(symbol_move_line(entry));
+    for (heading, items) in [
+        ("Recommended", result.advice.recommended.as_slice()),
+        (
+            "Review candidate",
+            result.advice.review_candidates.as_slice(),
+        ),
+    ] {
+        lines.push(format!(" {heading} ({}):", items.len()));
+        for item in items {
+            lines.extend(wrap(
+                &format!(
+                    "- {} → `{}` · supporting [{}] · qualified [{}] · absent [{}] · conflicts [{}]",
+                    advice_subject(&item.proposal, &paths),
+                    advice_path(&item.proposal, &item.destination, &paths),
+                    profile_names(&item.supporting_profiles),
+                    profile_names(&item.qualified_profiles),
+                    profile_names(&item.absent_profiles),
+                    item.conflicting_destinations
+                        .iter()
+                        .map(|conflict| format!(
+                            "{}→{}",
+                            profile_name(conflict.profile),
+                            nq(&advice_path(&item.proposal, &conflict.destination, &paths))
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+                3,
+                3,
+            ));
+            for assessment in item.assessments.iter().filter(|_| options.verbose) {
+                let evidence = assessment.evidence;
+                let best_alternative = assessment.best_alternative.as_deref().map_or_else(
+                    || "none".to_owned(),
+                    |path| nq(&advice_path(&item.proposal, path, &paths)),
+                );
+                lines.extend(wrap(&format!(
+                    "{}: owner {:.2} · role {:.2} · source {:.2} · destination {:.2} · producer {:.2} · reach {:.2} · margin {:.2}; weighted {:.2}/{:.2} · structural {:.2}/{:.2} · margin threshold {:.2} · qualified {} · best alternative {}",
+                    profile_name(assessment.profile), evidence.unique_owner, evidence.role_affinity,
+                    evidence.source_cohesion, evidence.destination_cohesion, evidence.producer_evidence,
+                    evidence.architectural_reach, assessment.ambiguity_margin, assessment.weighted_score,
+                    assessment.thresholds.minimum_evidence, assessment.structural_score,
+                    assessment.thresholds.minimum_structural, assessment.thresholds.minimum_ambiguity_margin,
+                    assessment.qualified, best_alternative
+                ), 5, 5));
+            }
+            if !item.review_reasons.is_empty() {
+                lines.extend(wrap(
+                    &format!(
+                        "review reasons: {}",
+                        item.review_reasons
+                            .iter()
+                            .map(|reason| review_reason_text(*reason))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    5,
+                    5,
+                ));
+            }
         }
     }
-
-    let unchanged = result
-        .summary
-        .files
-        .saturating_sub(u32::try_from(moved).unwrap_or(u32::MAX));
-    if unchanged > 0 {
-        let omission =
-            format!("The other {unchanged} files are absent because nothing about them changes.");
-        lines.extend(wrap(&omission, 1, 1));
-    }
-    lines
-}
-
-/// The display name of the mode other than `featured_name`.
-fn other_mode_name<'a>(result: &'a AnalyzeResult, featured_name: &str) -> &'a str {
-    present_modes(result)
-        .into_iter()
-        .find(|(name, _)| *name != featured_name)
-        .map_or("greenfield", |(name, _)| name)
-}
-
-/// Renders one numbered suggestion: title bar, grain label, the three-column
-/// change table (with explicit shortening honesty), and the captioned why.
-fn suggestion_block(number: usize, entry: &Move) -> Vec<String> {
-    let names: Vec<String> = entry.files.iter().map(|file| file.path.clone()).collect();
-    let title_prefix = format!(" {number} · ");
-    let (title, title_shortened) = fit_title(
-        &title_prefix,
-        &suggestion_title(entry.kind, &names, &entry.to),
-        100,
-    );
-    let mut lines = vec![
-        format!(" {SUB}"),
-        format!("{title_prefix}{title}"),
-        SUB.to_owned(),
-        " grain : whole files".to_owned(),
-        String::new(),
-    ];
-    let linked = !entry.mirrors.is_empty() || !entry.blocked_mirrors.is_empty();
-    if linked {
-        lines.push(" source files".to_owned());
-    }
-    let (table, shortened) = change_table(&entry.files, &names, &entry.to);
-    lines.extend(table);
-    if !entry.mirrors.is_empty() {
-        lines.push(String::new());
-        lines.push(" mirrored tests".to_owned());
-        lines.extend(mirror_table(&entry.mirrors));
-    }
-    if !entry.blocked_mirrors.is_empty() {
-        lines.push(String::new());
-        lines.push(" blocked mirrors".to_owned());
-        lines.extend(blocked_mirror_table(&entry.blocked_mirrors));
-    }
-    if shortened || title_shortened {
-        lines.push(
-            "          a leading … marks a shortened place name; the run's output carries the \
-             full paths."
-                .to_owned(),
-        );
-    }
-    lines.push(String::new());
-    lines.extend(labeled_block(
-        " caption  ",
-        11,
-        11,
-        &caption_for(&entry.reason),
-    ));
     lines.push(String::new());
     lines
 }
 
-fn mirror_table(mirrors: &[MirrorMove]) -> Vec<String> {
-    let mut rows = vec![" leaf | before place | after place".to_owned()];
-    rows.extend(mirrors.iter().map(|mirror| {
-        format!(
-            " {} | {} | {}",
-            nq(&mirror.path),
-            nq(&mirror.from),
-            nq(&mirror.to)
-        )
-    }));
-    rows
+fn review_reason_text(reason: ReviewReason) -> &'static str {
+    match reason {
+        ReviewReason::PartialProfileSupport => "selected by only some executed profiles",
+        ReviewReason::ConflictingDestinations => "profiles selected different destinations",
+        ReviewReason::WeakEvidence => "destination evidence is below the configured minimum",
+        ReviewReason::WeakStructuralEvidence => "structural evidence is insufficient",
+        ReviewReason::WeakAmbiguityMargin => {
+            "the destination is not sufficiently stronger than the best alternative"
+        }
+        ReviewReason::NoMajoritySupport => {
+            "no strict majority of executed profiles provides qualifying support for this destination"
+        }
+    }
 }
 
-fn blocked_mirror_table(mirrors: &[BlockedMirror]) -> Vec<String> {
-    let mut rows = vec![" leaf | before place | intended place | reason".to_owned()];
-    rows.extend(mirrors.iter().map(|mirror| {
-        format!(
-            " {} | {} | {} | {}",
-            nq(&mirror.path),
-            nq(&mirror.from),
-            nq(&mirror.intended_to),
-            blocked_mirror_reason(mirror.reason)
-        )
-    }));
-    rows
+fn profile_name(profile: strata_engine::ProfileName) -> &'static str {
+    match profile {
+        strata_engine::ProfileName::Anchored => "anchored",
+        strata_engine::ProfileName::Greenfield => "greenfield",
+    }
+}
+
+fn advice_path(proposal: &RelocationProposal, path: &str, paths: &changes::Changes) -> String {
+    match proposal {
+        RelocationProposal::File { .. } => paths.path(path),
+        RelocationProposal::Symbol { .. } => path.to_owned(),
+    }
+}
+
+fn advice_subject(proposal: &RelocationProposal, paths: &changes::Changes) -> String {
+    match proposal {
+        RelocationProposal::File { relocation } => relocation.files.first().map_or_else(
+            || "file `(unknown)`".to_owned(),
+            |file| format!("file `{}`", paths.path(&file.path)),
+        ),
+        RelocationProposal::Symbol { relocation } => {
+            let prefix = if relocation.kind == SymbolKind::Type {
+                "type "
+            } else {
+                "symbol "
+            };
+            format!(
+                "{prefix}`{}` from `{}`",
+                relocation.symbol, relocation.from_path
+            )
+        }
+    }
+}
+
+fn profile_names(profiles: &[strata_engine::ProfileName]) -> String {
+    profiles
+        .iter()
+        .map(|profile| profile_name(*profile))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn blocked_mirror_reason(reason: BlockedMirrorReason) -> &'static str {
@@ -1028,77 +479,11 @@ fn moved_file_count(entry: &Move) -> usize {
     entry.files.len().saturating_add(entry.mirrors.len())
 }
 
-/// Builds the `leaf | before place | after place` table for one suggestion.
-///
-/// Columns size to their widest cell (quoted names included) with the header
-/// words as floors; when any row would cross the grid the place columns shrink
-/// symmetrically and over-long names take a leading-ellipsis tail, flipping the
-/// returned honesty flag.
-fn change_table(files: &[FileMove], names: &[String], to: &str) -> (Vec<String>, bool) {
-    let destination = if to.is_empty() { "(root)" } else { to };
-    let leaf_width = names
-        .iter()
-        .map(|name| name.chars().count() + 2)
-        .max()
-        .unwrap_or(4)
-        .max(4);
-    let before_full = files
-        .iter()
-        .map(|file| file.from.chars().count() + 2)
-        .max()
-        .unwrap_or(12)
-        .max(12);
-    let after_full = (destination.chars().count() + 2).max(11);
-
-    let build = |before_width: usize, after_width: usize| -> (Vec<String>, bool) {
-        let before_budget = before_width.saturating_sub(2);
-        let after_budget = after_width.saturating_sub(2);
-        let before_cells: Vec<String> = files
-            .iter()
-            .map(|file| nq(&tail(&file.from, before_budget)))
-            .collect();
-        let shortened_before = files
-            .iter()
-            .any(|file| tail(&file.from, before_budget) != file.from);
-        let shown_after = tail(destination, after_budget);
-        let shortened = shortened_before || shown_after != destination;
-        let after_cell = nq(&shown_after);
-        let mut rows = Vec::new();
-        for (name, before_cell) in names.iter().zip(before_cells.iter()) {
-            rows.push(format!(
-                " {:<leaf_width$} | {:<before_width$} | {:<after_width$}",
-                nq(name),
-                before_cell,
-                after_cell,
-            ));
-        }
-        rows.insert(
-            0,
-            format!(
-                " {:<leaf_width$} | {:<before_width$} | {:<after_width$}",
-                "leaf", "before place", "after place",
-            ),
-        );
-        (rows, shortened)
-    };
-
-    let (rows, shortened) = build(before_full, after_full);
-    if rows.iter().all(|row| row.chars().count() <= 100) {
-        return (rows, shortened);
-    }
-    let budget = 93_usize.saturating_sub(leaf_width);
-    let half = budget / 2;
-    build(
-        before_full.min(half + (budget % 2)).max(12),
-        after_full.min(half).max(11),
-    )
-}
-
 /// One prose line per symbol relocation (FIX08): what moves, from which file
 /// to which file, the objective delta it earned at acceptance, and how many
 /// imports must be re-pointed. Full repo-relative paths — symbol moves name no
 /// folder to abbreviate against.
-fn symbol_move_line(entry: &SymbolMove) -> String {
+pub(crate) fn symbol_move_line(entry: &SymbolMove) -> String {
     let kind = if entry.kind == SymbolKind::Type {
         " type"
     } else {
@@ -1106,185 +491,12 @@ fn symbol_move_line(entry: &SymbolMove) -> String {
     };
     format!(
         " - move{kind} `{}` from {} to {} (delta {:+.4}, {} import(s) to re-point)",
-        entry.symbol, entry.from_path, entry.to_path, entry.delta, entry.broken_imports
+        entry.symbol,
+        nq(&entry.from_path),
+        nq(&entry.to_path),
+        entry.delta,
+        entry.broken_imports
     )
-}
-
-/// The `§3` changed-containers tally: per-container deltas, the twelve largest,
-/// the honest remainder marker, and the balance note.
-fn blast_radius_section(result: &AnalyzeResult) -> Vec<String> {
-    let Some((_, featured)) = featured_candidate(result) else {
-        return vec!["no candidate this run produced — nothing relocates.".to_owned()];
-    };
-    let moved: usize = featured.delta_narration.iter().map(moved_file_count).sum();
-    let rows = blast_rows(&featured.delta_narration);
-    if rows.is_empty() || moved == 0 {
-        return vec!["nothing relocates — every container keeps its files.".to_owned()];
-    }
-
-    let shown = rows.len().min(12);
-    let mut lines = wrap(
-        &format!(
-            "{} containers change as {moved} files relocate; the {shown} largest:",
-            rows.len()
-        ),
-        1,
-        1,
-    );
-    lines.push(String::new());
-
-    let width = rows
-        .iter()
-        .take(shown)
-        .map(|(container, _)| container.chars().count() + 2)
-        .max()
-        .unwrap_or(2);
-    for (container, delta) in rows.iter().take(shown) {
-        lines.push(format!(" {:<width$}  {delta:+}f", nq(container)));
-    }
-    let rest: Vec<(String, i64)> = rows.iter().skip(shown).cloned().collect();
-    if !rest.is_empty() {
-        let low = rest.iter().map(|(_, delta)| delta.abs()).min().unwrap_or(0);
-        let high = rest.iter().map(|(_, delta)| delta.abs()).max().unwrap_or(0);
-        let range = if low == high {
-            format!("±{low}f")
-        } else {
-            format!("{low}–{high}f")
-        };
-        lines.push(format!(
-            " … +{} more containers, each changing by {range}",
-            rest.len()
-        ));
-    }
-    lines.push(String::new());
-    lines.extend(wrap(
-        "the tally balances: every file that leaves a container arrives in one, so the changes \
-         sum to zero.",
-        1,
-        1,
-    ));
-    lines
-}
-
-/// Computes per-container member deltas for a plan: every relocation subtracts
-/// one at its source folder and adds one per relocated file at its
-/// destination, so a merge group lands with its full weight. Sorted by largest
-/// absolute change, ties in container order.
-fn blast_rows(moves: &[Move]) -> Vec<(String, i64)> {
-    let mut deltas: BTreeMap<String, i64> = BTreeMap::new();
-    for entry in moves {
-        for file in &entry.files {
-            *deltas.entry(file.from.clone()).or_default() -= 1;
-            *deltas.entry(entry.to.clone()).or_default() += 1;
-        }
-        for mirror in &entry.mirrors {
-            *deltas.entry(mirror.from.clone()).or_default() -= 1;
-            *deltas.entry(mirror.to.clone()).or_default() += 1;
-        }
-    }
-    let mut rows: Vec<(String, i64)> = deltas
-        .into_iter()
-        .filter(|(_, delta)| *delta != 0)
-        .collect();
-    rows.sort_by(|left, right| {
-        right
-            .1
-            .abs()
-            .cmp(&left.1.abs())
-            .then_with(|| left.0.cmp(&right.0))
-    });
-    rows
-}
-
-/// The `§4` findings: cycles with priced cuts, capacity breaches, then any
-/// further finding classes the run raised — nothing is dropped silently.
-fn findings_section(result: &AnalyzeResult) -> Vec<String> {
-    let mut lines = finding_group("shared findings", &result.current.shared_findings);
-    for (name, profile) in present_modes(result) {
-        if !lines.is_empty() {
-            lines.push(String::new());
-        }
-        lines.extend(finding_group(
-            &format!("{name}-only findings"),
-            &profile.current.unique_findings,
-        ));
-    }
-    lines
-}
-
-fn finding_group(label: &str, violations: &[Violation]) -> Vec<String> {
-    let mut lines = vec![format!(" {label}:")];
-    if violations.is_empty() {
-        lines.push(" none".to_owned());
-        return lines;
-    }
-    let cycles: Vec<&Violation> = violations
-        .iter()
-        .filter(|violation| violation.kind == ViolationKind::Cycle)
-        .collect();
-    let capacity: Vec<&Violation> = violations
-        .iter()
-        .filter(|violation| violation.kind == ViolationKind::Capacity)
-        .collect();
-
-    lines.extend([
-        String::new(),
-        format!(
-            " cycles ({}) — cuts that would break them, priced by weight:",
-            cycles.len()
-        ),
-        String::new(),
-    ]);
-    for (index, violation) in cycles.iter().enumerate() {
-        let mut wrapped = wrap(&cycle_finding_text(violation), 3, 5);
-        if let Some(first) = wrapped.first_mut() {
-            let body: String = first.chars().skip(3).collect();
-            *first = format!(" {}. {body}", index + 1);
-        }
-        lines.extend(wrapped);
-    }
-
-    if !capacity.is_empty() {
-        lines.push(String::new());
-    }
-    lines.push(format!(
-        " capacity ({}) — containers and files over their caps today:",
-        capacity.len()
-    ));
-    lines.push(String::new());
-    for violation in &capacity {
-        let severity = match violation.severity {
-            Severity::Borderline => "borderline",
-            Severity::Violation => "violation",
-        };
-        lines.extend(wrap(&format!("[{severity}] {}", violation.detail), 1, 3));
-    }
-
-    for (kind, lead) in [
-        (
-            ViolationKind::Polarity,
-            "production depending on test code today:",
-        ),
-        (
-            ViolationKind::Visibility,
-            "declared visibility wider than the derived scope today:",
-        ),
-    ] {
-        let group: Vec<&Violation> = violations
-            .iter()
-            .filter(|violation| violation.kind == kind)
-            .collect();
-        if group.is_empty() {
-            continue;
-        }
-        lines.push(String::new());
-        lines.push(format!(" {} ({}) — {lead}", kind_word(kind), group.len()));
-        lines.push(String::new());
-        for violation in group {
-            lines.extend(wrap(&violation.detail, 1, 3));
-        }
-    }
-    lines
 }
 
 /// Rebuilds one cycle finding's text from its structured fields, quoting every
@@ -1323,279 +535,6 @@ fn cycle_finding_text(violation: &Violation) -> String {
         let _ = write!(text, ", +{} more", breaks.len() - 1);
     }
     text
-}
-
-/// The lowercase report word for a finding class outside cycles and capacity.
-fn kind_word(kind: ViolationKind) -> &'static str {
-    match kind {
-        ViolationKind::Cycle => "cycles",
-        ViolationKind::Polarity => "polarity",
-        ViolationKind::Capacity => "capacity",
-        ViolationKind::Visibility => "visibility",
-    }
-}
-
-/// Accessor for one scored term of a breakdown.
-type Term = fn(&ScoreBreakdown) -> f64;
-
-/// The scored terms that always print, in their fixed table order.
-const TERMS: [(&str, Term); 7] = [
-    ("cut", |breakdown| breakdown.cut),
-    ("imbalance", |breakdown| breakdown.imbalance),
-    ("naming", |breakdown| breakdown.naming),
-    ("path", |breakdown| breakdown.path),
-    ("anchor", |breakdown| breakdown.anchor),
-    ("dependency-only", |breakdown| breakdown.dependency_only),
-    ("companion-separation", |breakdown| {
-        breakdown.companion_separation
-    }),
-];
-
-/// The `§5` per-term decomposition of the current score versus the featured
-/// candidate, with the combine line and the plain-language term gloss. The
-/// capacity term prints only when a run actually prices one, keeping every
-/// zero-capacity page byte-shaped like the approved artifact.
-fn score_delta_section(result: &AnalyzeResult) -> Vec<String> {
-    let Some((_, profile, featured)) = featured_entry(result) else {
-        return vec![" no candidate this run produced.".to_owned()];
-    };
-    let proposal_breakdown = featured.score_breakdown;
-    let proposal_score = featured.score;
-    let current = &profile.current.score_breakdown;
-
-    let mut lines = vec![format!(
-        " {:<15}{:>11}    {:>11}    delta",
-        "term", "current", "proposal"
-    )];
-    let capacity_live = current.capacity != 0.0 || proposal_breakdown.capacity != 0.0;
-    for (name, term) in TERMS {
-        let before = term(current);
-        let after = term(&proposal_breakdown);
-        lines.push(format!(
-            " {name:<15}{:>11}    {:>11}    {:>11}",
-            f4(before),
-            f4(after),
-            sf(round4(after - before))
-        ));
-    }
-    if capacity_live {
-        lines.push(format!(
-            " {:<15}{:>11}    {:>11}    {:>11}",
-            "capacity",
-            f4(current.capacity),
-            f4(proposal_breakdown.capacity),
-            sf(round4(proposal_breakdown.capacity - current.capacity))
-        ));
-    }
-    let gain_note = if featured.improvement > 0.0 {
-        format!("   (gain {})", sf(featured.improvement))
-    } else {
-        format!("   ({})", improvement_summary(featured.improvement))
-    };
-    lines.push(format!(
-        " {:<15}{:>11}    {:>11}    {:>11}{gain_note}",
-        "score",
-        f4(profile.current.score),
-        f4(proposal_score),
-        sf(round4(proposal_score - profile.current.score)),
-    ));
-    lines.push(String::new());
-    lines.push(if capacity_live {
-        " the terms combine into the total score; lower is better.".to_owned()
-    } else {
-        " the seven displayed terms combine into the total score; lower is better.".to_owned()
-    });
-    lines.push(String::new());
-
-    let mut gloss = String::from(
-        "cut = import connections broken by moving · imbalance = lopsided folder sizes · naming \
-         = folder names fit their contents · path = how far things travel · anchor = credit for \
-         respecting existing well-placed code · dependency-only = penalty for moving a declaration \
-         toward only what it depends on · companion-separation = penalty for keeping a named \
-         signature companion away from its owner",
-    );
-    if capacity_live {
-        gloss.push_str(" · capacity = penalty for containers still over cap");
-    }
-    lines.extend(labeled_block(" term gloss  ", 13, 13, &gloss));
-    lines
-}
-
-/// The `§6` verdict band: adopt an improving action or decline a regression,
-/// then state the second mode, keeping option, and partial-adoption rule.
-fn recommendation_section(result: &AnalyzeResult) -> Vec<String> {
-    let mut lines = Vec::new();
-    let modes = present_modes(result);
-    let featured = featured_candidate(result);
-    let total: usize = modes.iter().map(|(_, mode)| mode.candidates.len()).sum();
-
-    if let Some((featured_name, candidate)) = featured {
-        lines.extend(candidate_recommendation_lines(
-            modes.as_slice(),
-            featured_name,
-            candidate,
-            total,
-        ));
-    }
-
-    let infeasible: Vec<&str> = modes
-        .iter()
-        .filter(|(_, mode)| mode.current.standing == CurrentStanding::Infeasible)
-        .map(|(name, _)| *name)
-        .collect();
-    let keep = if let [single] = infeasible.as_slice() {
-        format!(
-            "not offered — the {single} parameter profile marks today's layout infeasible under its own caps (§4)."
-        )
-    } else if infeasible.len() > 1 {
-        "not offered — both parameter profiles mark today's layout infeasible under their own caps (§4)."
-            .to_owned()
-    } else {
-        match featured {
-            Some((_, candidate)) if !candidate.delta_narration.is_empty() => {
-                let baseline = modes
-                    .iter()
-                    .find(|(name, _)| {
-                        featured.is_some_and(|(featured_name, _)| featured_name == *name)
-                    })
-                    .map_or(0.0, |(_, mode)| mode.current.score);
-                format!(
-                    "keeping today's layout remains possible — it scores {} against this \
-                     proposal's {}.",
-                    f4(baseline),
-                    f4(candidate.score)
-                )
-            }
-            Some(_) => {
-                "keep the current layout — the run's best candidate is today's tree unchanged."
-                    .to_owned()
-            }
-            None => "keep the current layout — the run produced no candidate to weigh against it."
-                .to_owned(),
-        }
-    };
-    lines.extend(labeled_block(&format!(" {:<11}", "keep"), 12, 12, &keep));
-    lines.extend(labeled_block(
-        &format!(" {:<11}", "in part"),
-        12,
-        12,
-        "partial plans are not rescored; apply §2 in its given order, one change at a time.",
-    ));
-    lines
-}
-
-/// Renders the action verdict for a featured candidate that actually relocates files.
-fn candidate_recommendation_lines(
-    modes: &[(&str, &ModeResult)],
-    featured_name: &str,
-    candidate: &Candidate,
-    total: usize,
-) -> Vec<String> {
-    if candidate.delta_narration.is_empty() {
-        return Vec::new();
-    }
-    let mut lines = Vec::new();
-    let files: usize = candidate.delta_narration.iter().map(moved_file_count).sum();
-    if candidate.improvement > 0.0 {
-        let mut adopt = format!(
-            "candidate {} — {}, gain {}, {} changes relocating {} files (§2).",
-            candidate.index,
-            f4(candidate.score),
-            sf(candidate.improvement),
-            candidate.delta_narration.len(),
-            files
-        );
-        let current = modes
-            .iter()
-            .find(|(name, _)| *name == featured_name)
-            .map_or(&candidate.score_breakdown, |(_, mode)| {
-                &mode.current.score_breakdown
-            });
-        adopt.push_str(&driver_sentence(current, candidate));
-        lines.extend(labeled_block(&format!(" {:<11}", "adopt"), 12, 12, &adopt));
-
-        if let Some((other_name, other_mode, other)) = modes
-            .iter()
-            .filter_map(|(name, mode)| mode.candidates.first().map(|head| (*name, mode, head)))
-            .find(|(name, _, _)| *name != featured_name)
-        {
-            let shape = if other.tree == candidate.tree {
-                "the same grouping"
-            } else {
-                "a related but different shape"
-            };
-            let pair = if total == 2 { "the two" } else { "them" };
-            let second = format!(
-                "{other_name} reaches {shape} — {}, {} against its own {} baseline; decide \
-                     between {pair} by intent, never across baselines.",
-                f4(other.score),
-                improvement_summary(other.improvement),
-                f4(other_mode.current.score),
-            );
-            lines.extend(labeled_block(
-                &format!(" {:<11}", "second"),
-                12,
-                12,
-                &second,
-            ));
-        }
-    } else {
-        let decline = format!(
-            "candidate {} is not recommended — it scores {} with {} against the {featured_name} \
-             parameter profile's baseline.",
-            candidate.index,
-            f4(candidate.score),
-            improvement_summary(candidate.improvement),
-        );
-        lines.extend(labeled_block(
-            &format!(" {:<11}", "decline"),
-            12,
-            12,
-            &decline,
-        ));
-    }
-    lines
-}
-
-/// The adopt paragraph's driver sentence, priced against the featured mode's
-/// own baseline: the largest current term the proposal reduces, extended by the
-/// flat-cut clause when imports broken stay within a five percent band. Empty
-/// when no term dominates.
-fn driver_sentence(current: &ScoreBreakdown, candidate: &Candidate) -> String {
-    let proposal = &candidate.score_breakdown;
-    let mut dominant: Option<(&str, Term)> = None;
-    let mut best_magnitude = 0.0_f64;
-    for (name, term) in TERMS {
-        let magnitude = term(current).abs();
-        if magnitude > best_magnitude {
-            best_magnitude = magnitude;
-            dominant = Some((name, term));
-        }
-    }
-    let Some((name, term)) = dominant else {
-        return String::new();
-    };
-    let (before, after) = (term(current), term(proposal));
-    if before <= 0.0 || after >= before {
-        return String::new();
-    }
-    let mut sentence = format!(
-        " It goes straight at the {name} that dominates today's score ({} → {}).",
-        f4(before),
-        f4(after)
-    );
-    let cut_before = current.cut;
-    let cut_after = proposal.cut;
-    if cut_before > 0.0 && cut_after <= cut_before && (cut_before - cut_after) / cut_before <= 0.05
-    {
-        let _ = write!(
-            sentence,
-            " while imports broken stay nearly flat ({} → {}).",
-            f4(cut_before),
-            f4(cut_after)
-        );
-    }
-    sentence
 }
 
 /// Renders one container `node` as an indented tree to `out`.
@@ -1694,14 +633,12 @@ pub fn render_diff(candidate: &Candidate, out: &mut impl Write) -> io::Result<()
     Ok(())
 }
 
-/// Renders a candidate's moves as numbered per-file steps — the shared body of
-/// the `diff` and `report` faces so both speak in one voice.
+/// Renders a candidate's moves as numbered per-file steps for `diff`.
 ///
 /// Each group prints a header (`{kind} — {reason}`), then one numbered step per
 /// moved file reading `{path} [{from} → {to}]`; step numbers run continuously
 /// across the candidate so the whole change reads as one ordered plan. Lines
-/// carry no trailing newline: `diff` prints them raw, `report` wraps them in a
-/// fenced block. An empty source or destination renders as `(root)`.
+/// carry no trailing newline. An empty source or destination renders as `(root)`.
 pub(crate) fn move_step_lines(moves: &[Move]) -> Vec<String> {
     let mut lines = Vec::new();
     let mut step = 1_usize;
@@ -1801,11 +738,34 @@ fn severity_tag(severity: Severity) -> &'static str {
     }
 }
 
+/// Accessor for one scored term of a breakdown.
+type Term = fn(&ScoreBreakdown) -> f64;
+
+/// The scored terms that always print, in their fixed table order.
+const TERMS: [(&str, Term); 7] = [
+    ("cut", |breakdown| breakdown.cut),
+    ("imbalance", |breakdown| breakdown.imbalance),
+    ("naming", |breakdown| breakdown.naming),
+    ("path", |breakdown| breakdown.path),
+    ("anchor", |breakdown| breakdown.anchor),
+    ("dependency-only", |breakdown| breakdown.dependency_only),
+    ("companion-separation", |breakdown| {
+        breakdown.companion_separation
+    }),
+];
+
+#[cfg(test)]
+fn report_lines(result: &AnalyzeResult, project: &str) -> Vec<String> {
+    report::Report::build(result, project, RenderOptions::default()).lines()
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use strata_engine::{
-        CapacityRemainder, ContainerNode, CurrentTree, EdgeBreak, FileMove, Modes, MoveReason,
-        ProfileConfig, ProfileCurrent, ScoreBreakdown, Summary, SymbolKind, SymbolMove,
+        CapacityRemainder, ContainerNode, CurrentStanding, CurrentTree, EdgeBreak, FileMove, Modes,
+        MoveReason, ProfileConfig, ProfileCurrent, ScoreBreakdown, Summary, SymbolKind, SymbolMove,
         SymbolPlacement,
     };
 
@@ -1836,6 +796,7 @@ mod tests {
                 tree: file_node("lib", 2),
                 shared_findings: Vec::new(),
             },
+            advice: strata_engine::Advice::default(),
             profiles: Modes {
                 anchored: Some(ModeResult {
                     parameters: ProfileConfig::default(),
@@ -1892,6 +853,19 @@ mod tests {
             greenfield: None,
         };
         result
+    }
+
+    #[test]
+    fn should_follow_combined_multi_package_moves_in_terminal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut result = result_with_candidate();
+        super::combined_package_moves::configure(&mut result)?;
+        let mut buffer = Vec::new();
+
+        render(&result, Format::Summary, "workspace", &mut buffer)?;
+
+        super::combined_package_moves::assert_paths(&String::from_utf8(buffer)?)?;
+        Ok(())
     }
 
     /// Builds a zeroed score breakdown.
@@ -1965,8 +939,11 @@ mod tests {
     }
 
     #[test]
-    fn should_resolve_to_json_when_piped_without_an_explicit_format() {
-        assert_eq!(Format::resolve(None, false, Format::Summary), Format::Json);
+    fn should_resolve_to_summary_when_piped_without_an_explicit_format() {
+        assert_eq!(
+            Format::resolve(None, false, Format::Summary),
+            Format::Summary
+        );
     }
 
     #[test]
@@ -2050,48 +1027,6 @@ mod tests {
     }
 
     #[test]
-    fn should_shorten_long_names_with_a_leading_ellipsis() {
-        assert_eq!(tail("short", 10), "short");
-        assert_eq!(tail("abcdefghij", 5), "…ghij");
-        assert_eq!(tail("abc", 3), "abc");
-    }
-
-    #[test]
-    fn should_preserve_single_quote_pairs_when_shortening_a_multi_path_title() {
-        let long = "segment/".repeat(12);
-        let entry = Move {
-            kind: MoveKind::Merge,
-            files: vec![
-                FileMove {
-                    path: format!("root/{long}first.ts"),
-                    from: "root/origin".to_owned(),
-                },
-                FileMove {
-                    path: format!("root/{long}second.ts"),
-                    from: "root/origin".to_owned(),
-                },
-            ],
-            to: format!("root/{long}destination"),
-            reason: MoveReason::Clustering,
-            mirrors: Vec::new(),
-            blocked_mirrors: Vec::new(),
-        };
-
-        let rendered = suggestion_block(1, &entry);
-        let title = rendered.get(1).map_or("", String::as_str);
-        let quoted = title.split('`').skip(1).step_by(2).collect::<Vec<_>>();
-
-        assert!(title.chars().count() <= 100, "{title}");
-        assert_eq!(title.matches('`').count(), 6, "{title}");
-        assert!(!title.contains("``"), "{title}");
-        assert!(!title.contains("……"), "{title}");
-        assert!(
-            quoted.iter().all(|path| path.starts_with('…')),
-            "{quoted:?}: {title}"
-        );
-    }
-
-    #[test]
     fn should_wrap_prose_within_the_grid_with_continuation_indents() {
         let long_text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi \
                          omicron pi rho sigma tau upsilon phi chi psi omega";
@@ -2114,26 +1049,6 @@ mod tests {
     }
 
     #[test]
-    fn should_align_labeled_blocks_replacing_the_wrapper_padding() {
-        let lines = labeled_block(
-            " caption  ",
-            11,
-            11,
-            "WHY pulled toward `x.ts` — weight 1.0. This file already imports its destination \
-             heavily, and the move honors that relationship.",
-        );
-
-        assert!(lines.len() >= 2, "long captions wrap: {lines:?}");
-        assert!(
-            lines
-                .first()
-                .is_some_and(|first| first.starts_with(" caption  WHY pulled")),
-            "the label prefixes the block: {lines:?}"
-        );
-        assert!(lines.iter().skip(1).all(|line| line.starts_with(' ')));
-    }
-
-    #[test]
     fn should_trim_weights_to_one_meaningful_decimal() {
         assert_eq!(weight(1.0), "1.0");
         assert_eq!(weight(7.8), "7.8");
@@ -2152,148 +1067,13 @@ mod tests {
     }
 
     #[test]
-    fn should_disambiguate_colliding_basenames_by_growing_their_suffix() {
-        let files = vec![
-            FileMove {
-                path: "src/a/util.ts".to_owned(),
-                from: "x".to_owned(),
-            },
-            FileMove {
-                path: "src/b/util.ts".to_owned(),
-                from: "y".to_owned(),
-            },
-        ];
-
-        let names = leaf_names(&files);
-
-        assert_eq!(names, vec!["a/util.ts".to_owned(), "b/util.ts".to_owned()]);
-    }
-
-    #[test]
-    fn should_fall_back_to_full_paths_when_suffixes_still_collide() {
-        let files = vec![
-            FileMove {
-                path: "util.ts".to_owned(),
-                from: "x".to_owned(),
-            },
-            FileMove {
-                path: "one/util.ts".to_owned(),
-                from: "y".to_owned(),
-            },
-            FileMove {
-                path: "two/util.ts".to_owned(),
-                from: "z".to_owned(),
-            },
-        ];
-
-        let names = leaf_names(&files);
-
-        assert_eq!(
-            names,
-            files
-                .iter()
-                .map(|file| file.path.clone())
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn should_keep_unique_basenames_untouched() {
-        let files = vec![
-            FileMove {
-                path: "src/alpha.ts".to_owned(),
-                from: "x".to_owned(),
-            },
-            FileMove {
-                path: "src/beta.ts".to_owned(),
-                from: "y".to_owned(),
-            },
-        ];
-
-        assert_eq!(
-            leaf_names(&files),
-            vec!["alpha.ts".to_owned(), "beta.ts".to_owned()]
-        );
-    }
-
-    /// An owned name list for title expectations.
-    fn names_of(names: &[&str]) -> Vec<String> {
-        names.iter().map(|name| (*name).to_owned()).collect()
-    }
-
-    #[test]
-    fn should_title_moves_with_verbs_quotes_and_counts() {
-        assert_eq!(
-            suggestion_title(MoveKind::Move, &names_of(&["logger.ts"]), "io"),
-            "Move `logger.ts` into `io`"
-        );
-        assert_eq!(
-            suggestion_title(MoveKind::Split, &names_of(&["a.ts", "b.ts"]), "pkg/out"),
-            "Split `a.ts` and `b.ts` out into `pkg/out`"
-        );
-        assert_eq!(
-            suggestion_title(
-                MoveKind::Merge,
-                &names_of(&["a.ts", "b.ts", "c.ts"]),
-                "core"
-            ),
-            "Merge 3 files into `core`"
-        );
-        assert_eq!(
-            suggestion_title(MoveKind::Move, &names_of(&["x.ts"]), ""),
-            "Move `x.ts` into `(root)`"
-        );
-    }
-
-    #[test]
-    fn should_render_dataset_qualified_physical_file_moves() {
-        let entry = Move {
-            kind: MoveKind::Move,
-            files: vec![FileMove {
-                path: "sample/src/area/origin/item.ts".to_owned(),
-                from: "sample/src/area/origin".to_owned(),
-            }],
-            to: "sample/src/area/destination".to_owned(),
-            reason: MoveReason::Clustering,
-            mirrors: Vec::new(),
-            blocked_mirrors: Vec::new(),
-        };
-
-        let rendered = suggestion_block(1, &entry).join("\n");
-        let names = entry
-            .files
-            .iter()
-            .map(|file| file.path.clone())
-            .collect::<Vec<_>>();
-        let (table, shortened) = change_table(&entry.files, &names, &entry.to);
-        let table = table.join("\n");
-
-        assert!(
-            rendered.contains(
-                "Move `sample/src/area/origin/item.ts` into `sample/src/area/destination`"
-            ),
-            "the title identifies the physical source file and destination: {rendered}"
-        );
-        assert!(
-            !shortened,
-            "the neutral fixture fits the output grid: {table}"
-        );
-        assert!(
-            table.contains("`sample/src/area/origin/item.ts`")
-                && table.contains("`sample/src/area/origin`")
-                && table.contains("`sample/src/area/destination`"),
-            "the table identifies the physical file, source, and destination: {table}"
-        );
-    }
-
-    #[test]
     fn should_caption_each_reason_in_the_approved_voice() {
         assert_eq!(
             caption_for(&MoveReason::PulledBy {
                 partner: "src/core/engine.ts".to_owned(),
                 weight: 1.0,
             }),
-            "WHY pulled toward `src/core/engine.ts` — weight 1.0."
+            "Why: pulled toward `src/core/engine.ts` — weight 1.0."
         );
         assert_eq!(
             caption_for(&MoveReason::RelievesOverCap {
@@ -2301,48 +1081,17 @@ mod tests {
                 count: 33,
                 cap: 20,
             }),
-            "WHY relieves `ai/adapters`, which holds 33 against a cap of 20."
+            "Why: relieves `ai/adapters`, which holds 33 against a cap of 20."
         );
         assert_eq!(
             caption_for(&MoveReason::Follows {
                 subject: "spec/log.ts".to_owned(),
             }),
-            "WHY follows `spec/log.ts`, which this plan places nearby."
+            "Why: follows `spec/log.ts`, which this plan places nearby."
         );
         assert_eq!(
             caption_for(&MoveReason::Clustering),
-            "WHY clusters files that already import each other heavily."
-        );
-    }
-
-    #[test]
-    fn should_rank_blast_rows_by_absolute_change_then_name() {
-        let moves = vec![
-            move_of(
-                MoveKind::Merge,
-                &["a.ts", "b.ts"],
-                "pkg/one",
-                "pkg/two",
-                MoveReason::Clustering,
-            ),
-            move_of(
-                MoveKind::Move,
-                &["c.ts"],
-                "pkg/three",
-                "pkg/two",
-                MoveReason::Clustering,
-            ),
-        ];
-
-        let rows = blast_rows(&moves);
-
-        assert_eq!(
-            rows,
-            vec![
-                ("pkg/two".to_owned(), 3),
-                ("pkg/one".to_owned(), -2),
-                ("pkg/three".to_owned(), -1),
-            ]
+            "Why: clusters files that already import each other heavily."
         );
     }
 
@@ -2435,14 +1184,22 @@ mod tests {
         result.profiles.greenfield = Some(greenfield);
         let mut output = Vec::new();
 
-        let rendered_ok = render(&result, Format::Summary, "fixture", &mut output).is_ok();
+        let rendered_ok = render_with_options(
+            &result,
+            Format::Summary,
+            "fixture",
+            RenderOptions { verbose: true },
+            &mut output,
+        )
+        .is_ok();
         let rendered = String::from_utf8_lossy(&output);
 
         assert!(rendered_ok);
         assert!(rendered.contains("path 0.7 · anchor 0.8"), "{rendered}");
         assert!(!rendered.contains("drops anchor credit"), "{rendered}");
         assert!(
-            rendered.contains("using its own effective coefficients"),
+            rendered.contains("anchored — candidate 1")
+                && rendered.contains("greenfield — candidate 1"),
             "{rendered}"
         );
     }
@@ -2496,76 +1253,14 @@ mod tests {
     }
 
     #[test]
-    fn should_build_change_tables_with_quoted_headers_cells_and_elision_honesty() {
-        let files = vec![
-            FileMove {
-                path: "src/a/logger.ts".to_owned(),
-                from: "util/log".to_owned(),
-            },
-            FileMove {
-                path: "src/b/cache.ts".to_owned(),
-                from: "util/log".to_owned(),
-            },
-        ];
-        let names = leaf_names(&files);
-
-        let (rows, shortened) = change_table(&files, &names, "infra/logging");
-
-        let pipe_positions = |line: &str| {
-            line.char_indices()
-                .filter(|(_, ch)| *ch == '|')
-                .map(|(position, _)| position)
-                .collect::<Vec<_>>()
-        };
-        let header = rows.first().map(String::as_str).unwrap_or_default();
-        let first_row = rows.get(1).map(String::as_str).unwrap_or_default();
-        assert_eq!(
-            pipe_positions(header),
-            pipe_positions(first_row),
-            "columns align between header and data: {rows:?}"
-        );
-        for word in ["leaf", "before place", "after place"] {
-            assert!(header.contains(word), "header names {word}: {header}");
-        }
-        assert!(first_row.contains("`logger.ts`"), "{first_row}");
-        assert!(!shortened, "short names pass through untailored");
-
-        let long_from = "a/really/quite/unreasonably/long/adapters/path/segment";
-        let long_files = vec![FileMove {
-            path: "src/x.ts".to_owned(),
-            from: long_from.to_owned(),
-        }];
-        let (_, shortened_long) = change_table(
-            &long_files,
-            &names_of(&["x.ts"]),
-            "another/equally/long/destination",
-        );
-
-        assert!(shortened_long, "an overflowing table declares its tails");
-    }
-
-    #[test]
     fn should_print_the_claimed_candidate_count_and_list_every_candidate() {
-        let result = result_with_candidate();
-        let lines = report_lines(&result, "fixture");
-
-        let claim = lines
-            .iter()
-            .find(|line| line.starts_with(" candidate count"))
-            .map(String::as_str);
-        assert!(
-            claim.is_some_and(|line| line.contains("candidate count : 1")),
-            "{lines:?}"
-        );
-        let listed = lines
-            .iter()
-            .filter(|line| line.starts_with(" candidate ") && line.contains("score"))
-            .count();
-        assert_eq!(listed, 1, "every claimed candidate is listed");
+        let text = report_lines(&result_with_candidate(), "fixture").join("\n");
+        assert!(text.contains("anchored — 1 candidate(s)"));
+        assert_eq!(text.matches("anchored — candidate 1").count(), 1);
     }
 
     #[test]
-    fn should_annotate_the_featured_row_and_other_mode_heads() {
+    fn should_show_each_profile_with_its_own_baseline() {
         let mut result = result_with_candidate();
         result.profiles.greenfield = Some(ModeResult {
             parameters: ProfileConfig::greenfield(),
@@ -2599,24 +1294,11 @@ mod tests {
 
         let lines = report_lines(&result, "fixture");
 
-        assert!(
-            lines.iter().any(|line| line.starts_with(" candidate 1 ")
-                && line.contains("anchored/1")
-                && line.contains("best score")),
-            "{lines:?}"
-        );
-        assert!(
-            lines.iter().any(|line| line.starts_with(" candidate 2 ")
-                && line.contains("greenfield/1")
-                && line.contains("different shape, own baseline")),
-            "{lines:?}"
-        );
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("these two gains have different starting points")),
-            "{lines:?}"
-        );
+        let text = lines.join("\n");
+        assert!(text.contains("anchored — candidate 1"));
+        assert!(text.contains("greenfield — candidate 1"));
+        assert!(text.contains("Score: 1.5000 → 0.2500"));
+        assert!(text.contains("Score: 1.7500 → 0.5000"));
     }
 
     #[test]
@@ -2630,12 +1312,7 @@ mod tests {
         let text = report_lines(&result, "fixture").join("\n");
 
         assert!(!text.contains("these two gains"), "{text}");
-        assert!(
-            text.contains(
-                "neither parameter profile produced a candidate, so there are no score changes"
-            ),
-            "{text}"
-        );
+        assert!(text.contains("No candidates were produced."), "{text}");
     }
 
     #[test]
@@ -2660,10 +1337,14 @@ mod tests {
 
         let grains = lines
             .iter()
-            .filter(|line| line.starts_with(" grain :"))
+            .filter(|line| line.contains("- Move file"))
             .count();
         assert_eq!(grains, 1, "each suggestion states its grain: {lines:?}");
-        assert!(lines.contains(&" grain : whole files".to_owned()));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("- Move file `logger.ts`"))
+        );
     }
 
     #[test]
@@ -2697,32 +1378,24 @@ mod tests {
                 line.chars().count()
             );
         }
-        let shortened_notes = lines
-            .iter()
-            .filter(|line| line.contains("a leading … marks a shortened place name"))
-            .count();
-        assert_eq!(
-            shortened_notes, 1,
-            "shortened names are declared explicitly: {lines:?}"
+        let joined = lines.join("").replace(' ', "");
+        assert!(
+            joined.contains(
+                "src/equally/deeply/nested/generators/synthographers/adapters/openrouter"
+            )
         );
     }
 
     #[test]
     fn should_state_no_change_when_the_best_candidate_matches_today() {
-        let result = result_with_candidate();
-        let text = report_lines(&result, "fixture").join("\n");
-
-        assert!(
-            text.contains("no change suggested — candidate 1 matches today's layout"),
-            "{text}"
-        );
-        assert!(text.contains("nothing relocates — every container keeps its files."));
-        assert!(text.contains("keep the current layout"));
-        assert!(text.contains("What would change — candidate 1 (anchored)"));
+        let text = report_lines(&result_with_candidate(), "fixture").join("\n");
+        assert!(text.contains("No moves versus the current layout."));
+        assert!(text.contains("No files enter or leave a folder."));
+        assert!(text.contains("No affected branches."));
     }
 
     #[test]
-    fn should_render_the_recommendation_band_with_driver_and_flat_cut_clauses() {
+    fn should_show_each_component_delta_without_instructing_adoption() {
         let mut result = result_with_candidate();
         if let Some(mode) = result.profiles.anchored.as_mut() {
             mode.current.score_breakdown.imbalance = 1.0;
@@ -2749,24 +1422,17 @@ mod tests {
             .greenfield
             .clone_from(&result.profiles.anchored);
 
-        let text = report_lines(&result, "fixture").join("\n");
-
-        for clause in ["adopt", "second", "keep", "in part"] {
-            let label = format!(" {clause:<11}");
-            assert!(text.contains(&label), "the {clause} clause prints: {text}");
-        }
-        assert!(
-            text.contains("goes straight") && text.contains("dominates today's score"),
-            "the driver sentence names the dominant reduced term: {text}"
-        );
-        assert!(
-            text.contains("imports broken") && text.contains("stay nearly flat"),
-            "the flat-cut clause rides a small cut change: {text}"
-        );
+        let text = report::Report::build(&result, "fixture", RenderOptions { verbose: true })
+            .lines()
+            .join("\n");
+        assert!(text.contains("-0.5000"));
+        assert!(text.contains("-0.0001"));
+        assert!(text.contains("Partial plans are not"));
+        assert!(!text.contains("apply §2"));
     }
 
     #[test]
-    fn should_declare_keeping_not_offered_when_a_mode_is_infeasible() {
+    fn should_show_capacity_breaches_and_candidate_remainder() {
         let mut result = result_with_candidate();
         result.current.shared_findings = vec![
             capacity_violation("big_folder"),
@@ -2791,19 +1457,8 @@ mod tests {
 
         let text = report_lines(&result, "fixture").join("\n");
 
-        assert!(
-            text.contains("the anchored parameter profile records today's layout as infeasible"),
-            "{text}"
-        );
-        assert!(
-            text.contains("it breaks 2 capacity") && text.contains("findings (§4)"),
-            "{text}"
-        );
-        assert!(
-            text.contains("still leaves") && text.contains("above their caps"),
-            "the remainder is stated directly: {text}"
-        );
-        assert!(text.contains("not offered — the anchored parameter profile marks"));
+        assert!(text.contains("Current layout violates 2 capacity cap(s)."));
+        assert!(text.contains("Capacity remaining: 1 (0 at file level)."));
     }
 
     #[test]
@@ -2830,15 +1485,12 @@ mod tests {
 
         assert!(!text.contains(" adopt      candidate"), "{text}");
         assert!(!text.contains("gain -0.5000"), "{text}");
-        assert!(
-            text.contains("decline    candidate 1 is not recommended"),
-            "{text}"
-        );
-        assert!(text.contains("regression 0.5000"), "{text}");
+        assert!(text.contains("improvement -0.5000"), "{text}");
+        assert!(!text.contains("adopt"), "{text}");
     }
 
     #[test]
-    fn should_render_a_shared_infeasibility_note_for_both_modes() {
+    fn should_keep_shared_findings_once_and_each_profiles_capacity_status() {
         let mut result = result_with_candidate();
         result.profiles.greenfield = result.profiles.anchored.clone();
         result.current.shared_findings = vec![capacity_violation("big_folder")];
@@ -2854,27 +1506,20 @@ mod tests {
 
         let text = report_lines(&result, "fixture").join("\n");
 
-        assert!(
-            text.contains("both parameter profiles record today's layout as infeasible"),
-            "{text}"
-        );
-        assert!(
-            text.contains("it breaks 1 capacity finding") && text.contains("(§4)"),
-            "{text}"
-        );
         assert_eq!(
-            text.matches("today's layout as infeasible").count(),
-            1,
-            "the shared note prints once: {text}"
+            text.matches("Current layout violates 1 capacity cap(s).")
+                .count(),
+            2
         );
+        assert_eq!(text.matches("Shared findings (1)").count(), 1);
     }
 
     #[test]
     fn should_count_only_hard_capacity_findings_as_breaks() {
         let mut result = result_with_candidate();
         // Two hard breaches plus a borderline observation: the note counts the
-        // breaks from the engine's `capacity_breaks`, while §4 still lists all
-        // three findings with their severity tags.
+        // breaks from the engine's `capacity_breaks`, while Structural findings
+        // lists all three findings with their severity tags.
         result.current.shared_findings = vec![
             capacity_violation("big_folder"),
             capacity_violation("huge_file"),
@@ -2893,92 +1538,28 @@ mod tests {
         let text = report_lines(&result, "fixture").join("\n");
 
         assert!(
-            text.contains("it breaks 2 capacity") && text.contains("findings (§4)"),
+            text.contains("Current layout violates 2 capacity cap(s).")
+                && text.contains("[borderline]"),
             "borderline observations never count as breaks: {text}"
         );
     }
 
     #[test]
-    fn should_extend_the_term_gloss_only_when_the_capacity_term_is_live() {
-        let quiet_text = report_lines(&result_with_candidate(), "fixture").join("\n");
-
-        assert!(quiet_text.contains("the seven displayed terms combine into the total score"));
+    fn should_show_score_components_and_definitions_only_with_verbose() {
+        let result = result_with_candidate();
+        let quiet = report_lines(&result, "fixture").join("\n");
+        let verbose = report::Report::build(&result, "fixture", RenderOptions { verbose: true })
+            .lines()
+            .join("\n");
+        assert!(!quiet.contains("Score components"));
+        assert!(verbose.contains("Score components"));
+        assert!(verbose.contains("capacity penalizes"));
         assert!(
-            quiet_text.contains("dependency-only = penalty"),
-            "{quiet_text}"
-        );
-
-        let mut live = result_with_candidate();
-        if let Some(profile) = live.profiles.anchored.as_mut() {
-            profile.current.score_breakdown.capacity = 0.5;
-        }
-        let live_text = report_lines(&live, "fixture").join("\n");
-
-        assert!(live_text.contains("the terms combine into the total score"));
-        assert!(
-            live_text.contains("penalty"),
-            "the live capacity term adds its gloss: {live_text}"
-        );
-    }
-
-    #[test]
-    fn should_render_dependency_only_once_in_the_score_table_and_once_in_its_gloss() {
-        let mut result = result_with_candidate();
-        if let Some(profile) = result.profiles.anchored.as_mut() {
-            profile.current.score_breakdown.dependency_only = 0.0;
-            if let Some(candidate) = profile.candidates.first_mut() {
-                candidate.score_breakdown.dependency_only = 0.05;
-            }
-        }
-
-        let section = score_delta_section(&result);
-        let table_rows = section
-            .iter()
-            .filter(|line| line.trim_start().starts_with("dependency-only"))
-            .count();
-        let gloss_mentions = section
-            .iter()
-            .filter(|line| line.contains("dependency-only ="))
-            .count();
-
-        assert_eq!(table_rows, 1, "the term has one score row: {section:?}");
-        assert_eq!(
-            gloss_mentions, 1,
-            "the term has one glossary definition: {section:?}"
-        );
-    }
-
-    #[test]
-    fn should_render_companion_separation_once_in_the_score_table_and_once_in_its_gloss() {
-        let mut result = result_with_candidate();
-        if let Some(profile) = result.profiles.anchored.as_mut() {
-            profile.current.score_breakdown.companion_separation = 0.05;
-            if let Some(candidate) = profile.candidates.first_mut() {
-                candidate.score_breakdown.companion_separation = 0.0;
-            }
-        }
-
-        let section = score_delta_section(&result);
-        assert_eq!(
-            section
-                .iter()
-                .filter(|line| line.trim_start().starts_with("companion-separation"))
-                .count(),
-            1,
-            "the term has one score row: {section:?}"
-        );
-        assert_eq!(
-            section
-                .iter()
-                .filter(|line| line.contains("companion-separation ="))
-                .count(),
-            1,
-            "the term has one glossary definition: {section:?}"
-        );
-        assert!(
-            section.iter().any(|line| line
-                == " the seven displayed terms combine into the total score; lower is better."),
-            "the narration counts the seven displayed non-capacity terms exactly: {section:?}"
+            verbose
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .contains("dependency-only penalizes")
         );
     }
 
@@ -2993,6 +1574,175 @@ mod tests {
         }
         let diverged_text = report_lines(&diverged, "fixture").join("\n");
         assert!(!diverged_text.contains("solution space converged"));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn should_present_only_recommended_and_review_candidate_advice_groups() {
+        let mut result = result_with_candidate();
+        let assessment = strata_engine::ProfileAssessment {
+            profile: strata_engine::ProfileName::Anchored,
+            destination: "shared/owner.ts".to_owned(),
+            evidence: strata_engine::EvidenceSignals {
+                unique_owner: 1.0,
+                role_affinity: 0.8,
+                source_cohesion: 0.7,
+                destination_cohesion: 0.6,
+                producer_evidence: 0.5,
+                architectural_reach: 0.4,
+            },
+            weighted_score: 0.75,
+            structural_score: 0.65,
+            ambiguity_margin: 0.2,
+            best_alternative: Some("shared/alternative.ts".to_owned()),
+            thresholds: strata_engine::QualificationThresholds {
+                minimum_evidence: 0.6,
+                minimum_structural: 0.5,
+                minimum_ambiguity_margin: 0.15,
+            },
+            qualified: true,
+        };
+        let relocation = SymbolMove {
+            symbol: "RecordOptions".to_owned(),
+            kind: SymbolKind::Type,
+            from_path: "origin/options.ts".to_owned(),
+            to_path: "shared/owner.ts".to_owned(),
+            delta: -0.1,
+            broken_imports: 1,
+        };
+        let candidate = result
+            .profiles
+            .anchored
+            .as_mut()
+            .and_then(|profile| profile.candidates.first_mut());
+        assert!(candidate.is_some(), "fixture has an anchored candidate");
+        if let Some(candidate) = candidate {
+            candidate.symbol_moves = vec![relocation.clone()];
+        }
+        let item = strata_engine::RelocationAdvice {
+            proposal: strata_engine::RelocationProposal::Symbol { relocation },
+            destination: "shared/owner.ts".to_owned(),
+            supporting_profiles: vec![strata_engine::ProfileName::Anchored],
+            qualified_profiles: vec![strata_engine::ProfileName::Anchored],
+            absent_profiles: vec![strata_engine::ProfileName::Greenfield],
+            conflicting_destinations: vec![strata_engine::ProfileConflict {
+                profile: strata_engine::ProfileName::Greenfield,
+                destination: "shared/alternative.ts".to_owned(),
+            }],
+            assessments: vec![assessment],
+            review_reasons: vec![strata_engine::ReviewReason::PartialProfileSupport],
+        };
+        result.advice.recommended = vec![item.clone()];
+        result.advice.review_candidates = vec![item];
+        let text = report::Report::build(&result, "fixture", RenderOptions { verbose: true })
+            .lines()
+            .join("\n");
+        let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        assert!(text.contains("Recommended"), "{text}");
+        assert!(text.contains("Review candidate"), "{text}");
+        for expected in [
+            "supporting [anchored]",
+            "qualified [anchored]",
+            "absent [greenfield]",
+            "greenfield→`shared/alternative.ts`",
+            "owner 1.00",
+            "role 0.80",
+            "source 0.70",
+            "destination 0.60",
+            "producer 0.50",
+            "reach 0.40",
+            "weighted 0.75/0.60",
+            "structural 0.65/0.50",
+            "margin threshold 0.15",
+            "qualified true",
+            "best alternative `shared/alternative.ts`",
+            "review reasons: selected by only some executed profiles",
+            "RecordOptions",
+            "origin/options.ts",
+        ] {
+            assert!(
+                compact.contains(expected),
+                "missing `{expected}` from:\n{text}"
+            );
+        }
+        assert!(
+            !text.contains("Rejected"),
+            "ordinary non-moves stay absent: {text}"
+        );
+        assert!(
+            !compact.contains("adopt candidate"),
+            "a surfaced review-only atom makes blanket adoption unsafe: {text}"
+        );
+
+        let mut fully_recommended = result;
+        fully_recommended.advice.review_candidates.clear();
+        let recommended_text = report_lines(&fully_recommended, "fixture")
+            .join("\n")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            recommended_text.contains("Recommended (1)")
+                && recommended_text.contains("Review candidate (0)"),
+            "qualified actions remain recommended without endorsing an entire candidate: {recommended_text}"
+        );
+    }
+
+    #[test]
+    fn should_render_file_advice_alternatives_with_their_physical_source_root() {
+        let mut result = result_with_candidate();
+        result.advice.review_candidates = vec![strata_engine::RelocationAdvice {
+            proposal: strata_engine::RelocationProposal::File {
+                relocation: Move {
+                    kind: MoveKind::Move,
+                    files: vec![FileMove {
+                        path: "dataset/src/origin/unit.ts".to_owned(),
+                        from: "dataset/src/origin".to_owned(),
+                    }],
+                    to: "dataset/src/chosen".to_owned(),
+                    reason: MoveReason::Clustering,
+                    mirrors: Vec::new(),
+                    blocked_mirrors: Vec::new(),
+                },
+            },
+            destination: "dataset/src/chosen".to_owned(),
+            supporting_profiles: vec![strata_engine::ProfileName::Anchored],
+            qualified_profiles: Vec::new(),
+            absent_profiles: vec![strata_engine::ProfileName::Greenfield],
+            conflicting_destinations: Vec::new(),
+            assessments: vec![strata_engine::ProfileAssessment {
+                profile: strata_engine::ProfileName::Anchored,
+                destination: "dataset/src/chosen".to_owned(),
+                evidence: strata_engine::EvidenceSignals {
+                    unique_owner: 0.0,
+                    role_affinity: 0.0,
+                    source_cohesion: 0.0,
+                    destination_cohesion: 0.0,
+                    producer_evidence: 0.0,
+                    architectural_reach: 0.0,
+                },
+                weighted_score: 0.0,
+                structural_score: 0.0,
+                ambiguity_margin: 0.0,
+                best_alternative: Some("dataset/src/alternative".to_owned()),
+                thresholds: strata_engine::QualificationThresholds {
+                    minimum_evidence: 0.6,
+                    minimum_structural: 0.5,
+                    minimum_ambiguity_margin: 0.15,
+                },
+                qualified: false,
+            }],
+            review_reasons: vec![strata_engine::ReviewReason::PartialProfileSupport],
+        }];
+
+        let text = report::Report::build(&result, "dataset", RenderOptions { verbose: true })
+            .lines()
+            .join("\n");
+
+        assert!(text.contains("file `dataset/src/origin/unit.ts` → `dataset/src/chosen`"));
+        assert!(text.contains("best alternative `dataset/src/alternative`"));
+        assert!(!text.contains("best alternative `dataset/spec/alternative`"));
     }
 
     #[test]
@@ -3028,7 +1778,7 @@ mod tests {
                 "provenance token {banned} stays off the page"
             );
         }
-        for interactive in ["menu", "select", "press ", "click", "navigate", "option"] {
+        for interactive in ["menu", "press ", "click", "navigate"] {
             assert!(
                 !text.to_lowercase().contains(interactive),
                 "interactive token {interactive} stays off the page"
@@ -3037,18 +1787,12 @@ mod tests {
     }
 
     #[test]
-    fn should_banner_the_project_and_close_with_an_end_marker() {
+    fn should_banner_the_project_with_compact_saved_metadata() {
         let text = report_lines(&result_with_candidate(), "acme").join("\n");
-
-        assert!(text.contains(" dataset   : acme"));
-        assert!(text.contains(" census    : 2 symbols · 1 edges · 4 files (ts)"));
-        assert!(text.contains(" end of report · acme"));
-        assert!(text.contains(" reading rules"));
-        assert!(text.contains("`backticks`"));
-        assert!(
-            text.contains("\"future capability — not in current output\""),
-            "the future-ledger label appears in the reading rules"
-        );
+        assert!(text.starts_with("Strata report — acme\n4 files · 2 symbols · 1 edges"));
+        assert!(text.contains("Snapshot `deadbeef`"));
+        assert!(text.contains("Structural findings"));
+        assert!(!text.contains("future capability"));
     }
 
     #[test]
@@ -3232,3 +1976,7 @@ mod tests {
         assert!(text.contains("  2. b.ts [two → new]\n"), "{text}");
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/combined_package_moves.rs"]
+mod combined_package_moves;

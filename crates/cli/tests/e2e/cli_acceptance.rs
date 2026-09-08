@@ -30,6 +30,9 @@ use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 
+#[path = "cli_acceptance/markdown_advice.rs"]
+mod markdown_advice;
+
 /// A non-existent config path, forcing the binary onto its built-in defaults so
 /// the output is identical no matter which directory the harness runs from. A
 /// configured `strata.toml` in a parent directory must never leak into a run.
@@ -166,25 +169,23 @@ fn should_deliver_the_analyze_summary_for_the_rust_fixture() {
     );
     // the census and the claimed-vs-listed candidate counts are the contracted surface.
     assert!(
-        outcome
-            .stdout
-            .contains("census    : 6 symbols · 4 edges · 1 files"),
+        outcome.stdout.contains("1 files · 6 symbols · 4 edges"),
         "the expected node/edge census is delivered"
     );
     assert!(
-        outcome.stdout.contains("candidate count : 0"),
+        outcome.stdout.contains("No candidates were produced."),
         "the printed claim reports that no strict improvement survived"
     );
     assert!(
-        outcome.stdout.contains("anchored profile returned 0")
-            && outcome.stdout.contains("greenfield profile returned 0"),
+        outcome.stdout.contains("anchored — 0 candidate(s)")
+            && outcome.stdout.contains("greenfield — 0 candidate(s)"),
         "each profile's empty contribution is stated"
     );
 }
 
 #[test]
 fn should_itemize_suggestions_in_the_report_without_a_flag() {
-    // The printed report always itemizes §2. With no strict improvement it
+    // The printed report always includes candidate layouts. With no strict improvement it
     // reports an empty candidate set instead of inventing an identity plan.
     let root = fixture("rust");
     let root_str = root.to_str().unwrap_or_default();
@@ -203,16 +204,12 @@ fn should_itemize_suggestions_in_the_report_without_a_flag() {
 
     assert_eq!(outcome.code, 0, "the report run exits 0");
     assert!(
-        outcome
-            .stdout
-            .contains("What would change — no candidate this run produced"),
+        outcome.stdout.contains("Candidate layouts"),
         "the itemization section names the empty result: {}",
         outcome.stdout
     );
     assert!(
-        outcome
-            .stdout
-            .contains("no candidate this run produced — nothing to change"),
+        outcome.stdout.contains("No candidates were produced."),
         "the absence of an improving plan is declared honestly"
     );
 }
@@ -239,9 +236,7 @@ fn should_deliver_the_analyze_summary_for_the_python_fixture() {
         "a clean multi-file fixture analyzes and exits 0"
     );
     assert!(
-        outcome
-            .stdout
-            .contains("census    : 4 symbols · 4 edges · 2 files"),
+        outcome.stdout.contains("2 files · 4 symbols · 4 edges"),
         "the two-file census is delivered"
     );
 }
@@ -268,6 +263,7 @@ fn should_pin_the_anchor_term_apart_for_the_two_modes() {
         "anchored",
         "--format",
         "summary",
+        "--verbose",
     ]);
     let greenfield = run(&[
         "analyze",
@@ -279,6 +275,7 @@ fn should_pin_the_anchor_term_apart_for_the_two_modes() {
         "greenfield",
         "--format",
         "summary",
+        "--verbose",
     ]);
 
     assert_eq!(anchored.code, 0, "anchored mode exits 0");
@@ -292,11 +289,11 @@ fn should_pin_the_anchor_term_apart_for_the_two_modes() {
         "the effective profiles expose distinct path and anchor coefficients"
     );
     assert!(
-        !anchored.stdout.contains("mode greenfield"),
+        !anchored.stdout.contains("greenfield —"),
         "an anchored-only run emits only anchored"
     );
     assert!(
-        !greenfield.stdout.contains("mode anchored"),
+        !greenfield.stdout.contains("anchored —"),
         "a greenfield-only run emits only greenfield"
     );
 }
@@ -595,22 +592,22 @@ fn should_deliver_a_well_formed_report_for_the_rust_fixture() {
         "the title heading leads"
     );
     assert!(
-        outcome.stdout.contains("## Shared findings"),
+        outcome.stdout.contains("## Structural findings"),
         "the shared findings section is present"
     );
     assert!(
-        outcome.stdout.contains("## Anchored parameter profile"),
+        outcome.stdout.contains("anchored — 0 candidate(s)"),
         "the anchored section is present"
     );
     assert!(
-        outcome.stdout.contains("## Greenfield parameter profile"),
+        outcome.stdout.contains("greenfield — 0 candidate(s)"),
         "the greenfield section is present"
     );
     // the objective J(T) is surfaced per layout as a fixed-precision score line; the
     // exact score bytes are pinned by the `report.md` golden, so here we assert only
     // the structural invariant that the current-layout score line is present.
     assert!(
-        outcome.stdout.contains("Current score `"),
+        outcome.stdout.contains("Baseline score: "),
         "the current layout reports its objective J(T) as a score line: {}",
         outcome.stdout
     );
@@ -698,7 +695,9 @@ fn should_flag_visibility_violations_for_the_over_exported_rust_fixture() {
         "violations are findings, not failures, without --fail-on"
     );
     assert!(
-        outcome.stdout.contains("visibility [violation] Shape"),
+        outcome
+            .stdout
+            .contains("visibility [violation] src/lib.rs, Shape"),
         "an over-exported symbol is flagged"
     );
 }
@@ -1645,13 +1644,12 @@ fn should_omit_the_anchored_section_for_a_greenfield_only_run() {
 
     assert_eq!(outcome.code, 0, "a greenfield-only run exits 0");
     assert!(
-        outcome.stdout.contains("greenfield profile returned"),
+        outcome.stdout.contains("greenfield —"),
         "the greenfield claim is present: {}",
         outcome.stdout
     );
     assert!(
-        !outcome.stdout.contains("anchored profile returned")
-            && !outcome.stdout.contains("anchored/"),
+        !outcome.stdout.contains("anchored —") && !outcome.stdout.contains("anchored/"),
         "a greenfield-only run omits the anchored candidates"
     );
 }
@@ -2017,15 +2015,15 @@ fn should_exit_one_on_a_malformed_result_input_for_every_reader() {
 #[test]
 fn should_reject_a_result_with_an_unsupported_schema_version() {
     // a saved result stamped with any other schemaVersion — future (999), the
-    // immediately retired v5, or v1 — must be refused up front with a remediable message, not
+    // immediately retired v7, or v1 — must be refused up front with a remediable message, not
     // misread field-by-field.
     let result = analyze_to_file("rust");
     let contents = std::fs::read_to_string(&result).unwrap_or_default();
     let result_str = result.to_str().unwrap_or_default();
 
-    for version in ["999", "5", "1"] {
+    for version in ["999", "7", "1"] {
         let stamped = contents.replace(
-            "\"schemaVersion\":7",
+            "\"schemaVersion\":8",
             &format!("\"schemaVersion\":{version}"),
         );
         assert_ne!(contents, stamped, "the version stamp was found and bumped");
@@ -2045,7 +2043,7 @@ fn should_reject_a_result_with_an_unsupported_schema_version() {
         );
         assert!(
             outcome.stderr.contains(&format!(
-                "unsupported result schemaVersion {version}; expected 7"
+                "unsupported result schemaVersion {version}; expected 8"
             )),
             "the refusal names the offending version: {}",
             outcome.stderr
@@ -2125,26 +2123,54 @@ fn should_write_analyze_json_to_a_file_byte_identical_to_stdout() {
 }
 
 #[test]
-fn should_default_to_json_when_stdout_is_piped() {
-    // with no --format and a piped (non-tty) stdout — exactly how this harness
-    // captures output — analyze emits the machine face: parseable json carrying
-    // the schema stamp.
+fn should_default_to_summary_when_stdout_is_piped() {
     let root = fixture("python");
     let root_str = root.to_str().unwrap_or_default();
-
     let outcome = run(&["analyze", "--root", root_str, "--config", PURE_DEFAULTS]);
-
+    let summary = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
     assert_eq!(outcome.code, 0, "the formatless run exits 0");
-    let parsed: serde_json::Value =
-        serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
-    assert_eq!(
-        parsed
-            .pointer("/schemaVersion")
-            .and_then(serde_json::Value::as_u64),
-        Some(u64::from(strata_engine::RESULT_SCHEMA_VERSION)),
-        "piped output is json with the schema stamp: {}",
-        outcome.stdout
+    assert_eq!(summary.code, 0, "the explicit summary exits 0");
+    assert!(summary.stdout.contains("Structural findings"));
+    assert_eq!(outcome.stdout, summary.stdout);
+}
+
+#[test]
+fn should_default_to_summary_when_stdout_is_redirected() -> Result<(), Box<dyn std::error::Error>> {
+    let root = fixture("python");
+    let root_str = root.to_str().ok_or("non-UTF8 root")?;
+    let path = std::env::temp_dir().join(format!("strata-summary-redirect-{}.txt", nanos()));
+    let output = std::fs::File::create(&path)?;
+    let outcome = std::process::Command::new(assert_cmd::cargo::cargo_bin("strata"))
+        .args(["analyze", "--root", root_str, "--config", PURE_DEFAULTS])
+        .stdout(output)
+        .output()?;
+    let written = std::fs::read_to_string(&path)?;
+    std::fs::remove_file(path)?;
+    let summary = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
+    assert!(
+        outcome.status.success(),
+        "{}",
+        String::from_utf8_lossy(&outcome.stderr)
     );
+    assert_eq!(summary.code, 0);
+    assert_eq!(written, summary.stdout);
+    Ok(())
 }
 
 /// Counts the symbol bullet lines (`- name (visibility)`) in a rendered tree.
@@ -2408,14 +2434,14 @@ fn should_emit_no_candidate_when_the_current_layout_is_optimal() {
         "an optimal baseline has no strictly improving anchored candidate"
     );
     assert!(
-        summary.stdout.contains("no candidate this run produced"),
+        summary.stdout.contains("No candidates were produced."),
         "the report face announces the empty candidate set honestly: {}",
         summary.stdout
     );
     assert!(
-        summary.stdout.contains(
-            "keep the current layout — the run produced no candidate to weigh against it."
-        ),
+        summary
+            .stdout
+            .contains("Current layout is already optimal under this profile's search."),
         "the recommendation keeps the optimal layout: {}",
         summary.stdout
     );
@@ -2463,14 +2489,12 @@ fn should_mark_a_cap_violating_layout_infeasible_with_the_resolution_notice() {
         );
     }
     assert!(
-        summary
-            .stdout
-            .contains("today's layout as infeasible — it breaks"),
+        summary.stdout.contains("Current layout violates"),
         "the report face names the infeasibility and its finding count: {}",
         summary.stdout
     );
     assert!(
-        summary.stdout.contains(" capacity finding"),
+        summary.stdout.contains(" capacity cap(s)."),
         "the infeasibility is counted in capacity findings: {}",
         summary.stdout
     );

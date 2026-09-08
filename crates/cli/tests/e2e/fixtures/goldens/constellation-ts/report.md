@@ -1,91 +1,73 @@
-# Strata report
+# Strata report — constellation-ts
 
-Snapshot `bb8808550c3393fce4a11e7fddbd62e7b41b53ad8f23872c3408571b527ed1fe`.
+28 files · 28 symbols · 48 edges
+Snapshot `bb8808550c3393fce4a11e7fddbd62e7b41b53ad8f23872c3408571b527ed1fe`
 
-- 28 symbols, 48 edges, 28 files
-
-## Shared findings
-
-### Violations
-
-None.
-
-## Anchored parameter profile
-
-### Effective parameters
+## Structural findings
 
 ```text
-anchored parameter profile (effective):
-search    candidates 3 · seed 42
-capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
-objective imbalance 0.1 · naming 0.3 · path 0.2 · anchor 1.0 · capacity 4.0
-dependency-only 0.05 · companion-separation 0.05
-weights   value-import 1.0 · inheritance 1.5 · call 1.0 · type-reference 0.3 · re-export 0.0
-same-file-symbol 1.0 · same-file-type 3.0
-solver    ilp-threshold 300 · timeout-seconds 60
-diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
-tests     helper-cap 250 · patterns 0 · builtins true
-relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
-mirroring enabled true · builtins true · rules 0
+Shared findings (0)
+  None.
+
+anchored profile-specific findings (0)
+  None.
+
+greenfield profile-specific findings (0)
+  None.
+
 ```
 
-Current score `0.1668`.
-
-- cut `0.3281`, imbalance `0.0406`, naming `-0.0019`, path `-0.2000`, anchor `0.0000`, dependency-only `0.0000`, companion-separation `0.0000`
-
-### Profile-specific findings
-
-### Violations
-
-None.
-
-### Candidates
-
-_Fewer than the requested candidates survived; the solution space converged._
-
-_Current layout is already optimal; candidate 1 is the current tree._
-
-## Greenfield parameter profile
-
-### Effective parameters
+## Candidate layouts
 
 ```text
-greenfield parameter profile (effective):
-search    candidates 3 · seed 42
-capacity  file 250 · folder 20 · domain 16 · package 15 · package-group 12
-objective imbalance 0.1 · naming 0.3 · path 0.0 · anchor 0.0 · capacity 4.0
-dependency-only 0.05 · companion-separation 0.05
-weights   value-import 1.0 · inheritance 1.5 · call 1.0 · type-reference 0.3 · re-export 0.0
-same-file-symbol 1.0 · same-file-type 3.0
-solver    ilp-threshold 300 · timeout-seconds 60
-diversity seeds-per-candidate 10 · score-tolerance 0.05 · min-distance 0.05
-tests     helper-cap 250 · patterns 0 · builtins true
-relocation pin-test-files true · pin-test-symbols true · file patterns 0 · symbol patterns 0
-mirroring enabled true · builtins true · rules 0
+Lower scores are better. Compare scores only within one parameter profile of one project. A 
+candidate is a proposed layout; inclusion does not make a move Recommended. Partial plans are not 
+rescored.
+
+anchored — 0 candidate(s)
+Baseline score: 0.1668
+Fewer than the requested candidates survived; the solution space converged.
+Current layout is already optimal under this profile's search.
+No candidates were produced.
+
+greenfield — 1 candidate(s)
+Baseline score: 0.3668
+Fewer than the requested candidates survived; the solution space converged.
+
+greenfield — candidate 1
+  Score: 0.3668 → 0.2296; improvement +0.1372
+  Proposed moves
+    - Move file `src/util/hash.ts` → `src/model/hash.ts`
+      Why: pulled toward `src/model/matrix.ts` — weight 1.0.
+  Folder impacts
+    `src/model`: 0 file(s) leaving · 1 entering
+    `src/util`: 1 file(s) leaving · 0 entering
+  Before
+    constellation-ts/
+    └── src/
+        └── util/
+            └── hash.ts *
+  After
+    constellation-ts/
+    └── src/
+        └── model/
+            └── hash.ts *
+  * File moved or its symbol contents changed.
+  Unchanged branches and symbols omitted; excluded files are not shown.
 ```
 
-Current score `0.3668`.
+## Advice
 
-- cut `0.3281`, imbalance `0.0406`, naming `-0.0019`, path `-0.0000`, anchor `0.0000`, dependency-only `0.0000`, companion-separation `0.0000`
-
-### Profile-specific findings
-
-### Violations
-
-None.
-
-### Candidates
-
-_Fewer than the requested candidates survived; the solution space converged._
-
-### Candidate 1 (improvement `+0.1372`, score `0.2296`)
-
-- cut `0.1875`, imbalance `0.0437`, naming `-0.0016`, path `-0.0000`, anchor `0.0000`, dependency-only `0.0000`, companion-separation `0.0000`
-
-**Moves**
+```text
+Supporting profiles selected the destination; qualified profiles also passed the evidence 
+thresholds; absent profiles did not select the move; conflicts name alternative destinations. 
+Advice consolidates the best candidate from each executed profile.
+ Profiles share analysis-start evidence but apply their own weights and thresholds.
+ Recommended (0):
+ Review candidate (1):
+   - file `src/util/hash.ts` → `src/model` · supporting [greenfield] · qualified [greenfield] · 
+   absent [anchored] · conflicts []
+     review reasons: selected by only some executed profiles, no strict majority of executed 
+     profiles provides qualifying support for this destination
 
 ```
-move — pulled by matrix.ts (w 1.0)
-  1. constellation-ts/src/util/hash.ts [constellation-ts/src/util → constellation-ts/src/model]
-```
-

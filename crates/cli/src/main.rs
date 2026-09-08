@@ -25,7 +25,7 @@ use crate::commands::diff::DiffArgs;
 use crate::commands::report::ReportArgs;
 use crate::commands::tree::TreeArgs;
 use crate::commands::violations::{self, ViolationFormat, ViolationsArgs};
-use crate::render::Format;
+use crate::render::{Format, RenderOptions};
 
 /// The `strata` read-only module-decomposition tool.
 #[derive(Debug, Parser)]
@@ -84,6 +84,9 @@ impl From<ModeChoice> for Mode {
 /// `strata analyze` flags.
 #[derive(Debug, clap::Args)]
 struct AnalyzeCli {
+    /// Include numerical evidence, score components, and effective parameters.
+    #[arg(long)]
+    verbose: bool,
     /// Repository root to analyze.
     #[arg(long, default_value = ".")]
     root: PathBuf,
@@ -100,7 +103,7 @@ struct AnalyzeCli {
     /// Where to write the result (stdout when absent).
     #[arg(long)]
     output: Option<PathBuf>,
-    /// Output format (TTY-aware when absent: summary on a terminal, json piped).
+    /// Output format (defaults to summary, including when piped or redirected).
     #[arg(long)]
     format: Option<FormatChoice>,
     /// Deterministic seed.
@@ -179,6 +182,9 @@ enum ViolationFormatChoice {
 /// `strata report` flags.
 #[derive(Debug, clap::Args)]
 struct ReportCli {
+    /// Include numerical evidence, score components, and effective parameters.
+    #[arg(long)]
+    verbose: bool,
     /// `AnalyzeResult` JSON from a previous `analyze`.
     #[arg(long)]
     input: PathBuf,
@@ -310,11 +316,21 @@ fn run_analyze(
 
     if let Some(path) = cli.output {
         let mut buffer = Vec::new();
-        commands::analyze::run(&args, &mut buffer)?;
+        if cli.verbose {
+            commands::analyze::run_with_options(
+                &args,
+                RenderOptions { verbose: true },
+                &mut buffer,
+            )?;
+        } else {
+            commands::analyze::run(&args, &mut buffer)?;
+        }
         std::fs::write(&path, &buffer).map_err(|error| StrataError::InputUnreadable {
             path,
             reason: error.to_string(),
         })?;
+    } else if cli.verbose {
+        commands::analyze::run_with_options(&args, RenderOptions { verbose: true }, out)?;
     } else {
         commands::analyze::run(&args, out)?;
     }
@@ -379,7 +395,11 @@ fn run_report(cli: ReportCli, out: &mut impl Write) -> Result<ExitCode, StrataEr
         input: cli.input,
         output: cli.output,
     };
-    commands::report::run(&args, out)?;
+    if cli.verbose {
+        commands::report::run_with_options(&args, RenderOptions { verbose: true }, out)?;
+    } else {
+        commands::report::run(&args, out)?;
+    }
     Ok(ExitCode::SUCCESS)
 }
 

@@ -1,2 +1,2 @@
-visibility [violation] double :: `double` is exported at Package but needed only at File
-visibility [violation] halve :: `halve` is exported at Package but needed only at File
+visibility [violation] src/lib.rs, double :: `double` in `src/lib.rs` is exported at Package but needed only at File
+visibility [violation] src/lib.rs, halve :: `halve` in `src/lib.rs` is exported at Package but needed only at File

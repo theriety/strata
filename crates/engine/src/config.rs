@@ -262,6 +262,59 @@ impl Default for WeightsConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct QualificationWeightsConfig {
+    #[serde(rename = "unique-owner")]
+    pub unique_owner: f64,
+    #[serde(rename = "role-affinity")]
+    pub role_affinity: f64,
+    #[serde(rename = "source-cohesion")]
+    pub source_cohesion: f64,
+    #[serde(rename = "destination-cohesion")]
+    pub destination_cohesion: f64,
+    #[serde(rename = "producer-evidence")]
+    pub producer_evidence: f64,
+    #[serde(rename = "architectural-reach")]
+    pub architectural_reach: f64,
+}
+
+impl Default for QualificationWeightsConfig {
+    fn default() -> Self {
+        Self {
+            unique_owner: 0.10,
+            role_affinity: 0.10,
+            source_cohesion: 0.25,
+            destination_cohesion: 0.25,
+            producer_evidence: 0.10,
+            architectural_reach: 0.20,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct QualificationConfig {
+    #[serde(rename = "minimum-evidence")]
+    pub minimum_evidence: f64,
+    #[serde(rename = "minimum-structural")]
+    pub minimum_structural: f64,
+    #[serde(rename = "minimum-ambiguity-margin")]
+    pub minimum_ambiguity_margin: f64,
+    pub weights: QualificationWeightsConfig,
+}
+
+impl Default for QualificationConfig {
+    fn default() -> Self {
+        Self {
+            minimum_evidence: 0.60,
+            minimum_structural: 0.50,
+            minimum_ambiguity_margin: 0.15,
+            weights: QualificationWeightsConfig::default(),
+        }
+    }
+}
+
 /// One complete, independently configurable analysis parameter profile.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -284,6 +337,8 @@ pub struct ProfileConfig {
     pub tests: TestsConfig,
     /// Rules controlling which graph participants may relocate and how tests follow sources.
     pub relocation: RelocationConfig,
+    /// Evidence required before safe relocation advice is recommended.
+    pub qualification: QualificationConfig,
 }
 
 impl Default for ProfileConfig {
@@ -298,6 +353,7 @@ impl Default for ProfileConfig {
             diversity: DiversityConfig::default(),
             tests: TestsConfig::default(),
             relocation: RelocationConfig::default(),
+            qualification: QualificationConfig::default(),
         }
     }
 }
@@ -992,6 +1048,7 @@ impl AnalyzeConfig {
             })?;
         }
         Self::validate_relocation(prefix, &profile.relocation)?;
+        Self::validate_qualification(prefix, &profile.qualification)?;
         positive(&key("solver.ilp-threshold"), profile.solver.ilp_threshold)?;
         at_most(
             &key("solver.ilp-threshold"),
@@ -1053,6 +1110,60 @@ impl AnalyzeConfig {
                 .saturating_mul(profile.diversity.seeds_per_candidate),
             RESTART_POOL_CEILING,
         )
+    }
+
+    fn validate_qualification(
+        prefix: &str,
+        qualification: &QualificationConfig,
+    ) -> Result<(), StrataError> {
+        let key = |suffix: &str| format!("{prefix}.{suffix}");
+        for (suffix, value) in [
+            (
+                "qualification.minimum-evidence",
+                qualification.minimum_evidence,
+            ),
+            (
+                "qualification.minimum-structural",
+                qualification.minimum_structural,
+            ),
+            (
+                "qualification.minimum-ambiguity-margin",
+                qualification.minimum_ambiguity_margin,
+            ),
+        ] {
+            unit_interval(&key(suffix), value)?;
+        }
+        let qualification_weights = qualification.weights;
+        for (suffix, value) in [
+            ("unique-owner", qualification_weights.unique_owner),
+            ("role-affinity", qualification_weights.role_affinity),
+            ("source-cohesion", qualification_weights.source_cohesion),
+            (
+                "destination-cohesion",
+                qualification_weights.destination_cohesion,
+            ),
+            ("producer-evidence", qualification_weights.producer_evidence),
+            (
+                "architectural-reach",
+                qualification_weights.architectural_reach,
+            ),
+        ] {
+            non_negative_finite(&key(&format!("qualification.weights.{suffix}")), value)?;
+        }
+        let qualification_total = qualification_weights.unique_owner
+            + qualification_weights.role_affinity
+            + qualification_weights.source_cohesion
+            + qualification_weights.destination_cohesion
+            + qualification_weights.producer_evidence
+            + qualification_weights.architectural_reach;
+        non_negative_finite(&key("qualification.weights"), qualification_total)?;
+        if qualification_total <= 0.0 {
+            return Err(StrataError::ConfigInvalid {
+                key: Some(key("qualification.weights")),
+                reason: "at least one qualification weight must be positive".to_owned(),
+            });
+        }
+        Ok(())
     }
 
     fn validate_relocation(prefix: &str, relocation: &RelocationConfig) -> Result<(), StrataError> {
@@ -1357,6 +1468,17 @@ fn non_negative_finite(key: &str, value: f64) -> Result<(), StrataError> {
     }
 }
 
+fn unit_interval(key: &str, value: f64) -> Result<(), StrataError> {
+    if value.is_finite() && (0.0..=1.0).contains(&value) {
+        Ok(())
+    } else {
+        Err(StrataError::ConfigInvalid {
+            key: Some(key.to_owned()),
+            reason: "must be a finite number between 0 and 1".to_owned(),
+        })
+    }
+}
+
 /// Returns `Ok` when `value` is finite and at least one.
 fn at_least_one_finite(key: &str, value: f64) -> Result<(), StrataError> {
     if value.is_finite() && value >= 1.0 {
@@ -1370,6 +1492,7 @@ fn at_least_one_finite(key: &str, value: f64) -> Result<(), StrataError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
 
@@ -1652,6 +1775,17 @@ naming = 0.3
 path = 0.2
 anchor = 1.0
 capacity = 4.0
+[profiles.anchored.qualification]
+minimum-evidence = 0.60
+minimum-structural = 0.50
+minimum-ambiguity-margin = 0.15
+[profiles.anchored.qualification.weights]
+unique-owner = 0.10
+role-affinity = 0.10
+source-cohesion = 0.25
+destination-cohesion = 0.25
+producer-evidence = 0.10
+architectural-reach = 0.20
 [profiles.anchored.weights]
 value-import = 1.0
 inheritance = 1.5
@@ -1687,6 +1821,17 @@ naming = 0.4
 path = 0.7
 anchor = 0.8
 capacity = 5.0
+[profiles.greenfield.qualification]
+minimum-evidence = 0.70
+minimum-structural = 0.55
+minimum-ambiguity-margin = 0.20
+[profiles.greenfield.qualification.weights]
+unique-owner = 0.05
+role-affinity = 0.15
+source-cohesion = 0.20
+destination-cohesion = 0.30
+producer-evidence = 0.10
+architectural-reach = 0.20
 [profiles.greenfield.weights]
 value-import = 1.1
 inheritance = 1.6
@@ -1752,6 +1897,207 @@ builtins = false
         assert!((config.profiles.greenfield.objective.naming - 0.8).abs() < f64::EPSILON);
         assert!(config.profiles.greenfield.objective.path.abs() < f64::EPSILON);
         assert!(config.profiles.greenfield.objective.anchor.abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn should_parse_complete_independent_qualification_policies() {
+        let document = r"
+[profiles.anchored.qualification]
+minimum-evidence = 0.60
+minimum-structural = 0.50
+minimum-ambiguity-margin = 0.15
+[profiles.anchored.qualification.weights]
+unique-owner = 0.10
+role-affinity = 0.10
+source-cohesion = 0.25
+destination-cohesion = 0.25
+producer-evidence = 0.10
+architectural-reach = 0.20
+
+[profiles.greenfield.qualification]
+minimum-evidence = 0.70
+minimum-structural = 0.55
+minimum-ambiguity-margin = 0.20
+[profiles.greenfield.qualification.weights]
+unique-owner = 0.05
+role-affinity = 0.15
+source-cohesion = 0.20
+destination-cohesion = 0.30
+producer-evidence = 0.10
+architectural-reach = 0.20
+";
+
+        let parsed = toml::from_str::<AnalyzeConfig>(document);
+        assert!(
+            parsed.is_ok(),
+            "qualification is independently configurable per profile: {parsed:?}"
+        );
+        let config = parsed.unwrap_or_default();
+
+        assert!(
+            (config.profiles.anchored.qualification.minimum_evidence - 0.60).abs() < f64::EPSILON
+        );
+        assert!(
+            (config.profiles.greenfield.qualification.minimum_evidence - 0.70).abs() < f64::EPSILON
+        );
+        assert!(
+            (config
+                .profiles
+                .greenfield
+                .qualification
+                .weights
+                .destination_cohesion
+                - 0.30)
+                .abs()
+                < f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn should_default_every_profile_to_the_conservative_qualification_policy() {
+        let config = AnalyzeConfig::default();
+
+        for (profile_name, profile) in [
+            ("anchored", config.profiles.anchored),
+            ("greenfield", config.profiles.greenfield),
+        ] {
+            let qualification = profile.qualification;
+            let expected_values = [
+                ("minimum-evidence", qualification.minimum_evidence, 0.60),
+                ("minimum-structural", qualification.minimum_structural, 0.50),
+                (
+                    "minimum-ambiguity-margin",
+                    qualification.minimum_ambiguity_margin,
+                    0.15,
+                ),
+                (
+                    "weights.unique-owner",
+                    qualification.weights.unique_owner,
+                    0.10,
+                ),
+                (
+                    "weights.role-affinity",
+                    qualification.weights.role_affinity,
+                    0.10,
+                ),
+                (
+                    "weights.source-cohesion",
+                    qualification.weights.source_cohesion,
+                    0.25,
+                ),
+                (
+                    "weights.destination-cohesion",
+                    qualification.weights.destination_cohesion,
+                    0.25,
+                ),
+                (
+                    "weights.producer-evidence",
+                    qualification.weights.producer_evidence,
+                    0.10,
+                ),
+                (
+                    "weights.architectural-reach",
+                    qualification.weights.architectural_reach,
+                    0.20,
+                ),
+            ];
+            for (key, actual, expected) in expected_values {
+                assert!(
+                    (actual - expected).abs() < f64::EPSILON,
+                    "{profile_name} default at {key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn should_reject_out_of_range_qualification_values_with_precise_paths() {
+        let cases = [("minimum-evidence", -0.01), ("minimum-structural", 1.01)];
+
+        for (key, value) in cases {
+            let document = if let Some(weight) = key.strip_prefix("weights.") {
+                format!("[profiles.anchored.qualification.weights]\n{weight} = {value}\n")
+            } else {
+                format!("[profiles.anchored.qualification]\n{key} = {value}\n")
+            };
+            let result = toml::from_str::<AnalyzeConfig>(&document)
+                .map_err(|parse| parse.to_string())
+                .and_then(|config| config.validate().map_err(|error| error.to_string()));
+            let Err(error) = result else {
+                assert!(false, "invalid qualification values must be rejected");
+                continue;
+            };
+            assert!(
+                error.contains(&format!("profiles.anchored.qualification.{key}")),
+                "diagnostic should name the invalid key: {error}"
+            );
+        }
+
+        for (key, value) in [
+            ("minimum-ambiguity-margin", f64::INFINITY),
+            ("weights.unique-owner", f64::NAN),
+        ] {
+            let mut config = AnalyzeConfig::default();
+            if key == "minimum-ambiguity-margin" {
+                config
+                    .profiles
+                    .anchored
+                    .qualification
+                    .minimum_ambiguity_margin = value;
+            } else {
+                config.profiles.anchored.qualification.weights.unique_owner = value;
+            }
+            let Err(error) = config.validate() else {
+                assert!(false, "non-finite qualification values must be rejected");
+                continue;
+            };
+            let error = error.to_string();
+            assert!(
+                error.contains(&format!("profiles.anchored.qualification.{key}")),
+                "diagnostic should name the invalid key: {error}"
+            );
+        }
+    }
+
+    fn overflowing_qualification_weights(profile: &str) -> Result<(), String> {
+        let document = format!(
+            "[profiles.{profile}.qualification.weights]\nunique-owner = 1e308\nrole-affinity = 1e308\n"
+        );
+        let config: AnalyzeConfig = toml::from_str(&document).map_err(|error| error.to_string())?;
+        let error = config
+            .validate()
+            .err()
+            .ok_or("finite individual weights with an overflowing total must fail")?
+            .to_string();
+        assert!(
+            error.contains(&format!("profiles.{profile}.qualification.weights")),
+            "{error}"
+        );
+        assert!(error.contains("finite"), "{error}");
+        Ok(())
+    }
+
+    #[test]
+    fn should_reject_anchored_qualification_weight_overflow() -> Result<(), String> {
+        overflowing_qualification_weights("anchored")
+    }
+
+    #[test]
+    fn should_reject_greenfield_qualification_weight_overflow() -> Result<(), String> {
+        overflowing_qualification_weights("greenfield")
+    }
+
+    #[test]
+    fn should_accept_large_finite_qualification_weight_totals() -> Result<(), String> {
+        for profile in ["anchored", "greenfield"] {
+            let document = format!(
+                "[profiles.{profile}.qualification.weights]\nunique-owner = 5e307\nrole-affinity = 5e307\n"
+            );
+            let config: AnalyzeConfig =
+                toml::from_str(&document).map_err(|error| error.to_string())?;
+            config.validate().map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     #[test]

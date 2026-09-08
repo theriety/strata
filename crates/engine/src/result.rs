@@ -11,20 +11,20 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use strata_ir::ScopeLevel;
 
-use crate::config::ProfileConfig;
+use crate::config::{ProfileConfig, ProfileName};
 
 /// The schema version stamped into every [`AnalyzeResult`] this crate produces.
 ///
 /// Readers of a saved result reject any other version rather than misreading a
 /// future shape.
-pub const RESULT_SCHEMA_VERSION: u32 = 7;
+pub const RESULT_SCHEMA_VERSION: u32 = 8;
 
 /// The top-level analysis result: the snapshot hash, the current tree with its
-/// violations, and the per-mode candidate sets.
+/// violations, and the per-profile candidate sets.
 ///
 /// `snapshot_hash` keys a deterministic cache — an identical snapshot and config
-/// always produce an identical result. `modes` carries up to one [`ModeResult`]
-/// per requested mode.
+/// always produce an identical result. `profiles` carries up to one
+/// [`ProfileResult`] per requested parameter profile.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyzeResult {
@@ -41,6 +41,87 @@ pub struct AnalyzeResult {
     pub current: CurrentTree,
     /// The independently configured parameter-profile results.
     pub profiles: Profiles,
+    /// Evidence-qualified consensus over the selected profiles' first candidates.
+    pub advice: Advice,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Advice {
+    pub recommended: Vec<RelocationAdvice>,
+    pub review_candidates: Vec<RelocationAdvice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelocationAdvice {
+    pub proposal: RelocationProposal,
+    pub destination: String,
+    pub supporting_profiles: Vec<ProfileName>,
+    pub qualified_profiles: Vec<ProfileName>,
+    pub absent_profiles: Vec<ProfileName>,
+    pub conflicting_destinations: Vec<ProfileConflict>,
+    pub assessments: Vec<ProfileAssessment>,
+    pub review_reasons: Vec<ReviewReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RelocationProposal {
+    File { relocation: Move },
+    Symbol { relocation: SymbolMove },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileConflict {
+    pub profile: ProfileName,
+    pub destination: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileAssessment {
+    pub profile: ProfileName,
+    pub destination: String,
+    pub evidence: EvidenceSignals,
+    pub weighted_score: f64,
+    pub structural_score: f64,
+    pub ambiguity_margin: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub best_alternative: Option<String>,
+    pub thresholds: QualificationThresholds,
+    pub qualified: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvidenceSignals {
+    pub unique_owner: f64,
+    pub role_affinity: f64,
+    pub source_cohesion: f64,
+    pub destination_cohesion: f64,
+    pub producer_evidence: f64,
+    pub architectural_reach: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QualificationThresholds {
+    pub minimum_evidence: f64,
+    pub minimum_structural: f64,
+    pub minimum_ambiguity_margin: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewReason {
+    PartialProfileSupport,
+    ConflictingDestinations,
+    WeakEvidence,
+    WeakStructuralEvidence,
+    WeakAmbiguityMargin,
+    NoMajoritySupport,
 }
 
 /// A coarse census of the analyzed snapshot.
@@ -133,7 +214,7 @@ pub struct CapacityRemainder {
     pub file_level: u32,
 }
 
-/// Where the current layout stands relative to a mode's candidates.
+/// Where the current layout stands relative to a parameter profile's candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CurrentStanding {
@@ -151,7 +232,7 @@ pub enum CurrentStanding {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Candidate {
-    /// The 1-based candidate index within its mode.
+    /// The 1-based candidate index within its parameter profile.
     pub index: u32,
     /// The total objective `J`; lower is better.
     pub score: f64,
@@ -172,7 +253,7 @@ pub struct Candidate {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub symbol_moves: Vec<SymbolMove>,
     /// The hard capacity findings left in this candidate's tree; present only
-    /// when the mode's `current_standing` is `Infeasible`.
+    /// when the parameter profile's current standing is `Infeasible`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capacity_remainder: Option<CapacityRemainder>,
 }
@@ -559,7 +640,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn should_serialize_schema_version_seven_without_modes() {
+    fn should_serialize_schema_version_eight_with_two_advice_groups() {
         let result = AnalyzeResult {
             schema_version: RESULT_SCHEMA_VERSION,
             snapshot_hash: "snapshot".to_owned(),
@@ -580,6 +661,7 @@ mod tests {
                 shared_findings: Vec::new(),
             },
             profiles: Profiles::default(),
+            advice: Advice::default(),
         };
 
         let json = serde_json::to_value(result).unwrap_or_default();
@@ -587,11 +669,14 @@ mod tests {
         assert_eq!(
             json.pointer("/schemaVersion")
                 .and_then(serde_json::Value::as_u64),
-            Some(7)
+            Some(8)
         );
         assert!(json.get("profiles").is_some());
         assert!(json.get("modes").is_none());
         assert!(json.pointer("/current/sharedFindings").is_some());
+        assert!(json.pointer("/advice/recommended").is_some());
+        assert!(json.pointer("/advice/reviewCandidates").is_some());
+        assert!(json.pointer("/advice/rejected").is_none());
     }
 
     #[test]
