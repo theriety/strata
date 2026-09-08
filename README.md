@@ -25,7 +25,7 @@ cargo build --release
 
 ## Usage — point at a repo, get a report
 
-Run the full decomposition pipeline against any repository by pointing `--root` at it. On a terminal this prints a human-readable analysis report (violations + restructure candidates); piped or redirected, it emits JSON.
+Run the full decomposition pipeline against any repository by pointing `--root` at it. This prints the same plain-text analysis report (violations + restructure candidates) on a terminal, in a pipe, or when redirected. Use `--format json` for machine-readable output.
 
 ```sh
 strata analyze --root path/to/repo
@@ -96,7 +96,7 @@ The ambiguity comparison deliberately over-approximates alternatives from pass-s
 | `-k, --candidates <n>` | Override the candidate count for every selected parameter profile. |
 | `--seed <n>` | Override the deterministic seed for every selected parameter profile. |
 | `--jobs <n>` | Parallelism for parsing and shattering (`0` = all cores; never affects results). |
-| `--format <summary\|json>` | Force the output face (defaults to summary on a TTY, JSON when piped). |
+| `--format <summary\|json>` | Choose the output format (defaults to summary for every output destination). |
 | `--output <path>` | Write the result to a file instead of stdout. |
 | `--verbose` | Include numerical evidence, score-component deltas, and effective configuration in human-readable output. Also available on `report`; JSON is unchanged. |
 

@@ -62,7 +62,15 @@ pub fn configure(result: &mut AnalyzeResult) -> Result<(), &'static str> {
         "workspace",
         Level::PackageGroup,
         vec![
-            folder("left", Level::Package, vec![file("left/source.ts", &[])]),
+            folder(
+                "left",
+                Level::Package,
+                vec![folder(
+                    "relocated",
+                    Level::Folder,
+                    vec![file("left/source.ts", &[])],
+                )],
+            ),
             folder(
                 "right",
                 Level::Package,
@@ -85,6 +93,17 @@ pub fn configure(result: &mut AnalyzeResult) -> Result<(), &'static str> {
         mirrors: vec![],
         blocked_mirrors: vec![],
     }];
+    candidate.delta_narration.push(Move {
+        kind: MoveKind::Move,
+        files: vec![FileMove {
+            path: "workspace/left/source.ts".into(),
+            from: "workspace/left".into(),
+        }],
+        to: "workspace/left/relocated".into(),
+        reason: MoveReason::Clustering,
+        mirrors: vec![],
+        blocked_mirrors: vec![],
+    });
     candidate.symbol_moves = vec![SymbolMove {
         symbol: "Options".into(),
         kind: SymbolKind::Type,
@@ -113,20 +132,24 @@ pub fn assert_paths(report: &str) -> Result<(), &'static str> {
         );
         for package in ["left/", "right/"] {
             assert_eq!(
-                tree.matches(package).count(),
+                tree.lines()
+                    .filter(|line| line.trim_end().ends_with(package))
+                    .count(),
                 1,
                 "package directory lost or duplicated: {tree}"
             );
         }
     }
     assert!(before.lines().collect::<Vec<_>>().windows(3).any(|lines| {
-        matches!(lines, [package, file, symbol] if package.contains("left/") && file.contains("source.ts *") && symbol.contains("Options` [moves out]"))
+        matches!(lines, [package, file, symbol] if package.contains("left/") && file.contains("source.ts *") && symbol.contains("Options` [to right/nested/destination.ts]"))
     }), "wrong source: {before}");
     assert!(after.lines().collect::<Vec<_>>().windows(4).any(|lines| {
-        matches!(lines, [package, folder, file, symbol] if package.contains("right/") && folder.contains("nested/") && file.contains("destination.ts *") && symbol.contains("Options` [moved in]"))
+        matches!(lines, [package, folder, file, symbol] if package.contains("right/") && folder.contains("nested/") && file.contains("destination.ts *") && symbol.contains("Options` [from left/source.ts]"))
     }), "symbol must follow the whole-file move: {after}");
     assert!(
-        !before.contains("nested/")
+        !before
+            .lines()
+            .any(|line| line.trim_end().ends_with("nested/"))
             && !before.contains("[moved in]")
             && !after.contains("[moves out]")
     );

@@ -37,4 +37,4 @@ The public result has two groups. `Recommended` requires sufficient evidence and
 | [ADR-0012](decisions/0012-companion-owner-affinity.md) | Conservative companion-owner affinity | Accepted |
 | [ADR-0013](decisions/0013-pinned-relocation-policies-and-test-mirrors.md) | Pinned relocation policies and exact test mirrors | Accepted |
 | [ADR-0014](decisions/0014-profile-consensus.md) | Evidence-qualified profile consensus | Accepted |
-| [ADR-0015](decisions/0015-consistent-reports-and-change-trees.md) | Consistent reports — shared content, verbosity, and before/after change trees | Accepted |
+| [ADR-0016](decisions/0016-plain-text-reports-and-relocation-endpoints.md) | Plain-text reports — consistent defaults and relocation endpoint trees | Accepted |

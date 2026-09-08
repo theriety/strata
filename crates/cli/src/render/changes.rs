@@ -38,16 +38,14 @@ impl Changes {
             } else {
                 "symbol"
             };
-            changes
-                .before
-                .entry(source)
-                .or_default()
-                .push(format!("{kind} `{}` [moves out]", entry.symbol));
+            let outgoing = format!("{kind} `{}` [to {after_destination}]", entry.symbol);
+            let incoming = format!("{kind} `{}` [from {source}]", entry.symbol);
+            changes.before.entry(source).or_default().push(outgoing);
             changes
                 .after
                 .entry(after_destination)
                 .or_default()
-                .push(format!("{kind} `{}` [moved in]", entry.symbol));
+                .push(incoming);
         }
         changes
     }

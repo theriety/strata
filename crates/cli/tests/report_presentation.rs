@@ -164,11 +164,11 @@ fn should_place_moved_symbol_under_actual_before_and_after_files() -> TestResult
         .ok_or("missing advice boundary")?;
     assert!(before.contains("source.ts *\n") && after.contains("destination.ts *\n"));
     assert!(before.lines().collect::<Vec<_>>().windows(2).any(|lines| {
-        matches!(lines, [parent, symbol] if parent.contains("source.ts *") && symbol.contains("type `Options` [moves out]"))
+        matches!(lines, [parent, symbol] if parent.contains("source.ts *") && symbol.contains("type `Options` [to destination.ts]"))
     }));
     assert!(!before.contains("[moved in]"));
     assert!(after.lines().collect::<Vec<_>>().windows(2).any(|lines| {
-        matches!(lines, [parent, symbol] if parent.contains("destination.ts *") && symbol.contains("type `Options` [moved in]"))
+        matches!(lines, [parent, symbol] if parent.contains("destination.ts *") && symbol.contains("type `Options` [from source.ts]"))
     }));
     assert!(!after.contains("[moves out]"));
     assert!(!before.contains("untouched.ts") && !after.contains("untouched.ts"));
@@ -284,6 +284,21 @@ fn should_wrap_long_symbol_paths_without_losing_their_characters() -> TestResult
         unwrapped.contains(&from) && unwrapped.contains(&to),
         "wrapping must preserve paths"
     );
+    let (_, trees) = report.split_once("Before").ok_or("missing before")?;
+    let (before, after) = trees.split_once("After").ok_or("missing after")?;
+    for (tree, annotation) in [
+        (before, format!("[to{to}]")),
+        (after, format!("[from{from}]")),
+    ] {
+        let unwrapped_tree: String = tree
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        assert!(
+            unwrapped_tree.contains(&annotation),
+            "endpoint lost during wrapping: {tree}"
+        );
+    }
     Ok(())
 }
 
@@ -371,13 +386,19 @@ fn should_follow_relocated_symbol_destination_and_mirrored_test_in_paired_trees(
         .next()
         .ok_or("missing advice")?;
 
-    assert!(!before.contains("nested/") && after.matches("nested/").count() == 2);
+    assert!(
+        !before
+            .lines()
+            .any(|line| line.trim_end().ends_with("nested/"))
+            && after.matches("nested/").count() == 2
+    );
     for tree in [before, after] {
         assert!(tree.contains("destination.spec.ts *"));
     }
     assert!(after.lines().collect::<Vec<_>>().windows(3).any(|lines| {
-        matches!(lines, [folder, file, symbol] if folder.contains("nested/") && file.contains("destination.ts *") && symbol.contains("Options` [moved in]"))
+        matches!(lines, [folder, file, symbol] if folder.contains("nested/") && file.contains("destination.ts *") && symbol.contains("Options` [from source.ts]"))
     }));
+    assert!(before.contains("Options` [to nested/destination.ts]"));
     Ok(())
 }
 
@@ -451,10 +472,10 @@ fn should_keep_duplicate_filenames_distinct_across_roots() -> TestResult {
         .ok_or("missing advice")?;
 
     assert!(before.lines().collect::<Vec<_>>().windows(3).any(|lines| {
-        matches!(lines, [root, file, symbol] if root.contains("left/") && file.contains("options.ts *") && symbol.contains("Options` [moves out]"))
+        matches!(lines, [root, file, symbol] if root.contains("left/") && file.contains("options.ts *") && symbol.contains("Options` [to right/options.ts]"))
     }));
     assert!(after.lines().collect::<Vec<_>>().windows(3).any(|lines| {
-        matches!(lines, [root, file, symbol] if root.contains("right/") && file.contains("options.ts *") && symbol.contains("Options` [moved in]"))
+        matches!(lines, [root, file, symbol] if root.contains("right/") && file.contains("options.ts *") && symbol.contains("Options` [from left/options.ts]"))
     }));
     for tree in [before, after] {
         assert_eq!(tree.matches("options.ts *").count(), 2);
@@ -525,7 +546,9 @@ fn should_preserve_symbol_directory_named_like_project_root() -> TestResult {
             .ok_or("missing advice")?,
     ] {
         assert_eq!(
-            tree.matches("project/").count(),
+            tree.lines()
+                .filter(|line| line.trim_end().ends_with("project/"))
+                .count(),
             2,
             "root and same-name child must both survive: {tree}"
         );

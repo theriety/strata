@@ -49,16 +49,16 @@ greenfield — candidate 1
     ├── app.py *
     └── geometry/
         ├── rectangle.py *
-        │   └── symbol `describe` [moves out]
+        │   └── symbol `describe` [to geometry/app.py]
         └── shape.py *
-            └── type `Shape` [moves out]
+            └── type `Shape` [to geometry/rectangle.py]
   After
     nested-python/
     └── geometry/
         ├── app.py *
-        │   └── symbol `describe` [moved in]
+        │   └── symbol `describe` [from geometry/rectangle.py]
         ├── rectangle.py *
-        │   └── type `Shape` [moved in]
+        │   └── type `Shape` [from geometry/shape.py]
         └── shape.py *
   * File moved or its symbol contents changed.
   Unchanged branches and symbols omitted; excluded files are not shown.

@@ -103,7 +103,7 @@ struct AnalyzeCli {
     /// Where to write the result (stdout when absent).
     #[arg(long)]
     output: Option<PathBuf>,
-    /// Output format (TTY-aware when absent: summary on a terminal, json piped).
+    /// Output format (defaults to summary, including when piped or redirected).
     #[arg(long)]
     format: Option<FormatChoice>,
     /// Deterministic seed.

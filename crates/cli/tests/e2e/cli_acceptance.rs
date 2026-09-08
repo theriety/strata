@@ -2123,26 +2123,54 @@ fn should_write_analyze_json_to_a_file_byte_identical_to_stdout() {
 }
 
 #[test]
-fn should_default_to_json_when_stdout_is_piped() {
-    // with no --format and a piped (non-tty) stdout — exactly how this harness
-    // captures output — analyze emits the machine face: parseable json carrying
-    // the schema stamp.
+fn should_default_to_summary_when_stdout_is_piped() {
     let root = fixture("python");
     let root_str = root.to_str().unwrap_or_default();
-
     let outcome = run(&["analyze", "--root", root_str, "--config", PURE_DEFAULTS]);
-
+    let summary = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
     assert_eq!(outcome.code, 0, "the formatless run exits 0");
-    let parsed: serde_json::Value =
-        serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
-    assert_eq!(
-        parsed
-            .pointer("/schemaVersion")
-            .and_then(serde_json::Value::as_u64),
-        Some(u64::from(strata_engine::RESULT_SCHEMA_VERSION)),
-        "piped output is json with the schema stamp: {}",
-        outcome.stdout
+    assert_eq!(summary.code, 0, "the explicit summary exits 0");
+    assert!(summary.stdout.contains("Structural findings"));
+    assert_eq!(outcome.stdout, summary.stdout);
+}
+
+#[test]
+fn should_default_to_summary_when_stdout_is_redirected() -> Result<(), Box<dyn std::error::Error>> {
+    let root = fixture("python");
+    let root_str = root.to_str().ok_or("non-UTF8 root")?;
+    let path = std::env::temp_dir().join(format!("strata-summary-redirect-{}.txt", nanos()));
+    let output = std::fs::File::create(&path)?;
+    let outcome = std::process::Command::new(assert_cmd::cargo::cargo_bin("strata"))
+        .args(["analyze", "--root", root_str, "--config", PURE_DEFAULTS])
+        .stdout(output)
+        .output()?;
+    let written = std::fs::read_to_string(&path)?;
+    std::fs::remove_file(path)?;
+    let summary = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--format",
+        "summary",
+    ]);
+    assert!(
+        outcome.status.success(),
+        "{}",
+        String::from_utf8_lossy(&outcome.stderr)
     );
+    assert_eq!(summary.code, 0);
+    assert_eq!(written, summary.stdout);
+    Ok(())
 }
 
 /// Counts the symbol bullet lines (`- name (visibility)`) in a rendered tree.

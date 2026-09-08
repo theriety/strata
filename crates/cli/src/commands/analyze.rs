@@ -14,9 +14,9 @@ use crate::render::{Format, RenderOptions, render, render_with_options};
 
 /// The parsed inputs of an `analyze` run.
 ///
-/// `format` is the already-resolved effective format (TTY resolution happens in
-/// the caller, which knows whether the sink is a terminal); `overrides` carries
-/// the CLI flags that layer over the config file.
+/// `format` is the effective format, resolved by the caller from an explicit
+/// selection or the default human-readable format; `overrides` carries the CLI
+/// flags that layer over the config file.
 #[derive(Debug)]
 pub struct AnalyzeArgs {
     /// The repository root to analyze.

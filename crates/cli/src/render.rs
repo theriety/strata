@@ -1,4 +1,4 @@
-//! TTY-aware rendering of an [`AnalyzeResult`] into human-readable text.
+//! Sink-independent rendering of an [`AnalyzeResult`] into human-readable text.
 //!
 //! Rendering is a pure function of the result and an output sink: the same result
 //! always renders the same bytes, and `--format json` bypasses this module
@@ -35,19 +35,13 @@ pub enum Format {
 }
 
 impl Format {
-    /// Resolves the effective format from an optional explicit choice and whether
-    /// the sink is a terminal.
+    /// Resolves the effective format from an optional explicit choice.
     ///
-    /// With no explicit choice the format is TTY-aware: a terminal gets the
-    /// human-readable `default_human` face, a pipe gets [`Format::Json`]. An
-    /// explicit choice always wins.
+    /// An explicit choice wins; otherwise every sink uses `default_human`.
+    /// The terminal argument is retained for API compatibility and is ignored.
     #[must_use]
-    pub fn resolve(explicit: Option<Format>, is_terminal: bool, default_human: Format) -> Format {
-        match explicit {
-            Some(format) => format,
-            None if is_terminal => default_human,
-            None => Format::Json,
-        }
+    pub fn resolve(explicit: Option<Format>, _is_terminal: bool, default_human: Format) -> Format {
+        explicit.unwrap_or(default_human)
     }
 }
 
@@ -945,8 +939,11 @@ mod tests {
     }
 
     #[test]
-    fn should_resolve_to_json_when_piped_without_an_explicit_format() {
-        assert_eq!(Format::resolve(None, false, Format::Summary), Format::Json);
+    fn should_resolve_to_summary_when_piped_without_an_explicit_format() {
+        assert_eq!(
+            Format::resolve(None, false, Format::Summary),
+            Format::Summary
+        );
     }
 
     #[test]
