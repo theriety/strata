@@ -1,6 +1,6 @@
 > **Status:** Superseded
 >
-> **Superseded by:** [ADR-0009 — Complete analysis parameter profiles](../0009-complete-analysis-parameter-profiles.md)
+> **Superseded by:** [ADR-0009 — Complete analysis parameter profiles](0009-complete-analysis-parameter-profiles.md)
 >
 > **What changed:** Partial: same-file references remain dependency edges, but their cut price now uses independently configurable runtime and type affinity in each complete parameter profile.
 
