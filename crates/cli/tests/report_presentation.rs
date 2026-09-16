@@ -287,15 +287,25 @@ fn should_wrap_long_symbol_paths_without_losing_their_characters() -> TestResult
     let (_, trees) = report.split_once("Before").ok_or("missing before")?;
     let (before, after) = trees.split_once("After").ok_or("missing after")?;
     for (tree, annotation) in [
-        (before, format!("[to{to}]")),
-        (after, format!("[from{from}]")),
+        (before, format!("type `LongOptions` [to {to}]")),
+        (after, format!("type `LongOptions` [from {from}]")),
     ] {
-        let unwrapped_tree: String = tree
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-        assert!(
-            unwrapped_tree.contains(&annotation),
+        let mut lines = tree.lines();
+        let first = lines
+            .find(|line| line.contains("type `LongOptions`"))
+            .ok_or("missing symbol annotation")?;
+        let (ancestry, content) = first.split_once("└── ").ok_or("missing symbol branch")?;
+        let continuation = format!("{ancestry}    ");
+        let mut restored = content.to_owned();
+        while restored.len() < annotation.len() {
+            let line = lines.next().ok_or("missing symbol continuation")?;
+            restored.push_str(
+                line.strip_prefix(&continuation)
+                    .ok_or("symbol continuation lost tree geometry")?,
+            );
+        }
+        assert_eq!(
+            restored, annotation,
             "endpoint lost during wrapping: {tree}"
         );
     }
