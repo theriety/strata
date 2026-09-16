@@ -20,7 +20,7 @@ fn config_with_file_cap(cap: u32) -> AnalyzeConfig {
 }
 
 #[test]
-fn should_report_a_cycle_as_a_violation() {
+fn should_omit_a_same_file_cycle_from_shared_and_profile_findings() -> Result<(), String> {
     let snapshot = snapshot(
         vec![
             node(0, "a", 0, Polarity::Production),
@@ -30,23 +30,26 @@ fn should_report_a_cycle_as_a_violation() {
         vec![container(0, "file", ScopeLevel::File, None)],
     );
 
-    let result = analyze(&snapshot, &AnalyzeConfig::default());
-    let violations = result
-        .map(|result| result.current.shared_findings)
-        .unwrap_or_default();
-
-    let cycle = violations
-        .iter()
-        .find(|violation| violation.kind == ViolationKind::Cycle);
-    assert_eq!(
-        cycle.map(|violation| violation.location.as_slice()),
-        Some(["file".to_owned()].as_slice())
+    let result =
+        analyze(&snapshot, &AnalyzeConfig::default()).map_err(|error| error.to_string())?;
+    assert!(
+        result
+            .current
+            .shared_findings
+            .iter()
+            .all(|finding| finding.kind != ViolationKind::Cycle)
     );
-    assert!(cycle.is_some_and(|violation| {
-        violation.detail.contains("one placement unit")
-            && violation.detail.contains("must remain in one file")
-            && violation.detail.contains("break")
-    }));
+    for profile in [&result.profiles.anchored, &result.profiles.greenfield] {
+        let profile = profile.as_ref().ok_or("missing requested profile")?;
+        assert!(
+            profile
+                .current
+                .unique_findings
+                .iter()
+                .all(|finding| finding.kind != ViolationKind::Cycle)
+        );
+    }
+    Ok(())
 }
 
 #[test]
@@ -54,10 +57,13 @@ fn should_emit_identical_findings_once_as_shared() {
     let snapshot = snapshot(
         vec![
             node(0, "left", 0, Polarity::Production),
-            node(1, "right", 0, Polarity::Production),
+            node(1, "right", 1, Polarity::Production),
         ],
         vec![edge(0, 1), edge(1, 0)],
-        vec![container(0, "src/pair.rs", ScopeLevel::File, None)],
+        vec![
+            container(0, "src/left.rs", ScopeLevel::File, None),
+            container(1, "src/right.rs", ScopeLevel::File, None),
+        ],
     );
 
     let result = analyze(&snapshot, &AnalyzeConfig::default()).ok();
@@ -78,6 +84,18 @@ fn should_emit_identical_findings_once_as_shared() {
         });
 
     assert_eq!(shared.len(), 1);
+    let cycle = shared
+        .iter()
+        .find(|finding| finding.kind == ViolationKind::Cycle);
+    assert_eq!(
+        cycle.map(|finding| finding.location.as_slice()),
+        Some(["src/left.rs".to_owned(), "src/right.rs".to_owned()].as_slice())
+    );
+    assert!(cycle.is_some_and(|finding| {
+        finding.detail.contains("one placement unit")
+            && finding.detail.contains("must remain in one file")
+            && finding.detail.contains("break")
+    }));
     assert!(anchored_unique.is_empty());
     assert!(greenfield_unique.is_empty());
 
@@ -145,10 +163,13 @@ fn should_leave_shared_findings_empty_for_a_single_profile_run() {
     let snapshot = snapshot(
         vec![
             node(0, "left", 0, Polarity::Production),
-            node(1, "right", 0, Polarity::Production),
+            node(1, "right", 1, Polarity::Production),
         ],
         vec![edge(0, 1), edge(1, 0)],
-        vec![container(0, "src/pair.rs", ScopeLevel::File, None)],
+        vec![
+            container(0, "src/left.rs", ScopeLevel::File, None),
+            container(1, "src/right.rs", ScopeLevel::File, None),
+        ],
     );
     let mut config = AnalyzeConfig::default();
     config.analysis.profiles = vec![ProfileName::Anchored];
@@ -167,6 +188,32 @@ fn should_leave_shared_findings_empty_for_a_single_profile_run() {
     assert!(shared.is_empty());
     assert_eq!(anchored_unique.len(), 1);
     assert!(result.is_some_and(|result| result.profiles.greenfield.is_none()));
+}
+
+#[test]
+fn should_retain_a_cycle_between_distinct_files_with_the_same_name() -> Result<(), String> {
+    let snapshot = snapshot(
+        vec![
+            node(0, "left", 0, Polarity::Production),
+            node(1, "right", 1, Polarity::Production),
+        ],
+        vec![edge(0, 1), edge(1, 0)],
+        vec![
+            container(0, "src/item.rs", ScopeLevel::File, None),
+            container(1, "src/item.rs", ScopeLevel::File, None),
+        ],
+    );
+
+    let result =
+        analyze(&snapshot, &AnalyzeConfig::default()).map_err(|error| error.to_string())?;
+    assert!(
+        result
+            .current
+            .shared_findings
+            .iter()
+            .any(|finding| finding.kind == ViolationKind::Cycle)
+    );
+    Ok(())
 }
 
 #[test]
