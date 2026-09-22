@@ -4,13 +4,13 @@ use std::io::{self, Write};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use strata_engine::{AnalyzeResult, Candidate, CurrentStanding, ModeResult, Violation};
+use strata_engine::{AnalyzeResult, Candidate, CurrentStanding, ModeResult};
 
+use super::advice::{advice_with_options, caption_for};
 use super::changes::Changes;
-use super::{
-    RenderOptions, TERMS, advice_with_options, caption_for, effective_parameter_lines, f4, nq,
-    present_modes, severity_tag, sf, wrap,
-};
+use super::diff::blocked_mirror_reason;
+use super::findings::findings_lines;
+use super::{RenderOptions, TERMS, effective_parameter_lines, f4, nq, present_modes, sf, wrap};
 
 /// A heading and its already-wrapped, format-independent body.
 struct Section {
@@ -247,77 +247,6 @@ fn continuation_prefix(line: &str) -> String {
         .collect()
 }
 
-fn findings_lines(label: &str, violations: &[Violation]) -> Vec<String> {
-    let mut lines = vec![format!("{label} ({})", violations.len())];
-    if violations.is_empty() {
-        lines.push("  None.".to_owned());
-    }
-    for violation in violations {
-        let location = violation
-            .location
-            .iter()
-            .map(|path| nq(path))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let detail = if violation.kind == strata_engine::ViolationKind::Cycle {
-            super::cycle_finding_text(violation)
-        } else if violation
-            .capacity
-            .as_ref()
-            .is_some_and(|capacity| capacity.path.is_some())
-        {
-            violation.detail.clone()
-        } else if violation.capacity.is_some() {
-            format!("at container ancestry {location}: {}", violation.detail)
-        } else {
-            format!("at {location}: {}", violation.detail)
-        };
-        lines.extend(wrap(
-            &format!(
-                "- {} [{}] {detail}",
-                super::kind_tag(violation.kind),
-                severity_tag(violation.severity)
-            ),
-            2,
-            4,
-        ));
-        if let Some(capacity) = &violation.capacity
-            && !violation.detail.contains(&format!(
-                "holds {} against a cap of {}",
-                capacity.measured, capacity.cap
-            ))
-        {
-            let capacity_location = capacity
-                .path
-                .as_ref()
-                .map_or(String::new(), |path| format!(" at `{path}`"));
-            lines.extend(wrap(
-                &format!(
-                    "Measured {} against cap {}{capacity_location}.",
-                    capacity.measured, capacity.cap
-                ),
-                4,
-                4,
-            ));
-        }
-        for edge in violation.break_suggestions.iter().flatten().skip(1) {
-            lines.extend(wrap(
-                &format!(
-                    "Suggested cut: `{}` → `{}` (weight {:.4}, {})",
-                    edge.source,
-                    edge.target,
-                    edge.weight,
-                    if edge.exact { "exact" } else { "heuristic" }
-                ),
-                4,
-                4,
-            ));
-        }
-    }
-    lines.push(String::new());
-    lines
-}
-
 fn profile_lines(
     result: &AnalyzeResult,
     name: &str,
@@ -504,7 +433,7 @@ fn file_move_lines(candidate: &Candidate, changes: &Changes) -> Vec<String> {
                     changes.path(&blocked.path),
                     changes.path(&blocked.from),
                     changes.path(&blocked.intended_to),
-                    super::blocked_mirror_reason(blocked.reason)
+                    blocked_mirror_reason(blocked.reason)
                 ),
                 4,
                 6,
