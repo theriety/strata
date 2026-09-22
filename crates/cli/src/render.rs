@@ -1564,6 +1564,211 @@ mod tests {
     }
 
     #[test]
+    fn should_preserve_wrapped_tree_geometry_and_literals_in_both_report_formats()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use unicode_width::UnicodeWidthStr;
+
+        let mut result = result_with_candidate();
+        let source_name = format!("a{}  literal*.ts", "界e\u{301} part  ".repeat(28));
+        let destination_name = format!("z{}  destination.ts", "wide界  ".repeat(35));
+        let source = format!("src/deep/{source_name}");
+        let destination = format!("src/deep/{destination_name}");
+        let symbol = format!("Long{}Name", "界e\u{301}".repeat(100));
+        let candidate = result
+            .profiles
+            .anchored
+            .as_mut()
+            .and_then(|profile| profile.candidates.first_mut())
+            .ok_or("missing candidate")?;
+        candidate.symbol_moves = vec![SymbolMove {
+            symbol: symbol.clone(),
+            kind: SymbolKind::Type,
+            from_path: source.clone(),
+            to_path: destination.clone(),
+            delta: -0.1,
+            broken_imports: 0,
+        }];
+        let mut terminal = Vec::new();
+
+        render(
+            &result,
+            Format::Summary,
+            &result.current.tree.name,
+            &mut terminal,
+        )?;
+        let terminal = String::from_utf8(terminal)?;
+        let markdown = markdown(&result, RenderOptions::default());
+
+        let mut rendered_trees = Vec::new();
+        for output in [&terminal, &markdown] {
+            assert!(output.lines().all(|line| line.width() <= 100), "{output}");
+            let (_, trees) = output.split_once("Before").ok_or("missing Before")?;
+            let (before, _) = trees.split_once("After").ok_or("missing After")?;
+            assert_wrapped_tree_label(
+                before,
+                "            ├── ",
+                "            │   ",
+                &format!("{source_name} *"),
+            )?;
+            assert_wrapped_tree_label(
+                before,
+                "            └── ",
+                "                ",
+                &format!("{destination_name} *"),
+            )?;
+            assert_wrapped_tree_label(
+                before,
+                "            │   └── ",
+                "            │       ",
+                &format!("type `{symbol}` [to {destination}]"),
+            )?;
+            rendered_trees.push(before.to_owned());
+        }
+        let [terminal_tree, markdown_tree] = rendered_trees.as_slice() else {
+            return Err("missing report format".into());
+        };
+        assert_eq!(terminal_tree, markdown_tree);
+        Ok(())
+    }
+
+    fn assert_wrapped_tree_label(
+        tree: &str,
+        first_prefix: &str,
+        continuation: &str,
+        expected: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut lines = tree.lines();
+        let first = lines
+            .find_map(|line| line.strip_prefix(first_prefix))
+            .ok_or_else(|| format!("missing branch {first_prefix:?}: {tree}"))?;
+        let mut restored = first.to_owned();
+        let mut segments = 1;
+        while restored.len() < expected.len() {
+            let next = lines.next().ok_or("missing wrapped continuation")?;
+            let content = next
+                .strip_prefix(continuation)
+                .ok_or_else(|| format!("continuation lost geometry {continuation:?}: {next:?}"))?;
+            restored.push_str(content);
+            segments += 1;
+        }
+        assert!(
+            segments >= 3,
+            "fixture must exercise intermediate continuations"
+        );
+        assert_eq!(
+            restored, expected,
+            "literal spaces, names, paths, and stars must survive"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn should_keep_deep_tree_paths_inside_the_report_width()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use unicode_width::UnicodeWidthStr;
+
+        let mut result = result_with_candidate();
+        let components = (0..24)
+            .map(|index| format!("component{index:02}/"))
+            .collect::<Vec<_>>();
+        let ancestry = components.concat();
+        let destination = format!("{ancestry}界z.ts");
+        let candidate = result
+            .profiles
+            .anchored
+            .as_mut()
+            .and_then(|profile| profile.candidates.first_mut())
+            .ok_or("missing candidate")?;
+        candidate.symbol_moves = vec![SymbolMove {
+            symbol: "Options".into(),
+            kind: SymbolKind::Type,
+            from_path: format!("{ancestry}界a.ts"),
+            to_path: destination.clone(),
+            delta: -0.1,
+            broken_imports: 0,
+        }];
+        let mut terminal = Vec::new();
+
+        render(
+            &result,
+            Format::Summary,
+            &result.current.tree.name,
+            &mut terminal,
+        )?;
+        let terminal = String::from_utf8(terminal)?;
+        let markdown = markdown(&result, RenderOptions::default());
+
+        let mut trees = Vec::new();
+        for output in [&terminal, &markdown] {
+            for line in output.lines() {
+                assert!(line.width() <= 100, "{} columns: {line:?}", line.width());
+            }
+            let (_, tree) = output.split_once("Before").ok_or("missing Before")?;
+            let (before, _) = tree.split_once("After").ok_or("missing After")?;
+            let mut lines = before
+                .lines()
+                .skip_while(|line| !line.contains("component00/"));
+            for (index, component) in components.iter().enumerate() {
+                let indentation = "    ".repeat(index + 1);
+                assert_deep_tree_line(
+                    &mut lines,
+                    &format!("{indentation}└── {component}"),
+                    &format!("{indentation}    "),
+                )?;
+            }
+            let indentation = "    ".repeat(25);
+            assert_deep_tree_line(
+                &mut lines,
+                &format!("{indentation}├── 界a.ts *"),
+                &format!("{indentation}│   "),
+            )?;
+            assert_deep_tree_line(
+                &mut lines,
+                &format!("{indentation}│   └── type `Options` [to {destination}]"),
+                &format!("{indentation}│       "),
+            )?;
+            assert_deep_tree_line(
+                &mut lines,
+                &format!("{indentation}└── 界z.ts *"),
+                &format!("{indentation}    "),
+            )?;
+            assert!(lines.all(|line| line.is_empty() || line == "  "));
+            trees.push(before.to_owned());
+        }
+        let [terminal_tree, markdown_tree] = trees.as_slice() else {
+            return Err("missing report format".into());
+        };
+        assert_eq!(terminal_tree, markdown_tree);
+        Ok(())
+    }
+
+    fn assert_deep_tree_line<'text>(
+        lines: &mut impl Iterator<Item = &'text str>,
+        expected: &str,
+        continuation: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut restored = lines.next().ok_or("missing tree line")?.to_owned();
+        while restored.len() < expected.len() {
+            assert!(
+                expected.starts_with(&restored),
+                "unexpected tree payload {restored:?}"
+            );
+            let next = lines.next().ok_or("missing deep continuation")?;
+            let prefix = if next.starts_with("… ") {
+                let suffix: String = continuation.chars().rev().take(76).collect();
+                format!("… {}", suffix.chars().rev().collect::<String>())
+            } else {
+                continuation.to_owned()
+            };
+            let payload = next.strip_prefix(&prefix).ok_or("invalid deep geometry")?;
+            assert!(!payload.is_empty(), "continuation must make progress");
+            restored.push_str(payload);
+        }
+        assert_eq!(restored, expected, "deep tree payload must survive exactly");
+        Ok(())
+    }
+
+    #[test]
     fn should_report_the_converged_solution_space_exactly_when_a_mode_converges() {
         let converged = report_lines(&result_with_candidate(), "fixture").join("\n");
         assert!(converged.contains("the solution space converged"));
