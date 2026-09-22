@@ -31,6 +31,23 @@ pub enum DeclKind {
     Type,
 }
 
+/// Source form of a Rust item's visibility.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisibilityKind {
+    /// Visibility from a payload produced before explicit metadata existed.
+    #[default]
+    Legacy,
+    /// Private visibility inherited from the containing module.
+    Inherited,
+    /// Unrestricted public visibility.
+    Public,
+    /// Visibility restricted to the current crate.
+    Crate,
+    /// Visibility restricted to a module path.
+    Restricted,
+}
+
 /// The category of a resolved reference, fixing the edge kind it produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RefKind {
@@ -72,6 +89,12 @@ pub struct Declaration {
     /// `true` when the declaration is `pub` (or `pub(...)`), part of the export
     /// surface.
     pub exported: bool,
+    /// Source form of the declaration's visibility.
+    #[serde(default)]
+    pub visibility_kind: VisibilityKind,
+    /// Canonical `::`-joined path for restricted visibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility_path: Option<SmolStr>,
     /// `true` when the declaration is gated behind `#[cfg(test)]`.
     pub cfg_test: bool,
     /// `true` when the declaration is itself a test case — a function carrying a
@@ -96,9 +119,20 @@ pub struct ReExport {
     /// The name the re-export binds in this file (the imported leaf, or its
     /// `as`-rename when present).
     pub name: SmolStr,
+    /// Source form of the re-export's visibility.
+    #[serde(default = "public_visibility_kind")]
+    pub visibility_kind: VisibilityKind,
+    /// Canonical `::`-joined path for restricted visibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility_path: Option<SmolStr>,
     /// 0-based byte offset of the re-exported leaf identifier; resolution runs
     /// `goto_definition` here to find the original declaration.
     pub offset: u32,
+}
+
+/// Supplies the compatibility default for re-exports from legacy payloads.
+fn public_visibility_kind() -> VisibilityKind {
+    VisibilityKind::Public
 }
 
 /// A serializable summary of one parsed Rust source file.
@@ -173,7 +207,13 @@ fn push_item(
             // A `pub use` re-exports the imported names through this module; a
             // plain `use` is a private import and contributes no export surface.
             if is_public(&item_use.vis) {
-                collect_re_exports(&item_use.tree, re_exports);
+                let (visibility_kind, visibility_path) = visibility(&item_use.vis);
+                collect_re_exports(
+                    &item_use.tree,
+                    visibility_kind,
+                    visibility_path.as_ref(),
+                    re_exports,
+                );
             }
         }
         Item::Fn(item_fn) => {
@@ -181,7 +221,7 @@ fn push_item(
             let mut decl = declaration(
                 &item_fn.sig.ident.to_string(),
                 DeclKind::Symbol,
-                is_public(&item_fn.vis),
+                &item_fn.vis,
                 cfg_test,
                 item_fn.span(),
                 contents,
@@ -192,7 +232,7 @@ fn push_item(
         }
         Item::Struct(item_struct) => push_type(
             &item_struct.ident.to_string(),
-            is_public(&item_struct.vis),
+            &item_struct.vis,
             cfg_test_ancestor || has_cfg_test(&item_struct.attrs),
             item_struct.span(),
             contents,
@@ -201,7 +241,7 @@ fn push_item(
         ),
         Item::Enum(item_enum) => push_type(
             &item_enum.ident.to_string(),
-            is_public(&item_enum.vis),
+            &item_enum.vis,
             cfg_test_ancestor || has_cfg_test(&item_enum.attrs),
             item_enum.span(),
             contents,
@@ -210,7 +250,7 @@ fn push_item(
         ),
         Item::Union(item_union) => push_type(
             &item_union.ident.to_string(),
-            is_public(&item_union.vis),
+            &item_union.vis,
             cfg_test_ancestor || has_cfg_test(&item_union.attrs),
             item_union.span(),
             contents,
@@ -219,7 +259,7 @@ fn push_item(
         ),
         Item::Trait(item_trait) => push_type(
             &item_trait.ident.to_string(),
-            is_public(&item_trait.vis),
+            &item_trait.vis,
             cfg_test_ancestor || has_cfg_test(&item_trait.attrs),
             item_trait.span(),
             contents,
@@ -228,7 +268,7 @@ fn push_item(
         ),
         Item::Type(item_type) => push_type(
             &item_type.ident.to_string(),
-            is_public(&item_type.vis),
+            &item_type.vis,
             cfg_test_ancestor || has_cfg_test(&item_type.attrs),
             item_type.span(),
             contents,
@@ -238,7 +278,7 @@ fn push_item(
         Item::Const(item_const) => out.push(declaration(
             &item_const.ident.to_string(),
             DeclKind::Symbol,
-            is_public(&item_const.vis),
+            &item_const.vis,
             cfg_test_ancestor || has_cfg_test(&item_const.attrs),
             item_const.span(),
             contents,
@@ -247,7 +287,7 @@ fn push_item(
         Item::Static(item_static) => out.push(declaration(
             &item_static.ident.to_string(),
             DeclKind::Symbol,
-            is_public(&item_static.vis),
+            &item_static.vis,
             cfg_test_ancestor || has_cfg_test(&item_static.attrs),
             item_static.span(),
             contents,
@@ -271,7 +311,7 @@ fn push_item(
 /// Appends a type declaration to `out`.
 fn push_type(
     name: &str,
-    exported: bool,
+    visibility: &syn::Visibility,
     cfg_test: bool,
     span: Span,
     contents: &str,
@@ -281,7 +321,7 @@ fn push_type(
     out.push(declaration(
         name,
         DeclKind::Type,
-        exported,
+        visibility,
         cfg_test,
         span,
         contents,
@@ -312,6 +352,8 @@ fn push_impl(
             name: SmolStr::new(self_name),
             kind: DeclKind::Type,
             exported: false,
+            visibility_kind: VisibilityKind::Inherited,
+            visibility_path: None,
             cfg_test,
             test_case: false,
             byte_start: byte_start(item_impl.span()),
@@ -331,7 +373,7 @@ fn push_impl(
             let mut decl = declaration(
                 &method.sig.ident.to_string(),
                 DeclKind::Symbol,
-                is_public(&method.vis),
+                &method.vis,
                 cfg_test || has_cfg_test(&method.attrs),
                 method.span(),
                 contents,
@@ -347,12 +389,13 @@ fn push_impl(
 fn declaration(
     name: &str,
     kind: DeclKind,
-    exported: bool,
+    source_visibility: &syn::Visibility,
     cfg_test: bool,
     span: Span,
     contents: &str,
     references: Vec<Reference>,
 ) -> Declaration {
+    let (visibility_kind, visibility_path) = visibility(source_visibility);
     let byte_start = byte_start(span);
     let byte_end = byte_end(span);
     let sloc = if cfg_test {
@@ -364,7 +407,9 @@ fn declaration(
     Declaration {
         name: SmolStr::new(name),
         kind,
-        exported,
+        exported: is_public(source_visibility),
+        visibility_kind,
+        visibility_path,
         cfg_test,
         test_case: false,
         byte_start,
@@ -413,20 +458,31 @@ fn byte_end(span: Span) -> u32 {
 /// `use a::b::{C, D};` yields both; `use a::b::C as E;` binds the renamed `E` but
 /// resolves through the original `C` offset. Glob (`use a::*`) re-exports bind no
 /// individual name and are skipped — the engine sees only named re-exports.
-fn collect_re_exports(tree: &syn::UseTree, re_exports: &mut Vec<ReExport>) {
+fn collect_re_exports(
+    tree: &syn::UseTree,
+    visibility_kind: VisibilityKind,
+    visibility_path: Option<&SmolStr>,
+    re_exports: &mut Vec<ReExport>,
+) {
     match tree {
-        syn::UseTree::Path(path) => collect_re_exports(&path.tree, re_exports),
+        syn::UseTree::Path(path) => {
+            collect_re_exports(&path.tree, visibility_kind, visibility_path, re_exports)
+        }
         syn::UseTree::Name(name) => re_exports.push(ReExport {
             name: SmolStr::new(name.ident.to_string()),
+            visibility_kind,
+            visibility_path: visibility_path.cloned(),
             offset: byte_offset(name.ident.span()),
         }),
         syn::UseTree::Rename(rename) => re_exports.push(ReExport {
             name: SmolStr::new(rename.rename.to_string()),
+            visibility_kind,
+            visibility_path: visibility_path.cloned(),
             offset: byte_offset(rename.ident.span()),
         }),
         syn::UseTree::Group(group) => {
             for nested in &group.items {
-                collect_re_exports(nested, re_exports);
+                collect_re_exports(nested, visibility_kind, visibility_path, re_exports);
             }
         }
         syn::UseTree::Glob(_) => {}
@@ -451,6 +507,28 @@ fn is_public(vis: &syn::Visibility) -> bool {
         vis,
         syn::Visibility::Public(_) | syn::Visibility::Restricted(_)
     )
+}
+
+/// Returns explicit visibility metadata without deriving it from `exported`.
+fn visibility(vis: &syn::Visibility) -> (VisibilityKind, Option<SmolStr>) {
+    match vis {
+        syn::Visibility::Inherited => (VisibilityKind::Inherited, None),
+        syn::Visibility::Public(_) => (VisibilityKind::Public, None),
+        syn::Visibility::Restricted(restricted) => {
+            let path = restricted
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+            if path == "crate" {
+                (VisibilityKind::Crate, None)
+            } else {
+                (VisibilityKind::Restricted, Some(SmolStr::new(path)))
+            }
+        }
+    }
 }
 
 /// Returns `true` when any attribute is `#[cfg(test)]`.
@@ -655,6 +733,8 @@ mod tests {
         name: SmolStr::new_inline("<<missing>>"),
         kind: DeclKind::Symbol,
         exported: false,
+        visibility_kind: VisibilityKind::Inherited,
+        visibility_path: None,
         cfg_test: false,
         test_case: false,
         byte_start: u32::MAX,

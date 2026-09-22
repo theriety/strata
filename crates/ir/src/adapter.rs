@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::Affinity;
 use crate::container::Container;
 use crate::edge::Edge;
-use crate::node::Node;
+use crate::node::{Node, NodeId};
 
 /// A source file handed to an adapter for parsing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +30,15 @@ pub struct ParseTree {
     pub payload: String,
 }
 
+/// A node's resolved Rust module scope, expressed as repository-relative files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VisibilityScope {
+    /// Fragment-local node whose visibility is restricted to `files`.
+    pub node: NodeId,
+    /// Complete file set of the resolved module subtree.
+    pub files: Vec<SmolStr>,
+}
+
 /// A partial IR produced by one adapter; the engine merges fragments into one IR.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct IrFragment {
@@ -41,6 +50,9 @@ pub struct IrFragment {
     pub affinities: Vec<Affinity>,
     /// Containers contributed by this adapter.
     pub containers: Vec<Container>,
+    /// Resolved language scopes that must be projected onto the merged tree.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visibility_scopes: Vec<VisibilityScope>,
 }
 
 /// Failures raised while parsing or binding source with an adapter.

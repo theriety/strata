@@ -19,8 +19,8 @@ use strata_adapter_python::PythonAdapter;
 use strata_adapter_rust::RustAdapter;
 use strata_adapter_typescript::TypeScriptAdapter;
 use strata_ir::{
-    Adapter, ContainerId, EdgeKind, IntermediateRepresentation, IrFragment, Layout, Node, NodeId,
-    ScopeLevel, SourceFile, build_laminar_tree,
+    Adapter, ContainerId, ContainerTree, EdgeKind, IntermediateRepresentation, IrFragment, Layout,
+    Node, NodeId, ScopeLevel, SourceFile, VisibilityScope, build_laminar_tree,
 };
 
 use crate::config::AnalyzeConfig;
@@ -360,6 +360,7 @@ fn merge_fragments(
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges = Vec::new();
     let mut affinities = Vec::new();
+    let mut visibility_scopes = Vec::new();
     // the file path each merged node belongs to, parallel to `nodes`.
     let mut node_paths: Vec<SmolStr> = Vec::new();
     let mut all_paths: Vec<SmolStr> = Vec::new();
@@ -399,6 +400,10 @@ fn merge_fragments(
             affinity.companion = NodeId(affinity.companion.0 + node_offset);
             affinities.push(affinity);
         }
+        for mut visibility_scope in fragment.visibility_scopes {
+            visibility_scope.node = NodeId(visibility_scope.node.0 + node_offset);
+            visibility_scopes.push(visibility_scope);
+        }
         node_offset += node_span;
     }
 
@@ -406,10 +411,97 @@ fn merge_fragments(
     for (node, path) in nodes.iter_mut().zip(&node_paths) {
         node.container = built.files.get(path).copied().unwrap_or(ContainerId(0));
     }
+    apply_visibility_scopes(&mut nodes, &built.tree, &built.files, &visibility_scopes);
 
     let mut ir = IntermediateRepresentation::new(nodes, edges, built.tree);
     ir.affinities = affinities;
     ir
+}
+
+/// Projects complete visibility sidecars onto the final laminar tree.
+fn apply_visibility_scopes(
+    nodes: &mut [Node],
+    tree: &ContainerTree,
+    files: &HashMap<SmolStr, ContainerId>,
+    visibility_scopes: &[VisibilityScope],
+) {
+    let mut scopes_by_node: HashMap<NodeId, Vec<&VisibilityScope>> = HashMap::new();
+    for visibility_scope in visibility_scopes {
+        scopes_by_node
+            .entry(visibility_scope.node)
+            .or_default()
+            .push(visibility_scope);
+    }
+
+    for node in nodes {
+        let Some([visibility_scope]) = scopes_by_node.get(&node.id).map(Vec::as_slice) else {
+            continue;
+        };
+        if visibility_scope.files.is_empty()
+            || !visibility_scope.files.windows(2).all(|pair| {
+                pair.first()
+                    .zip(pair.get(1))
+                    .is_some_and(|(left, right)| left < right)
+            })
+        {
+            continue;
+        }
+
+        let Some(owner) = tree.containers().get(node.container.0 as usize) else {
+            continue;
+        };
+        if owner.id != node.container || owner.level != ScopeLevel::File {
+            continue;
+        }
+
+        let mut containers = Vec::with_capacity(visibility_scope.files.len() + 1);
+        containers.push(node.container);
+        let mut complete = true;
+        for path in &visibility_scope.files {
+            let Some(container) = files.get(path).copied() else {
+                complete = false;
+                break;
+            };
+            containers.push(container);
+        }
+        if !complete {
+            continue;
+        }
+        if let Some(level) = common_ancestor_level(tree, &containers) {
+            node.visibility = level;
+        }
+    }
+}
+
+/// Returns the deepest actual ancestor shared by every supplied container.
+fn common_ancestor_level(tree: &ContainerTree, containers: &[ContainerId]) -> Option<ScopeLevel> {
+    let mut containers = containers.iter().copied();
+    let mut common = ancestor_chain(tree, containers.next()?)?;
+    for container in containers {
+        let ancestors = ancestor_chain(tree, container)?;
+        common.retain(|candidate| ancestors.contains(candidate));
+    }
+    let common_id = common.first()?;
+    let common_container = tree.containers().get(common_id.0 as usize)?;
+    (common_container.id == *common_id).then_some(common_container.level)
+}
+
+/// Returns one container's validated leaf-to-root ancestry.
+fn ancestor_chain(tree: &ContainerTree, start: ContainerId) -> Option<Vec<ContainerId>> {
+    let mut chain = Vec::new();
+    let mut current = Some(start);
+    while let Some(id) = current {
+        if chain.len() >= tree.containers().len() || chain.contains(&id) {
+            return None;
+        }
+        let container = tree.containers().get(id.0 as usize)?;
+        if container.id != id {
+            return None;
+        }
+        chain.push(id);
+        current = container.parent;
+    }
+    Some(chain)
 }
 
 /// Returns one past the maximum id in `ids`, i.e. the id range width a fragment
@@ -676,6 +768,7 @@ mod tests {
                 kind: AffinityKind::CompanionOwner,
             }],
             containers: vec![container(0, "src/a.ts")],
+            visibility_scopes: Vec::new(),
         };
         let second = IrFragment {
             nodes: vec![node(0, "b", 0)],
@@ -686,6 +779,7 @@ mod tests {
                 kind: AffinityKind::CompanionOwner,
             }],
             containers: vec![container(0, "src/b.ts")],
+            visibility_scopes: Vec::new(),
         };
 
         let merged = merge_fragments(vec![first, second], "pkg", &Layout::default());
@@ -718,12 +812,14 @@ mod tests {
             edges: Vec::new(),
             affinities: Vec::new(),
             containers: vec![container(0, "src/ui/widget.ts")],
+            visibility_scopes: Vec::new(),
         };
         let test = IrFragment {
             nodes: vec![node(0, "widget_test", 0)],
             edges: Vec::new(),
             affinities: Vec::new(),
             containers: vec![container(0, "spec/ui/widget.spec.ts")],
+            visibility_scopes: Vec::new(),
         };
         let layout = Layout {
             package_roots: Vec::new(),
