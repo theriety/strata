@@ -139,8 +139,11 @@ pub(in crate::analyze) fn kind_rank(kind: ViolationKind) -> u8 {
     }
 }
 
-/// Reports every multi-node strongly connected component of the hard-edge graph
-/// as a cycle violation, carrying the MFAS break set as suggestions.
+/// Reports each multi-node strongly connected component of the hard-edge graph
+/// as a cycle violation unless every member resolves to the same file container.
+/// Missing or non-file members remain reportable because only proven intra-file
+/// recursion is suppressed. Reported cycles carry the MFAS break set as
+/// suggestions.
 pub(in crate::analyze) fn cycle_violations(
     snapshot: &Snapshot,
     cycles: &[SccSolution],
@@ -163,6 +166,7 @@ pub(in crate::analyze) fn cycle_violations(
 
     cycles
         .iter()
+        .filter(|solution| !is_same_file_cycle(solution, &nodes, &files))
         .map(|solution| {
             let location: Vec<String> = solution
                 .members
@@ -183,6 +187,24 @@ pub(in crate::analyze) fn cycle_violations(
             }
         })
         .collect()
+}
+
+fn is_same_file_cycle(
+    solution: &SccSolution,
+    nodes: &BTreeMap<u32, &Node>,
+    files: &BTreeMap<u32, String>,
+) -> bool {
+    let mut member_files = solution.members.iter().map(|member| {
+        nodes.get(&member.0).and_then(|node| {
+            files
+                .contains_key(&node.container.0)
+                .then_some(node.container)
+        })
+    });
+    let Some(Some(first_file)) = member_files.next() else {
+        return false;
+    };
+    member_files.all(|file| file == Some(first_file))
 }
 
 /// Maps one SCC's MFAS break set onto named [`EdgeBreak`]s, in the break set's
