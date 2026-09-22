@@ -104,6 +104,7 @@ pub fn bind(modules: &[ParsedModule], root: &Path) -> Result<IrFragment, BindOut
         edges,
         affinities: Vec::new(),
         containers: containers.tree.containers().to_vec(),
+        visibility_scopes: Vec::new(),
     })
 }
 

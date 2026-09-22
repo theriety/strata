@@ -13,21 +13,29 @@
 //! it. References that originate inside a macro invocation resolve at confidence
 //! below `1.0` — honest uncertainty rather than silence.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
-use ra_ap_ide::{AnalysisHost, FilePosition, GotoDefinitionConfig, RaFixtureConfig, TextSize};
+use ra_ap_ide::{
+    AnalysisHost, FilePosition, GotoDefinitionConfig, RaFixtureConfig, Semantics, TextSize,
+};
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::{CargoConfig, RustLibSource};
-use ra_ap_syntax::{AstNode as _, T, algo::previous_non_trivia_token};
+use ra_ap_syntax::{
+    AstNode as _, SyntaxNode, T,
+    algo::previous_non_trivia_token,
+    ast::{self, HasModuleItem as _, HasName as _},
+};
 use ra_ap_vfs::Vfs;
 use smol_str::SmolStr;
 use strata_ir::{
     Container, ContainerId, ContainerTree, Edge, EdgeKind, Hardness, IrFragment, Node, NodeId,
-    NodeKind, Polarity, ScopeLevel,
+    NodeKind, Polarity, ScopeLevel, VisibilityScope,
 };
 
-use crate::parse::{DeclKind, Declaration, ParsedFile, RefKind, Reference};
+use crate::parse::{
+    DeclKind, Declaration, ParsedFile, ReExport, RefKind, Reference, VisibilityKind,
+};
 
 /// Confidence assigned to a soft re-export edge: the `pub use` binding is
 /// statically certain even though it imposes no runtime dependency of its own.
@@ -85,6 +93,7 @@ pub fn bind(files: &[ParsedFile], manifest: &Path, root: &Path) -> Result<IrFrag
     let assignment = NodeAssignment::build(files, root);
     let mut edges = resolve_edges(files, &assignment, &database, workspace_root);
     resolve_re_exports(&assignment, &database, workspace_root, &mut edges);
+    let visibility_scopes = resolve_visibility_scopes(files, &assignment, &database, root);
     let edges = dedup_edges(edges);
     let mut nodes = assignment.into_nodes();
     classify_polarity(files, &mut nodes, &edges);
@@ -94,6 +103,7 @@ pub fn bind(files: &[ParsedFile], manifest: &Path, root: &Path) -> Result<IrFrag
         edges,
         affinities: Vec::new(),
         containers: assignment_containers(files, root),
+        visibility_scopes,
     })
 }
 
@@ -211,6 +221,174 @@ impl Database {
         let relative = raw.strip_prefix(workspace_root).ok()?;
         Some(SmolStr::new(relative.to_string_lossy().replace('\\', "/")))
     }
+
+    /// Resolves a restricted path to the complete analyzed module subtree.
+    fn visibility_files(
+        &self,
+        path: &str,
+        offset: u32,
+        visibility_path: &str,
+        repository_root: &Path,
+        parsed_paths: &BTreeSet<SmolStr>,
+    ) -> Option<Vec<SmolStr>> {
+        let file_id = self.file_id_for(path, repository_root)?;
+        let semantics = Semantics::new(self.host.raw_database());
+        if semantics.file_to_module_defs(file_id).count() != 1 {
+            return None;
+        }
+
+        let parsed = semantics.parse_guess_edition(file_id);
+        let position = TextSize::new(offset);
+        if !parsed.syntax().text_range().contains(position) {
+            return None;
+        }
+        let token = parsed.syntax().token_at_offset(position).right_biased()?;
+        if token.kind().is_trivia() || !token.text_range().contains(position) {
+            return None;
+        }
+        let scope_node = token.parent()?;
+        let current = semantics.scope_at_offset(&scope_node, position)?.module();
+        let mut target = current;
+        for (index, segment) in visibility_path.split("::").enumerate() {
+            match segment {
+                "crate" if index == 0 => target = current.crate_root(semantics.db),
+                "self" if index == 0 => {}
+                "super" => target = target.parent(semantics.db)?,
+                "crate" | "self" | "" => return None,
+                name => {
+                    let expected = name.strip_prefix("r#").unwrap_or(name);
+                    let child = {
+                        let mut matches = target.children(semantics.db).filter(|child| {
+                            child
+                                .name(semantics.db)
+                                .is_some_and(|child_name| child_name.as_str() == expected)
+                        });
+                        let only = matches.next()?;
+                        if matches.next().is_some() {
+                            return None;
+                        }
+                        only
+                    };
+                    target = child;
+                }
+            }
+        }
+        if !current.path_to_root(semantics.db).contains(&target) {
+            return None;
+        }
+
+        let mut files = BTreeSet::new();
+        let mut pending = vec![target];
+        while let Some(module) = pending.pop() {
+            let definition = semantics.module_definition_node(module);
+            let original = semantics.original_range_opt(&definition.value)?;
+            let relative =
+                self.relative_path(original.file_id.file_id(semantics.db), repository_root)?;
+            if !parsed_paths.contains(&relative) {
+                return None;
+            }
+
+            let children = module.children(semantics.db).collect::<Vec<_>>();
+            let mut semantic_names = children
+                .iter()
+                .map(|child| {
+                    child
+                        .name(semantics.db)
+                        .map(|name| name.as_str().to_owned())
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let mut syntactic_names = direct_module_names(&definition.value)?;
+            semantic_names.sort();
+            syntactic_names.sort();
+            if semantic_names != syntactic_names {
+                return None;
+            }
+
+            files.insert(relative);
+            pending.extend(children);
+        }
+        (!files.is_empty()).then(|| files.into_iter().collect())
+    }
+}
+
+/// Returns direct syntactic child-module names for a module definition.
+fn direct_module_names(node: &SyntaxNode) -> Option<Vec<String>> {
+    if let Some(source) = ast::SourceFile::cast(node.clone()) {
+        return module_item_names(source.items());
+    }
+    let module = ast::Module::cast(node.clone())?;
+    module_item_names(module.item_list()?.items())
+}
+
+/// Collects module names from one syntactic module-item list.
+fn module_item_names(items: impl Iterator<Item = ast::Item>) -> Option<Vec<String>> {
+    let mut names = Vec::new();
+    for item in items {
+        if let ast::Item::Module(module) = item {
+            let name = module.name()?.text().to_string();
+            names.push(name.strip_prefix("r#").unwrap_or(&name).to_owned());
+        }
+    }
+    Some(names)
+}
+
+/// Resolves every restricted declaration and re-export into an IR sidecar.
+fn resolve_visibility_scopes(
+    files: &[ParsedFile],
+    assignment: &NodeAssignment,
+    database: &Database,
+    repository_root: &Path,
+) -> Vec<VisibilityScope> {
+    let parsed_paths = files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<BTreeSet<_>>();
+    let mut scopes = Vec::new();
+    for file in files {
+        for declaration in &file.declarations {
+            let Some((node, visibility_path)) = assignment
+                .node_at(&file.path, declaration.byte_start)
+                .zip(declaration.visibility_path.as_deref())
+                .filter(|_| declaration.visibility_kind == VisibilityKind::Restricted)
+            else {
+                continue;
+            };
+            if let Some(scope_files) = database.visibility_files(
+                &file.path,
+                declaration.byte_start,
+                visibility_path,
+                repository_root,
+                &parsed_paths,
+            ) {
+                scopes.push(VisibilityScope {
+                    node,
+                    files: scope_files,
+                });
+            }
+        }
+        for re_export in &file.re_exports {
+            let Some((node, visibility_path)) = assignment
+                .re_export_node_at(&file.path, re_export.offset)
+                .zip(re_export.visibility_path.as_deref())
+                .filter(|_| re_export.visibility_kind == VisibilityKind::Restricted)
+            else {
+                continue;
+            };
+            if let Some(scope_files) = database.visibility_files(
+                &file.path,
+                re_export.offset,
+                visibility_path,
+                repository_root,
+                &parsed_paths,
+            ) {
+                scopes.push(VisibilityScope {
+                    node,
+                    files: scope_files,
+                });
+            }
+        }
+    }
+    scopes
 }
 
 /// Resolves every recorded reference into the typed edge set.
@@ -553,7 +731,7 @@ impl NodeAssignment {
             let container = containers.file_of(&file.path);
             for re_export in &file.re_exports {
                 let id = NodeId(u32::try_from(nodes.len()).unwrap_or(u32::MAX));
-                nodes.push(re_export_node(&re_export.name, id, container));
+                nodes.push(re_export_node(re_export, id, container));
                 re_export_links.push(ReExportLink {
                     source: id,
                     path: file.path.clone(),
@@ -582,6 +760,17 @@ impl NodeAssignment {
             .filter(|interval| interval.start <= offset && offset < interval.end)
             .max_by_key(|interval| interval.start)
             .map(|interval| interval.node)
+    }
+
+    /// Returns the barrel node materialized at one re-export source location.
+    fn re_export_node_at(&self, path: &str, offset: u32) -> Option<NodeId> {
+        let mut matches = self
+            .re_export_links
+            .iter()
+            .filter(|link| link.path == path && link.offset == offset)
+            .map(|link| link.source);
+        let node = matches.next()?;
+        matches.next().is_none().then_some(node)
     }
 
     /// Returns the single in-workspace declaration named `name`, or `None` when
@@ -633,11 +822,7 @@ fn node_for(declaration: &Declaration, id: NodeId, container: ContainerId) -> No
         },
         polarity,
         container,
-        visibility: if declaration.exported {
-            ScopeLevel::Package
-        } else {
-            ScopeLevel::File
-        },
+        visibility: declared_visibility(declaration.visibility_kind, declaration.exported),
         effective_size: declaration.sloc,
     }
 }
@@ -647,15 +832,26 @@ fn node_for(declaration: &Declaration, id: NodeId, container: ContainerId) -> No
 /// The node carries the re-exported name within the re-exporting file's
 /// container, is `pub`-visible (a re-export is always part of the export
 /// surface), and has zero size — it owns no source of its own.
-fn re_export_node(name: &SmolStr, id: NodeId, container: ContainerId) -> Node {
+fn re_export_node(re_export: &ReExport, id: NodeId, container: ContainerId) -> Node {
     Node {
         id,
-        name: name.clone(),
+        name: re_export.name.clone(),
         kind: NodeKind::Symbol,
         polarity: Polarity::Production,
         container,
-        visibility: ScopeLevel::Package,
+        visibility: declared_visibility(re_export.visibility_kind, true),
         effective_size: 0,
+    }
+}
+
+/// Maps source visibility to the conservative pre-merge IR scope.
+fn declared_visibility(kind: VisibilityKind, legacy_exported: bool) -> ScopeLevel {
+    match kind {
+        VisibilityKind::Legacy if legacy_exported => ScopeLevel::Package,
+        VisibilityKind::Legacy | VisibilityKind::Inherited => ScopeLevel::File,
+        VisibilityKind::Public | VisibilityKind::Crate | VisibilityKind::Restricted => {
+            ScopeLevel::Package
+        }
     }
 }
 
@@ -788,6 +984,8 @@ mod tests {
             name: SmolStr::new(name),
             kind: DeclKind::Symbol,
             exported: true,
+            visibility_kind: VisibilityKind::Legacy,
+            visibility_path: None,
             cfg_test: false,
             test_case: false,
             byte_start: start,
@@ -1020,6 +1218,8 @@ mod tests {
             declarations: Vec::new(),
             re_exports: vec![crate::parse::ReExport {
                 name: SmolStr::new("Measure"),
+                visibility_kind: VisibilityKind::Public,
+                visibility_path: None,
                 offset: 0,
             }],
         };

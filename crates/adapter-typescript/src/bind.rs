@@ -116,6 +116,7 @@ pub fn bind(
         edges,
         affinities,
         containers: containers.tree.containers().to_vec(),
+        visibility_scopes: Vec::new(),
     })
 }
 

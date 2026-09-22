@@ -13,7 +13,7 @@ pub mod laminar;
 pub mod node;
 pub mod snapshot;
 
-pub use adapter::{Adapter, AdapterError, IrFragment, ParseTree, SourceFile};
+pub use adapter::{Adapter, AdapterError, IrFragment, ParseTree, SourceFile, VisibilityScope};
 pub use affinity::{Affinity, AffinityKind};
 pub use container::{Container, ContainerId, ContainerTree, TreeError};
 pub use edge::{Edge, EdgeKind, Hardness};
