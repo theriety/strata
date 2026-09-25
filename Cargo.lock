@@ -3183,6 +3183,7 @@ name = "strata-adapter-rust"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
+ "quote",
  "ra_ap_ide",
  "ra_ap_load-cargo",
  "ra_ap_project_model",

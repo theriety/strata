@@ -1,6 +1,6 @@
 Strata report — rust
-1 files · 6 symbols · 4 edges
-Snapshot `79ef1fe07dca82de32a01a265ddec575bb7e9112ae8dc901f0668abfd6c61b7f`
+1 files · 5 symbols · 4 edges
+Snapshot `cf17b49127b1ca847d8e0cad34aed2b3860dfc2efe975121c29059b5f27c83b2`
 
 Structural findings
 Shared findings (4)
