@@ -11,7 +11,10 @@ use crate::analyze::search::{SccSolution, node_names, solve_cycles};
 #[cfg(test)]
 use crate::config::AnalyzeConfig;
 use crate::config::{CapacityConfig, ProfileConfig};
-use crate::narrate::{project_package_rooted_path, project_physical_path};
+use crate::narrate::{
+    drain_dataset, path_segments, physical_directory, project_package_rooted_path,
+    project_physical_path,
+};
 use crate::result::{
     CapacityBreach, ConditionalSplit, ContainerNode, EdgeBreak, Level, Severity, Summary,
     Violation, ViolationKind,
@@ -446,42 +449,35 @@ pub(in crate::analyze) fn physical_folder_entries_with_rootedness(
         .filter(|container| container.level == ScopeLevel::File)
     {
         let mut ancestor = Some(file);
-        let mut dataset = None;
+        let (mut dataset, mut package) = (None, None);
         while let Some(current) = ancestor {
-            if current.level == ScopeLevel::PackageGroup {
-                dataset = Some(current.name.as_str());
+            match current.level {
+                ScopeLevel::PackageGroup => dataset = Some(current.name.as_str()),
+                ScopeLevel::Package if package.is_none() => package = Some(current.name.as_str()),
+                _ => {}
             }
             ancestor = current
                 .parent
                 .and_then(|parent| by_id.get(&parent.0).copied());
         }
         let dataset = dataset.unwrap_or("");
-        let dataset_segments: Vec<String> = dataset
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .map(str::to_owned)
-            .collect();
+        let dataset_segments = path_segments(dataset);
         let folder = file.parent.and_then(|parent| by_id.get(&parent.0).copied());
-        let mut logical: Vec<String> = folder
-            .into_iter()
-            .flat_map(|folder| folder.name.split('/'))
-            .filter(|segment| !segment.is_empty())
-            .map(str::to_owned)
-            .collect();
+        let mut logical = path_segments(folder.map_or("", |folder| folder.name.as_str()));
+        let package = drain_dataset(path_segments(package.unwrap_or("")), &dataset_segments);
+        // the synthetic `workspace` bucket names no real directory: it stands
+        // for the package itself.
         if folder.is_some_and(|folder| folder.synthetic) {
-            logical.clear();
+            logical.clone_from(&package);
         }
         if logical.starts_with(&dataset_segments) {
             logical.drain(..dataset_segments.len());
         }
         let directory = if let Some(namespace) = namespaces.and_then(|values| values.get(&file.id))
         {
-            let mut relative: Vec<String> = namespace
-                .split('/')
-                .filter(|segment| !segment.is_empty())
-                .map(str::to_owned)
-                .collect();
-            relative.extend(logical);
+            // restore the package-relative namespace between the package and
+            // the folder's scope (ADR-0018): `crates/core` + `src` + `cluster`.
+            let relative = physical_directory(&package, &path_segments(namespace), &logical);
             if package_rooted {
                 project_package_rooted_path(dataset, &relative)
             } else {

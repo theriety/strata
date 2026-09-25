@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_ir::{ContainerTree, Layout, Polarity, ScopeLevel, build_laminar_tree};
+use strata_ir::{ContainerId, ContainerTree, Layout, Polarity, ScopeLevel, build_laminar_tree};
 
 use crate::config::{AnalyzeConfig, ProfileName};
 use crate::result::{CapacityBreach, Level, Severity, Violation, ViolationKind};
@@ -465,6 +465,57 @@ fn should_order_nested_package_and_transparent_roots_once_for_capacity() {
             .keys()
             .all(|path| path.join("/").matches("packages/unit").count() <= 1),
         "the nested package root is never duplicated: {entries:?}"
+    );
+}
+
+#[test]
+fn should_compose_capacity_paths_below_a_nested_package_not_above_it() {
+    // ADR-0018: a namespace is package-relative, so a file in `crates/core/src`
+    // counts toward `strata/crates/core/src`, never `strata/src/crates/core`.
+    let tree = ContainerTree::new(vec![
+        container(0, "strata", ScopeLevel::PackageGroup, None),
+        container(1, "crates/core", ScopeLevel::Package, Some(0)),
+        strata_ir::Container {
+            synthetic: true,
+            ..container(2, "crates/core/workspace", ScopeLevel::Folder, Some(1))
+        },
+        container(3, "crates/core/cluster", ScopeLevel::Folder, Some(1)),
+        container(4, "crates/core/src/lib.rs", ScopeLevel::File, Some(2)),
+        container(
+            5,
+            "crates/core/src/cluster/refine.rs",
+            ScopeLevel::File,
+            Some(3),
+        ),
+    ]);
+    let namespaces: BTreeMap<ContainerId, SmolStr> = [4, 5]
+        .into_iter()
+        .map(|id| (ContainerId(id), SmolStr::new("src")))
+        .collect();
+
+    let entries = physical_folder_entries(&tree, Some(&namespaces));
+    let path = |segments: &[&str]| -> Vec<String> {
+        segments
+            .iter()
+            .map(|segment| (*segment).to_owned())
+            .collect()
+    };
+
+    assert_eq!(
+        entries.get(&path(&["strata", "crates", "core", "src"])),
+        Some(&2),
+        "`src` holds `lib.rs` and the `cluster` directory: {entries:?}"
+    );
+    assert_eq!(
+        entries.get(&path(&["strata", "crates", "core", "src", "cluster"])),
+        Some(&1),
+        "{entries:?}"
+    );
+    assert!(
+        entries
+            .keys()
+            .all(|key| !key.join("/").starts_with("strata/src")),
+        "no invented `strata/src/...` directory: {entries:?}"
     );
 }
 
