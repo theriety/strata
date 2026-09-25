@@ -1,16 +1,12 @@
 //! The eval gate: one test per committed target, plus e2e smoke cases and the
 //! β ≡ −0.0 witness.
 //!
-//! Exit state: one standing red by design. Witnesses start red on purpose —
-//! each failure message names the defect it measures — and flip exactly
-//! themselves green when the matching fix lands. naming-drift's anchored
-//! verdicts closed as pins on the scorer's measured, honorable election
-//! (deviation D-49), no coefficient touched. cycle-span's stays red as the
-//! standing witness for a capability the scorer lacks: no lawful proposal can
-//! reproduce a layout that splits an import-cycle atom across directories —
-//! a measured impossibility (deviation D-50), and per owner ruling
-//! 2026-08-24 the partitioner redesign enabling it ships as its own
-//! follow-up stream.
+//! Exit state: every witness is green. Each witness was committed red, names
+//! the defect it measures in its failure message, and now guards the landed
+//! fix against regression. naming-drift's anchored verdicts closed as pins on
+//! the scorer's measured, honorable election (deviation D-49), no coefficient
+//! touched. cycle-span, once the standing red of deviation D-50, now passes
+//! and guards import-cycle tearing like the rest.
 
 use strata_engine::config::AnalyzeConfig;
 use strata_engine::{analyze, snapshot_from_root};
@@ -82,21 +78,21 @@ fn welding_holds_its_best_state() {
     assert_best_state("welding");
 }
 
-/// RED AS DESIGNED: green when directory tearing stops dissolving billing,
-/// telemetry, and pipeline containers in the best candidates.
+/// Witness: directory tearing must not dissolve the billing, telemetry, and
+/// pipeline containers in the best candidates.
 #[test]
 fn tearing_witnesses_directory_tearing() {
     assert_best_state("tearing");
 }
 
-/// RED AS DESIGNED: green when the over-cap hub actually relieves.
+/// Witness: the over-cap hub must actually relieve.
 #[test]
 fn relief_witnesses_unrelieved_capacity() {
     assert_best_state("relief");
 }
 
-/// RED AS DESIGNED: green when anchored stops moving six structural files on an
-/// already-optimal layout.
+/// Witness: anchored must not move structural files on an already-optimal
+/// layout.
 #[test]
 fn inversion_witnesses_anchored_inversion() {
     assert_best_state("inversion");
@@ -153,22 +149,22 @@ fn zero_candidate_result_does_not_fabricate_later_alternatives() -> Result<(), E
     Ok(())
 }
 
-/// RED AS DESIGNED: green when container names align with their members.
+/// Witness: container names must align with their members.
 #[test]
 fn naming_drift_witnesses_naming_incoherence() {
     assert_best_state("naming-drift");
 }
 
-/// RED AS DESIGNED: green when a cross-directory import cycle stops tearing one
-/// of its two real directories out of the greenfield proposal (anchored already
-/// keeps the layout at zero churn).
+/// Witness: a cross-directory import cycle must not tear one of its two real
+/// directories out of the greenfield proposal (anchored keeps the layout at
+/// zero churn).
 #[test]
 fn cycle_span_witnesses_import_cycle_tearing() {
     assert_best_state("cycle-span");
 }
 
-/// RED AS DESIGNED: green when the symbol pass stops relocating production
-/// symbols across the source/test boundary into their mirrored spec twins.
+/// Witness: the symbol pass must not relocate production symbols across the
+/// source/test boundary into their mirrored spec twins.
 #[test]
 fn spec_twin_ts_witnesses_source_test_mixing() {
     assert_best_state("spec-twin-ts");

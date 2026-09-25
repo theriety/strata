@@ -44,8 +44,8 @@ mod tests;
 /// The pass is pure: it reads only the snapshot and config and returns owned
 /// data. It derives the current tree's violations (cycles, polarity breaches,
 /// over-exports), scores the current layout, then runs the restructuring pipeline
-/// to produce one [`ModeResult`] of up to `k` diverse candidates per requested
-/// mode.
+/// to produce one [`ProfileResult`](crate::result::ProfileResult) of up to `k`
+/// diverse candidates per requested mode.
 ///
 /// # Errors
 ///

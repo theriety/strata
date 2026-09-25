@@ -203,33 +203,8 @@ fn push_item(
     re_exports: &mut Vec<ReExport>,
 ) {
     match item {
-        Item::Use(item_use) => {
-            // A `pub use` re-exports the imported names through this module; a
-            // plain `use` is a private import and contributes no export surface.
-            if is_public(&item_use.vis) {
-                let (visibility_kind, visibility_path) = visibility(&item_use.vis);
-                collect_re_exports(
-                    &item_use.tree,
-                    visibility_kind,
-                    visibility_path.as_ref(),
-                    re_exports,
-                );
-            }
-        }
-        Item::Fn(item_fn) => {
-            let cfg_test = cfg_test_ancestor || has_cfg_test(&item_fn.attrs);
-            let mut decl = declaration(
-                &item_fn.sig.ident.to_string(),
-                DeclKind::Symbol,
-                &item_fn.vis,
-                cfg_test,
-                item_fn.span(),
-                contents,
-                collect_references(item_fn),
-            );
-            decl.test_case = has_test_attr(&item_fn.attrs);
-            out.push(decl);
-        }
+        Item::Use(item_use) => push_re_exports(item_use, re_exports),
+        Item::Fn(item_fn) => push_fn(item_fn, contents, cfg_test_ancestor, out),
         Item::Struct(item_struct) => push_type(
             &item_struct.ident.to_string(),
             &item_struct.vis,
@@ -306,6 +281,42 @@ fn push_item(
         }
         _ => {}
     }
+}
+
+/// Records the names a `pub use` re-exports through this module; a plain `use`
+/// is a private import and contributes no export surface.
+fn push_re_exports(item_use: &syn::ItemUse, re_exports: &mut Vec<ReExport>) {
+    if is_public(&item_use.vis) {
+        let (visibility_kind, visibility_path) = visibility(&item_use.vis);
+        collect_re_exports(
+            &item_use.tree,
+            visibility_kind,
+            visibility_path.as_ref(),
+            re_exports,
+        );
+    }
+}
+
+/// Appends a free function's declaration, marking `#[test]` functions as test
+/// cases.
+fn push_fn(
+    item_fn: &syn::ItemFn,
+    contents: &str,
+    cfg_test_ancestor: bool,
+    out: &mut Vec<Declaration>,
+) {
+    let cfg_test = cfg_test_ancestor || has_cfg_test(&item_fn.attrs);
+    let mut decl = declaration(
+        &item_fn.sig.ident.to_string(),
+        DeclKind::Symbol,
+        &item_fn.vis,
+        cfg_test,
+        item_fn.span(),
+        contents,
+        collect_references(item_fn),
+    );
+    decl.test_case = has_test_attr(&item_fn.attrs);
+    out.push(decl);
 }
 
 /// Appends a type declaration to `out`.
@@ -466,7 +477,7 @@ fn collect_re_exports(
 ) {
     match tree {
         syn::UseTree::Path(path) => {
-            collect_re_exports(&path.tree, visibility_kind, visibility_path, re_exports)
+            collect_re_exports(&path.tree, visibility_kind, visibility_path, re_exports);
         }
         syn::UseTree::Name(name) => re_exports.push(ReExport {
             name: SmolStr::new(name.ident.to_string()),
