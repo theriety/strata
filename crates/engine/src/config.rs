@@ -376,6 +376,10 @@ pub struct RelocationConfig {
     /// any file, from relocating independently.
     #[serde(rename = "pin-detected-test-symbols")]
     pub pin_detected_test_symbols: bool,
+    /// Lift the package wall so relocations may cross manifest packages
+    /// (ADR-0017); off by default. Every other admission rule still applies.
+    #[serde(rename = "allow-cross-package-moves")]
+    pub allow_cross_package_moves: bool,
     /// Repo-relative file globs whose matching files cannot relocate independently.
     #[serde(rename = "forbid-file-moves")]
     pub forbid_file_moves: Vec<String>,
@@ -392,6 +396,7 @@ impl Default for RelocationConfig {
         Self {
             pin_detected_test_files: true,
             pin_detected_test_symbols: true,
+            allow_cross_package_moves: false,
             forbid_file_moves: Vec::new(),
             forbid_symbol_moves: Vec::new(),
             test_mirroring: TestMirroringConfig::default(),
@@ -767,6 +772,17 @@ impl AnalyzeConfig {
         if self.analysis.profiles.contains(&ProfileName::Greenfield) {
             self.profiles.greenfield.seed = seed;
         }
+    }
+
+    /// Lifts the package wall for every profile in this run, whatever each
+    /// profile's `allow-cross-package-moves` says (the CLI
+    /// `--allow-cross-package-moves` flag).
+    pub const fn lift_package_wall(&mut self) {
+        self.profiles.anchored.relocation.allow_cross_package_moves = true;
+        self.profiles
+            .greenfield
+            .relocation
+            .allow_cross_package_moves = true;
     }
 
     /// Returns the configuration for a named parameter profile.
@@ -1373,6 +1389,55 @@ mod tests {
             legacy.map(|config| config.adapters.source_roots).ok(),
             Some(vec!["app".to_owned()]),
             "the snake_case spelling remains accepted"
+        );
+    }
+
+    #[test]
+    fn should_keep_the_package_wall_up_unless_a_profile_lifts_it() {
+        let toml = "[profiles.greenfield.relocation]\nallow-cross-package-moves = true\n";
+
+        let config: Result<AnalyzeConfig, _> = toml::from_str(toml);
+
+        assert_eq!(
+            config
+                .map(|config| (
+                    config
+                        .profiles
+                        .anchored
+                        .relocation
+                        .allow_cross_package_moves,
+                    config
+                        .profiles
+                        .greenfield
+                        .relocation
+                        .allow_cross_package_moves,
+                ))
+                .ok(),
+            Some((false, true)),
+            "the key defaults off and is owned per profile"
+        );
+    }
+
+    #[test]
+    fn should_lift_the_package_wall_for_every_profile_on_override() {
+        let mut config = AnalyzeConfig::default();
+        config.select_mode(Mode::Anchored);
+
+        config.lift_package_wall();
+
+        assert!(
+            config
+                .profiles
+                .anchored
+                .relocation
+                .allow_cross_package_moves
+        );
+        assert!(
+            config
+                .profiles
+                .greenfield
+                .relocation
+                .allow_cross_package_moves
         );
     }
 

@@ -444,9 +444,22 @@ fn should_assemble_a_root_mirror_at_the_repository_root_exactly_once() {
 #[derive(Clone, Copy)]
 enum MirrorBlockFixture {
     Ambiguous,
+    Package,
     Namespace,
     Capacity,
     Collision,
+}
+
+/// Makes the spec tree its own manifest package, so a follower would leave
+/// its package to trail the source into `source/target`.
+fn move_spec_tree_into_its_own_package(containers: &mut Vec<Container>) {
+    containers.push(container(10, "spec", ScopeLevel::Package, Some(0)));
+    for spec_folder in containers
+        .iter_mut()
+        .filter(|entry| entry.id.0 == 4 || entry.id.0 == 5)
+    {
+        spec_folder.parent = Some(ContainerId(10));
+    }
 }
 
 fn assert_actual_mirror_block(fixture: MirrorBlockFixture, expected: BlockedMirrorReason) {
@@ -470,6 +483,7 @@ fn assert_actual_mirror_block(fixture: MirrorBlockFixture, expected: BlockedMirr
     ];
     let mut edges = vec![edge(0, 2)];
     match fixture {
+        MirrorBlockFixture::Package => move_spec_tree_into_its_own_package(&mut containers),
         MirrorBlockFixture::Namespace => {
             containers.push(container(10, "support", ScopeLevel::Folder, Some(0)));
             containers.push(container(
@@ -552,6 +566,14 @@ fn should_report_actual_ambiguous_mirror_attempt() {
     assert_actual_mirror_block(
         MirrorBlockFixture::Ambiguous,
         BlockedMirrorReason::AmbiguousMapping,
+    );
+}
+
+#[test]
+fn should_report_actual_package_mirror_attempt() {
+    assert_actual_mirror_block(
+        MirrorBlockFixture::Package,
+        BlockedMirrorReason::PackageBoundary,
     );
 }
 

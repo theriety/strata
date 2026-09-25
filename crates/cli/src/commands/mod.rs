@@ -69,6 +69,9 @@ pub struct ConfigOverrides {
     pub jobs: Option<u32>,
     /// The `--mode` override.
     pub mode: Option<strata_engine::Mode>,
+    /// The `--allow-cross-package-moves` switch; `false` leaves each profile's
+    /// own key in force.
+    pub allow_cross_package_moves: bool,
 }
 
 impl ConfigOverrides {
@@ -85,6 +88,9 @@ impl ConfigOverrides {
         }
         if let Some(jobs) = self.jobs {
             config.analysis.jobs = jobs;
+        }
+        if self.allow_cross_package_moves {
+            config.lift_package_wall();
         }
     }
 }
@@ -199,6 +205,7 @@ mod tests {
             candidates: Some(5),
             jobs: Some(2),
             mode: Some(Mode::Anchored),
+            allow_cross_package_moves: false,
         }
         .apply(&mut config);
 
@@ -242,6 +249,70 @@ mod tests {
 
         assert_eq!(config.profiles.anchored.seed, 7);
         assert_eq!(config.profiles.greenfield.seed, 99);
+    }
+
+    #[test]
+    fn should_lift_the_package_wall_for_every_profile_when_the_flag_is_passed() {
+        let mut config = AnalyzeConfig::default();
+        config
+            .profiles
+            .anchored
+            .relocation
+            .allow_cross_package_moves = false;
+        config
+            .profiles
+            .greenfield
+            .relocation
+            .allow_cross_package_moves = false;
+
+        ConfigOverrides {
+            mode: Some(Mode::Anchored),
+            allow_cross_package_moves: true,
+            ..ConfigOverrides::default()
+        }
+        .apply(&mut config);
+
+        assert!(
+            config
+                .profiles
+                .anchored
+                .relocation
+                .allow_cross_package_moves
+        );
+        assert!(
+            config
+                .profiles
+                .greenfield
+                .relocation
+                .allow_cross_package_moves
+        );
+    }
+
+    #[test]
+    fn should_keep_each_profile_package_key_without_the_flag() {
+        let mut config = AnalyzeConfig::default();
+        config
+            .profiles
+            .greenfield
+            .relocation
+            .allow_cross_package_moves = true;
+
+        ConfigOverrides::default().apply(&mut config);
+
+        assert!(
+            !config
+                .profiles
+                .anchored
+                .relocation
+                .allow_cross_package_moves
+        );
+        assert!(
+            config
+                .profiles
+                .greenfield
+                .relocation
+                .allow_cross_package_moves
+        );
     }
 
     #[test]

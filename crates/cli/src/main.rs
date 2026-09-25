@@ -112,6 +112,10 @@ struct AnalyzeCli {
     /// Parallelism for parsing and shattering.
     #[arg(long)]
     jobs: Option<u32>,
+    /// Let relocations cross package boundaries in every profile, overriding
+    /// each profile's `allow-cross-package-moves`.
+    #[arg(long)]
+    allow_cross_package_moves: bool,
 }
 
 /// `strata tree` flags.
@@ -305,6 +309,7 @@ fn run_analyze(
         candidates: cli.candidates,
         jobs: cli.jobs,
         mode: cli.mode.map(Mode::from),
+        allow_cross_package_moves: cli.allow_cross_package_moves,
     };
     let config = resolve_config_path(cli.config, &cli.root, err);
     let args = AnalyzeArgs {
@@ -430,7 +435,7 @@ fn report_error(error: &StrataError, err: &mut impl Write) {
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, clap_exit_code, resolve_config_path};
+    use super::{Cli, Command, clap_exit_code, resolve_config_path};
 
     /// Parses `argv` and returns the resulting clap error kind.
     ///
@@ -485,6 +490,19 @@ mod tests {
         let cli = Cli::try_parse_from(["strata", "analyze"]);
 
         assert!(cli.is_ok(), "--config is optional");
+    }
+
+    #[test]
+    fn should_parse_the_cross_package_switch_as_off_unless_passed() {
+        let passed = Cli::try_parse_from(["strata", "analyze", "--allow-cross-package-moves"]);
+        let absent = Cli::try_parse_from(["strata", "analyze"]);
+
+        let switch = |cli: Result<Cli, clap::Error>| match cli.map(|cli| cli.command) {
+            Ok(Command::Analyze(analyze)) => Some(analyze.allow_cross_package_moves),
+            _ => None,
+        };
+        assert_eq!(switch(passed), Some(true));
+        assert_eq!(switch(absent), Some(false));
     }
 
     #[test]
