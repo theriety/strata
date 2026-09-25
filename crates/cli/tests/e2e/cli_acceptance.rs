@@ -3149,10 +3149,11 @@ fn should_yield_byte_identical_output_across_root_path_forms() {
         "a . root yields the same snapshot as canonical, snapshotHash included"
     );
     // the invariance is meaningful, not a shared-degradation coincidence: the
-    // converged snapshot carries the full 13-edge graph the degraded forms lost.
+    // converged snapshot carries the full 17-edge graph the degraded forms lost
+    // (13 declaration edges plus the 4 `Type::method()` qualifier type references).
     assert!(
-        abs.stdout.contains("\"edges\":13,") || abs.stdout.contains("\"edges\":13}"),
-        "the converged snapshot carries all 13 semantic edges: {}",
+        abs.stdout.contains("\"edges\":17,") || abs.stdout.contains("\"edges\":17}"),
+        "the converged snapshot carries all 17 semantic edges: {}",
         abs.stdout
     );
 }

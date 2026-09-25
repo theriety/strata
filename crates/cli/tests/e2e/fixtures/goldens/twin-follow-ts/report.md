@@ -1,7 +1,7 @@
 # Strata report — twin-follow-ts
 
 2 files · 2 symbols · 1 edges
-Snapshot `52e6f14a8dc5624b5a8c5f07220f4e35022fab3ffdb40b804590074420b43892`
+Snapshot `89296d41fb0f4241cd469bb29eea316562fbd60964c95d8dd2d825d61b3cc88e`
 
 ## Structural findings
 

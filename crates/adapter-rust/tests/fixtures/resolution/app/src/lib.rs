@@ -1,4 +1,5 @@
 mod omitted;
+mod render;
 
 pub fn external_caller() -> u32 {
     resolution_external::external_value() + local_value()
@@ -30,6 +31,36 @@ impl Local {
     pub fn measure(&self) -> u32 {
         2
     }
+}
+
+pub struct Built;
+
+impl Built {
+    pub fn new() -> u32 {
+        3
+    }
+}
+
+// Shares its name with `std::io::Error`: a foreign-rooted path must not bind here.
+pub struct Error;
+
+impl Error {
+    pub fn other() -> u32 {
+        6
+    }
+}
+
+pub fn associated_caller() -> u32 {
+    Built::new()
+}
+
+pub fn module_caller() -> u32 {
+    render::report()
+}
+
+// Shares the module's name: a value and a module live in different namespaces.
+pub fn render() -> u32 {
+    4
 }
 
 mod collisions {

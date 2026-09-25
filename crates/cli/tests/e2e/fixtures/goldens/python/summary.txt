@@ -1,6 +1,6 @@
 Strata report — python
 2 files · 4 symbols · 4 edges
-Snapshot `9d2353ef7b54118fc475c73afad47f718dc9e9560acd449a3768b80ad8f4811c`
+Snapshot `2023a9ce0ea1e41c9dd15cf66c4612989abb0cfed6431ba0526315f7cd44db70`
 
 Structural findings
 Shared findings (0)

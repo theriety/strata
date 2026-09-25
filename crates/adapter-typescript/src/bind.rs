@@ -75,6 +75,7 @@ pub fn bind(
                 container,
                 visibility: ScopeLevel::File,
                 effective_size: declaration.sloc,
+                re_export: false,
             });
             exported.push(declaration.exported);
             module_local.insert(declaration.name.clone(), id);
@@ -377,8 +378,15 @@ mod tests {
             edge.map(|edge| edge.confidence.to_bits()),
             Some(CONFIDENCE_STATIC.to_bits())
         );
-        // The barrel materializes its own node for the re-exported name, and the
-        // edge runs from that node to the original declaration.
+        // The barrel materializes its own node for the re-exported name, flagged
+        // as a re-export (ADR-0020), and the edge runs from that node to the
+        // original declaration.
+        let flag_of = |id: Option<NodeId>| -> Option<bool> {
+            id.and_then(|id| fragment.nodes.iter().find(|node| node.id == id))
+                .map(|node| node.re_export)
+        };
+        assert_eq!(flag_of(edge.map(|edge| edge.source)), Some(true));
+        assert_eq!(flag_of(edge.map(|edge| edge.target)), Some(false));
         let name_of = |id: Option<NodeId>| -> Option<SmolStr> {
             id.and_then(|id| fragment.nodes.iter().find(|node| node.id == id))
                 .map(|node| node.name.clone())

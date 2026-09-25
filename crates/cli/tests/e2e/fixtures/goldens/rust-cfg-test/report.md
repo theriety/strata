@@ -1,7 +1,7 @@
 # Strata report — rust-cfg-test
 
 1 files · 4 symbols · 2 edges
-Snapshot `f99674b9641890cfcd2e47a396178db0016f6722c6e97085f8c8e5dbd6c1b2e7`
+Snapshot `72472a4d36d1b5f02fb5368a6a5c3733a3b862ca59b20f489506f8bee0c57544`
 
 ## Structural findings
 
