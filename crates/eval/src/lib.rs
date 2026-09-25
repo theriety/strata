@@ -67,7 +67,7 @@ pub fn e2e_fixture_root(name: &str) -> std::path::PathBuf {
 ///
 /// # Errors
 ///
-/// Returns [`EvalError::TargetInvalid] when the file cannot be read or parsed.
+/// Returns [`EvalError::TargetInvalid`] when the file cannot be read or parsed.
 pub fn load_target(name: &str) -> Result<TargetSpec, EvalError> {
     let path = eval_target_path(name);
     let raw = std::fs::read_to_string(&path).map_err(|error| EvalError::TargetInvalid {

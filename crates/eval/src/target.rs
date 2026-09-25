@@ -3,7 +3,7 @@
 //! Every struct denies unknown fields: a typo in a target file is a harness
 //! error at load, never a silently skipped assertion. Structural rules that
 //! serde cannot express (exactly-one-of keys, rationale non-emptiness,
-//! mode producibility) live in [`TargetSpec::validate], which every case must
+//! mode producibility) live in [`TargetSpec::validate`], which every case must
 //! pass before the engine runs. Census-dependent checks (referenced paths,
 //! `preserve_dir resolution) live in [`crate::harness] because they need the
 //! analyzed result.
@@ -12,16 +12,16 @@ use serde::Deserialize;
 
 use crate::error::EvalError;
 
-/// The contract version this crate implements; any other `schema value is a
+/// The contract version this crate implements; any other `schema` value is a
 /// load-time error.
 pub const SCHEMA_VERSION: u8 = 1;
 
 /// One committed constraint target, parsed from
-/// `crates/eval/targets/<name>.toml.
+/// `crates/eval/targets/<name>.toml`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetSpec {
-    /// The contract version; must equal [`SCHEMA_VERSION].
+    /// The contract version; must equal [`SCHEMA_VERSION`].
     pub schema: u8,
     /// The fixture directory this target constrains.
     pub fixture: String,
@@ -29,7 +29,7 @@ pub struct TargetSpec {
     pub meta: TargetMeta,
     /// The exact invocation every assertion was validated against.
     pub run: RunSpec,
-    /// Preconditions verified against `current before scoring; any failure is
+    /// Preconditions verified against `current` before scoring; any failure is
     /// a harness or fixture error, never distance.
     #[serde(default)]
     pub precondition: Vec<Precondition>,
@@ -102,7 +102,7 @@ pub enum RunMode {
 }
 
 impl RunMode {
-    /// Returns whether `face is among the modes this run produces.
+    /// Returns whether `face` is among the modes this run produces.
     #[must_use]
     pub fn produces(self, face: FaceMode) -> bool {
         matches!(
@@ -120,17 +120,17 @@ impl RunMode {
 pub enum ConfigSource {
     /// Built-in defaults via a missing config path.
     Defaults,
-    /// The fixture's own `strata.toml.
+    /// The fixture's own `strata.toml`.
     Fixture,
 }
 
-/// The `[run] invocation block.
+/// The `[run]` invocation block.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunSpec {
     /// Which modes the invocation produced.
     pub mode: RunMode,
-    /// The `-k candidate count.
+    /// The `-k` candidate count.
     pub candidates: u32,
     /// The deterministic seed.
     pub seed: u64,
@@ -149,11 +149,11 @@ pub enum FaceMode {
     Greenfield,
 }
 
-/// The kind of a precondition check against `result.current.
+/// The kind of a precondition check against `result.current`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PreconditionKind {
-    /// `summary.files within [min, max].
+    /// `summary.files` within [min, max].
     FileCount,
     /// A violation class is present (optionally suffix-scoped).
     ViolationPresent,
@@ -162,7 +162,7 @@ pub enum PreconditionKind {
 }
 
 /// The violation classes a precondition may reference; mirrors the DTO's
-/// `ViolationKind values.
+/// `ViolationKind` values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ViolationClass {
@@ -192,10 +192,10 @@ pub enum SeverityFilter {
 pub struct Precondition {
     /// Which check to perform.
     pub kind: PreconditionKind,
-    /// Inclusive lower file-count bound (`file_count only).
+    /// Inclusive lower file-count bound (`file_count` only).
     #[serde(default)]
     pub min: Option<u32>,
-    /// Inclusive upper file-count bound (`file_count only).
+    /// Inclusive upper file-count bound (`file_count` only).
     #[serde(default)]
     pub max: Option<u32>,
     /// Which violation class to look for (violation kinds only).
@@ -211,13 +211,13 @@ pub struct Precondition {
     pub because: String,
 }
 
-/// The `[assert] block: which modes' best candidates must satisfy the
+/// The `[assert]` block: which modes' best candidates must satisfy the
 /// constraints below. The corpus carries exactly one block per target.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssertBlock {
     /// Modes whose asserted candidate must satisfy every assertion without its
-    /// own `mode key.
+    /// own `mode` key.
     #[serde(default)]
     pub modes: Vec<FaceMode>,
     /// 1-based state index the assertions read; 1 is the best returned
@@ -285,13 +285,13 @@ pub struct PreserveSymbolHome {
 }
 
 /// A directory that must survive as a named container once per package that
-/// physically has it; `path is a post-strip package-relative container key.
+/// physically has it; `path` is a post-strip package-relative container key.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreserveDir {
     /// The container key that must survive.
     pub path: String,
-    /// Overrides `[assert].modes for this assertion alone.
+    /// Overrides `[assert].modes` for this assertion alone.
     #[serde(default)]
     pub mode: Option<FaceMode>,
     /// Why the directory survives in the best state.
@@ -305,14 +305,14 @@ pub struct PreserveDir {
 pub struct PathSetAssertion {
     /// The repo-relative file paths.
     pub paths: Vec<String>,
-    /// Overrides `[assert].modes for this assertion alone.
+    /// Overrides `[assert].modes` for this assertion alone.
     #[serde(default)]
     pub mode: Option<FaceMode>,
     /// Why these files share — or never share — a container.
     pub because: String,
 }
 
-/// The `any_container scope selector for a size band.
+/// The `any_container` scope selector for a size band.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BandScope {
@@ -331,14 +331,14 @@ pub struct SizeBand {
     /// Optional inclusive minimum member count.
     #[serde(default)]
     pub min_files: Option<u32>,
-    /// Scope selector; exactly one of this and [`SizeBand::container].
+    /// Scope selector; exactly one of this and [`SizeBand::container`].
     #[serde(default)]
     pub scope: Option<BandScope>,
     /// Named-container selector matching that full-prefix node name at any
     /// non-file level.
     #[serde(default)]
     pub container: Option<String>,
-    /// Overrides `[assert].modes for this assertion alone.
+    /// Overrides `[assert].modes` for this assertion alone.
     #[serde(default)]
     pub mode: Option<FaceMode>,
     /// Why the band holds in the best state.
@@ -368,7 +368,7 @@ pub struct MoveBudget {
 pub struct BucketName {
     /// The forbidden last segment.
     pub name: String,
-    /// Overrides `[assert].modes for this assertion alone.
+    /// Overrides `[assert].modes` for this assertion alone.
     #[serde(default)]
     pub mode: Option<FaceMode>,
     /// Why the bucket must not appear.
@@ -383,7 +383,7 @@ pub struct NameAlignment {
     pub min_ratio: f64,
     /// Containers holding fewer files are exempt.
     pub min_members: u32,
-    /// Overrides `[assert].modes for this assertion alone.
+    /// Overrides `[assert].modes` for this assertion alone.
     #[serde(default)]
     pub mode: Option<FaceMode>,
     /// Why names align in the best state.
@@ -426,7 +426,7 @@ pub struct ReferenceContainer {
     pub files: Vec<String>,
 }
 
-/// Builds a target-scoped [`EvalError::TargetInvalid] without repeating the
+/// Builds a target-scoped [`EvalError::TargetInvalid`] without repeating the
 /// case name.
 fn invalid(target: &str, message: String) -> EvalError {
     EvalError::TargetInvalid {
@@ -443,7 +443,7 @@ impl TargetSpec {
     ///
     /// # Errors
     ///
-    /// Returns [`EvalError::TargetInvalid] on the first violated rule.
+    /// Returns [`EvalError::TargetInvalid`] on the first violated rule.
     pub fn validate(&self, expected_fixture: &str) -> Result<(), EvalError> {
         let block = self.validate_shape(expected_fixture)?;
         for precondition in &self.precondition {
