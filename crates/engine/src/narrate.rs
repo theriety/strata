@@ -185,14 +185,117 @@ fn narrate_with_rootedness(
         .collect()
 }
 
+/// Recomposes each candidate file's physical parent from its logical
+/// destination and a namespace that belongs to the destination package
+/// (ADR-0017, ADR-0018).
+///
+/// A file changes package only by landing in a folder cluster whose members
+/// span packages. When every pass-start package of its candidate cluster's
+/// members is one package, the file stays in that package whatever the
+/// display-only upper levels elected above the cluster, and its scope is
+/// re-rooted from the key it was expressed under onto that package. A mixed
+/// cluster arises when the package wall is lifted and a file joins another
+/// package's folder, or, with the wall up, when a cross-package import cycle
+/// condenses into one SCC that stays in its pass-start cluster and admits no
+/// newcomer (ADR-0017). It takes the candidate's package when that is a real
+/// pass-start package, otherwise (a cluster elected under a directory with no
+/// manifest) the deepest pass-start package whose key prefixes the logical
+/// destination, or the package group itself.
+///
+/// A namespace is package-relative, so the file keeps its own namespace when
+/// the destination package has it, takes the package's only namespace
+/// otherwise, and takes none when the package has no single one.
 fn preserve_pass_start_namespaces(before: &FilePlacements, after: &mut FilePlacements) {
+    let mut namespaces_of: BTreeMap<&[String], BTreeSet<&[String]>> = BTreeMap::new();
+    for (file, package) in &before.package_of {
+        if let Some(namespace) = before.namespace_of.get(file) {
+            namespaces_of
+                .entry(package.as_slice())
+                .or_default()
+                .insert(namespace.as_slice());
+        }
+    }
+    let mut packages_of_cluster: BTreeMap<u32, BTreeSet<&[String]>> = BTreeMap::new();
+    for (file, cluster) in &after.cluster_of {
+        if let Some(package) = before.package_of.get(file) {
+            packages_of_cluster
+                .entry(*cluster)
+                .or_default()
+                .insert(package.as_slice());
+        }
+    }
     for (file, logical) in &after.logical_parent_of {
-        let Some(namespace) = before.namespace_of.get(file) else {
+        let Some(own) = before.namespace_of.get(file) else {
             continue;
         };
-        let mut physical = namespace.clone();
-        physical.extend(logical.iter().cloned());
+        let elected = after.package_of.get(file).map_or(&[][..], Vec::as_slice);
+        let unanimous = after
+            .cluster_of
+            .get(file)
+            .and_then(|cluster| packages_of_cluster.get(cluster))
+            .filter(|packages| packages.len() == 1)
+            .and_then(|packages| packages.first().copied());
+        let (package, rerooted) = package_and_scope(&namespaces_of, elected, logical, unanimous);
+        let namespace = kept_namespace(&namespaces_of, package, own);
+        let mut physical = after.root_of.get(file).cloned().unwrap_or_default();
+        physical.extend(physical_directory(package, namespace, &rerooted));
         after.parent_of.insert(file.clone(), physical);
+    }
+}
+
+/// Chooses the real pass-start package one file is drawn under and its logical
+/// scope expressed below that package's key. The candidate's package is kept
+/// unless every file of the file's cluster comes from one other package
+/// (`unanimous`), in which case the scope is re-rooted below the deepest
+/// package key (elected or real) the logical destination is expressed under.
+fn package_and_scope<'a>(
+    namespaces_of: &BTreeMap<&'a [String], BTreeSet<&'a [String]>>,
+    elected: &'a [String],
+    logical: &'a [String],
+    unanimous: Option<&'a [String]>,
+) -> (&'a [String], Vec<String>) {
+    let candidate_package = if namespaces_of.contains_key(elected) {
+        elected
+    } else {
+        namespaces_of
+            .keys()
+            .filter(|package| logical.starts_with(package))
+            .max_by_key(|package| package.len())
+            .copied()
+            .unwrap_or(&[])
+    };
+    match unanimous {
+        Some(own_package) if own_package != candidate_package => {
+            let keyed_under = namespaces_of
+                .keys()
+                .copied()
+                .chain(std::iter::once(elected))
+                .filter(|package| logical.starts_with(package))
+                .max_by_key(|package| package.len())
+                .unwrap_or(&[]);
+            let mut rerooted = own_package.to_vec();
+            rerooted.extend(logical.iter().skip(keyed_under.len()).cloned());
+            (own_package, rerooted)
+        }
+        _ => (candidate_package, logical.to_vec()),
+    }
+}
+
+/// The namespace a file keeps in `package`: its own when the package has it,
+/// the package's only namespace otherwise, and none when it has no single one.
+fn kept_namespace<'a>(
+    namespaces_of: &BTreeMap<&'a [String], BTreeSet<&'a [String]>>,
+    package: &[String],
+    own: &'a [String],
+) -> &'a [String] {
+    let namespaces = namespaces_of.get(package);
+    if namespaces.is_some_and(|set| set.contains(own)) {
+        own
+    } else {
+        namespaces
+            .filter(|set| set.len() == 1)
+            .and_then(|set| set.first().copied())
+            .unwrap_or(&[])
     }
 }
 
@@ -209,10 +312,19 @@ struct GroupAccumulator<'a> {
 struct FilePlacements {
     /// Each file path's folded parent path.
     parent_of: BTreeMap<String, Vec<String>>,
-    /// Each file's logical destination before physical namespace qualification.
+    /// Each file's logical folder key, relative to the package group, before
+    /// its namespace is restored.
     logical_parent_of: BTreeMap<String, Vec<String>>,
-    /// Dataset and transparent physical-root segments retained across a move.
+    /// Each file's package-relative namespace (ADR-0018): the transparent
+    /// source-root segments retained across a move.
     namespace_of: BTreeMap<String, Vec<String>>,
+    /// Each file's manifest package key, relative to the package group.
+    package_of: BTreeMap<String, Vec<String>>,
+    /// Each file's projected package-group root segments.
+    root_of: BTreeMap<String, Vec<String>>,
+    /// Each file's parent container id: files sharing one are one folder
+    /// cluster of the candidate.
+    cluster_of: BTreeMap<String, u32>,
     /// The (sorted) member file paths of each folded folder path.
     members_of: BTreeMap<Vec<String>, Vec<String>>,
     /// Direct files plus distinct direct child folders at each physical path.
@@ -238,6 +350,72 @@ fn folder_entry_counts(parent_of: &BTreeMap<String, Vec<String>>) -> BTreeMap<Ve
         *counts.entry(folder).or_default() += u32::try_from(names.len()).unwrap_or(u32::MAX);
     }
     counts
+}
+
+/// Splits a file's real directory into its package-relative namespace
+/// (ADR-0018): the see-through source-root segments that the laminar folder
+/// key omits.
+///
+/// `directory` is the file's real directory, `package` its manifest package
+/// key and `folder` its laminar folder key, all relative to the package group.
+/// The namespace is the directory below the package minus the longest common
+/// trailing run it shares with the folder's scope below the package. For a
+/// file under a see-through root that is the root itself (`src`); for a file
+/// directly in its package it is empty. Relocation admission (each file's
+/// pass-start namespace), capacity composition and narration all share this
+/// one derivation, so the paths they reason about are the same real paths.
+pub(crate) fn physical_namespace(
+    directory: &[String],
+    package: &[String],
+    folder: &[String],
+) -> Vec<String> {
+    let relative = directory.strip_prefix(package).unwrap_or(directory);
+    let scope = folder.strip_prefix(package).unwrap_or(folder);
+    let common = relative
+        .iter()
+        .rev()
+        .zip(scope.iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    relative
+        .get(..relative.len().saturating_sub(common))
+        .unwrap_or_default()
+        .to_vec()
+}
+
+/// Composes the real directory a file occupies in `folder`, restoring its
+/// package-relative `namespace` between the package and the folder's scope.
+///
+/// The inverse of [`physical_namespace`]: `package ++ namespace ++ scope`. A
+/// folder outside `package` keeps the namespace as a plain prefix.
+pub(crate) fn physical_directory(
+    package: &[String],
+    namespace: &[String],
+    folder: &[String],
+) -> Vec<String> {
+    let (prefix, scope) = folder
+        .strip_prefix(package)
+        .map_or((&[][..], folder), |scope| (package, scope));
+    let mut directory = prefix.to_vec();
+    directory.extend(namespace.iter().cloned());
+    directory.extend(scope.iter().cloned());
+    directory
+}
+
+/// Splits `/`-separated text into its non-empty segments.
+pub(crate) fn path_segments(path: &str) -> Vec<String> {
+    path.split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Drops a leading package-group (`dataset`) prefix from a laminar key.
+pub(crate) fn drain_dataset(mut segments: Vec<String>, dataset: &[String]) -> Vec<String> {
+    if segments.starts_with(dataset) {
+        segments.drain(..dataset.len());
+    }
+    segments
 }
 
 /// Projects a repository-relative path beneath its package-group root.
@@ -302,82 +480,67 @@ fn index_files(tree: &ContainerTree, package_rooted: bool) -> FilePlacements {
     let mut parent_of = BTreeMap::new();
     let mut logical_parent_of = BTreeMap::new();
     let mut namespace_of = BTreeMap::new();
+    let mut package_of = BTreeMap::new();
+    let mut root_of = BTreeMap::new();
+    let mut cluster_of = BTreeMap::new();
     let mut members_of: BTreeMap<Vec<String>, Vec<String>> = BTreeMap::new();
     for container in containers {
         if container.level != ScopeLevel::File {
             continue;
         }
         let folder = container.parent.and_then(|parent| by_id.get(&parent.0));
-        let folder_key = folder.map_or("", |folder| folder.name.as_str());
-        let mut logical_segments: Vec<String> = folder_key
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .map(str::to_owned)
-            .collect();
-        // the synthetic `workspace` bucket names no real directory, so a
-        // root-level file's move target is its package, not an invented
-        // `.../workspace` path: drop the trailing synthetic segment.
-        if folder.is_some_and(|folder| folder.synthetic) {
-            logical_segments.pop();
-        }
         let mut ancestor = Some(container);
-        let mut dataset = None;
+        let (mut dataset, mut package) = (None, None);
         while let Some(current) = ancestor {
-            if current.level == ScopeLevel::PackageGroup {
-                dataset = Some(current.name.as_str());
+            match current.level {
+                ScopeLevel::PackageGroup => dataset = Some(current.name.as_str()),
+                ScopeLevel::Package if package.is_none() => package = Some(current.name.as_str()),
+                _ => {}
             }
             ancestor = current
                 .parent
                 .and_then(|parent| by_id.get(&parent.0).copied());
         }
         let dataset = dataset.unwrap_or("");
-        let dataset_segments: Vec<&str> = dataset
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .collect();
-        if logical_segments.len() >= dataset_segments.len()
-            && logical_segments
-                .iter()
-                .map(String::as_str)
-                .zip(dataset_segments.iter().copied())
-                .all(|(left, right)| left == right)
-        {
-            logical_segments.drain(..dataset_segments.len());
-        }
-        let raw_segments: Vec<String> = container
-            .name
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .map(str::to_owned)
-            .collect();
+        let dataset_segments = path_segments(dataset);
+        let package = drain_dataset(path_segments(package.unwrap_or("")), &dataset_segments);
+        // the synthetic `workspace` bucket names no real directory, so a
+        // root-level file's move target is its package, not an invented
+        // `.../workspace` path: the bucket stands for the package itself.
+        let logical = if folder.is_some_and(|folder| folder.synthetic) {
+            package.clone()
+        } else {
+            drain_dataset(
+                path_segments(folder.map_or("", |folder| folder.name.as_str())),
+                &dataset_segments,
+            )
+        };
+        let raw_segments = path_segments(&container.name);
         let physical_file_segments = if package_rooted {
             project_package_rooted_path(dataset, &raw_segments)
         } else {
             project_physical_path(dataset, &raw_segments)
         };
-        let raw_directory = physical_file_segments
+        let physical_directory_segments = physical_file_segments
             .get(..physical_file_segments.len().saturating_sub(1))
             .unwrap_or_default();
-        let common_suffix = raw_directory
-            .iter()
-            .rev()
-            .zip(logical_segments.iter().rev())
-            .take_while(|(left, right)| **left == right.as_str())
-            .count();
-        let namespace_end = raw_directory.len().saturating_sub(common_suffix);
-        let namespace = raw_directory
-            .get(..namespace_end)
-            .unwrap_or_default()
-            .to_vec();
-        let mut segments = namespace.clone();
-        segments.extend(logical_segments);
+        // both projections prefix exactly the package-group root segments.
+        let root_length = dataset_segments
+            .len()
+            .min(physical_directory_segments.len());
+        let (root, directory) = physical_directory_segments.split_at(root_length);
+        let namespace = physical_namespace(directory, &package, &logical);
+        let mut segments = root.to_vec();
+        segments.extend(physical_directory(&package, &namespace, &logical));
         let physical_file = physical_file_segments.join("/");
         parent_of.insert(physical_file.clone(), segments.clone());
-        logical_parent_of.insert(
-            physical_file.clone(),
-            segments.get(namespace.len()..).unwrap_or_default().to_vec(),
-        );
+        logical_parent_of.insert(physical_file.clone(), logical);
         namespace_of.insert(physical_file.clone(), namespace);
+        package_of.insert(physical_file.clone(), package);
+        root_of.insert(physical_file.clone(), root.to_vec());
+        if let Some(parent) = container.parent {
+            cluster_of.insert(physical_file.clone(), parent.0);
+        }
         members_of.entry(segments).or_default().push(physical_file);
     }
     for members in members_of.values_mut() {
@@ -388,6 +551,9 @@ fn index_files(tree: &ContainerTree, package_rooted: bool) -> FilePlacements {
         parent_of,
         logical_parent_of,
         namespace_of,
+        package_of,
+        root_of,
+        cluster_of,
         members_of,
         entry_count,
     }
@@ -849,6 +1015,252 @@ mod tests {
                     "sample/src/area/destination".to_owned(),
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn should_split_a_real_directory_into_its_package_relative_namespace() {
+        // a nested package file under a see-through root, one directly in it,
+        // a single-package file, and a file directly in its package.
+        let cases = [
+            (
+                strings(&["crates", "core", "src", "cluster"]),
+                strings(&["crates", "core"]),
+                strings(&["crates", "core", "cluster"]),
+                strings(&["src"]),
+            ),
+            (
+                strings(&["crates", "core", "src"]),
+                strings(&["crates", "core"]),
+                strings(&["crates", "core"]),
+                strings(&["src"]),
+            ),
+            (
+                strings(&["src", "geometry"]),
+                Vec::new(),
+                strings(&["geometry"]),
+                strings(&["src"]),
+            ),
+            (
+                strings(&["crates", "core"]),
+                strings(&["crates", "core"]),
+                strings(&["crates", "core"]),
+                Vec::new(),
+            ),
+        ];
+
+        for (directory, package, folder, namespace) in cases {
+            assert_eq!(
+                physical_namespace(&directory, &package, &folder),
+                namespace,
+                "namespace of {directory:?}"
+            );
+            assert_eq!(
+                physical_directory(&package, &namespace, &folder),
+                directory,
+                "composing the namespace back restores {directory:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn should_compose_a_destination_in_another_package_below_its_namespace() {
+        let directory = physical_directory(
+            &strings(&["crates", "engine"]),
+            &strings(&["src"]),
+            &strings(&["crates", "engine", "analyze"]),
+        );
+
+        assert_eq!(directory, strings(&["crates", "engine", "src", "analyze"]));
+    }
+
+    /// A multi-package repository: `crates/core` holds a file directly in its
+    /// see-through `src` root (the synthetic bucket) and one in `src/cluster`;
+    /// `crates/engine` holds `src/analyze`.
+    fn multi_package_tree(placements: [(u32, &str); 2]) -> ContainerTree {
+        let mut containers = vec![
+            container(0, "strata", ScopeLevel::PackageGroup, None),
+            container(1, "crates/core", ScopeLevel::Package, Some(0)),
+            container(2, "crates/engine", ScopeLevel::Package, Some(0)),
+            Container {
+                synthetic: true,
+                ..container(3, "crates/core/workspace", ScopeLevel::Folder, Some(1))
+            },
+            container(4, "crates/core/cluster", ScopeLevel::Folder, Some(1)),
+            container(5, "crates/engine/analyze", ScopeLevel::Folder, Some(2)),
+            container(6, "crates/core/fresh", ScopeLevel::Folder, Some(1)),
+            container(
+                9,
+                "crates/engine/src/analyze/z.rs",
+                ScopeLevel::File,
+                Some(5),
+            ),
+        ];
+        let [(lib_folder, lib), (refine_folder, refine)] = placements;
+        containers.push(container(7, lib, ScopeLevel::File, Some(lib_folder)));
+        containers.push(container(8, refine, ScopeLevel::File, Some(refine_folder)));
+        containers.sort_by_key(|container| container.id);
+        ContainerTree::new(containers)
+    }
+
+    #[test]
+    fn should_narrate_real_paths_for_files_under_a_nested_package_source_root() {
+        // ADR-0018: the package path must precede the see-through `src`, never
+        // follow it (`strata/crates/core/src/crates/core`).
+        let current = multi_package_tree([
+            (3, "crates/core/src/lib.rs"),
+            (4, "crates/core/src/cluster/refine.rs"),
+        ]);
+        let candidate = multi_package_tree([
+            (5, "crates/core/src/lib.rs"),
+            (6, "crates/core/src/cluster/refine.rs"),
+        ]);
+
+        let moves = narrate_repository_relative(&current, &candidate, &plain_facts());
+        let narrated: Vec<(String, String, String)> = moves
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .files
+                    .iter()
+                    .map(|file| (file.path.clone(), file.from.clone(), entry.to.clone()))
+            })
+            .collect();
+
+        assert_eq!(
+            narrated,
+            vec![
+                (
+                    "strata/crates/core/src/cluster/refine.rs".to_owned(),
+                    "strata/crates/core/src/cluster".to_owned(),
+                    "strata/crates/core/src/fresh".to_owned(),
+                ),
+                (
+                    "strata/crates/core/src/lib.rs".to_owned(),
+                    "strata/crates/core/src".to_owned(),
+                    "strata/crates/engine/src/analyze".to_owned(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn should_not_carry_a_source_root_into_a_package_that_has_no_manifest() {
+        // ADR-0018 with the package wall down: clusters elected under `crates`
+        // (no manifest) must not print `crates/src/...`. Each cluster here
+        // holds files of a single package, so nothing changes package: the
+        // lone `lib.rs` stays in `crates/core/src` and `refine.rs` stays in its
+        // own `cluster` folder.
+        let current = multi_package_tree([
+            (3, "crates/core/src/lib.rs"),
+            (4, "crates/core/src/cluster/refine.rs"),
+        ]);
+        let candidate = ContainerTree::new(vec![
+            container(0, "strata", ScopeLevel::PackageGroup, None),
+            container(1, "crates", ScopeLevel::Package, Some(0)),
+            container(2, "crates/engine", ScopeLevel::Package, Some(0)),
+            Container {
+                synthetic: true,
+                ..container(3, "crates/workspace", ScopeLevel::Folder, Some(1))
+            },
+            container(4, "crates/core/cluster", ScopeLevel::Folder, Some(1)),
+            container(5, "crates/engine/analyze", ScopeLevel::Folder, Some(2)),
+            container(7, "crates/core/src/lib.rs", ScopeLevel::File, Some(3)),
+            container(
+                8,
+                "crates/core/src/cluster/refine.rs",
+                ScopeLevel::File,
+                Some(4),
+            ),
+            container(
+                9,
+                "crates/engine/src/analyze/z.rs",
+                ScopeLevel::File,
+                Some(5),
+            ),
+        ]);
+
+        let moves = narrate_repository_relative(&current, &candidate, &plain_facts());
+        let narrated: Vec<(String, String, String)> = moves
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .files
+                    .iter()
+                    .map(|file| (file.path.clone(), file.from.clone(), entry.to.clone()))
+            })
+            .collect();
+
+        assert_eq!(narrated, Vec::<(String, String, String)>::new());
+    }
+
+    #[test]
+    fn should_keep_a_lone_file_in_its_package_when_upper_levels_merge_packages() {
+        // ADR-0017: the display-only package level elected `crates/core` above
+        // util's untouched `lib.rs`; its cluster holds only util files, so it
+        // stays in `crates/util/src` and never lands on core's `lib.rs`.
+        let current = ContainerTree::new(vec![
+            container(0, "ws", ScopeLevel::PackageGroup, None),
+            container(1, "crates/core", ScopeLevel::Package, Some(0)),
+            container(2, "crates/util", ScopeLevel::Package, Some(0)),
+            Container {
+                synthetic: true,
+                ..container(3, "crates/core/workspace", ScopeLevel::Folder, Some(1))
+            },
+            container(4, "crates/core/beta", ScopeLevel::Folder, Some(1)),
+            Container {
+                synthetic: true,
+                ..container(5, "crates/util/workspace", ScopeLevel::Folder, Some(2))
+            },
+            container(6, "crates/core/src/lib.rs", ScopeLevel::File, Some(3)),
+            container(
+                7,
+                "crates/core/src/beta/scale.rs",
+                ScopeLevel::File,
+                Some(4),
+            ),
+            container(8, "crates/util/src/lib.rs", ScopeLevel::File, Some(5)),
+        ]);
+        let candidate = ContainerTree::new(vec![
+            container(0, "ws", ScopeLevel::PackageGroup, None),
+            container(1, "crates/core", ScopeLevel::Package, Some(0)),
+            Container {
+                synthetic: true,
+                ..container(2, "crates/core/workspace", ScopeLevel::Folder, Some(1))
+            },
+            container(3, "crates/core/alpha", ScopeLevel::Folder, Some(1)),
+            Container {
+                synthetic: true,
+                ..container(4, "crates/core/workspace", ScopeLevel::Folder, Some(1))
+            },
+            container(5, "crates/core/src/lib.rs", ScopeLevel::File, Some(2)),
+            container(
+                6,
+                "crates/core/src/beta/scale.rs",
+                ScopeLevel::File,
+                Some(3),
+            ),
+            container(7, "crates/util/src/lib.rs", ScopeLevel::File, Some(4)),
+        ]);
+
+        let moves = narrate_repository_relative(&current, &candidate, &plain_facts());
+        let narrated: Vec<(String, String, String)> = moves
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .files
+                    .iter()
+                    .map(|file| (file.path.clone(), file.from.clone(), entry.to.clone()))
+            })
+            .collect();
+
+        assert_eq!(
+            narrated,
+            vec![(
+                "ws/crates/core/src/beta/scale.rs".to_owned(),
+                "ws/crates/core/src/beta".to_owned(),
+                "ws/crates/core/src/alpha".to_owned(),
+            )]
         );
     }
 

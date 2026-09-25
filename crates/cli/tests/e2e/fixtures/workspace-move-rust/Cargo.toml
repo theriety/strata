@@ -1,0 +1,10 @@
+# A standalone fixture workspace analyzed at runtime by the CLI e2e parity test.
+# Two crates whose `core` keeps a helper file in the wrong module folder, so the
+# analysis proposes a same-package move whose real path runs through a
+# see-through `src/` source root (ADR-0018).
+#
+# This is itself a `[workspace]`, so cargo never treats it as a member of the
+# outer strata workspace.
+[workspace]
+resolver = "2"
+members = ["crates/util", "crates/core"]
