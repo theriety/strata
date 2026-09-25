@@ -178,7 +178,7 @@ Cross-profile aggregation gives each executed profile at most one vote per reloc
 
 ## Analysis result contract
 
-Result schema version 8 separates facts shared by the executed profiles from profile-specific evaluation, records both relocation-policy objective terms, links exact test followers to their primary file move, and adds evidence-qualified advice:
+Result schema version 9 records each profile's `allow-cross-package-moves` relocation parameter (ADR-0017); version 8 introduced the layout below. The result separates facts shared by the executed profiles from profile-specific evaluation, records both relocation-policy objective terms, links exact test followers to their primary file move, and adds evidence-qualified advice:
 
 ```text
 AnalyzeResult

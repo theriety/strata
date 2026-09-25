@@ -884,6 +884,64 @@ fn should_refuse_a_test_polarity_symbol_only_when_the_pass_pins_polarity() {
     );
 }
 
+/// Greenfield symbol moves for the misfiled-symbol fixture with `keep` and
+/// `sink` as two manifest packages, under the given
+/// `allow-cross-package-moves` policy.
+fn cross_package_symbol_moves(allow_cross_package: bool) -> Vec<SymbolMove> {
+    let snapshot = snapshot(
+        vec![
+            node(0, "s", 3, Polarity::Production),
+            node(1, "mate", 3, Polarity::Production),
+            node(2, "c1", 4, Polarity::Production),
+            node(3, "c2", 4, Polarity::Production),
+            node(4, "base", 4, Polarity::Production),
+            node(5, "mate2", 3, Polarity::Production),
+        ],
+        vec![inherits(2, 0), inherits(3, 0), edge(4, 2), edge(4, 3)],
+        vec![
+            container(0, "app", ScopeLevel::PackageGroup, None),
+            container(1, "keep", ScopeLevel::Package, Some(0)),
+            container(2, "sink", ScopeLevel::Package, Some(0)),
+            container(3, "a.ts", ScopeLevel::File, Some(1)),
+            container(4, "b.ts", ScopeLevel::File, Some(2)),
+        ],
+    );
+    let mut config = AnalyzeConfig::default();
+    config.profiles.anchored.candidates = 1;
+    config
+        .profiles
+        .greenfield
+        .relocation
+        .allow_cross_package_moves = allow_cross_package;
+    analyze(&snapshot, &config)
+        .ok()
+        .and_then(|result| result.profiles.greenfield)
+        .and_then(|mode| mode.candidates.into_iter().next())
+        .map(|candidate| candidate.symbol_moves)
+        .unwrap_or_default()
+}
+
+#[test]
+fn should_keep_a_symbol_inside_its_package_by_default() {
+    let moves = cross_package_symbol_moves(false);
+
+    assert!(
+        moves.iter().all(|entry| entry.symbol != "s"),
+        "a declaration never leaves its manifest package by default; got {moves:?}"
+    );
+}
+
+#[test]
+fn should_move_a_symbol_across_packages_when_the_wall_is_lifted() {
+    let moves = cross_package_symbol_moves(true);
+
+    assert!(
+        moves.iter().any(|entry| entry.symbol == "s"),
+        "with allow-cross-package-moves the same pull relocates the declaration, \
+         proving the wall is what held it; got {moves:?}"
+    );
+}
+
 #[test]
 fn should_leave_the_zone_inert_when_builtins_are_off_and_no_patterns_given() {
     let nodes = vec![node(0, "spec", 1, Polarity::TestCase)];
