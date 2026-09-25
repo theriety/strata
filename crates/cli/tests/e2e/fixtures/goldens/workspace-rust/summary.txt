@@ -1,6 +1,6 @@
 Strata report — workspace-rust
-3 files · 14 symbols · 17 edges
-Snapshot `b0806ffeb95da063b1ebb36088f5488087a827d9c58888ac32879ba6ec29c56d`
+3 files · 13 symbols · 17 edges
+Snapshot `a2cbc679781a146c1ffa18fdcbde069b1fd131562c3c5de63ffcfe5aeb2035f2`
 
 Structural findings
 Shared findings (2)
@@ -22,13 +22,13 @@ candidate is a proposed layout; inclusion does not make a move Recommended. Part
 rescored.
 
 anchored — 0 candidate(s)
-Baseline score: 0.6929
+Baseline score: 0.6958
 Fewer than the requested candidates survived; the solution space converged.
 Current layout is already optimal under this profile's search.
 No candidates were produced.
 
 greenfield — 0 candidate(s)
-Baseline score: 0.8929
+Baseline score: 0.8958
 Fewer than the requested candidates survived; the solution space converged.
 Current layout is already optimal under this profile's search.
 No candidates were produced.

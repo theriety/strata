@@ -12,13 +12,14 @@
 //! to the declaration whose byte range contains it.
 
 use proc_macro2::Span;
+use quote::ToTokens;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use strata_ir::{AdapterError, SourceFile};
 use syn::spanned::Spanned as _;
 use syn::visit::Visit;
-use syn::{ImplItem, Item, ItemImpl, Type};
+use syn::{ImplItem, Item, ItemImpl};
 
 use crate::sloc::production_sloc;
 
@@ -344,9 +345,9 @@ fn push_type(
     ));
 }
 
-/// Appends declarations for an `impl` block: its inherent and trait methods, and
-/// — for a trait impl — a synthetic declaration on the self type that carries the
-/// inheritance reference to the implemented trait.
+/// Appends declarations for an `impl` block: one symbol per inherent method, or
+/// — for a trait impl — a single declaration for the whole block (see
+/// [`push_trait_impl`]).
 fn push_impl(
     item_impl: &ItemImpl,
     contents: &str,
@@ -354,33 +355,16 @@ fn push_impl(
     out: &mut Vec<Declaration>,
 ) {
     let cfg_test = cfg_test_ancestor || has_cfg_test(&item_impl.attrs);
-    let self_name = type_leaf_name(&item_impl.self_ty);
 
-    // A trait impl contributes an inheritance reference from the self type to
-    // the trait, recorded on a declaration named after the self type so the
-    // edge originates at the implementing type.
-    if let Some((_, trait_path, _)) = &item_impl.trait_
-        && let (Some(self_name), Some(segment)) = (self_name.as_ref(), trait_path.segments.last())
-    {
-        let offset = byte_offset(segment.ident.span());
-        out.push(Declaration {
-            name: SmolStr::new(self_name),
-            kind: DeclKind::Type,
-            exported: false,
-            visibility_kind: VisibilityKind::Inherited,
-            visibility_path: None,
-            cfg_test,
-            test_case: false,
-            byte_start: byte_start(item_impl.span()),
-            byte_end: byte_end(item_impl.span()),
-            sloc: 0,
-            references: vec![Reference {
-                kind: RefKind::TraitImpl,
-                name: SmolStr::new(segment.ident.to_string()),
-                offset,
-                macro_expanded: false,
-            }],
-        });
+    // A trait impl is one indivisible Rust item: its methods cannot live in a
+    // different file from the impl block, so the whole block is a single
+    // declaration (ADR-0019). It is named after its header and carries the
+    // inheritance reference to the trait plus every item's references, so
+    // calls into any method resolve to the block that must move as a unit.
+    if item_impl.trait_.is_some() {
+        push_trait_impl(item_impl, contents, cfg_test, out);
+
+        return;
     }
 
     for impl_item in &item_impl.items {
@@ -396,6 +380,174 @@ fn push_impl(
             );
             decl.test_case = has_test_attr(&method.attrs);
             out.push(decl);
+        }
+    }
+}
+
+/// Pushes an `impl Trait for T` block as one [`DeclKind::Type`] declaration.
+///
+/// The declaration is named from the block's header without the impl's own
+/// generic parameter list (`impl From<Config> for Profile`), spans the whole
+/// block, and carries the references of every method, associated type, and
+/// constant, so its SLOC and dependencies travel together. A header already
+/// used earlier in the same file — mutually exclusive `cfg` variants — is
+/// disambiguated by source order: `impl Display for Report (2)`.
+fn push_trait_impl(
+    item_impl: &ItemImpl,
+    contents: &str,
+    cfg_test: bool,
+    out: &mut Vec<Declaration>,
+) {
+    let Some((_, trait_path, _)) = &item_impl.trait_ else {
+        return;
+    };
+    let Some(segment) = trait_path.segments.last() else {
+        return;
+    };
+    let header = trait_impl_header(item_impl);
+    let earlier = out
+        .iter()
+        .filter(|decl| {
+            decl.kind == DeclKind::Type
+                && decl.name.strip_prefix(header.as_str()).is_some_and(|rest| {
+                    rest.is_empty() || (rest.starts_with(" (") && rest.ends_with(')'))
+                })
+        })
+        .count();
+    let name = if earlier == 0 {
+        header
+    } else {
+        format!("{header} ({})", earlier + 1)
+    };
+
+    let mut references = vec![Reference {
+        kind: RefKind::TraitImpl,
+        name: SmolStr::new(segment.ident.to_string()),
+        offset: byte_offset(segment.ident.span()),
+        macro_expanded: false,
+    }];
+    for impl_item in &item_impl.items {
+        references.extend(collect_references(impl_item));
+    }
+
+    out.push(declaration(
+        &name,
+        DeclKind::Type,
+        &syn::Visibility::Inherited,
+        cfg_test,
+        item_impl.span(),
+        contents,
+        references,
+    ));
+}
+
+/// Renders a trait impl's header without its own generic parameter list:
+/// `impl<T> From<T> for Wrapper<T>` becomes `impl From<T> for Wrapper<T>`.
+fn trait_impl_header(item_impl: &ItemImpl) -> String {
+    let (negative, trait_path) = item_impl
+        .trait_
+        .as_ref()
+        .map_or((false, None), |(bang, path, _)| {
+            (bang.is_some(), Some(path))
+        });
+    format!(
+        "impl {}{} for {}",
+        if negative { "!" } else { "" },
+        trait_path.map(compact_tokens).unwrap_or_default(),
+        compact_tokens(&item_impl.self_ty)
+    )
+}
+
+/// Prints `node` as source-like text: tokens are joined without spacing except
+/// between two word-like tokens, after `,` and `;`, and around `+` and `->`
+/// (`From < Vec < u8 > >` becomes `From<Vec<u8>>`, `* const T` becomes
+/// `*const T`).
+fn compact_tokens(node: &impl ToTokens) -> String {
+    let mut text = String::new();
+    write_tokens(node.to_token_stream(), &mut text);
+    text
+}
+
+/// Appends `stream` to `text`, inserting a space only where two tokens would
+/// otherwise fuse or where a separator reads better spaced.
+fn write_tokens(stream: proc_macro2::TokenStream, text: &mut String) {
+    use proc_macro2::{Delimiter, Spacing, TokenTree};
+
+    let mut previous_is_word = false;
+    let mut previous_is_lifetime = false;
+    let mut after_tick = false;
+    let mut pending_space = false;
+    let mut tokens = stream.into_iter().peekable();
+    while let Some(token) = tokens.next() {
+        let is_word = matches!(token, TokenTree::Ident(_) | TokenTree::Literal(_));
+        let lifetime_tick = matches!(&token, TokenTree::Punct(p) if p.as_char() == '\'');
+        // `*mut [u8; 4]`: a bracket group after a qualifier is a type, not an index.
+        let slice_type = matches!(&token, TokenTree::Group(g) if g.delimiter() == Delimiter::Bracket)
+            && matches!(
+                text.rsplit([' ', '*', '&']).next(),
+                Some("mut" | "const" | "dyn")
+            );
+        // `for<'a> Fn(&'a u8)` and `&'a [u8]`: a closed higher-ranked binder
+        // or a lifetime name must not fuse with the word or group after it.
+        let after_binder =
+            matches!(token, TokenTree::Ident(_)) && !after_tick && text.ends_with('>');
+        let after_lifetime = previous_is_lifetime
+            && matches!(&token, TokenTree::Group(g) if g.delimiter() != Delimiter::None);
+        if (pending_space
+            || slice_type
+            || after_binder
+            || after_lifetime
+            || ((is_word || lifetime_tick) && previous_is_word))
+            && !text.is_empty()
+        {
+            text.push(' ');
+        }
+        pending_space = false;
+        previous_is_lifetime = after_tick && is_word;
+        after_tick = lifetime_tick;
+        previous_is_word = is_word;
+        match token {
+            TokenTree::Group(group) => {
+                let (open, close) = match group.delimiter() {
+                    Delimiter::Parenthesis => ("(", ")"),
+                    Delimiter::Bracket => ("[", "]"),
+                    Delimiter::Brace => ("{ ", " }"),
+                    Delimiter::None => ("", ""),
+                };
+                if group.stream().is_empty() {
+                    text.push_str(open.trim_end());
+                    text.push_str(close.trim_start());
+                } else {
+                    text.push_str(open);
+                    write_tokens(group.stream(), text);
+                    text.push_str(close);
+                }
+            }
+            TokenTree::Punct(punct) => {
+                let ch = punct.as_char();
+                let arrow = ch == '-'
+                    && punct.spacing() == Spacing::Joint
+                    && matches!(tokens.peek(), Some(TokenTree::Punct(next)) if next.as_char() == '>');
+                if arrow {
+                    tokens.next();
+                    text.push_str(" ->");
+                    pending_space = true;
+                } else if ch == '+' {
+                    text.push_str(" +");
+                    pending_space = true;
+                } else if ch == '='
+                    && punct.spacing() == Spacing::Alone
+                    && !text.ends_with(['<', '>', '=', '!'])
+                {
+                    text.push_str(" =");
+                    pending_space = true;
+                } else {
+                    text.push(ch);
+                    pending_space = matches!(ch, ',' | ';');
+                }
+            }
+            TokenTree::Ident(ident) => text.push_str(&ident.to_string()),
+            TokenTree::Literal(literal) => text.push_str(&literal.to_string()),
         }
     }
 }
@@ -504,18 +656,6 @@ fn collect_re_exports(
     }
 }
 
-/// Returns the trailing identifier of a type path (`a::b::Foo` -> `Foo`).
-fn type_leaf_name(ty: &Type) -> Option<String> {
-    match ty {
-        Type::Path(path) => path
-            .path
-            .segments
-            .last()
-            .map(|segment| segment.ident.to_string()),
-        _ => None,
-    }
-}
-
 /// Returns `true` when `vis` is any form of `pub`.
 fn is_public(vis: &syn::Visibility) -> bool {
     matches!(
@@ -612,6 +752,7 @@ impl_visit_node! {
     syn::ItemConst => visit_item_const,
     syn::ItemStatic => visit_item_static,
     syn::ImplItemFn => visit_impl_item_fn,
+    syn::ImplItem => visit_impl_item,
 }
 
 /// A syn visitor that gathers references (use paths, calls, type positions) with
@@ -808,7 +949,158 @@ mod tests {
             .find(|decl| decl.references.iter().any(|r| r.kind == RefKind::TraitImpl));
         assert_eq!(
             trait_decl.map(|decl| decl.name.clone()),
-            Some(SmolStr::new("R"))
+            Some(SmolStr::new("impl Summarize for R"))
+        );
+    }
+
+    #[test]
+    fn should_fold_trait_impl_items_into_one_block_named_by_its_header() {
+        let declarations = parse_text(
+            "struct R;\nimpl Summarize for R {\n    type Out = Unit;\n    fn s(&self) -> u32 {\n        helper()\n    }\n}\n",
+        );
+
+        let names = declarations
+            .iter()
+            .map(|decl| decl.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            ["R", "impl Summarize for R"],
+            "a trait impl's items are not their own declarations"
+        );
+        let block = declarations.get(1);
+        assert_eq!(block.map(|block| block.kind), Some(DeclKind::Type));
+        assert!(
+            block.is_some_and(|block| block.sloc > 0),
+            "the block carries its items' sloc"
+        );
+        let carries = |kind: RefKind, name: &str| {
+            block.is_some_and(|block| {
+                block
+                    .references
+                    .iter()
+                    .any(|r| r.kind == kind && r.name == name)
+            })
+        };
+        assert!(
+            carries(RefKind::Call, "helper"),
+            "the block carries its methods' references"
+        );
+        assert!(
+            carries(RefKind::TypeRef, "Unit"),
+            "the block carries its associated types' references"
+        );
+    }
+
+    #[test]
+    fn should_name_a_trait_impl_without_the_impls_own_generic_parameters() {
+        let declarations = parse_text(
+            "impl<T: Clone> From<Vec<T>> for Wrapper<T> {\n    fn from(v: Vec<T>) -> Self {\n        Wrapper(v)\n    }\n}\nimpl std::fmt::Display for &'static Report {\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        Ok(())\n    }\n}\n",
+        );
+
+        let names = declarations
+            .iter()
+            .map(|decl| decl.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "impl From<Vec<T>> for Wrapper<T>",
+                "impl std::fmt::Display for &'static Report",
+            ]
+        );
+    }
+
+    #[test]
+    fn should_declare_a_trait_impl_block_with_the_type_kind() {
+        // ADR-19: the block is a `Type`; the downstream type-only pricing it
+        // implies is pinned by the engine, not here.
+        let declarations = parse_text(
+            "impl Display for Report {\n    fn fmt(&self, f: &mut Formatter) -> Result {\n        Ok(())\n    }\n}\n",
+        );
+
+        assert_eq!(
+            declarations
+                .iter()
+                .map(|decl| decl.kind)
+                .collect::<Vec<_>>(),
+            [DeclKind::Type]
+        );
+    }
+
+    #[test]
+    fn should_render_fn_pointer_and_const_generic_self_types_compactly() {
+        let declarations = parse_text(
+            "impl Tr for Box<dyn Fn(u8) -> u8> {}\nimpl Tr for *const Item {}\nimpl Tr for *mut [u8; 4] {}\nimpl Tr for Buf<{ N > 1 }> {}\nimpl Tr for Box<dyn A + Send + 'a> {}\n",
+        );
+
+        let names = declarations
+            .iter()
+            .map(|decl| decl.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "impl Tr for Box<dyn Fn(u8) -> u8>",
+                "impl Tr for *const Item",
+                "impl Tr for *mut [u8; 4]",
+                "impl Tr for Buf<{ N>1 }>",
+                "impl Tr for Box<dyn A + Send + 'a>",
+            ]
+        );
+    }
+
+    #[test]
+    fn should_render_binders_lifetimes_bindings_and_empty_braces_compactly() {
+        let declarations = parse_text(
+            "impl Tr for Box<dyn for<'a> Fn(&'a u8)> {}\nimpl Tr for &'a [u8] {}\nimpl Tr for &'a (A, B) {}\nimpl Tr for Box<dyn Iterator<Item = u8>> {}\nimpl Tr for Buf<{}> {}\nimpl Tr for Buf<{ N >= 1 }> {}\n",
+        );
+
+        let names = declarations
+            .iter()
+            .map(|decl| decl.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "impl Tr for Box<dyn for<'a> Fn(&'a u8)>",
+                "impl Tr for &'a [u8]",
+                "impl Tr for &'a (A, B)",
+                "impl Tr for Box<dyn Iterator<Item = u8>>",
+                "impl Tr for Buf<{}>",
+                "impl Tr for Buf<{ N>=1 }>",
+            ]
+        );
+    }
+
+    #[test]
+    fn should_disambiguate_cfg_variant_trait_impls_by_source_order() {
+        let declarations = parse_text(
+            "#[cfg(unix)]\nimpl Display for Report {\n    fn fmt(&self) {}\n}\n#[cfg(windows)]\nimpl Display for Report {\n    fn fmt(&self) {}\n}\nimpl Debug for Report {\n    fn fmt(&self) {}\n}\n",
+        );
+
+        let names = declarations
+            .iter()
+            .map(|decl| decl.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "impl Display for Report",
+                "impl Display for Report (2)",
+                "impl Debug for Report",
+            ]
+        );
+    }
+
+    #[test]
+    fn should_keep_inherent_methods_as_separate_symbols() {
+        let declarations = parse_text("struct R;\nimpl R {\n    fn s(&self) {}\n}\n");
+
+        assert!(
+            declarations
+                .iter()
+                .any(|decl| decl.name == "s" && decl.kind == DeclKind::Symbol)
         );
     }
 
