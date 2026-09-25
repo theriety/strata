@@ -1,7 +1,7 @@
 # Strata report — cyclic-oversized
 
 3 files · 3 symbols · 3 edges
-Snapshot `55784e8d4ae083e616cd25e5fb9c5c3a94ea39ee8dbb7bc6dfe7ad6e1da7312c`
+Snapshot `c51792430242b5990bdcf9c2ef33e7d89d835047b1930dad349d1ce8921889cf`
 
 ## Structural findings
 

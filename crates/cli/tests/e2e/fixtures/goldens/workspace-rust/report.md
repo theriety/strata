@@ -1,20 +1,16 @@
 # Strata report — workspace-rust
 
-3 files · 14 symbols · 13 edges
-Snapshot `a796634250f1de8a466fe7acac2cb579eb4f6dce97b7ce5260598fcf732dca0b`
+3 files · 14 symbols · 17 edges
+Snapshot `b0806ffeb95da063b1ebb36088f5488087a827d9c58888ac32879ba6ec29c56d`
 
 ## Structural findings
 
 ```text
-Shared findings (4)
-  - visibility [violation] at `crates/app/src/lib.rs`, `ReMeasure`: `ReMeasure` in 
-    `crates/app/src/lib.rs` is exported at Package but needed only at File
+Shared findings (2)
   - visibility [violation] at `crates/app/src/lib.rs`, `combined_total`: `combined_total` in 
     `crates/app/src/lib.rs` is exported at Package but needed only at File
   - visibility [violation] at `crates/app/src/lib.rs`, `describe`: `describe` in 
     `crates/app/src/lib.rs` is exported at Package but needed only at File
-  - visibility [violation] at `crates/core/src/lib.rs`, `Report`: `Report` in 
-    `crates/core/src/lib.rs` is exported at Package but needed only at File
 
 anchored profile-specific findings (0)
   None.
@@ -32,13 +28,13 @@ candidate is a proposed layout; inclusion does not make a move Recommended. Part
 rescored.
 
 anchored — 0 candidate(s)
-Baseline score: 0.6810
+Baseline score: 0.6929
 Fewer than the requested candidates survived; the solution space converged.
 Current layout is already optimal under this profile's search.
 No candidates were produced.
 
 greenfield — 0 candidate(s)
-Baseline score: 0.8810
+Baseline score: 0.8929
 Fewer than the requested candidates survived; the solution space converged.
 Current layout is already optimal under this profile's search.
 No candidates were produced.

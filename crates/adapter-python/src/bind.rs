@@ -72,6 +72,7 @@ pub fn bind(modules: &[ParsedModule], root: &Path) -> Result<IrFragment, BindOut
                 container,
                 visibility: ScopeLevel::File,
                 effective_size: declaration.sloc,
+                re_export: false,
             });
             // Python has no `export` keyword: a module-level definition not
             // prefixed with `_` is part of the importable surface.
@@ -545,6 +546,7 @@ fn assign_re_export_nodes(
                     container,
                     visibility: ScopeLevel::File,
                     effective_size: 0,
+                    re_export: true,
                 });
                 exported.push(true);
                 local
@@ -1158,6 +1160,15 @@ mod tests {
             re_exports.first().map(|edge| edge.hardness),
             Some(Hardness::Soft)
         );
+        // the barrel binding is flagged as a re-export (ADR-0020); the original
+        // declaration is not.
+        let flag_of = |id: Option<NodeId>| -> Option<bool> {
+            id.and_then(|id| fragment.nodes.iter().find(|node| node.id == id))
+                .map(|node| node.re_export)
+        };
+        let edge = re_exports.first().copied();
+        assert_eq!(flag_of(edge.map(|edge| edge.source)), Some(true));
+        assert_eq!(flag_of(edge.map(|edge| edge.target)), Some(false));
     }
 
     #[test]

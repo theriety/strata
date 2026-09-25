@@ -252,12 +252,23 @@ fn collect_scopes(
 
 /// Flags every node whose declared visibility sits strictly above its derived
 /// scope level.
+///
+/// A re-export node ([`Node::re_export`], ADR-0020) is exempt: it declares no
+/// entity of its own but publishes another one, and flattening has already
+/// redirected its consumers to the original, so its derived scope never
+/// reflects the export surface it exists to provide. The adapter's flag, not a
+/// resolved re-export edge, decides — so an alias whose target is not a node
+/// (a crate root, an external module) is exempt too.
+///
+/// A snapshot upgraded from schema 2 is the exception: its flag is derived from
+/// `ReExport` edges, and a crate-root alias (`pub use crate as alias`) has no
+/// such edge, so that alias stays unflagged there until the IR is regenerated.
 fn collect_findings(by_id: &NodeIndex, scopes: &[DerivedScope]) -> Vec<Finding> {
     scopes
         .iter()
         .filter_map(|scope| {
             let node = by_id.get(scope.node.0)?;
-            (node.visibility > scope.level).then_some(Finding {
+            (!node.re_export && node.visibility > scope.level).then_some(Finding {
                 node: scope.node,
                 declared: node.visibility,
                 derived: scope.level,
@@ -467,6 +478,7 @@ mod tests {
             container: ContainerId(container),
             visibility,
             effective_size: 1,
+            re_export: false,
         }
     }
 
@@ -588,6 +600,72 @@ mod tests {
                 declared: ScopeLevel::Package,
                 derived: ScopeLevel::File,
             }]
+        );
+    }
+
+    /// Builds a package-public re-export node in `container`.
+    fn re_export(id: u32, container: u32) -> Node {
+        Node {
+            re_export: true,
+            ..node(id, container, NodeKind::Symbol, ScopeLevel::Package)
+        }
+    }
+
+    #[test]
+    fn should_not_flag_a_re_export_node_whose_consumers_resolve_to_the_original() {
+        let tree = sample_tree();
+        // node 0 is the original in file 3, node 1 a package-public barrel
+        // re-export in file 4; the consumer (node 2) was flattened onto node 0.
+        let nodes = vec![
+            node(0, 3, NodeKind::Symbol, ScopeLevel::Package),
+            re_export(1, 4),
+            node(2, 4, NodeKind::Symbol, ScopeLevel::File),
+        ];
+        let edges = vec![edge(1, 0, EdgeKind::ReExport), edge(2, 0, EdgeKind::Call)];
+
+        let result = derive_visibility(&tree, &nodes, &edges);
+
+        assert!(
+            result
+                .findings
+                .iter()
+                .all(|finding| finding.node != NodeId(1)),
+            "a re-export publishes another declaration and is never narrowed; got {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn should_not_flag_a_re_export_whose_target_is_not_a_node() {
+        let tree = sample_tree();
+        // `pub use other_crate as alias;` — the target is a crate root, which is
+        // not a node, so the adapter emits no re-export edge for it.
+        let nodes = vec![re_export(0, 3)];
+
+        let result = derive_visibility(&tree, &nodes, &[]);
+
+        assert_eq!(result.findings, Vec::new());
+    }
+
+    #[test]
+    fn should_flag_an_unmarked_node_even_when_it_sources_a_re_export_edge() {
+        let tree = sample_tree();
+        // the flag, not the edge, decides the exemption (ADR-0020).
+        let nodes = vec![
+            node(0, 3, NodeKind::Symbol, ScopeLevel::File),
+            node(1, 4, NodeKind::Symbol, ScopeLevel::Package),
+        ];
+        let edges = vec![edge(1, 0, EdgeKind::ReExport)];
+
+        let result = derive_visibility(&tree, &nodes, &edges);
+
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|finding| finding.node == NodeId(1)),
+            "an unmarked over-declared node is a finding; got {:?}",
+            result.findings
         );
     }
 

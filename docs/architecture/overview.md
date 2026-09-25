@@ -46,7 +46,7 @@ Every crate depends *down*, never sideways or up: adapters and `core` share no d
 
 ## The IR snapshot contract
 
-The `strata-ir` crate defines the single data structure that flows between adapters and the engine. A `Snapshot` (`crates/ir/src/snapshot.rs`) is a validated, content-addressed, immutable view over an `IntermediateRepresentation` — a set of nodes, edges, and a container tree — fingerprinted with a `blake3` hash over its canonical JSON form. Assembly rejects dangling edges, an unknown schema version, and an invalid container tree, so any snapshot the engine receives is already well-formed.
+The `strata-ir` crate defines the single data structure that flows between adapters and the engine. A `Snapshot` (`crates/ir/src/snapshot.rs`) is a validated, content-addressed, immutable view over an `IntermediateRepresentation` — a set of nodes, edges, and a container tree — fingerprinted with a `blake3` hash over its canonical JSON form. Assembly rejects dangling edges, an unsupported schema version, and an invalid container tree, so any snapshot the engine receives is already well-formed. The IR is at schema version 3; assembly still reads version 2 and upgrades it by deriving `Node.re_export` from its re-export edges ([ADR-0020](decisions/0020-re-exports-and-associated-calls-in-visibility.md)).
 
 ```mermaid
 classDiagram
@@ -68,6 +68,7 @@ classDiagram
         +container: ContainerId
         +visibility: ScopeLevel
         +effective_size: u32
+        +re_export: bool
     }
     class Edge {
         +source: NodeId
