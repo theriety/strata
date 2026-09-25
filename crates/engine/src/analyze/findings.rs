@@ -476,7 +476,7 @@ pub(in crate::analyze) fn physical_folder_entries_with_rootedness(
         let directory = if let Some(namespace) = namespaces.and_then(|values| values.get(&file.id))
         {
             // restore the package-relative namespace between the package and
-            // the folder's scope (ADR-0018): `crates/core` + `src` + `cluster`.
+            // the folder's scope (ADR-18): `crates/core` + `src` + `cluster`.
             let relative = physical_directory(&package, &path_segments(namespace), &logical);
             if package_rooted {
                 project_package_rooted_path(dataset, &relative)

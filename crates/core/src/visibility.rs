@@ -253,7 +253,7 @@ fn collect_scopes(
 /// Flags every node whose declared visibility sits strictly above its derived
 /// scope level.
 ///
-/// A re-export node ([`Node::re_export`], ADR-0020) is exempt: it declares no
+/// A re-export node ([`Node::re_export`], ADR-20) is exempt: it declares no
 /// entity of its own but publishes another one, and flattening has already
 /// redirected its consumers to the original, so its derived scope never
 /// reflects the export surface it exists to provide. The adapter's flag, not a
@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn should_flag_an_unmarked_node_even_when_it_sources_a_re_export_edge() {
         let tree = sample_tree();
-        // the flag, not the edge, decides the exemption (ADR-0020).
+        // the flag, not the edge, decides the exemption (ADR-20).
         let nodes = vec![
             node(0, 3, NodeKind::Symbol, ScopeLevel::File),
             node(1, 4, NodeKind::Symbol, ScopeLevel::Package),
