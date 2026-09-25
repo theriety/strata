@@ -377,7 +377,7 @@ pub struct RelocationConfig {
     #[serde(rename = "pin-detected-test-symbols")]
     pub pin_detected_test_symbols: bool,
     /// Lift the package wall so relocations may cross manifest packages
-    /// (ADR-0017); off by default. Every other admission rule still applies.
+    /// (ADR-17); off by default. Every other admission rule still applies.
     #[serde(rename = "allow-cross-package-moves")]
     pub allow_cross_package_moves: bool,
     /// Repo-relative file globs whose matching files cannot relocate independently.

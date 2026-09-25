@@ -47,7 +47,7 @@ fn should_serialize_profile_results_as_schema_version_nine_without_modes() {
             .and_then(serde_json::Value::as_u64),
         Some(9)
     );
-    // version 9 carries the per-profile package-wall parameter (ADR-0017).
+    // version 9 carries the per-profile package-wall parameter (ADR-17).
     assert_eq!(
         serialized
             .pointer("/profiles/anchored/parameters/relocation/allow-cross-package-moves")

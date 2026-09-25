@@ -187,7 +187,7 @@ fn narrate_with_rootedness(
 
 /// Recomposes each candidate file's physical parent from its logical
 /// destination and a namespace that belongs to the destination package
-/// (ADR-0017, ADR-0018).
+/// (ADR-17, ADR-18).
 ///
 /// A file changes package only by landing in a folder cluster whose members
 /// span packages. When every pass-start package of its candidate cluster's
@@ -197,7 +197,7 @@ fn narrate_with_rootedness(
 /// cluster arises when the package wall is lifted and a file joins another
 /// package's folder, or, with the wall up, when a cross-package import cycle
 /// condenses into one SCC that stays in its pass-start cluster and admits no
-/// newcomer (ADR-0017). It takes the candidate's package when that is a real
+/// newcomer (ADR-17). It takes the candidate's package when that is a real
 /// pass-start package, otherwise (a cluster elected under a directory with no
 /// manifest) the deepest pass-start package whose key prefixes the logical
 /// destination, or the package group itself.
@@ -315,7 +315,7 @@ struct FilePlacements {
     /// Each file's logical folder key, relative to the package group, before
     /// its namespace is restored.
     logical_parent_of: BTreeMap<String, Vec<String>>,
-    /// Each file's package-relative namespace (ADR-0018): the transparent
+    /// Each file's package-relative namespace (ADR-18): the transparent
     /// source-root segments retained across a move.
     namespace_of: BTreeMap<String, Vec<String>>,
     /// Each file's manifest package key, relative to the package group.
@@ -353,7 +353,7 @@ fn folder_entry_counts(parent_of: &BTreeMap<String, Vec<String>>) -> BTreeMap<Ve
 }
 
 /// Splits a file's real directory into its package-relative namespace
-/// (ADR-0018): the see-through source-root segments that the laminar folder
+/// (ADR-18): the see-through source-root segments that the laminar folder
 /// key omits.
 ///
 /// `directory` is the file's real directory, `package` its manifest package
@@ -1105,7 +1105,7 @@ mod tests {
 
     #[test]
     fn should_narrate_real_paths_for_files_under_a_nested_package_source_root() {
-        // ADR-0018: the package path must precede the see-through `src`, never
+        // ADR-18: the package path must precede the see-through `src`, never
         // follow it (`strata/crates/core/src/crates/core`).
         let current = multi_package_tree([
             (3, "crates/core/src/lib.rs"),
@@ -1146,7 +1146,7 @@ mod tests {
 
     #[test]
     fn should_not_carry_a_source_root_into_a_package_that_has_no_manifest() {
-        // ADR-0018 with the package wall down: clusters elected under `crates`
+        // ADR-18 with the package wall down: clusters elected under `crates`
         // (no manifest) must not print `crates/src/...`. Each cluster here
         // holds files of a single package, so nothing changes package: the
         // lone `lib.rs` stays in `crates/core/src` and `refine.rs` stays in its
@@ -1196,7 +1196,7 @@ mod tests {
 
     #[test]
     fn should_keep_a_lone_file_in_its_package_when_upper_levels_merge_packages() {
-        // ADR-0017: the display-only package level elected `crates/core` above
+        // ADR-17: the display-only package level elected `crates/core` above
         // util's untouched `lib.rs`; its cluster holds only util files, so it
         // stays in `crates/util/src` and never lands on core's `lib.rs`.
         let current = ContainerTree::new(vec![

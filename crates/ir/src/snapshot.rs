@@ -12,7 +12,7 @@ use crate::node::{Node, NodeId};
 
 /// Current IR schema version, bumped on any contract change.
 ///
-/// Version 3 added [`Node::re_export`] (ADR-0020).
+/// Version 3 added [`Node::re_export`] (ADR-20).
 pub const SCHEMA_VERSION: u32 = 3;
 
 /// Oldest IR schema version this build still reads.

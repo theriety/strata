@@ -46,7 +46,7 @@ Every crate depends *down*, never sideways or up: adapters and `core` share no d
 
 ## The IR snapshot contract
 
-The `strata-ir` crate defines the single data structure that flows between adapters and the engine. A `Snapshot` (`crates/ir/src/snapshot.rs`) is a validated, content-addressed, immutable view over an `IntermediateRepresentation` — a set of nodes, edges, and a container tree — fingerprinted with a `blake3` hash over its canonical JSON form. Assembly rejects dangling edges, an unsupported schema version, and an invalid container tree, so any snapshot the engine receives is already well-formed. The IR is at schema version 3; assembly still reads version 2 and upgrades it by deriving `Node.re_export` from its re-export edges ([ADR-0020](decisions/0020-re-exports-and-associated-calls-in-visibility.md)).
+The `strata-ir` crate defines the single data structure that flows between adapters and the engine. A `Snapshot` (`crates/ir/src/snapshot.rs`) is a validated, content-addressed, immutable view over an `IntermediateRepresentation` — a set of nodes, edges, and a container tree — fingerprinted with a `blake3` hash over its canonical JSON form. Assembly rejects dangling edges, an unsupported schema version, and an invalid container tree, so any snapshot the engine receives is already well-formed. The IR is at schema version 3; assembly still reads version 2 and upgrades it by deriving `Node.re_export` from its re-export edges ([ADR-20](decisions/analysis/adr-20-re-exports-and-associated-calls-in-visibility.md)).
 
 ```mermaid
 classDiagram
@@ -178,7 +178,7 @@ Cross-profile aggregation gives each executed profile at most one vote per reloc
 
 ## Analysis result contract
 
-Result schema version 9 records each profile's `allow-cross-package-moves` relocation parameter (ADR-0017); version 8 introduced the layout below. The result separates facts shared by the executed profiles from profile-specific evaluation, records both relocation-policy objective terms, links exact test followers to their primary file move, and adds evidence-qualified advice:
+Result schema version 9 records each profile's `allow-cross-package-moves` relocation parameter (ADR-17); version 8 introduced the layout below. The result separates facts shared by the executed profiles from profile-specific evaluation, records both relocation-policy objective terms, links exact test followers to their primary file move, and adds evidence-qualified advice:
 
 ```text
 AnalyzeResult

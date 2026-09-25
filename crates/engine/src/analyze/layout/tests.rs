@@ -1259,7 +1259,7 @@ fn should_inherit_real_domain_keys_for_domain_rooted_files() {
     config.profiles.anchored.capacity.folder = 3;
     config.profiles.greenfield.capacity.folder = 3;
 
-    // the consolidation crosses a manifest package, which ADR-0017 admits
+    // the consolidation crosses a manifest package, which ADR-17 admits
     // only when the profile lifts the package wall.
     config
         .profiles
@@ -1359,7 +1359,7 @@ fn should_qualify_folder_keys_that_collide_across_nested_packages() {
     config.profiles.anchored.capacity.folder = 3;
     config.profiles.greenfield.capacity.folder = 3;
 
-    // the consolidation crosses a manifest package, which ADR-0017 admits
+    // the consolidation crosses a manifest package, which ADR-17 admits
     // only when the profile lifts the package wall.
     config
         .profiles
@@ -2190,7 +2190,7 @@ fn should_join_the_top_two_homes_when_no_prefix_is_shared() {
     // sole-anchored satellite without exceeding the cap.
     config.profiles.anchored.capacity.folder = 3;
 
-    // the consolidation crosses a manifest package, which ADR-0017 admits
+    // the consolidation crosses a manifest package, which ADR-17 admits
     // only when the profile lifts the package wall.
     config
         .profiles
@@ -2281,7 +2281,7 @@ fn top_two_homes_crossings(allow_cross_package: bool) -> Vec<(String, String)> {
 #[test]
 fn should_keep_a_file_inside_its_package_by_default() {
     // the same pull that joins the two packages above: with the package wall
-    // up (ADR-0017) the satellite never leaves `bi`, whatever the objective.
+    // up (ADR-17) the satellite never leaves `bi`, whatever the objective.
     let crossings = top_two_homes_crossings(false);
 
     assert!(

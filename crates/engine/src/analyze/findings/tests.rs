@@ -470,7 +470,7 @@ fn should_order_nested_package_and_transparent_roots_once_for_capacity() {
 
 #[test]
 fn should_compose_capacity_paths_below_a_nested_package_not_above_it() {
-    // ADR-0018: a namespace is package-relative, so a file in `crates/core/src`
+    // ADR-18: a namespace is package-relative, so a file in `crates/core/src`
     // counts toward `strata/crates/core/src`, never `strata/src/crates/core`.
     let tree = ContainerTree::new(vec![
         container(0, "strata", ScopeLevel::PackageGroup, None),

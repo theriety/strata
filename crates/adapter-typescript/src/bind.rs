@@ -379,7 +379,7 @@ mod tests {
             Some(CONFIDENCE_STATIC.to_bits())
         );
         // The barrel materializes its own node for the re-exported name, flagged
-        // as a re-export (ADR-0020), and the edge runs from that node to the
+        // as a re-export (ADR-20), and the edge runs from that node to the
         // original declaration.
         let flag_of = |id: Option<NodeId>| -> Option<bool> {
             id.and_then(|id| fragment.nodes.iter().find(|node| node.id == id))
