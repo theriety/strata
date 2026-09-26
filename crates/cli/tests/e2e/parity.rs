@@ -577,6 +577,47 @@ fn should_match_the_goldens_for_the_rust_workspace_move_fixture() {
 }
 
 #[test]
+fn should_draw_each_file_inside_its_own_crate_in_the_workspace_move_candidate_tree() {
+    // The candidate tree must obey the package wall its move list obeys: the
+    // upper levels once clustered util's `lib.rs` under `crates/core`, a tree
+    // no default-profile move could ever produce.
+    let result_path = analyze_to_file("workspace-move-rust");
+    let result_str = result_path.to_str().unwrap_or_default();
+    let (code, tree_out) = run_strata(&[
+        "tree",
+        "--input",
+        result_str,
+        "--mode",
+        "greenfield",
+        "--candidate",
+        "1",
+    ]);
+    let _ = std::fs::remove_file(&result_path);
+    assert_eq!(code, 0, "candidate tree exits 0 for workspace-move-rust");
+    assert_golden("workspace-move-rust", "greenfield-tree.txt", &tree_out);
+
+    let text = String::from_utf8_lossy(&tree_out);
+    let mut package = None;
+    let mut misplaced = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if let Some(name) = line.strip_suffix(" [package]") {
+            package = Some(name.to_owned());
+        } else if let Some((path, _)) = line.split_once(" [file]") {
+            let inside = package
+                .as_deref()
+                .is_some_and(|name| path.starts_with(&format!("{name}/")));
+            if !inside {
+                misplaced.push((path.to_owned(), package.clone()));
+            }
+        }
+    }
+    assert!(
+        package.is_some() && misplaced.is_empty(),
+        "every file must sit under its own crate's package; misplaced {misplaced:#?} in\n{text}"
+    );
+}
+
+#[test]
 fn should_narrate_a_same_package_move_through_a_source_root_for_the_workspace_move_fixture() {
     // The real-path invariant is only as strong as the moves it sees: this
     // fixture must keep proposing a same-package move under `crates/<x>/src`,

@@ -533,6 +533,35 @@ impl RelocationIdentityGuard {
     }
 }
 
+/// Refines `parts` so no cluster mixes vertices of different `keys`: each
+/// (cluster, key) pair becomes its own cluster, numbered densely in vertex order.
+fn split_by_key(parts: &Partition, keys: &[SmolStr]) -> Partition {
+    let mut ids: BTreeMap<(u32, &SmolStr), u32> = BTreeMap::new();
+    let assignment = parts
+        .assignment()
+        .iter()
+        .zip(keys)
+        .map(|(cluster, key)| {
+            let next = u32::try_from(ids.len()).unwrap_or(u32::MAX);
+            ClusterId(*ids.entry((cluster.0, key)).or_insert(next))
+        })
+        .collect();
+    Partition::from_assignment(assignment, ids.len())
+}
+
+/// Clusters vertices by exact key equality, numbered densely in vertex order.
+fn group_by_key(keys: &[SmolStr]) -> Partition {
+    let mut ids: BTreeMap<&SmolStr, u32> = BTreeMap::new();
+    let assignment = keys
+        .iter()
+        .map(|key| {
+            let next = u32::try_from(ids.len()).unwrap_or(u32::MAX);
+            ClusterId(*ids.entry(key).or_insert(next))
+        })
+        .collect();
+    Partition::from_assignment(assignment, ids.len())
+}
+
 /// Derives the opaque path prefix removed from a file's rendered laminar home.
 pub(in crate::analyze) const POLISH_SWEEPS: usize = 2;
 
@@ -790,6 +819,36 @@ impl PipelineSolver<'_> {
         members_of
     }
 
+    /// Each folder cluster's members drawn in the cluster's own folder.
+    ///
+    /// [`Self::projected_folder_members`] draws a cross-package cycle member
+    /// whose retained home is another folder in that home, under its own
+    /// package, so it must not key the cluster it is solved in. A cluster none
+    /// of whose members stay keeps them all, so no cluster goes unkeyed.
+    fn drawn_members(
+        &self,
+        parts: &Partition,
+        members_of: &BTreeMap<u32, Vec<u32>>,
+        evidence: &MirrorEvidence,
+    ) -> BTreeMap<u32, Vec<u32>> {
+        members_of
+            .iter()
+            .map(|(&folder, members)| {
+                let key = self
+                    .real_folder_names
+                    .get(folder as usize)
+                    .cloned()
+                    .unwrap_or_else(|| SmolStr::new("workspace"));
+                let drawn = self
+                    .projected_folder_members(parts, members, evidence, &key)
+                    .remove(&key)
+                    .filter(|drawn| !drawn.is_empty())
+                    .unwrap_or_else(|| members.clone());
+                (folder, drawn)
+            })
+            .collect()
+    }
+
     /// Dominant laminar home key (via `key`, weighted by production SLOC) per
     /// base vertex of an upper clustering level.
     ///
@@ -823,6 +882,27 @@ impl PipelineSolver<'_> {
             .collect()
     }
 
+    /// The candidate of a repository with no files: its root package group
+    /// alone.
+    fn empty_candidate(&self) -> CandidateTree {
+        let root = Container {
+            id: ContainerId(0),
+            name: self.root_name.clone(),
+            level: ScopeLevel::PackageGroup,
+            parent: None,
+            synthetic: false,
+        };
+        CandidateTree {
+            tree: ContainerTree::new(vec![root]),
+            placement: BTreeMap::new(),
+            pass_start_file_by_candidate: BTreeMap::new(),
+            zone_by_file: BTreeMap::new(),
+            namespace_by_file: BTreeMap::new(),
+            package_by_file: BTreeMap::new(),
+            key_by_id: BTreeMap::new(),
+        }
+    }
+
     /// Assembles the five-level candidate tree a folder partition induces.
     ///
     /// Folders are the partition's non-empty clusters and keep their real
@@ -847,22 +927,7 @@ impl PipelineSolver<'_> {
         evidence: &MirrorEvidence,
     ) -> CandidateTree {
         if self.files.is_empty() {
-            let root = Container {
-                id: ContainerId(0),
-                name: self.root_name.clone(),
-                level: ScopeLevel::PackageGroup,
-                parent: None,
-                synthetic: false,
-            };
-            return CandidateTree {
-                tree: ContainerTree::new(vec![root]),
-                placement: BTreeMap::new(),
-                pass_start_file_by_candidate: BTreeMap::new(),
-                zone_by_file: BTreeMap::new(),
-                namespace_by_file: BTreeMap::new(),
-                package_by_file: BTreeMap::new(),
-                key_by_id: BTreeMap::new(),
-            };
+            return self.empty_candidate();
         }
 
         let members_of = self.folder_members(parts);
@@ -881,15 +946,37 @@ impl PipelineSolver<'_> {
             |folder| folder,
             |file| &file.home.domain,
         );
-        let domain_parts = cluster_level(
+        let mut domain_parts = cluster_level(
             &folder_quotient,
             &self.caps,
             SeedLevel::Domain,
             &home_affinity(&domain_homes),
         );
+        // with the package wall up the display levels obey it too (ADR-0017):
+        // no domain spans packages and each package container holds exactly
+        // one real package, so the tree never draws a file under a package
+        // its move list keeps it out of.
+        //
+        // A folder is keyed by the files drawn in it, not every member of its
+        // cluster: a cross-package cycle member whose retained home is another
+        // folder is drawn there, under its own package.
+        let drawn_of = (!self.relocation_identity.allows_cross_package_moves())
+            .then(|| self.drawn_members(parts, &members_of, evidence));
+        let package_members = drawn_of.as_ref().unwrap_or(&members_of);
+        let folder_packages = drawn_of.as_ref().map(|drawn_of| {
+            self.home_keys(
+                drawn_of,
+                folder_quotient.vertex_count(),
+                |folder| folder,
+                |file| &file.home.package,
+            )
+        });
+        if let Some(folder_packages) = &folder_packages {
+            domain_parts = split_by_key(&domain_parts, folder_packages);
+        }
         let domain_quotient = domain_parts.quotient(&folder_quotient);
         let package_homes = self.home_keys(
-            &members_of,
+            package_members,
             domain_quotient.vertex_count(),
             |folder| {
                 domain_parts
@@ -898,12 +985,19 @@ impl PipelineSolver<'_> {
             },
             |file| &file.home.package,
         );
-        let package_parts = cluster_level(
-            &domain_quotient,
-            &self.caps,
-            SeedLevel::Package,
-            &home_affinity(&package_homes),
-        );
+        // with the wall up a package level is an uncapped mirror of the
+        // manifests (ADR-0017): its containers are the real packages, which
+        // the capacity caps never split, so it is grouped by key, not clustered.
+        let package_parts = if folder_packages.is_some() {
+            group_by_key(&package_homes)
+        } else {
+            cluster_level(
+                &domain_quotient,
+                &self.caps,
+                SeedLevel::Package,
+                &home_affinity(&package_homes),
+            )
+        };
         let package_quotient = package_parts.quotient(&domain_quotient);
         let group_parts =
             cluster_level(&package_quotient, &self.caps, SeedLevel::PackageGroup, &[]);
@@ -933,7 +1027,16 @@ impl PipelineSolver<'_> {
                 // prefixes, so source roots stay transparent and the package
                 // resolves to its manifest root (never a bare `src`).
                 vote(&mut domain_tally, domain, file.home.domain.clone(), sloc);
-                vote(&mut package_tally, package, file.home.package.clone(), sloc);
+            }
+            for &vertex in package_members.get(&folder).map_or(&[][..], Vec::as_slice) {
+                if let Some(file) = self.files.get(vertex as usize) {
+                    vote(
+                        &mut package_tally,
+                        package,
+                        file.home.package.clone(),
+                        file.production_sloc,
+                    );
+                }
             }
         }
 

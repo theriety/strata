@@ -1,0 +1,16 @@
+workspace-move-rust [packageGroup]
+  crates/core [package]
+    beta [domain]
+      alpha [folder]
+        crates/core/src/alpha/mod.rs [file] 0 sloc
+        crates/core/src/alpha/parse.rs [file] 9 sloc
+        crates/core/src/alpha/score.rs [file] 6 sloc
+        crates/core/src/beta/scale.rs [file] 6 sloc
+      beta [folder]
+        crates/core/src/beta/mod.rs [file] 0 sloc
+        crates/core/src/beta/report.rs [file] 6 sloc
+    workspace [domain]
+      crates/core/src/lib.rs [file] 0 sloc
+  crates/util [package]
+    workspace [domain]
+      crates/util/src/lib.rs [file] 6 sloc
