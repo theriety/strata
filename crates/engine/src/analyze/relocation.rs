@@ -20,6 +20,7 @@ use crate::analyze::layout::{
 use crate::analyze::rendering::render_tree;
 use crate::analyze::scoring::{
     ContainerSpec, move_distance, score_candidate, score_current_with_affinity,
+    score_current_with_overlay,
 };
 use crate::config::{CapacityConfig, TestMirrorRule, TestsConfig};
 use crate::error::StrataError;
@@ -721,7 +722,14 @@ impl PipelineSolver<'_> {
         if let Some(identity) = &self.identity
             && identity == &parts
         {
-            return self.identity_entry(identity);
+            // A faithful partition is priced on the current tree with its
+            // symbol overlay applied (`symbol_polish_with_mirror_evidence`), so
+            // an improving symbol polish survives as an offer; without one it
+            // collapses onto the "change nothing" identity entry.
+            let entry = self.identity_entry(identity);
+            if total >= entry.score {
+                return entry;
+            }
         }
         SolvedCandidate {
             partition: parts,
@@ -1312,13 +1320,115 @@ impl PipelineSolver<'_> {
         placement
     }
 
+    /// Whether a solved partition is the current layout itself (FIX05).
+    ///
+    /// The faithful exit keys on the layout being reality, not on the analysis
+    /// mode. Gating it on `identity` alone (anchored-only) meant a greenfield
+    /// candidate whose partition is byte-for-byte the real directory layout
+    /// still went through assemble() — which re-elects upper-level containers
+    /// and nests them differently from the current tree — so "change nothing"
+    /// rendered as structural moves for every file whose fabricated chain
+    /// differed. When relief split an over-capacity folder, the search's start
+    /// is no longer reality, so the assemble path stays (the split is exactly
+    /// what the proposal must show).
+    fn is_faithful(&self, partition: &Partition) -> bool {
+        self.identity.as_ref() == Some(partition)
+            || (self.real_is_identity && &self.real_partition == partition)
+    }
+
+    /// The current tree as a [`CandidateTree`]: every file keeps its current
+    /// container id and every declaration its current file. A faithful layout
+    /// renders as exactly this tree, so its symbol pass runs here, with every
+    /// structural veto and every price read from the tree the report shows.
+    pub(in crate::analyze) fn current_candidate_tree(&self) -> CandidateTree {
+        let ir = self.snapshot.ir();
+        let mut pass_start_file_by_candidate = BTreeMap::new();
+        let mut zone_by_file = BTreeMap::new();
+        let mut namespace_by_file = BTreeMap::new();
+        let mut package_by_file = BTreeMap::new();
+        for (vertex, file) in self.files.iter().enumerate() {
+            let id = ContainerId(file.container);
+            pass_start_file_by_candidate.insert(id, id);
+            zone_by_file.insert(id, self.test_zone.get(vertex).copied().unwrap_or(false));
+            namespace_by_file.insert(id, file.namespace.clone());
+            package_by_file.insert(id, file.home.package.clone());
+        }
+        let placement = ir
+            .nodes
+            .iter()
+            .filter(|node| pass_start_file_by_candidate.contains_key(&node.container))
+            .map(|node| (node.id.0, node.container))
+            .collect();
+        CandidateTree {
+            tree: ir.containers.clone(),
+            placement,
+            pass_start_file_by_candidate,
+            zone_by_file,
+            namespace_by_file,
+            package_by_file,
+            key_by_id: BTreeMap::new(),
+        }
+    }
+
+    /// Prices the current tree with `overlay` (current file ids) applied.
+    fn score_faithful(
+        &self,
+        overlay: &BTreeMap<u32, ContainerId>,
+    ) -> strata_core::score::ScoreBreakdown {
+        score_current_with_overlay(
+            self.snapshot,
+            &self.coefficients,
+            &self.weights,
+            &self.capacity,
+            self.same_file_symbol,
+            self.same_file_type,
+            overlay,
+        )
+    }
+
+    /// Builds the candidate for a faithful layout: the current tree verbatim,
+    /// no file moves, and whatever symbol relocations the symbol polish
+    /// accepted on it, priced on the current tree. With no accepted symbol
+    /// move this is "change nothing" at exactly the current score.
+    fn build_faithful_candidate(
+        &self,
+        current_tree: &ContainerTree,
+        solved: &SolvedCandidate<MirrorEvidence>,
+        index: u32,
+        splits: &[ConditionalSplit],
+    ) -> Result<Candidate, StrataError> {
+        let nodes = &self.snapshot.ir().nodes;
+        let current = self.current_candidate_tree();
+        let symbols = self.symbol_polish_with_mirror_evidence(&solved.partition, &solved.evidence);
+        ensure_namespaces_preserved(&symbols, &current)?;
+        let overlay = &symbols.overlay;
+        let breakdown = self.score_faithful(overlay);
+        let node = render_tree(
+            current_tree,
+            nodes,
+            &|node: &Node| Some(overlay.get(&node.id.0).copied().unwrap_or(node.container)),
+            &BTreeMap::new(),
+        )?;
+        Ok(Candidate {
+            index,
+            score: breakdown.total,
+            score_breakdown: ScoreBreakdown::from(breakdown),
+            improvement: 0.0,
+            tree: node,
+            conditional_splits: splits.to_vec(),
+            delta_narration: Vec::new(),
+            symbol_moves: self.symbol_narrate(&current, &symbols),
+            capacity_remainder: None,
+        })
+    }
+
     /// Builds one DTO [`Candidate`] from a solved partition.
     ///
-    /// The identity survivor is emitted as a verbatim clone of the current tree
-    /// — zero moves, byte-equal layout — never re-derived through assembly, so
-    /// "already optimal" genuinely means nothing changes. Every other partition
-    /// is assembled, rescored under this mode's coefficients, and narrated
-    /// against the current layout.
+    /// A faithful partition keeps the current tree verbatim — zero file moves,
+    /// never re-derived through assembly — and carries only its accepted
+    /// symbol relocations, priced on that tree exactly as ranking priced them.
+    /// Every other partition is assembled, rescored under this mode's
+    /// coefficients, and narrated against the current layout.
     ///
     /// # Errors
     ///
@@ -1331,45 +1441,8 @@ impl PipelineSolver<'_> {
         splits: &[ConditionalSplit],
     ) -> Result<Candidate, StrataError> {
         let nodes = &self.snapshot.ir().nodes;
-        // FIX05: the faithful exit keys on the layout being reality, not on the
-        // analysis mode. Gating it on `identity` alone (anchored-only) meant a
-        // greenfield candidate whose partition is byte-for-byte the real
-        // directory layout still went through assemble() — which re-elects
-        // upper-level containers and nests them differently from the current
-        // tree — so "change nothing" rendered as structural moves for every
-        // file whose fabricated chain differed. That phantom churn is what
-        // inverted anchored against greenfield: the unbiased mode was billed
-        // for movement it never proposed. When relief split an over-capacity
-        // folder, the search's start is no longer reality, so the assemble
-        // path stays (the split is exactly what the proposal must show).
-        let faithful = self.identity.as_ref() == Some(&solved.partition)
-            || (self.real_is_identity && self.real_partition == solved.partition);
-        if faithful {
-            let breakdown = score_current_with_affinity(
-                self.snapshot,
-                &self.coefficients,
-                &self.weights,
-                &self.capacity,
-                self.same_file_symbol,
-                self.same_file_type,
-            );
-            let node = render_tree(
-                current_tree,
-                nodes,
-                &|node: &Node| Some(node.container),
-                &BTreeMap::new(),
-            )?;
-            return Ok(Candidate {
-                index,
-                score: breakdown.total,
-                score_breakdown: ScoreBreakdown::from(breakdown),
-                improvement: 0.0,
-                tree: node,
-                conditional_splits: splits.to_vec(),
-                delta_narration: Vec::new(),
-                symbol_moves: Vec::new(),
-                capacity_remainder: None,
-            });
+        if self.is_faithful(&solved.partition) {
+            return self.build_faithful_candidate(current_tree, solved, index, splits);
         }
 
         let assembled = self.assemble_with_mirror_evidence(&solved.partition, &solved.evidence);
@@ -1377,13 +1450,7 @@ impl PipelineSolver<'_> {
         // `solve` already priced its result into the ranking score, so the DTO
         // score here matches what ranked this candidate by construction.
         let symbols = self.symbol_polish_with_mirror_evidence(&solved.partition, &solved.evidence);
-        if !symbols.preserves_namespaces(&assembled) {
-            return Err(StrataError::SnapshotInvalid {
-                source: strata_ir::SnapshotError::Serialization {
-                    reason: "symbol relocation crossed a pass-start render namespace".to_owned(),
-                },
-            });
-        }
+        ensure_namespaces_preserved(&symbols, &assembled)?;
         let merged = |id: u32| {
             symbols
                 .overlay
@@ -1625,4 +1692,20 @@ pub(in crate::analyze) fn file_facts_with_rootedness(
         shadow_test_files,
         folder_cap,
     }
+}
+
+/// Fails when the symbol pass moved a declaration across a pass-start render
+/// namespace of `tree`.
+fn ensure_namespaces_preserved(
+    symbols: &symbol::SymbolOutcome,
+    tree: &CandidateTree,
+) -> Result<(), StrataError> {
+    if symbols.preserves_namespaces(tree) {
+        return Ok(());
+    }
+    Err(StrataError::SnapshotInvalid {
+        source: strata_ir::SnapshotError::Serialization {
+            reason: "symbol relocation crossed a pass-start render namespace".to_owned(),
+        },
+    })
 }

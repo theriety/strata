@@ -104,9 +104,13 @@ pub(in crate::analyze) fn build_profile_result(
     }
 
     let current_standing = if capacity_clean {
-        let identity_won = valid
-            .first()
-            .is_some_and(|best| solver.identity.as_ref() == Some(&best.partition));
+        // the current file layout wins only when nothing beats it: a faithful
+        // partition whose symbol polish still lowered the score is an offer,
+        // not the identity.
+        let identity_won = valid.first().is_some_and(|best| {
+            solver.identity.as_ref() == Some(&best.partition)
+                && best.score >= current_breakdown.total
+        });
         if identity_won {
             CurrentStanding::Optimal
         } else {

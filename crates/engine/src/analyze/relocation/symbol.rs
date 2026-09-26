@@ -32,7 +32,12 @@ impl PipelineSolver<'_> {
         evidence: &MirrorEvidence,
     ) -> SymbolOutcome {
         let ir = self.snapshot.ir();
-        let assembled = self.assemble_with_mirror_evidence(parts, evidence);
+        // A faithful layout renders as the current tree (FIX05), so its symbol
+        // pass runs on that tree: every structural veto, the accept test and
+        // every reported delta read the tree the report shows, and the deltas
+        // sum to the candidate's score minus the current score (FIX08).
+        let faithful = self.is_faithful(parts);
+        let assembled = self.symbol_tree(faithful, parts, evidence);
         let mut pass = SymbolPass::new_with_policy(
             PassInputs {
                 snapshot: self.snapshot,
@@ -55,6 +60,13 @@ impl PipelineSolver<'_> {
         pass.run();
         let overlay = pass.overlay;
         let relocations = pass.relocations;
+        if faithful {
+            return SymbolOutcome {
+                total: self.score_faithful(&overlay).total,
+                overlay,
+                relocations,
+            };
+        }
         let placement = |id: u32| {
             overlay
                 .get(&id)
@@ -82,6 +94,21 @@ impl PipelineSolver<'_> {
             overlay,
             relocations,
             total,
+        }
+    }
+
+    /// The tree the symbol pass runs on for `parts`: the current tree for a
+    /// faithful layout, otherwise the assembled candidate tree.
+    fn symbol_tree(
+        &self,
+        faithful: bool,
+        parts: &Partition,
+        evidence: &MirrorEvidence,
+    ) -> CandidateTree {
+        if faithful {
+            self.current_candidate_tree()
+        } else {
+            self.assemble_with_mirror_evidence(parts, evidence)
         }
     }
 
@@ -696,8 +723,10 @@ pub(in crate::analyze) struct SymbolPass<'a> {
     moved: BTreeSet<u32>,
     /// Dense vertex per candidate FILE, for the crossing graph.
     file_vertices: BTreeMap<ContainerId, u32>,
-    /// Working copy of the node table whose containers track the overlay,
-    /// so the visibility floor is derived over trial placements.
+    /// Working copy of the node table, seeded from the base placement (the
+    /// tree the pass runs on, not the node table's current container ids)
+    /// and tracking the overlay, so the visibility floor is derived over
+    /// trial placements in the same arena the veto reads.
     visibility_nodes: Vec<Node>,
     /// Effective placement overrides accepted so far.
     overlay: BTreeMap<u32, ContainerId>,
@@ -891,7 +920,13 @@ impl<'a> SymbolPass<'a> {
             native,
             moved: BTreeSet::new(),
             file_vertices,
-            visibility_nodes: nodes.to_vec(),
+            visibility_nodes: nodes
+                .iter()
+                .map(|node| Node {
+                    container: base.get(&node.id.0).copied().unwrap_or(node.container),
+                    ..node.clone()
+                })
+                .collect(),
             overlay: BTreeMap::new(),
             best: 0.0,
             cyclic_base: CycleCounts::default(),
