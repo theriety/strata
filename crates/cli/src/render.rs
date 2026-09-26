@@ -938,6 +938,34 @@ mod tests {
     }
 
     #[test]
+    fn should_not_state_no_change_when_only_symbols_move() {
+        let mut result = result_with_candidate();
+        if let Some(candidate) = result
+            .profiles
+            .anchored
+            .as_mut()
+            .and_then(|profile| profile.candidates.first_mut())
+        {
+            candidate.symbol_moves = vec![SymbolMove {
+                symbol: "helper".to_owned(),
+                kind: SymbolKind::Symbol,
+                from_path: "src/a.ts".to_owned(),
+                to_path: "src/b.ts".to_owned(),
+                delta: -0.1,
+                broken_imports: 0,
+            }];
+        }
+
+        let text = report_lines(&result, "fixture").join("\n");
+
+        assert!(
+            !text.contains("No moves versus the current layout."),
+            "{text}"
+        );
+        assert!(text.contains("helper"), "{text}");
+    }
+
+    #[test]
     fn should_show_each_component_delta_without_instructing_adoption() {
         let mut result = result_with_candidate();
         if let Some(mode) = result.profiles.anchored.as_mut() {
