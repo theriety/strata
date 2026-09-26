@@ -142,6 +142,7 @@ fn relocates_and_narrates_first_symbol(snapshot: &Snapshot) -> Vec<SymbolMove> {
             from_file,
             to_file,
             delta: 1.0,
+            fold: None,
         }],
         total: 0.0,
     };
@@ -259,6 +260,7 @@ fn should_reject_a_cross_namespace_symbol_in_the_final_overlay() {
             from_file: source,
             to_file: destination,
             delta: 1.0,
+            fold: None,
         }],
         total: 0.0,
     };
@@ -1100,7 +1102,7 @@ fn should_not_relocate_a_production_symbol_into_its_spec_twin() {
     let assembled = solver.symbol_tree(
         solver.is_faithful(&solver.real_partition),
         &solver.real_partition,
-        &MirrorEvidence::default(),
+        &PolishEvidence::default(),
     );
     let spec_file = assembled
         .tree
@@ -1348,6 +1350,10 @@ fn should_allow_shared_consumers_that_remain_in_one_folder() {
     );
 }
 
+/// Pins the inbound reach guard's one defined carve-out (ADR-6, ADR-11): both
+/// consumers gain a reach into `components/common`, which neither depended on,
+/// yet the move is admitted because that folder is a neutral unoccupied
+/// sibling branch under their common ancestor.
 #[test]
 fn should_allow_a_shared_declaration_to_move_into_a_neutral_branch() {
     let snapshot = snapshot(
@@ -1389,6 +1395,83 @@ fn should_allow_a_shared_declaration_to_move_into_a_neutral_branch() {
         accepted && relocated == [0],
         "a neutral sibling branch does not award either consumer branch ownership; \
              relocations {relocated:?}"
+    );
+}
+
+/// A shared symbol whose two consumers sit in the sibling branches
+/// `components/left` and `components/right`, holding file `components/holding`,
+/// and one candidate destination file the symbol already depends on twice.
+/// Moving there gives both consumers a reach into `destination_folder`, which
+/// neither depended on.
+fn shared_symbol_with_one_destination(destination_folder: &str, folder_parent: u32) -> Snapshot {
+    snapshot(
+        vec![
+            node(0, "shared_contract", 6, Polarity::Production),
+            node(1, "origin_resident", 6, Polarity::Production),
+            node(2, "left_consumer", 7, Polarity::Production),
+            node(3, "right_consumer", 8, Polarity::Production),
+            node(4, "destination_dependency", 9, Polarity::Production),
+        ],
+        vec![
+            type_ref(2, 0),
+            type_ref(3, 0),
+            type_ref(0, 4),
+            type_ref(0, 4),
+        ],
+        vec![
+            container(0, "workspace", ScopeLevel::PackageGroup, None),
+            container(1, "components", ScopeLevel::Domain, Some(0)),
+            container(2, "components/holding", ScopeLevel::Folder, Some(1)),
+            container(3, "components/left", ScopeLevel::Folder, Some(1)),
+            container(4, "components/right", ScopeLevel::Folder, Some(1)),
+            container(
+                5,
+                destination_folder,
+                ScopeLevel::Folder,
+                Some(folder_parent),
+            ),
+            container(
+                6,
+                "components/holding/contracts.ts",
+                ScopeLevel::File,
+                Some(2),
+            ),
+            container(7, "components/left/consumer.ts", ScopeLevel::File, Some(3)),
+            container(8, "components/right/consumer.ts", ScopeLevel::File, Some(4)),
+            container(
+                9,
+                &format!("{destination_folder}/helpers.ts"),
+                ScopeLevel::File,
+                Some(5),
+            ),
+        ],
+    )
+}
+
+/// Pins the exact scope of the inbound reach guard's carve-out (ADR-6): the
+/// same move, giving the same two consumers the same new reach, is admitted
+/// into an unoccupied sibling branch under the consumers' common ancestor and
+/// refused into a folder outside that ancestor. The carve-out is fixed: no
+/// profile value or key widens it.
+#[test]
+fn should_admit_the_neutral_branch_carve_out_only_under_the_consumers_common_ancestor() {
+    let neutral = shared_symbol_with_one_destination("components/common", 1);
+    let outside = shared_symbol_with_one_destination("elsewhere", 0);
+
+    let (neutral_accepted, neutral_moved) =
+        relocates_first_symbol_with_dependency_only(&neutral, 0.0);
+    let (outside_accepted, outside_moved) =
+        relocates_first_symbol_with_dependency_only(&outside, 0.0);
+
+    assert!(
+        neutral_accepted && neutral_moved == [0],
+        "an unoccupied sibling under the consumers' common ancestor is admitted; \
+             relocations {neutral_moved:?}"
+    );
+    assert!(
+        !outside_accepted && outside_moved.is_empty(),
+        "the same move into a folder outside the common ancestor invents a reach and is \
+             refused; relocations {outside_moved:?}"
     );
 }
 
@@ -2917,7 +3000,7 @@ fn should_veto_entry_into_a_pattern_marked_test_zone() {
     let assembled = solver.symbol_tree(
         solver.is_faithful(&solver.real_partition),
         &solver.real_partition,
-        &MirrorEvidence::default(),
+        &PolishEvidence::default(),
     );
     let probe_file = assembled
         .tree
@@ -3078,7 +3161,7 @@ fn should_pin_a_spec_when_its_subject_did_not_move() {
     );
 
     let before = parts.cluster_of(unit);
-    solver.shadow_tests(&mut parts);
+    solver.shadow_tests(&mut parts, Vec::new());
 
     assert_eq!(parts.cluster_of(unit), before);
 }
@@ -3176,7 +3259,7 @@ fn should_not_let_an_arrival_unlock_a_lone_resident() {
     let assembled = solver.symbol_tree(
         solver.is_faithful(&solver.real_partition),
         &solver.real_partition,
-        &MirrorEvidence::default(),
+        &PolishEvidence::default(),
     );
     let natives = native_residents(&snapshot, &assembled);
     let outcome = solver.symbol_polish(&solver.real_partition);
@@ -3218,7 +3301,7 @@ fn should_not_nominate_a_destination_only_a_mid_pass_move_created() {
     let assembled = solver.symbol_tree(
         solver.is_faithful(&solver.real_partition),
         &solver.real_partition,
-        &MirrorEvidence::default(),
+        &PolishEvidence::default(),
     );
     let ir = snapshot.ir();
     let outcome = solver.symbol_polish(&solver.real_partition);
@@ -3673,5 +3756,97 @@ fn should_derive_the_visibility_baseline_over_the_tree_the_pass_runs_on() {
     assert_eq!(
         pass.vis_base, expected,
         "the visibility baseline must be derived over the assembled placement"
+    );
+}
+
+/// `a/x.ts` holds `moving` (and optionally a test case `t`); `b/y.ts` holds two
+/// subclasses of `moving`, so folding `a/x.ts` into `b/y.ts` improves the
+/// objective. With `dependant`, `b/c/z.ts` calls `moving` while folder `b/c`
+/// never depended on folder `b` at pass start; both consumers sit in branch
+/// `b`, so the consumer-branch veto stays silent and only the reach guard can
+/// refuse.
+fn collision_fold_snapshot(test_member: bool, dependant: bool) -> Snapshot {
+    let mut nodes = vec![
+        node(0, "moving", 4, Polarity::Production),
+        node(1, "y1", 5, Polarity::Production),
+        node(2, "y2", 5, Polarity::Production),
+    ];
+    let mut edges = vec![inherits(1, 0), inherits(2, 0)];
+    if test_member {
+        nodes.push(node(3, "t", 4, Polarity::TestCase));
+    }
+    if dependant {
+        nodes.push(node(4, "z", 6, Polarity::Production));
+        edges.push(edge(4, 0));
+    }
+    snapshot(
+        nodes,
+        edges,
+        vec![
+            container(0, "app", ScopeLevel::PackageGroup, None),
+            container(1, "a", ScopeLevel::Domain, Some(0)),
+            container(2, "b", ScopeLevel::Domain, Some(0)),
+            container(3, "b/c", ScopeLevel::Folder, Some(2)),
+            container(4, "a/x.ts", ScopeLevel::File, Some(1)),
+            container(5, "b/y.ts", ScopeLevel::File, Some(2)),
+            container(6, "b/c/z.ts", ScopeLevel::File, Some(3)),
+        ],
+    )
+}
+
+/// Runs the symbol pass on reality with `a/x.ts` offered as a fold into
+/// `b/y.ts` (ADR-21) and returns `(node, fold)` per accepted relocation.
+fn fold_relocations(snapshot: &Snapshot) -> Vec<(u32, Option<u32>)> {
+    let tests = TestPolicy::defaults();
+    let config = AnalyzeConfig::default();
+    let profile = &config.profiles.greenfield;
+    let solver = PipelineSolver::new(
+        snapshot,
+        profile,
+        profile.objective.coefficients(),
+        false,
+        &tests,
+    );
+    let evidence = PolishEvidence {
+        folds: vec![CollisionFold {
+            file: 4,
+            into: 5,
+            offered: true,
+        }],
+        ..PolishEvidence::default()
+    };
+    solver
+        .symbol_polish_with_polish_evidence(&solver.real_partition, &evidence)
+        .relocations
+        .iter()
+        .map(|relocation| (relocation.node, relocation.fold.map(|file| file.0)))
+        .collect()
+}
+
+/// F7: a test-polarity declaration pinned by polarity stays in the folded
+/// file and does not refuse the unit; the production declarations fold.
+#[test]
+fn should_fold_production_members_and_keep_a_pinned_test_member_in_place() {
+    let relocations = fold_relocations(&collision_fold_snapshot(true, false));
+
+    assert_eq!(
+        relocations,
+        vec![(0, Some(4))],
+        "`moving` folds into b/y.ts and the test case `t` stays in a/x.ts"
+    );
+}
+
+/// F1: a fold obeys the reach guards like any relocation. Folding `moving`
+/// into folder `b` would hand its dependant in folder `b/c` a reach into `b`
+/// that `b/c` never had, so the fold is refused and nothing moves.
+#[test]
+fn should_refuse_a_fold_that_invents_a_reach_for_a_dependant() {
+    let relocations = fold_relocations(&collision_fold_snapshot(false, true));
+
+    assert!(
+        relocations
+            .iter()
+            .all(|&(node, fold)| node != 0 && fold.is_none()),
+        "the fold would invent b/c -> b, so `moving` stays and nothing folds; got {relocations:?}"
     );
 }

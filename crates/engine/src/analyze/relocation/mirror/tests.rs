@@ -64,7 +64,7 @@ fn should_price_one_exact_mirror_before_finish_and_replay_idempotently() {
 
     let score_before = solver.evaluate(&before);
     let mut after = before.clone();
-    let evidence = solver.shadow_tests(&mut after);
+    let evidence = solver.shadow_tests(&mut after, Vec::new());
     assert_eq!(evidence.outcomes.len(), 1);
     assert_eq!(
         evidence.outcomes.first().map(|outcome| outcome.disposition),
@@ -79,8 +79,8 @@ fn should_price_one_exact_mirror_before_finish_and_replay_idempotently() {
         .collect();
     assert_eq!(changed, vec![mirror as usize]);
 
-    let recompute = |parts: &Partition, replay: &MirrorEvidence| {
-        let assembled = solver.assemble_with_mirror_evidence(parts, replay);
+    let recompute = |parts: &Partition, replay: &PolishEvidence| {
+        let assembled = solver.assemble_with_polish_evidence(parts, replay);
         let placement = |node: &Node| assembled.placement.get(&node.id.0).copied();
         render_tree(
             &assembled.tree,
@@ -91,8 +91,8 @@ fn should_price_one_exact_mirror_before_finish_and_replay_idempotently() {
         .ok()
         .map(|rendered| {
             (
-                solver.evaluate_with_mirror_evidence(parts, replay),
-                solver.capacity_remainder_with_mirror_evidence(
+                solver.evaluate_with_polish_evidence(parts, replay),
+                solver.capacity_remainder_with_polish_evidence(
                     parts,
                     replay,
                     &rendered,
@@ -102,7 +102,7 @@ fn should_price_one_exact_mirror_before_finish_and_replay_idempotently() {
         })
     };
     let projected =
-        physical_file_folders(&solver.assemble_with_mirror_evidence(&after, &evidence).tree);
+        physical_file_folders(&solver.assemble_with_polish_evidence(&after, &evidence).tree);
     let follower_folder = projected
         .iter()
         .find(|(path, _)| path.ends_with("spec/module/task.spec.ts"))
@@ -118,7 +118,7 @@ fn should_price_one_exact_mirror_before_finish_and_replay_idempotently() {
         return;
     };
     assert!(
-        (post.0 - solver.evaluate_with_mirror_evidence(&after, &evidence)).abs() < f64::EPSILON
+        (post.0 - solver.evaluate_with_polish_evidence(&after, &evidence)).abs() < f64::EPSILON
     );
     assert!(
         (score_before - post.0).abs() >= f64::EPSILON,
@@ -126,7 +126,7 @@ fn should_price_one_exact_mirror_before_finish_and_replay_idempotently() {
     );
 
     let mut replayed = after.clone();
-    let replay_evidence = solver.shadow_tests(&mut replayed);
+    let replay_evidence = solver.shadow_tests(&mut replayed, Vec::new());
     assert_eq!(replayed.assignment(), after.assignment());
     let replayed_post = recompute(&replayed, &replay_evidence);
     assert!(replayed_post.is_some(), "replayed candidate tree renders");
@@ -216,7 +216,7 @@ fn should_attempt_mirrors_for_every_physical_source_move() {
     };
     *name = SmolStr::new("source/projected");
 
-    let evidence = solver.shadow_tests(&mut parts);
+    let evidence = solver.shadow_tests(&mut parts, Vec::new());
     let applied_sources: BTreeSet<&str> = evidence
         .outcomes
         .iter()
@@ -275,7 +275,7 @@ fn should_attempt_a_mirror_when_the_source_moves_to_its_namespace_root() {
     };
     assert!(parts.move_node(scc_of(3), target));
 
-    let evidence = solver.shadow_tests(&mut parts);
+    let evidence = solver.shadow_tests(&mut parts, Vec::new());
 
     assert_eq!(
         evidence
@@ -296,7 +296,7 @@ fn should_attempt_a_mirror_when_the_source_moves_to_its_namespace_root() {
     );
 }
 
-fn repeated_root_mirror_evidence(with_collision: bool) -> MirrorEvidence {
+fn repeated_root_mirror_evidence(with_collision: bool) -> PolishEvidence {
     let mut containers = vec![
         container(0, "app", ScopeLevel::PackageGroup, None),
         container(1, "app/source/module", ScopeLevel::Folder, Some(0)),
@@ -337,7 +337,7 @@ fn repeated_root_mirror_evidence(with_collision: bool) -> MirrorEvidence {
     let mut parts = solver.pass_start_partition.clone();
     let target = parts.cluster_of(scc(5)).unwrap_or(ClusterId(0));
     assert!(parts.move_node(scc(4), target));
-    solver.shadow_tests(&mut parts)
+    solver.shadow_tests(&mut parts, Vec::new())
 }
 
 #[test]
@@ -410,7 +410,7 @@ fn should_assemble_a_root_mirror_at_the_repository_root_exactly_once() {
     }
     assert!(parts.move_node(scc(3), target));
 
-    let evidence = solver.shadow_tests(&mut parts);
+    let evidence = solver.shadow_tests(&mut parts, Vec::new());
     assert_eq!(
         evidence.outcomes.first().map(|outcome| outcome.disposition),
         Some(MirrorDisposition::Applied)
@@ -422,7 +422,7 @@ fn should_assemble_a_root_mirror_at_the_repository_root_exactly_once() {
             .map(|outcome| outcome.intended_to.as_str()),
         Some("app")
     );
-    let assembled = solver.assemble_with_mirror_evidence(&parts, &evidence);
+    let assembled = solver.assemble_with_polish_evidence(&parts, &evidence);
     let candidate_file = assembled
         .pass_start_file_by_candidate
         .iter()
@@ -552,7 +552,7 @@ fn assert_actual_mirror_block(fixture: MirrorBlockFixture, expected: BlockedMirr
     let target = target.unwrap_or(ClusterId(0));
     assert!(parts.move_node(scc(6), target));
 
-    let evidence = solver.shadow_tests(&mut parts);
+    let evidence = solver.shadow_tests(&mut parts, Vec::new());
 
     assert_eq!(evidence.outcomes.len(), 1, "one follower was attempted");
     assert_eq!(
@@ -641,7 +641,7 @@ fn should_not_shadow_by_basename_when_exact_mirroring_is_disabled() {
     assert!(parts.move_node(source, owner_cluster));
     let before = parts.cluster_of(mirror);
 
-    solver.shadow_tests(&mut parts);
+    solver.shadow_tests(&mut parts, Vec::new());
 
     assert_eq!(parts.cluster_of(mirror), before);
 }
@@ -750,7 +750,7 @@ fn should_keep_an_ambiguously_twinned_spec_where_it_is() {
         "setup: the spec starts apart from its would-be twins"
     );
 
-    solver.shadow_tests(&mut parts);
+    solver.shadow_tests(&mut parts, Vec::new());
 
     assert_eq!(parts.cluster_of(unit), before);
 }
@@ -800,7 +800,7 @@ fn should_veto_a_shadow_move_that_would_overflow_the_folder_cap() {
         "setup: real dirs must start the pair apart"
     );
 
-    solver.shadow_tests(&mut parts);
+    solver.shadow_tests(&mut parts, Vec::new());
 
     assert_ne!(
         parts.cluster_of(unit),
