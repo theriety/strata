@@ -9,7 +9,7 @@ use strata_core::shatter::{BreakSet, EdgeRef, EdgeWeights, SccView, shatter};
 use strata_ir::{Hardness, Node, NodeId, NodeKind, Polarity, Snapshot};
 
 use crate::analyze::findings::{conditional_splits, hard_capacity_breaks};
-use crate::analyze::relocation::mirror::MirrorEvidence;
+use crate::analyze::relocation::mirror::PolishEvidence;
 use crate::analyze::relocation::{PipelineSolver, TestPolicy};
 use crate::analyze::scoring::{ProfileSource, score_current_with_affinity};
 use crate::config::ProfileConfig;
@@ -67,7 +67,7 @@ pub(in crate::analyze) fn build_profile_result(
     // therefore never offered. This applies even when the current tree breaches
     // a hard cap: infeasibility is reported as a finding, not used to relabel a
     // score regression as a gain.
-    let valid: Vec<&SolvedCandidate<MirrorEvidence>> = candidates
+    let valid: Vec<&SolvedCandidate<PolishEvidence>> = candidates
         .iter()
         .filter(|solved| {
             solver
@@ -75,7 +75,7 @@ pub(in crate::analyze) fn build_profile_result(
                 .accepts_with_mirrors(&solved.partition, &solved.evidence)
         })
         .collect();
-    let offered: Vec<SolvedCandidate<MirrorEvidence>> = valid
+    let offered: Vec<SolvedCandidate<PolishEvidence>> = valid
         .iter()
         .filter(|solved| solved.score < current_breakdown.total)
         .map(|solved| (*solved).clone())
@@ -93,7 +93,7 @@ pub(in crate::analyze) fn build_profile_result(
         // an infeasible standing must say what each candidate actually fixes,
         // so its tree is re-checked against the same caps as the current one.
         candidate.capacity_remainder = (!capacity_clean).then(|| {
-            solver.capacity_remainder_with_mirror_evidence(
+            solver.capacity_remainder_with_polish_evidence(
                 &solved.partition,
                 &solved.evidence,
                 &candidate.tree,
@@ -138,7 +138,7 @@ pub(in crate::analyze) fn build_profile_result(
 
 /// Returns the variation-of-information matrix over the diversified candidates.
 pub(in crate::analyze) fn pairwise_distances(
-    candidates: &[SolvedCandidate<MirrorEvidence>],
+    candidates: &[SolvedCandidate<PolishEvidence>],
 ) -> Vec<Vec<f64>> {
     candidates
         .iter()

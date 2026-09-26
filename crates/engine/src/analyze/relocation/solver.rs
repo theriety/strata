@@ -12,7 +12,8 @@ use crate::analyze::findings::{
     physical_folder_entries_repository_relative, physical_folder_findings, walk_all_capacity,
 };
 use crate::analyze::layout::{real_dir_partition, relieve_over_capacity, synthesize_roof_rebuild};
-use crate::analyze::relocation::mirror::{MirrorEvidence, mirror_rules};
+use crate::analyze::relocation::collision::Withdrawals;
+use crate::analyze::relocation::mirror::{PolishEvidence, mirror_rules};
 use crate::analyze::relocation::{
     CandidateTree, FileInfo, POLISH_SWEEPS, POLISH_TARGETS, PipelineSolver,
     RelocationIdentityGuard, TestPolicy, cycle_homes, file_facts_repository_relative,
@@ -33,12 +34,12 @@ impl<'a> PipelineSolver<'a> {
         )
     }
 
-    fn physical_entry_counts_with_mirror_evidence(
+    fn physical_entry_counts_with_polish_evidence(
         &self,
         parts: &Partition,
-        evidence: &MirrorEvidence,
+        evidence: &PolishEvidence,
     ) -> BTreeMap<Vec<String>, u32> {
-        let assembled = self.assemble_with_mirror_evidence(parts, evidence);
+        let assembled = self.assemble_with_polish_evidence(parts, evidence);
         physical_folder_entries_repository_relative(
             &assembled.tree,
             Some(&assembled.namespace_by_file),
@@ -88,20 +89,20 @@ impl<'a> PipelineSolver<'a> {
         parts: &Partition,
         scc: u32,
         target: ClusterId,
-        evidence: &MirrorEvidence,
-        prospective: &MirrorEvidence,
+        evidence: &PolishEvidence,
+        prospective: &PolishEvidence,
     ) -> bool {
         if self.caps.folder == 0 {
             return true;
         }
-        let before = self.physical_entry_counts_with_mirror_evidence(parts, evidence);
+        let before = self.physical_entry_counts_with_polish_evidence(parts, evidence);
         let mut assignment = parts.assignment().to_vec();
         let Some(slot) = assignment.get_mut(scc as usize) else {
             return false;
         };
         *slot = target;
         let moved = Partition::from_assignment(assignment, parts.cluster_count());
-        let after = self.physical_entry_counts_with_mirror_evidence(&moved, prospective);
+        let after = self.physical_entry_counts_with_polish_evidence(&moved, prospective);
         before.keys().chain(after.keys()).all(|path| {
             let prior = before
                 .get(path)
@@ -119,14 +120,14 @@ impl<'a> PipelineSolver<'a> {
 
     /// Re-checks a candidate with physical folder semantics while retaining
     /// the DTO walk for file and upper-level findings.
-    pub(in crate::analyze) fn capacity_remainder_with_mirror_evidence(
+    pub(in crate::analyze) fn capacity_remainder_with_polish_evidence(
         &self,
         parts: &Partition,
-        evidence: &MirrorEvidence,
+        evidence: &PolishEvidence,
         rendered: &ContainerNode,
         capacity: &CapacityConfig,
     ) -> CapacityRemainder {
-        let assembled = self.assemble_with_mirror_evidence(parts, evidence);
+        let assembled = self.assemble_with_polish_evidence(parts, evidence);
         Self::capacity_remainder_for_assembled(&assembled, rendered, capacity)
     }
 
@@ -352,12 +353,12 @@ impl<'a> PipelineSolver<'a> {
     }
 
     #[cfg(test)]
-    pub(in crate::analyze) fn evaluate_with_mirror_evidence(
+    pub(in crate::analyze) fn evaluate_with_polish_evidence(
         &self,
         parts: &Partition,
-        evidence: &MirrorEvidence,
+        evidence: &PolishEvidence,
     ) -> f64 {
-        let assembled = self.assemble_with_mirror_evidence(parts, evidence);
+        let assembled = self.assemble_with_polish_evidence(parts, evidence);
         self.evaluate_assembled(&assembled)
     }
 
@@ -536,9 +537,9 @@ impl<'a> PipelineSolver<'a> {
 }
 
 impl Solver for PipelineSolver<'_> {
-    type Evidence = MirrorEvidence;
+    type Evidence = PolishEvidence;
 
-    fn solve(&self, seed: u64) -> SolvedCandidate<MirrorEvidence> {
+    fn solve(&self, seed: u64) -> SolvedCandidate<PolishEvidence> {
         let offset = seed.wrapping_sub(self.base_seed);
         if offset == 0
             && let Some(identity) = &self.identity
@@ -560,10 +561,16 @@ impl Solver for PipelineSolver<'_> {
         };
         let mut parts = start.clone();
         self.polish(&mut parts);
-        // The shadow pass runs on the polished layout so a test file follows
-        // the placement its subject actually earned, not the one reality
-        // suggested; production placements are never moved by it.
-        let mirror_evidence = self.shadow_tests(&mut parts);
+        // ADR-21: a move onto a path another file holds is withdrawn, and the
+        // test followers are placed against the layout that survives; both
+        // repeat until a round withdraws nothing, because a follower can change
+        // a display-level election and carry another file onto an occupied
+        // path. The shadow pass runs on the polished layout so a test file
+        // follows the placement its subject actually earned, not the one
+        // reality suggested; production placements are never moved by it.
+        let mut folds = Vec::new();
+        let mut withdrawals = Withdrawals::default();
+        let mut polish_evidence = self.settle_collisions(&mut parts, &mut folds, &mut withdrawals);
         // FIX08: the file polish's layout is refined by the symbol-grain pass
         // before scoring, so pool ranking prices symbol relocation too. The
         // outcome itself is not threaded out — `build_candidate` re-runs this
@@ -571,8 +578,15 @@ impl Solver for PipelineSolver<'_> {
         // identical overlay, so ranking score and DTO score agree by
         // construction. (The polish's own total is subsumed: the symbol pass
         // re-prices the identical layout before improving on it.)
-        let symbols = self.symbol_polish_with_mirror_evidence(&parts, &mirror_evidence);
-        self.finish(parts, symbols.total, mirror_evidence)
+        let mut symbols = self.symbol_polish_with_polish_evidence(&parts, &polish_evidence);
+        (polish_evidence, symbols) = self.settle_refusals(
+            &mut parts,
+            &mut folds,
+            &mut withdrawals,
+            polish_evidence,
+            symbols,
+        );
+        self.finish(parts, symbols.total, polish_evidence)
     }
 }
 

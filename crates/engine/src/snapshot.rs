@@ -77,6 +77,28 @@ impl Language {
         }
     }
 
+    /// Whether `path` names a file the language's module system is built
+    /// around, so emptying or retiring it breaks the module structure: a Rust
+    /// crate or module root (`lib.rs`, `main.rs`, `mod.rs`), a TypeScript
+    /// directory index (`index.ts` and its variants), or a Python package
+    /// marker or entry point (`__init__.py`, `__main__.py`).
+    pub(crate) fn is_module_root(path: &str) -> bool {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        Self::ALL.iter().any(|language| {
+            language.matches_extension(name)
+                && match language {
+                    Self::TypeScript => {
+                        matches!(name, "index.ts" | "index.tsx" | "index.mts" | "index.cts")
+                    }
+                    Self::Rust => matches!(name, "lib.rs" | "main.rs" | "mod.rs"),
+                    Self::Python => matches!(
+                        name,
+                        "__init__.py" | "__init__.pyi" | "__main__.py" | "__main__.pyi"
+                    ),
+                }
+        })
+    }
+
     /// Builds the adapter for this language anchored at `root`.
     fn adapter(self, root: &Path) -> Box<dyn Adapter + Send + Sync> {
         match self {
@@ -754,6 +776,33 @@ mod tests {
         assert!(Language::Rust.matches_extension("lib.rs"));
         assert!(Language::Python.matches_extension("mod.py"));
         assert!(!Language::Rust.matches_extension("a.ts"));
+    }
+
+    #[test]
+    fn should_recognize_each_languages_module_roots() {
+        for root in [
+            "crates/util/src/lib.rs",
+            "src/main.rs",
+            "src/alpha/mod.rs",
+            "atlas/src/index.ts",
+            "web/index.tsx",
+            "pkg/__init__.py",
+            "pkg/__main__.py",
+        ] {
+            assert!(Language::is_module_root(root), "{root} is a module root");
+        }
+        for leaf in [
+            "crates/util/src/weight.rs",
+            "src/index.rs",
+            "src/lib.ts",
+            "pkg/init.py",
+            "docs/index.md",
+        ] {
+            assert!(
+                !Language::is_module_root(leaf),
+                "{leaf} is not a module root"
+            );
+        }
     }
 
     #[test]
