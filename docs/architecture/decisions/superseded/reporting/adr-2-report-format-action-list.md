@@ -1,10 +1,12 @@
 > **Status:** Superseded
 >
-> **Superseded by:** [ADR-0016 — Plain-text reports and relocation endpoints](../0016-plain-text-reports-and-relocation-endpoints.md)
+> **Superseded by:** [ADR-16 — Plain-text reports and relocation endpoints](../../reporting/adr-16-plain-text-reports-and-relocation-endpoints.md)
 >
 > **What changed:** Partial supersession: retain explicit action vocabulary and deterministic output, with shared report ordering, verbosity, and before/after affected-branch trees with change markers.
+>
+> superseded-by: adr-16
 
-# ADR-0002: Report format — suggested action list
+# ADR-2: Report format — suggested action list
 
 - **Status:** Accepted
 - **Date:** 2026-08-23

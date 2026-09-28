@@ -1,10 +1,12 @@
 > **Status:** Superseded
 >
-> **Superseded by:** [ADR-0011 — Relocation ownership and dependency-only scoring](../0011-relocation-ownership-scoring.md)
+> **Superseded by:** [ADR-11 — Relocation ownership and dependency-only scoring](../../relocation/adr-11-relocation-ownership-scoring.md)
 >
 > **What changed:** Partial change: dependency-only destinations are governed by a profile objective charge, while shared ownership is protected by an immutable consumer-branch guard.
+>
+> superseded-by: adr-11
 
-# ADR-0010: Recommendations require structural and scoring integrity
+# ADR-10: Recommendations require structural and scoring integrity
 
 - **Status:** Accepted
 - **Date:** 2026-08-30

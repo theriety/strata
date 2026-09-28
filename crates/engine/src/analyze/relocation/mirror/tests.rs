@@ -678,8 +678,8 @@ fn should_not_duplicate_an_unfollowed_namespace_during_assembly() {
 #[test]
 fn should_keep_an_ambiguously_twinned_spec_where_it_is() {
     // Two production files reduce to the same stem in the same package —
-    // no unique twin, so the shadow pass must leave the spec alone (ADR-0002
-    // rule 1: unchanged placements are never listed).
+    // no unique twin, so the shadow pass must leave the spec alone (ADR-16:
+    // unchanged placements are never presented as suggested actions).
     let nodes = vec![
         node(0, "one", 4, Polarity::Production),
         node(1, "two", 5, Polarity::Production),

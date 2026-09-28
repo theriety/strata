@@ -1,10 +1,12 @@
 > **Status:** Superseded
 >
-> **Superseded by:** [ADR-0011 — Relocation ownership and dependency-only scoring](../0011-relocation-ownership-scoring.md)
+> **Superseded by:** [ADR-11 — Relocation ownership and dependency-only scoring](../../relocation/adr-11-relocation-ownership-scoring.md)
 >
 > **What changed:** Partial change: analysis results advance from schema version 4 to version 5 so profile scoring can carry the dependency-only objective term.
+>
+> superseded-by: adr-11
 
-# ADR-0009: Complete analysis parameter profiles
+# ADR-9: Complete analysis parameter profiles
 
 - Status: `Accepted`
 - Date: `2026-08-30`
