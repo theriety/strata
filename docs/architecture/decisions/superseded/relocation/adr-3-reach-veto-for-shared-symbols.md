@@ -1,10 +1,12 @@
 > **Status:** Superseded
 >
-> **Superseded by:** [ADR-0006 — Symbol destinations obey pass-start guardrails](../0006-symbol-destination-guardrails.md)
+> **Superseded by:** [ADR-6 — Symbol destinations obey pass-start guardrails](../../relocation/adr-6-symbol-destination-guardrails.md)
 >
 > **What changed:** Partial change: destination admission now also preserves pass-start type-only file roles and outbound destination-folder dependency envelopes.
+>
+> superseded-by: adr-6
 
-# ADR-0003: A shared symbol is protected by a reach veto, not by a score term
+# ADR-3: A shared symbol is protected by a reach veto, not by a score term
 
 - **Status:** Accepted
 - **Date:** 2026-08-27
