@@ -11,7 +11,7 @@ mod construct;
 mod file_graph;
 mod polish;
 
-pub(in crate::analyze) use file_graph::{build_file_graph, test_zone_marks};
+pub(in crate::analyze) use file_graph::{TestPolicy, build_file_graph, test_zone_marks};
 
 impl Solver for PipelineSolver<'_> {
     type Evidence = PolishEvidence;
