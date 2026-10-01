@@ -4,7 +4,7 @@
 
 ## Crate layout
 
-The workspace is seven crates layered strictly by dependency: the IR sits at the bottom, the pure algorithms depend only on it, the adapters and engine sit above, and the CLI is a thin shell on top.
+The workspace is eight crates layered strictly by dependency: the IR sits at the bottom, the pure algorithms depend only on it, the adapters and engine sit above, and the CLI and the evaluation harness are thin consumers of the engine on top.
 
 ```text
 crates
@@ -14,6 +14,7 @@ crates
 ├── adapter-rust          # Rust → IR fragment (syn + rust-analyzer)
 ├── adapter-python        # Python → IR fragment (rustpython-parser)
 ├── engine                # orchestration: discover, parse, assemble, analyze
+├── eval                  # constraint-target evaluation harness over the engine
 └── cli                   # the `strata` binary: flags, dispatch, rendering
 ```
 
@@ -26,6 +27,7 @@ flowchart TD
     aps[adapter-python]
     engine[strata-engine]
     cli[strata-cli · binary]
+    eval[strata-eval]
 
     ir --> core
     ir --> ats
@@ -37,9 +39,10 @@ flowchart TD
     ars --> engine
     aps --> engine
     engine --> cli
+    engine --> eval
 ```
 
-Every crate depends *down*, never sideways or up: adapters and `core` share no dependency, and the engine is the only crate that knows both. The CLI depends only on the engine and re-exposes the same public functions an embedder would call.
+Every crate depends *down*, never sideways or up: adapters and `core` share no dependency, and the engine is the only crate that knows both. The CLI depends only on the engine and re-exposes the same public functions an embedder would call; the evaluation harness likewise drives the engine in-process as a library.
 
 ## The IR snapshot contract
 
@@ -206,7 +209,7 @@ A finding is shared only when its complete serialized content is identical in bo
 
 Capacity findings are profile-dependent because caps belong to profiles. A physical folder measures direct files plus immediate child folders; descendants below those children do not inflate it. Measures at or below the cap produce no finding, values above the cap through 110% are `Borderline`, and larger values are `Violation`.
 
-Cycle findings resolve every member to repository-relative paths and explain the placement consequence: the members form one placement unit and must remain in one file unless the suggested dependency edge is broken. The cheapest cut and its exact-or-heuristic method remain profile-specific when dependency weights change its serialized content.
+Cycle findings report only components spanning distinct source-file identities; intra-file recursion is not a violation. The optimizer still keeps mutually recursive symbols in one placement unit. Reported cycles resolve every member to repository-relative paths and explain the placement consequence: the members form one placement unit and must remain in one file unless the suggested dependency edge is broken. The cheapest cut and its exact-or-heuristic method remain profile-specific when dependency weights change its serialized content.
 
 ## Main components
 
@@ -218,5 +221,5 @@ Cycle findings resolve every member to repository-relative paths and explain the
 - **`AnalyzeConfig` / `load_config`** (`crates/engine/src/config.rs`): the `strata.toml` schema and validation, mapping config sections to objective weights, capacities, and solver budgets.
 - **`StrataError`** (`crates/engine/src/error.rs`): the typed error surface with stable remedy codes that the CLI maps to exit code `1`.
 - **Decomposition algorithms** (`crates/core/src`): `condense`, `shatter`, `layer`, `cluster`, `pack`, `visibility`, `project`, `score`, and `diversify` — each a pure phase over the IR.
-- **CLI dispatch and rendering** (`crates/cli/src/main.rs`, `crates/cli/src/render.rs`): clap-derived flag parsing, subcommand dispatch, the plain-text default with explicit JSON selection, and the fixed exit-code mapping (`0`/`1`/`2`). Terminal and Markdown reports consume one private report representation assembled from the saved result. Candidate change trees compare saved file identities and recorded moves to show physical before/after paths; virtual grouping labels are not treated as directories. Presentation options control numerical detail without changing the analysis payload.
+- **CLI dispatch and rendering** (`crates/cli/src/main.rs`, `crates/cli/src/render.rs`): clap-derived flag parsing, subcommand dispatch, the plain-text default with explicit JSON selection, and the fixed exit-code mapping (`0`/`1`/`2`). Terminal and Markdown reports consume one private report representation assembled from the saved result. Candidate change trees compare saved file identities and recorded moves to show physical before/after paths; virtual grouping labels are not treated as directories. Wrapped change-tree labels retain branch ancestry and literal path characters, preferring word or path boundaries within 100 display columns. Presentation options control numerical detail without changing the analysis payload.
 - **Language adapters** (`crates/adapter-typescript`, `crates/adapter-rust`, `crates/adapter-python`): swc-, syn+rust-analyzer-, and rustpython-based front ends, each pairing a `parse` module with a `bind` reference resolver and an `sloc` size counter.

@@ -17,6 +17,9 @@ exclude = [
     "**/tests/**/fixtures/**",
     "crates/eval/fixtures/**",
 ]
+# Directory names treated as transparent below each package root, so a source
+# file and its test share a folder (`source_roots` is accepted as an alias).
+source-roots = ["src", "spec", "test", "tests", "lib", "dist", "__tests__"]
 
 [analysis]
 # Complete parameter profiles to execute against the same discovered snapshot.

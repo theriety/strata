@@ -2,6 +2,7 @@
 name = "strata-core"
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 
 [lib]
 name = "strata_core"
