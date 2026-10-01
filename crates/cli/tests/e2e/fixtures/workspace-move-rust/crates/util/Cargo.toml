@@ -1,0 +1,8 @@
+[package]
+name = "fixture-move-util"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fixture_move_util"
+path = "src/lib.rs"
