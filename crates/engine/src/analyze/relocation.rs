@@ -185,7 +185,7 @@ fn cycle_homes(files: &[FileInfo], condensation: &Condensation) -> BTreeMap<u32,
 }
 
 /// Preserves pass-start render namespaces and namespace-scoped leaf identity,
-/// and keeps every file inside its manifest package (ADR-0017).
+/// and keeps every file inside its manifest package (ADR-17).
 ///
 /// Render namespaces are package-relative (every crate's `src` renders alike),
 /// so they cannot tell two packages apart; the package key from the laminar
@@ -952,7 +952,7 @@ impl PipelineSolver<'_> {
             SeedLevel::Domain,
             &home_affinity(&domain_homes),
         );
-        // with the package wall up the display levels obey it too (ADR-0017):
+        // with the package wall up the display levels obey it too (ADR-17):
         // no domain spans packages and each package container holds exactly
         // one real package, so the tree never draws a file under a package
         // its move list keeps it out of.
@@ -986,7 +986,7 @@ impl PipelineSolver<'_> {
             |file| &file.home.package,
         );
         // with the wall up a package level is an uncapped mirror of the
-        // manifests (ADR-0017): its containers are the real packages, which
+        // manifests (ADR-17): its containers are the real packages, which
         // the capacity caps never split, so it is grouped by key, not clustered.
         let package_parts = if folder_packages.is_some() {
             group_by_key(&package_homes)

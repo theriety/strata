@@ -16,7 +16,7 @@ use crate::narrate::{path_segments, physical_namespace, tokenize};
 #[cfg(test)]
 mod tests;
 
-/// Renders a file's package-relative namespace (ADR-0018) from its real path
+/// Renders a file's package-relative namespace (ADR-18) from its real path
 /// and laminar home — the see-through source-root segments its folder key
 /// omits (`src` for `crates/core/src/x.rs`).
 pub(in crate::analyze) fn render_namespace(path: &str, home: &LaminarHome) -> SmolStr {

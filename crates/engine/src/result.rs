@@ -478,7 +478,7 @@ pub struct BlockedMirror {
 pub enum BlockedMirrorReason {
     /// More than one immutable source/template pairing claimed the test.
     AmbiguousMapping,
-    /// The follower would leave its pass-start manifest package (ADR-0017).
+    /// The follower would leave its pass-start manifest package (ADR-17).
     PackageBoundary,
     /// The follower would cross its pass-start render namespace.
     NamespaceBoundary,

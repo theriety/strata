@@ -715,7 +715,7 @@ pub(in crate::analyze) struct SymbolPass<'a> {
     /// are pinned wherever they live, per `pin-detected-test-symbols`.
     pin_test_polarity: bool,
     /// Whether declarations may leave their manifest package, per
-    /// `allow-cross-package-moves` (ADR-0017).
+    /// `allow-cross-package-moves` (ADR-17).
     allow_cross_package: bool,
     /// Nodes already relocated in this pass. A symbol moves at most once per
     /// candidate (FIX12-C), so no reader is ever told two contradictory
@@ -1137,7 +1137,7 @@ impl<'a> SymbolPass<'a> {
                 break;
             }
             // A declaration never leaves its manifest package unless the
-            // profile lifts the wall (ADR-0017): a move across crates changes
+            // profile lifts the wall (ADR-17): a move across crates changes
             // a package's public surface and manifest dependencies.
             if !self.assembled.shares_namespace(source_file, destination)
                 || (!self.allow_cross_package

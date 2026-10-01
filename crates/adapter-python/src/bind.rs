@@ -1160,7 +1160,7 @@ mod tests {
             re_exports.first().map(|edge| edge.hardness),
             Some(Hardness::Soft)
         );
-        // the barrel binding is flagged as a re-export (ADR-0020); the original
+        // the barrel binding is flagged as a re-export (ADR-20); the original
         // declaration is not.
         let flag_of = |id: Option<NodeId>| -> Option<bool> {
             id.and_then(|id| fragment.nodes.iter().find(|node| node.id == id))
