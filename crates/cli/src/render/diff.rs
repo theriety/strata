@@ -9,6 +9,7 @@ use super::{improvement_summary, nq};
 pub(super) fn blocked_mirror_reason(reason: BlockedMirrorReason) -> &'static str {
     match reason {
         BlockedMirrorReason::AmbiguousMapping => "ambiguous mapping",
+        BlockedMirrorReason::PackageBoundary => "package boundary",
         BlockedMirrorReason::NamespaceBoundary => "namespace boundary",
         BlockedMirrorReason::Capacity => "capacity",
         BlockedMirrorReason::PathCollision => "path collision",

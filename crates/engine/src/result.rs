@@ -17,7 +17,7 @@ use crate::config::{ProfileConfig, ProfileName};
 ///
 /// Readers of a saved result reject any other version rather than misreading a
 /// future shape.
-pub const RESULT_SCHEMA_VERSION: u32 = 8;
+pub const RESULT_SCHEMA_VERSION: u32 = 9;
 
 /// The top-level analysis result: the snapshot hash, the current tree with its
 /// violations, and the per-profile candidate sets.
@@ -478,6 +478,8 @@ pub struct BlockedMirror {
 pub enum BlockedMirrorReason {
     /// More than one immutable source/template pairing claimed the test.
     AmbiguousMapping,
+    /// The follower would leave its pass-start manifest package (ADR-0017).
+    PackageBoundary,
     /// The follower would cross its pass-start render namespace.
     NamespaceBoundary,
     /// The destination would exceed its configured physical capacity.
@@ -640,7 +642,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn should_serialize_schema_version_eight_with_two_advice_groups() {
+    fn should_serialize_schema_version_nine_with_two_advice_groups() {
         let result = AnalyzeResult {
             schema_version: RESULT_SCHEMA_VERSION,
             snapshot_hash: "snapshot".to_owned(),
@@ -669,7 +671,7 @@ mod tests {
         assert_eq!(
             json.pointer("/schemaVersion")
                 .and_then(serde_json::Value::as_u64),
-            Some(8)
+            Some(9)
         );
         assert!(json.get("profiles").is_some());
         assert!(json.get("modes").is_none());

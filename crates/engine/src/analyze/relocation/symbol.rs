@@ -49,6 +49,7 @@ impl PipelineSolver<'_> {
                 forbidden_sources: self.symbol_source_blocks(&assembled),
                 forbidden_destinations: self.symbol_destination_blocks(&assembled),
                 pin_test_polarity: self.pin_detected_test_symbols(),
+                allow_cross_package: self.relocation_identity.allows_cross_package_moves(),
             },
         );
         pass.run();
@@ -686,6 +687,9 @@ pub(in crate::analyze) struct SymbolPass<'a> {
     /// Whether detected test declarations (`TestCase`/`TestSupport` polarity)
     /// are pinned wherever they live, per `pin-detected-test-symbols`.
     pin_test_polarity: bool,
+    /// Whether declarations may leave their manifest package, per
+    /// `allow-cross-package-moves` (ADR-0017).
+    allow_cross_package: bool,
     /// Nodes already relocated in this pass. A symbol moves at most once per
     /// candidate (FIX12-C), so no reader is ever told two contradictory
     /// destinations for the same name.
@@ -721,7 +725,9 @@ struct PassInputs<'a> {
     edges: &'a [Edge],
 }
 
-/// Which symbols a [`SymbolPass`] may not nominate or land on.
+/// The admission rules of a [`SymbolPass`]: which files may not give or
+/// receive a symbol, whether test-polarity declarations are pinned, and
+/// whether the package wall is lifted.
 #[derive(Default)]
 struct RelocationPolicy {
     /// Files whose symbols may not leave.
@@ -730,6 +736,8 @@ struct RelocationPolicy {
     forbidden_destinations: BTreeSet<ContainerId>,
     /// Refuse any non-production-polarity declaration, wherever it lives.
     pin_test_polarity: bool,
+    /// Allow a symbol to land in a file of another package.
+    allow_cross_package: bool,
 }
 
 impl<'a> SymbolPass<'a> {
@@ -750,6 +758,7 @@ impl<'a> SymbolPass<'a> {
             forbidden_sources,
             forbidden_destinations,
             pin_test_polarity,
+            allow_cross_package,
         } = policy;
         let base = &assembled.placement;
         let mut sloc: BTreeMap<ContainerId, u32> = BTreeMap::new();
@@ -876,6 +885,7 @@ impl<'a> SymbolPass<'a> {
             forbidden_sources,
             forbidden_destinations,
             pin_test_polarity,
+            allow_cross_package,
             sloc,
             residents,
             native,
@@ -1091,7 +1101,13 @@ impl<'a> SymbolPass<'a> {
             if self.native.get(&source_file).copied().unwrap_or(0) <= 1 {
                 break;
             }
-            if !self.assembled.shares_namespace(source_file, destination) {
+            // A declaration never leaves its manifest package unless the
+            // profile lifts the wall (ADR-0017): a move across crates changes
+            // a package's public surface and manifest dependencies.
+            if !self.assembled.shares_namespace(source_file, destination)
+                || (!self.allow_cross_package
+                    && !self.assembled.shares_package(source_file, destination))
+            {
                 continue;
             }
             if self.file_depth.get(&destination).copied().unwrap_or(0)

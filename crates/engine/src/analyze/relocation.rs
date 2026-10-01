@@ -13,9 +13,9 @@ use strata_ir::{
 };
 
 use crate::analyze::layout::{
-    ContainerArena, LaminarHome, NameTally, anchor_min, cluster_level, elect, home_affinity,
-    laminar_home, plurality, qualify_elected, qualify_folder_names, record_undecorated_key,
-    render_namespace, vote,
+    ContainerArena, LaminarHome, NameTally, anchor_min, cluster_level, dominant_member, elect,
+    home_affinity, laminar_home, plurality, qualify_elected, qualify_folder_names,
+    record_undecorated_key, render_namespace, vote,
 };
 use crate::analyze::rendering::render_tree;
 use crate::analyze::scoring::{
@@ -183,16 +183,39 @@ fn cycle_homes(files: &[FileInfo], condensation: &Condensation) -> BTreeMap<u32,
     retained
 }
 
-/// Preserves pass-start render namespaces and namespace-scoped leaf identity.
+/// Preserves pass-start render namespaces and namespace-scoped leaf identity,
+/// and keeps every file inside its manifest package (ADR-0017).
+///
+/// Render namespaces are package-relative (every crate's `src` renders alike),
+/// so they cannot tell two packages apart; the package key from the laminar
+/// home can. Both permissions are frozen at pass start: a cluster admits only
+/// the namespaces its pass-start members already had, and a file may join a
+/// cluster only when every file physically in that cluster at pass start is in
+/// the file's package. So no relocation (search move, mirror follower, or roof rebuild)
+/// carries a file across a package boundary unless the profile lifts the
+/// package wall.
+///
+/// An SCC whose files span packages (a cross-package import cycle) belongs to
+/// no single package. With the wall up it stays in its pass-start cluster: it
+/// never moves and never joins a new group folder. The cluster it sits in is
+/// the folder of its dominant member; members whose retained home is another
+/// folder do not count toward that folder's packages, so a file of the
+/// folder's own package may still join it.
 pub(in crate::analyze) struct RelocationIdentityGuard {
     identities_by_scc: Vec<Vec<RenderIdentity>>,
     allowed_namespaces: Vec<BTreeSet<SmolStr>>,
+    packages_by_scc: Vec<BTreeSet<SmolStr>>,
+    allowed_packages: Vec<BTreeSet<SmolStr>>,
+    homes_by_scc: Vec<Vec<ClusterId>>,
+    package_wall: bool,
 }
 
 pub(in crate::analyze) type RenderIdentity = (SmolStr, SmolStr);
 pub(in crate::analyze) type IdentitySubgroup = (Vec<u32>, BTreeSet<RenderIdentity>);
 
 impl RelocationIdentityGuard {
+    /// Builds a guard with the package wall up; lift it with
+    /// [`Self::lift_package_wall`].
     pub(in crate::analyze) fn new(
         files: &[FileInfo],
         condensation: &Condensation,
@@ -218,23 +241,105 @@ impl RelocationIdentityGuard {
                     .collect()
             })
             .collect();
-        let mut allowed_namespaces = Self::cluster_namespaces(identity, &identities_by_scc);
-        Self::append_fresh_cluster_namespaces(
-            &mut allowed_namespaces,
-            relieved,
-            &identities_by_scc,
-        );
-        if let Some(rebuilt) = roof_rebuild {
-            Self::append_fresh_cluster_namespaces(
-                &mut allowed_namespaces,
-                rebuilt,
-                &identities_by_scc,
-            );
-        }
+        let namespaces_by_scc: Vec<BTreeSet<SmolStr>> = identities_by_scc
+            .iter()
+            .map(|identities| {
+                identities
+                    .iter()
+                    .map(|(namespace, _)| namespace.clone())
+                    .collect()
+            })
+            .collect();
+        let packages_by_scc: Vec<BTreeSet<SmolStr>> = condensation
+            .members
+            .iter()
+            .map(|members| {
+                members
+                    .iter()
+                    .filter_map(|member| files.get(member.0 as usize))
+                    .map(|file| file.home.package.clone())
+                    .collect()
+            })
+            .collect();
+        // a cluster's packages are those of the files physically in it: a
+        // cross-package cycle's members whose retained home is another folder
+        // do not widen the folder the cycle is placed in.
+        let resident_packages_by_scc: Vec<BTreeSet<SmolStr>> = condensation
+            .members
+            .iter()
+            .map(|members| {
+                let placed = dominant_member(files, members).map(|file| &file.home);
+                members
+                    .iter()
+                    .filter_map(|member| files.get(member.0 as usize))
+                    .filter(|file| placed == Some(&file.home))
+                    .map(|file| file.home.package.clone())
+                    .collect()
+            })
+            .collect();
+        let allowed_namespaces =
+            Self::pass_start_values(identity, relieved, roof_rebuild, &namespaces_by_scc);
+        let allowed_packages =
+            Self::pass_start_values(identity, relieved, roof_rebuild, &resident_packages_by_scc);
+        let homes_by_scc =
+            Self::pass_start_homes(identity, relieved, roof_rebuild, packages_by_scc.len());
         Self {
             identities_by_scc,
             allowed_namespaces,
+            packages_by_scc,
+            allowed_packages,
+            homes_by_scc,
+            package_wall: true,
         }
+    }
+
+    /// Lifts the package wall (the profile's `allow-cross-package-moves`);
+    /// every other rule still applies.
+    #[must_use]
+    pub(in crate::analyze) const fn lift_package_wall(mut self) -> Self {
+        self.package_wall = false;
+        self
+    }
+
+    /// Whether the package wall is lifted; the single source of the setting.
+    pub(in crate::analyze) const fn allows_cross_package_moves(&self) -> bool {
+        !self.package_wall
+    }
+
+    /// Returns `true` when the package wall is down, when `target` is one of
+    /// `moving`'s own pass-start clusters, or when `moving` lies in a single
+    /// package and every pass-start member of `target` lies in that package.
+    pub(in crate::analyze) fn permits_package_join(&self, moving: u32, target: ClusterId) -> bool {
+        !self.package_wall
+            || self.is_pass_start_home(moving, target)
+            || self.within_pass_start_package(moving, target)
+    }
+
+    fn is_pass_start_home(&self, scc: u32, cluster: ClusterId) -> bool {
+        self.homes_by_scc
+            .get(scc as usize)
+            .is_some_and(|homes| homes.contains(&cluster))
+    }
+
+    /// The single-package join rule: the packages of the files physically in
+    /// the cluster at pass start must equal the mover's one package. A cluster
+    /// holding files of two packages admits no newcomer, and a mover spanning
+    /// packages matches no cluster (it may only stay home).
+    fn within_pass_start_package(&self, scc: u32, cluster: ClusterId) -> bool {
+        match (
+            self.packages_by_scc.get(scc as usize),
+            self.allowed_packages.get(cluster.0 as usize),
+        ) {
+            (Some(packages), Some(allowed)) => packages.len() == 1 && packages == allowed,
+            _ => false,
+        }
+    }
+
+    /// Whether `scc`'s files all lie in one package.
+    fn is_single_package(&self, scc: u32) -> bool {
+        self.packages_by_scc
+            .get(scc as usize)
+            .is_some_and(|packages| packages.len() == 1)
     }
 
     fn permits_join(&self, parts: &Partition, moving: u32, target: ClusterId) -> bool {
@@ -244,6 +349,9 @@ impl RelocationIdentityGuard {
         let Some(allowed) = self.allowed_namespaces.get(target.0 as usize) else {
             return false;
         };
+        if !self.permits_package_join(moving, target) {
+            return false;
+        }
         if moving_identities
             .iter()
             .any(|(namespace, _)| !allowed.contains(namespace))
@@ -268,7 +376,9 @@ impl RelocationIdentityGuard {
     /// Permits a pinned test follower to join a production-owned logical
     /// cluster while retaining its own render namespace. Exact mirror rules
     /// establish that cross-namespace relationship; leaf collisions remain a
-    /// hard veto within the projected namespace.
+    /// hard veto within the projected namespace. The package wall is checked
+    /// earlier through [`Self::permits_package_join`], so a follower blocked
+    /// by it reports `packageBoundary` rather than a path collision.
     fn permits_shadow_join(&self, parts: &Partition, moving: u32, target: ClusterId) -> bool {
         let Some(moving_identities) = self.identities_by_scc.get(moving as usize) else {
             return false;
@@ -293,6 +403,10 @@ impl RelocationIdentityGuard {
         self.accepts_with_mirrors(parts, &MirrorEvidence::default())
     }
 
+    /// Checks a finished candidate against every pass-start permission: each
+    /// SCC sits in a cluster that admits its namespaces (applied mirror
+    /// followers excepted) and, with the wall up, its packages; and no two
+    /// files collide on one rendered identity.
     pub(in crate::analyze) fn accepts_with_mirrors(
         &self,
         parts: &Partition,
@@ -304,20 +418,27 @@ impl RelocationIdentityGuard {
             .iter()
             .enumerate()
             .all(|(scc, identities)| {
-                let Some(cluster) = parts.cluster_of(u32::try_from(scc).unwrap_or(u32::MAX)) else {
+                let scc = u32::try_from(scc).unwrap_or(u32::MAX);
+                let Some(cluster) = parts.cluster_of(scc) else {
                     return false;
                 };
                 let Some(allowed) = self.allowed_namespaces.get(cluster.0 as usize) else {
                     return false;
                 };
+                if !self.permits_package_join(scc, cluster) {
+                    return false;
+                }
                 identities.iter().all(|(namespace, leaf)| {
-                    (allowed.contains(namespace)
-                        || applied.contains(&u32::try_from(scc).unwrap_or(u32::MAX)))
+                    (allowed.contains(namespace) || applied.contains(&scc))
                         && occupied.insert((cluster, namespace, leaf))
                 })
             })
     }
 
+    /// Splits `group` into collision-free subgroups; with the package wall up
+    /// each subgroup also holds a single package, so a new group folder never
+    /// spans packages, and an SCC spanning packages joins no subgroup at all
+    /// (it stays in its pass-start cluster).
     pub(in crate::analyze) fn collision_free_subgroups(&self, group: &[u32]) -> Vec<Vec<u32>> {
         let mut subgroups: Vec<IdentitySubgroup> = Vec::new();
         for &scc in group {
@@ -325,13 +446,19 @@ impl RelocationIdentityGuard {
                 continue;
             };
             let unique: BTreeSet<RenderIdentity> = identities.iter().cloned().collect();
-            if unique.len() != identities.len() {
+            if unique.len() != identities.len()
+                || (self.package_wall && !self.is_single_package(scc))
+            {
                 continue;
             }
-            if let Some((members, occupied)) = subgroups
-                .iter_mut()
-                .find(|(_, occupied)| occupied.is_disjoint(&unique))
-            {
+            let packages = self.packages_by_scc.get(scc as usize);
+            if let Some((members, occupied)) = subgroups.iter_mut().find(|(members, occupied)| {
+                occupied.is_disjoint(&unique)
+                    && (!self.package_wall
+                        || members.first().is_some_and(|&first| {
+                            self.packages_by_scc.get(first as usize) == packages
+                        }))
+            }) {
                 members.push(scc);
                 occupied.extend(unique);
             } else {
@@ -341,47 +468,66 @@ impl RelocationIdentityGuard {
         subgroups.into_iter().map(|(members, _)| members).collect()
     }
 
-    fn cluster_namespaces(
-        parts: &Partition,
-        identities_by_scc: &[Vec<RenderIdentity>],
+    /// Freezes one per-SCC value set per cluster at pass start: the identity
+    /// clusters, then the fresh clusters that capacity relief and the roof
+    /// rebuild introduce.
+    fn pass_start_values(
+        identity: &Partition,
+        relieved: &Partition,
+        roof_rebuild: Option<&Partition>,
+        values_by_scc: &[BTreeSet<SmolStr>],
     ) -> Vec<BTreeSet<SmolStr>> {
-        let mut namespaces = vec![BTreeSet::new(); parts.cluster_count()];
-        Self::merge_cluster_namespaces(&mut namespaces, parts, identities_by_scc);
-        namespaces
-    }
-
-    fn append_fresh_cluster_namespaces(
-        namespaces: &mut Vec<BTreeSet<SmolStr>>,
-        parts: &Partition,
-        identities_by_scc: &[Vec<RenderIdentity>],
-    ) {
-        let first_fresh = namespaces.len();
-        namespaces.resize_with(parts.cluster_count(), BTreeSet::new);
-        for (scc, identities) in identities_by_scc.iter().enumerate() {
-            let Some(cluster) = parts.cluster_of(u32::try_from(scc).unwrap_or(u32::MAX)) else {
-                continue;
-            };
-            if cluster.0 as usize >= first_fresh
-                && let Some(allowed) = namespaces.get_mut(cluster.0 as usize)
-            {
-                allowed.extend(identities.iter().map(|(namespace, _)| namespace.clone()));
-            }
+        let mut values = vec![BTreeSet::new(); identity.cluster_count()];
+        Self::merge_cluster_values(&mut values, identity, values_by_scc, 0);
+        for fresh in std::iter::once(relieved).chain(roof_rebuild) {
+            let first_fresh = values.len();
+            values.resize_with(fresh.cluster_count().max(first_fresh), BTreeSet::new);
+            Self::merge_cluster_values(&mut values, fresh, values_by_scc, first_fresh);
         }
+        values
     }
 
-    fn merge_cluster_namespaces(
-        namespaces: &mut [BTreeSet<SmolStr>],
+    /// Records, per SCC, the clusters it occupies at pass start, under the
+    /// same freshness rule as [`Self::pass_start_values`]: its identity
+    /// cluster, then any fresh cluster capacity relief or the roof rebuild
+    /// places it in.
+    fn pass_start_homes(
+        identity: &Partition,
+        relieved: &Partition,
+        roof_rebuild: Option<&Partition>,
+        scc_count: usize,
+    ) -> Vec<Vec<ClusterId>> {
+        let mut homes = vec![Vec::new(); scc_count];
+        let mut first_fresh = 0;
+        for parts in [identity, relieved].into_iter().chain(roof_rebuild) {
+            for (scc, scc_homes) in homes.iter_mut().enumerate() {
+                if let Some(cluster) = parts.cluster_of(u32::try_from(scc).unwrap_or(u32::MAX))
+                    && cluster.0 as usize >= first_fresh
+                    && !scc_homes.contains(&cluster)
+                {
+                    scc_homes.push(cluster);
+                }
+            }
+            first_fresh = first_fresh.max(parts.cluster_count());
+        }
+        homes
+    }
+
+    fn merge_cluster_values(
+        values: &mut [BTreeSet<SmolStr>],
         parts: &Partition,
-        identities_by_scc: &[Vec<RenderIdentity>],
+        values_by_scc: &[BTreeSet<SmolStr>],
+        first_cluster: usize,
     ) {
-        for (scc, identities) in identities_by_scc.iter().enumerate() {
+        for (scc, scc_values) in values_by_scc.iter().enumerate() {
             let Some(cluster) = parts.cluster_of(u32::try_from(scc).unwrap_or(u32::MAX)) else {
                 continue;
             };
-            let Some(allowed) = namespaces.get_mut(cluster.0 as usize) else {
-                continue;
-            };
-            allowed.extend(identities.iter().map(|(namespace, _)| namespace.clone()));
+            if cluster.0 as usize >= first_cluster
+                && let Some(allowed) = values.get_mut(cluster.0 as usize)
+            {
+                allowed.extend(scc_values.iter().cloned());
+            }
         }
     }
 }
@@ -706,6 +852,7 @@ impl PipelineSolver<'_> {
                 pass_start_file_by_candidate: BTreeMap::new(),
                 zone_by_file: BTreeMap::new(),
                 namespace_by_file: BTreeMap::new(),
+                package_by_file: BTreeMap::new(),
                 key_by_id: BTreeMap::new(),
             };
         }
@@ -819,6 +966,7 @@ impl PipelineSolver<'_> {
         let mut restored_ids = BTreeMap::new();
         let mut zone_by_file: BTreeMap<ContainerId, bool> = BTreeMap::new();
         let mut namespace_by_file: BTreeMap<ContainerId, SmolStr> = BTreeMap::new();
+        let mut package_by_file: BTreeMap<ContainerId, SmolStr> = BTreeMap::new();
         let mut pass_start_file_by_candidate: BTreeMap<ContainerId, ContainerId> = BTreeMap::new();
         let cluster_by_folder: BTreeMap<&SmolStr, u32> = self
             .real_folder_names
@@ -889,6 +1037,7 @@ impl PipelineSolver<'_> {
                     file_ids.insert(vertex, id);
                     pass_start_file_by_candidate.insert(id, ContainerId(file.container));
                     namespace_by_file.insert(id, file.namespace.clone());
+                    package_by_file.insert(id, file.home.package.clone());
                     zone_by_file.insert(
                         id,
                         self.test_zone
@@ -906,6 +1055,7 @@ impl PipelineSolver<'_> {
             pass_start_file_by_candidate,
             zone_by_file,
             namespace_by_file,
+            package_by_file,
             key_by_id,
         }
     }
@@ -1293,6 +1443,10 @@ pub(in crate::analyze) struct CandidateTree {
     zone_by_file: BTreeMap<ContainerId, bool>,
     /// Opaque pass-start render namespace of each emitted candidate file.
     namespace_by_file: BTreeMap<ContainerId, SmolStr>,
+    /// Pass-start manifest package key of each emitted candidate file. Render
+    /// namespaces are package-relative, so only this key keeps a declaration
+    /// from being relocated into another package.
+    package_by_file: BTreeMap<ContainerId, SmolStr>,
     /// The undecorated elected key of each upper container whose display name
     /// `qualify_elected` had to disambiguate, keyed by container id — empty when
     /// no sibling name collided. The render boundary strips a folder's increment
@@ -1305,6 +1459,14 @@ pub(in crate::analyze) struct CandidateTree {
 impl CandidateTree {
     fn shares_namespace(&self, first: ContainerId, second: ContainerId) -> bool {
         self.namespace_by_file.get(&first) == self.namespace_by_file.get(&second)
+    }
+
+    /// Returns `true` when both candidate files belong to the same manifest
+    /// package; an unknown file shares no package.
+    fn shares_package(&self, first: ContainerId, second: ContainerId) -> bool {
+        self.package_by_file
+            .get(&first)
+            .is_some_and(|package| self.package_by_file.get(&second) == Some(package))
     }
 }
 

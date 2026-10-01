@@ -205,6 +205,11 @@ impl PipelineSolver<'_> {
 
                 let reason = if claims.len() > 1 {
                     Some(BlockedMirrorReason::AmbiguousMapping)
+                } else if !self
+                    .relocation_identity
+                    .permits_package_join(mirror_scc, target)
+                {
+                    Some(BlockedMirrorReason::PackageBoundary)
                 } else if intended.is_none() || !self.test_only_scc(mirror_scc) {
                     Some(BlockedMirrorReason::NamespaceBoundary)
                 } else if !self.permits_mirror_physical_capacity(

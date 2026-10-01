@@ -7,7 +7,7 @@ use strata_core::cluster::seed::{SeedLevel, seed};
 use strata_core::cluster::{ClusterId, LevelCaps, Partition};
 use strata_core::condense::Condensation;
 use strata_core::graph::csr::Csr;
-use strata_ir::{Container, ContainerId, ScopeLevel};
+use strata_ir::{Container, ContainerId, NodeId, ScopeLevel};
 
 use crate::analyze::relocation::{FileInfo, ROOF_COHERENCE_FLOOR, RelocationIdentityGuard};
 use crate::analyze::scoring::ContainerSpec;
@@ -145,6 +145,28 @@ pub(in crate::analyze) fn fold_affinity_to_top(
         .collect()
 }
 
+/// The member an SCC is placed by: the file with the largest production SLOC,
+/// ties to the lexicographically smaller path.
+pub(in crate::analyze) fn dominant_member<'a>(
+    files: &'a [FileInfo],
+    members: &[NodeId],
+) -> Option<&'a FileInfo> {
+    let mut dominant: Option<&FileInfo> = None;
+    for member in members {
+        let Some(file) = files.get(member.0 as usize) else {
+            continue;
+        };
+        let better = dominant.is_none_or(|top| {
+            file.production_sloc > top.production_sloc
+                || (file.production_sloc == top.production_sloc && file.name < top.name)
+        });
+        if better {
+            dominant = Some(file);
+        }
+    }
+    dominant
+}
+
 /// Builds the real-directory folder partition: each file SCC lands in the
 /// cluster of its dominant member's laminar home — the file with the largest
 /// production SLOC, ties to the lexicographically smaller path (an SCC
@@ -171,20 +193,7 @@ pub(in crate::analyze) fn real_dir_partition(
         .members
         .iter()
         .map(|members| {
-            let mut dominant: Option<&FileInfo> = None;
-            for member in members {
-                let Some(file) = files.get(member.0 as usize) else {
-                    continue;
-                };
-                let better = dominant.is_none_or(|top| {
-                    file.production_sloc > top.production_sloc
-                        || (file.production_sloc == top.production_sloc && file.name < top.name)
-                });
-                if better {
-                    dominant = Some(file);
-                }
-            }
-            dominant.map_or_else(fallback, |file| file.home.clone())
+            dominant_member(files, members).map_or_else(fallback, |file| file.home.clone())
         })
         .collect();
     let distinct: BTreeSet<LaminarHome> = keys.iter().cloned().collect();

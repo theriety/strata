@@ -246,9 +246,10 @@ pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<St
             p.tests.builtins
         ),
         format!(
-            "   relocation pin-test-files {} · pin-test-symbols {} · file patterns {} · symbol patterns {}",
+            "   relocation pin-test-files {} · pin-test-symbols {} · cross-package {} · file patterns {} · symbol patterns {}",
             p.relocation.pin_detected_test_files,
             p.relocation.pin_detected_test_symbols,
+            p.relocation.allow_cross_package_moves,
             p.relocation.forbid_file_moves.len(),
             p.relocation.forbid_symbol_moves.len()
         ),

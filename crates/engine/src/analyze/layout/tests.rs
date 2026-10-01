@@ -552,6 +552,184 @@ fn should_treat_rendered_leaf_identity_as_case_sensitive() {
     assert!(guard.accepts(&partition));
 }
 
+/// Two single-file SCCs in packages `left` and `right`, each alone in its
+/// pass-start cluster, with distinct rendered leaves so only the package wall
+/// can refuse a join.
+fn two_package_guard(allow_cross_package: bool) -> RelocationIdentityGuard {
+    let mut first = relief_file(0, "first");
+    first.home.package = SmolStr::new("left");
+    let mut second = relief_file(1, "second");
+    second.home.package = SmolStr::new("right");
+    let condensation = singleton_condensation(2);
+    let pass_start = Partition::from_assignment(vec![ClusterId(0), ClusterId(1)], 2);
+    let guard = RelocationIdentityGuard::new(
+        &[first, second],
+        &condensation,
+        &pass_start,
+        &pass_start,
+        None,
+    );
+    if allow_cross_package {
+        guard.lift_package_wall()
+    } else {
+        guard
+    }
+}
+
+#[test]
+fn should_refuse_a_candidate_that_joins_files_of_two_packages_by_default() {
+    let joined = Partition::from_assignment(vec![ClusterId(0), ClusterId(0)], 2);
+
+    assert!(
+        two_package_guard(false).accepts(&Partition::from_assignment(
+            vec![ClusterId(0), ClusterId(1)],
+            2
+        ))
+    );
+    assert!(
+        !two_package_guard(false).accepts(&joined),
+        "a file may not join a cluster whose pass-start members sit in another package"
+    );
+}
+
+#[test]
+fn should_accept_a_cross_package_join_when_the_wall_is_lifted() {
+    let joined = Partition::from_assignment(vec![ClusterId(0), ClusterId(0)], 2);
+
+    assert!(two_package_guard(true).accepts(&joined));
+}
+
+#[test]
+fn should_refuse_a_mirror_follower_into_another_package_by_default() {
+    assert!(two_package_guard(false).permits_package_join(1, ClusterId(1)));
+    assert!(!two_package_guard(false).permits_package_join(1, ClusterId(0)));
+    assert!(two_package_guard(true).permits_package_join(1, ClusterId(0)));
+}
+
+#[test]
+fn should_keep_each_new_group_folder_inside_one_package_by_default() {
+    assert_eq!(
+        two_package_guard(false).collision_free_subgroups(&[0, 1]),
+        vec![vec![0], vec![1]],
+        "a new group folder must not hold files of two packages"
+    );
+    assert_eq!(
+        two_package_guard(true).collision_free_subgroups(&[0, 1]),
+        vec![vec![0, 1]]
+    );
+}
+
+/// A cross-package import cycle between two TypeScript packages:
+/// `left/src/a.ts` and `right/src/b.ts` import each other, so they condense into
+/// one SCC homed in the left folder (cluster 0), while `right/src/c.ts` sits
+/// alone in the right folder (cluster 1). Cluster 0's pass-start package set
+/// is therefore `{left, right}`.
+fn cross_package_cycle_guard(allow_cross_package: bool) -> RelocationIdentityGuard {
+    let typescript = |index: usize, name: &str, package: &str| {
+        let mut file = relief_file(index, name);
+        file.name = SmolStr::new(format!("{package}/src/{name}.ts"));
+        file.home.package = SmolStr::new(package);
+        file
+    };
+    let files = [
+        typescript(0, "a", "left"),
+        typescript(1, "b", "right"),
+        typescript(2, "c", "right"),
+    ];
+    let condensation = Condensation {
+        dag: Csr::from_sorted_edges(2, &[]),
+        membership: vec![SccId(0), SccId(0), SccId(1)],
+        members: vec![vec![NodeId(0), NodeId(1)], vec![NodeId(2)]],
+    };
+    let pass_start = Partition::from_assignment(vec![ClusterId(0), ClusterId(1)], 2);
+    let guard = RelocationIdentityGuard::new(&files, &condensation, &pass_start, &pass_start, None);
+    if allow_cross_package {
+        guard.lift_package_wall()
+    } else {
+        guard
+    }
+}
+
+#[test]
+fn should_admit_a_same_package_newcomer_into_a_folder_a_cross_package_cycle_passes_through() {
+    let typescript = |index: usize, name: &str, package: &str| {
+        let mut file = relief_file(index, name);
+        file.name = SmolStr::new(format!("{package}/src/{name}.ts"));
+        file.home.package = SmolStr::new(package);
+        file.home.folder = SmolStr::new(format!("{package}/src"));
+        file
+    };
+    // a.ts (left) is the cycle's dominant member, so the cycle sits in the
+    // left folder; b.ts's retained home is the right folder.
+    let mut dominant = typescript(0, "a", "left");
+    dominant.production_sloc = 20;
+    let files = [
+        dominant,
+        typescript(1, "b", "right"),
+        typescript(2, "c", "right"),
+        typescript(3, "d", "left"),
+    ];
+    let condensation = Condensation {
+        dag: Csr::from_sorted_edges(3, &[]),
+        membership: vec![SccId(0), SccId(0), SccId(1), SccId(2)],
+        members: vec![vec![NodeId(0), NodeId(1)], vec![NodeId(2)], vec![NodeId(3)]],
+    };
+    let pass_start = Partition::from_assignment(vec![ClusterId(0), ClusterId(1), ClusterId(2)], 3);
+    let guard = RelocationIdentityGuard::new(&files, &condensation, &pass_start, &pass_start, None);
+
+    assert!(
+        guard.permits_package_join(2, ClusterId(0)),
+        "left/src/d.ts may join the left folder: the cycle's right member lives elsewhere"
+    );
+    assert!(
+        !guard.permits_package_join(1, ClusterId(0)),
+        "right/src/c.ts still may not join the left folder"
+    );
+    assert!(
+        !guard.permits_package_join(0, ClusterId(2)),
+        "the cross-package cycle itself still never moves"
+    );
+}
+
+#[test]
+fn should_not_admit_a_file_into_a_folder_that_a_cross_package_cycle_mixed() {
+    let guard = cross_package_cycle_guard(false);
+
+    assert!(
+        !guard.permits_package_join(1, ClusterId(0)),
+        "right/src/c.ts may not join the left folder just because a cycle made it mixed"
+    );
+    assert!(
+        !guard.accepts(&Partition::from_assignment(
+            vec![ClusterId(0), ClusterId(0)],
+            2
+        )),
+        "a candidate placing c.ts in the left folder crosses the package wall"
+    );
+    assert!(cross_package_cycle_guard(true).permits_package_join(1, ClusterId(0)));
+}
+
+#[test]
+fn should_keep_a_package_spanning_cycle_in_its_pass_start_cluster() {
+    let guard = cross_package_cycle_guard(false);
+
+    assert!(guard.accepts(&Partition::from_assignment(
+        vec![ClusterId(0), ClusterId(1)],
+        2
+    )));
+    assert!(guard.permits_package_join(0, ClusterId(0)));
+    assert!(
+        !guard.permits_package_join(0, ClusterId(1)),
+        "an SCC spanning packages never moves while the wall is up"
+    );
+    assert_eq!(
+        guard.collision_free_subgroups(&[0, 1]),
+        vec![vec![1]],
+        "an SCC spanning packages joins no new group folder"
+    );
+    assert!(cross_package_cycle_guard(true).permits_package_join(0, ClusterId(1)));
+}
+
 #[test]
 fn should_move_a_file_body_only_with_its_whole_file() {
     let snapshot = rendered_leaf_collision_snapshot(true, true);
@@ -1081,6 +1259,19 @@ fn should_inherit_real_domain_keys_for_domain_rooted_files() {
     config.profiles.anchored.capacity.folder = 3;
     config.profiles.greenfield.capacity.folder = 3;
 
+    // the consolidation crosses a manifest package, which ADR-0017 admits
+    // only when the profile lifts the package wall.
+    config
+        .profiles
+        .anchored
+        .relocation
+        .allow_cross_package_moves = true;
+    config
+        .profiles
+        .greenfield
+        .relocation
+        .allow_cross_package_moves = true;
+
     let modes = analyze(&snapshot, &config)
         .map(|result| result.profiles)
         .unwrap_or_default();
@@ -1167,6 +1358,19 @@ fn should_qualify_folder_keys_that_collide_across_nested_packages() {
     // absorbs the sole-anchored satellite without exceeding the cap.
     config.profiles.anchored.capacity.folder = 3;
     config.profiles.greenfield.capacity.folder = 3;
+
+    // the consolidation crosses a manifest package, which ADR-0017 admits
+    // only when the profile lifts the package wall.
+    config
+        .profiles
+        .anchored
+        .relocation
+        .allow_cross_package_moves = true;
+    config
+        .profiles
+        .greenfield
+        .relocation
+        .allow_cross_package_moves = true;
 
     let modes = analyze(&snapshot, &config)
         .map(|result| result.profiles)
@@ -1935,17 +2139,11 @@ fn should_name_a_balanced_cluster_by_the_shared_home_prefix() {
     );
 }
 
-#[test]
-fn should_join_the_top_two_homes_when_no_prefix_is_shared() {
-    // rung R3: `ai/app` and `bi/app` tie at 30 SLOC of real homes with no
-    // shared prefix, so the merged domain joins the two homes — ranked by
-    // production SLOC then file count, so the exact SLOC tie falls to file
-    // count and `bi/app` leads despite `ai/app` sorting first. The
-    // satellite `d` carries a sole call anchor into `ai/app`, so polish
-    // genuinely consolidates it there while every vote keeps its real
-    // home, and the weak `a`-to-`c` reference keeps the packages coupled
-    // into one suggestion.
-    let snapshot = snapshot(
+/// Rung R3's fixture: `ai/app` and `bi/app` tie on SLOC with no shared
+/// prefix; the satellite `src/d.ts` of package `bi` carries a sole call
+/// anchor into package `ai`'s `ai/app`.
+fn top_two_homes_snapshot() -> Snapshot {
+    snapshot(
         vec![
             homed(0, "a", 3, 15),
             homed(1, "b", 4, 15),
@@ -1973,11 +2171,37 @@ fn should_join_the_top_two_homes_when_no_prefix_is_shared() {
             container(8, "src/d.ts", ScopeLevel::File, Some(6)),
             container(9, "src/e.ts", ScopeLevel::File, Some(6)),
         ],
-    );
+    )
+}
+
+#[test]
+fn should_join_the_top_two_homes_when_no_prefix_is_shared() {
+    // rung R3: `ai/app` and `bi/app` tie at 30 SLOC of real homes with no
+    // shared prefix, so the merged domain joins the two homes — ranked by
+    // production SLOC then file count, so the exact SLOC tie falls to file
+    // count and `bi/app` leads despite `ai/app` sorting first. The
+    // satellite `d` carries a sole call anchor into `ai/app`, so polish
+    // genuinely consolidates it there while every vote keeps its real
+    // home, and the weak `a`-to-`c` reference keeps the packages coupled
+    // into one suggestion.
+    let snapshot = top_two_homes_snapshot();
     let mut config = config_with_k(2);
     // headroom for the genuine consolidation: `ai/app` absorbs the
     // sole-anchored satellite without exceeding the cap.
     config.profiles.anchored.capacity.folder = 3;
+
+    // the consolidation crosses a manifest package, which ADR-0017 admits
+    // only when the profile lifts the package wall.
+    config
+        .profiles
+        .anchored
+        .relocation
+        .allow_cross_package_moves = true;
+    config
+        .profiles
+        .greenfield
+        .relocation
+        .allow_cross_package_moves = true;
 
     let modes = analyze(&snapshot, &config)
         .map(|result| result.profiles)
@@ -2003,6 +2227,77 @@ fn should_join_the_top_two_homes_when_no_prefix_is_shared() {
         joined_seen,
         "expected the merged levels to join their top-two homes as \
              `bi/app/ai/app` under `bi/ai`"
+    );
+}
+
+/// Every (file, destination) move of the R3 fixture into a folder of the
+/// other package, across both profiles and all candidates.
+fn top_two_homes_crossings(allow_cross_package: bool) -> Vec<(String, String)> {
+    let snapshot = top_two_homes_snapshot();
+    let mut config = config_with_k(2);
+    config.profiles.anchored.capacity.folder = 3;
+    config
+        .profiles
+        .anchored
+        .relocation
+        .allow_cross_package_moves = allow_cross_package;
+    config
+        .profiles
+        .greenfield
+        .relocation
+        .allow_cross_package_moves = allow_cross_package;
+    let modes = analyze(&snapshot, &config)
+        .map(|result| result.profiles)
+        .unwrap_or_default();
+    [modes.anchored, modes.greenfield]
+        .into_iter()
+        .flatten()
+        .flat_map(|mode| mode.candidates)
+        .flat_map(|candidate| candidate.delta_narration)
+        .flat_map(|entry| {
+            let to = entry.to;
+            entry
+                .files
+                .into_iter()
+                .map(move |file| (file.path, to.clone()))
+        })
+        .filter(|(path, to)| {
+            // the fixture's container names carry no package prefix, so each
+            // file's package is read from the fixture itself.
+            let home = if ["c.ts", "d.ts", "e.ts"]
+                .iter()
+                .any(|leaf| path.ends_with(leaf))
+            {
+                "bi/"
+            } else {
+                "ai/"
+            };
+            let other = if home == "bi/" { "ai/" } else { "bi/" };
+            to.contains(other) && !to.contains(home)
+        })
+        .collect()
+}
+
+#[test]
+fn should_keep_a_file_inside_its_package_by_default() {
+    // the same pull that joins the two packages above: with the package wall
+    // up (ADR-0017) the satellite never leaves `bi`, whatever the objective.
+    let crossings = top_two_homes_crossings(false);
+
+    assert!(
+        crossings.is_empty(),
+        "no file move may cross a package boundary, got {crossings:?}"
+    );
+}
+
+#[test]
+fn should_move_a_file_across_packages_when_the_wall_is_lifted() {
+    let crossings = top_two_homes_crossings(true);
+
+    assert!(
+        !crossings.is_empty(),
+        "with allow-cross-package-moves the same pull crosses packages, proving \
+         the wall is what held the file"
     );
 }
 
