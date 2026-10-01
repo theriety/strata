@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_ir::{ContainerId, ContainerTree, Layout, Polarity, ScopeLevel, build_laminar_tree};
+use strata_ir::{
+    ContainerId, ContainerTree, IntermediateRepresentation, Layout, NodeId, Polarity, ScopeLadder,
+    ScopeLevel, Snapshot, build_laminar_tree,
+};
 
 use crate::config::{AnalyzeConfig, ProfileName};
 use crate::result::{CapacityBreach, Level, Severity, Violation, ViolationKind};
@@ -887,6 +890,81 @@ fn should_retain_visibility_identity_without_a_file_container() -> Result<(), St
     assert_eq!(
         finding.detail,
         "`orphan` is exported at Package but needed only at Folder"
+    );
+    Ok(())
+}
+
+/// Builds a package holding `src/` (files `args`, `main`) and `src/sub/` (files
+/// `a`, `b`) with one `Package`-declared `item` in `home` consumed from
+/// `consumer_file`, optionally with an expressible-scope ladder for the item.
+fn ladder_fixture(
+    home: u32,
+    consumer_file: Option<u32>,
+    ladder: Option<Vec<ScopeLevel>>,
+) -> Result<Snapshot, String> {
+    let containers = vec![
+        container(0, "pkg", ScopeLevel::Package, None),
+        container(1, "src", ScopeLevel::Domain, Some(0)),
+        container(2, "src/args.rs", ScopeLevel::File, Some(1)),
+        container(3, "src/main.rs", ScopeLevel::File, Some(1)),
+        container(4, "src/sub", ScopeLevel::Folder, Some(1)),
+        container(5, "src/sub/a.rs", ScopeLevel::File, Some(4)),
+        container(6, "src/sub/b.rs", ScopeLevel::File, Some(4)),
+    ];
+    let mut item = node(0, "item", home, Polarity::Production);
+    item.visibility = ScopeLevel::Package;
+    let mut nodes = vec![item];
+    let mut edges = Vec::new();
+    if let Some(file) = consumer_file {
+        nodes.push(node(1, "user", file, Polarity::Production));
+        edges.push(edge(1, 0));
+    }
+    let mut ir = IntermediateRepresentation::new(nodes, edges, ContainerTree::new(containers));
+    ir.scope_ladders = ladder
+        .into_iter()
+        .map(|levels| ScopeLadder {
+            node: NodeId(0),
+            levels,
+        })
+        .collect();
+    Snapshot::assemble(ir).map_err(|error| error.to_string())
+}
+
+const CRATE_ROOT_LADDER: [ScopeLevel; 2] = [ScopeLevel::File, ScopeLevel::Package];
+
+#[test]
+fn should_not_flag_a_crate_root_sibling_that_no_narrower_spelling_reaches() -> Result<(), String> {
+    let snapshot = ladder_fixture(2, Some(3), Some(CRATE_ROOT_LADDER.to_vec()))?;
+    assert_eq!(visibility_violations(&snapshot), []);
+    Ok(())
+}
+
+#[test]
+fn should_still_flag_the_same_item_without_a_ladder() -> Result<(), String> {
+    let found = visibility_violations(&ladder_fixture(2, Some(3), None)?);
+    assert_eq!(found.len(), 1, "{found:?}");
+    Ok(())
+}
+
+#[test]
+fn should_still_flag_an_item_nobody_outside_its_file_uses_despite_a_ladder() -> Result<(), String> {
+    let snapshot = ladder_fixture(2, None, Some(CRATE_ROOT_LADDER.to_vec()))?;
+    let found = visibility_violations(&snapshot);
+    assert_eq!(found.len(), 1, "{found:?}");
+    Ok(())
+}
+
+#[test]
+fn should_still_flag_a_nested_item_consumed_only_inside_its_own_subtree() -> Result<(), String> {
+    // item in `src/sub/a.rs`, consumer in `src/sub/b.rs`; the `sub` folder rung
+    // is narrower than the declared crate-wide scope and covers the consumer.
+    let ladder = vec![ScopeLevel::File, ScopeLevel::Folder, ScopeLevel::Package];
+    let found = visibility_violations(&ladder_fixture(5, Some(6), Some(ladder))?);
+    let finding = found.first().ok_or("missing finding")?;
+    assert!(
+        finding.detail.contains("Package but needed only at Folder"),
+        "{}",
+        finding.detail
     );
     Ok(())
 }

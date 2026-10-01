@@ -15,13 +15,17 @@ use strata_ir::{Adapter, IrFragment, SourceFile};
 /// so a scope surviving beside them proves the syntactic and semantic child
 /// lists are compared after skipping them.
 fn bind_fixture() -> Result<IrFragment, String> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/scope/app");
-    let paths = [
+    bind_fixture_files(&[
         "src/lib.rs",
         "src/parse.rs",
         "src/parse/refs.rs",
         "src/parse/tests.rs",
-    ];
+    ])
+}
+
+/// Parses and binds the `scope/app` fixture restricted to the given files.
+fn bind_fixture_files(paths: &[&str]) -> Result<IrFragment, String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/scope/app");
     let files = paths
         .iter()
         .map(|path| {
@@ -146,5 +150,73 @@ fn should_not_state_a_definition_file_for_a_crate_root_that_owns_a_matching_fold
         .ok_or("no crate-root scope emitted")?;
     assert_eq!(scope.files, ["src/lib.rs", "src/lib/x.rs"]);
     assert_eq!(scope.definition_file, None);
+    Ok(())
+}
+
+#[test]
+fn should_state_no_rung_between_a_crate_root_child_and_the_crate() -> Result<(), String> {
+    // `inner::item` is `pub(super)` under the crate root: the only spellings
+    // are private (`src/inner.rs`) and the crate itself, so the ladder has no
+    // rung narrower than the crate that still reaches `src/lib.rs`.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/scope/crate_scope");
+    let paths = ["src/lib.rs", "src/inner.rs"];
+    let files = paths
+        .iter()
+        .map(|path| {
+            fs::read_to_string(root.join(path))
+                .map(|contents| SourceFile {
+                    path: (*path).into(),
+                    contents,
+                })
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let adapter = RustAdapter::new(root.join("Cargo.toml"));
+    let trees = adapter.parse(&files).map_err(|error| error.to_string())?;
+    let fragment = adapter.bind(trees).map_err(|error| error.to_string())?;
+    let scope = fragment
+        .visibility_scopes
+        .first()
+        .ok_or("no crate-root scope emitted")?;
+    let rungs: Vec<Vec<&str>> = scope
+        .expressible
+        .iter()
+        .map(|rung| rung.files.iter().map(SmolStr::as_str).collect())
+        .collect();
+    assert_eq!(
+        rungs,
+        [vec!["src/inner.rs"], vec!["src/inner.rs", "src/lib.rs"]]
+    );
+    Ok(())
+}
+
+#[test]
+fn should_state_every_enclosing_module_as_a_rung_for_a_nested_pub_super_item() -> Result<(), String>
+{
+    // `refs::helper` is `pub(super)`: private (`refs`), `parse`, crate root.
+    let fragment = bind_fixture()?;
+    let scope = fragment
+        .visibility_scopes
+        .first()
+        .ok_or("no pub(super) scope emitted")?;
+    let sizes: Vec<usize> = scope
+        .expressible
+        .iter()
+        .map(|rung| rung.files.len())
+        .collect();
+    assert_eq!(sizes, [1, 2, 3]);
+    Ok(())
+}
+
+#[test]
+fn should_state_no_ladder_when_an_enclosing_rung_is_not_analyzed() -> Result<(), String> {
+    // without `src/lib.rs` among the analyzed files the crate-root rung cannot
+    // be resolved, so the whole ladder is dropped rather than left with a gap.
+    let fragment = bind_fixture_files(&["src/parse.rs", "src/parse/refs.rs"])?;
+    let scope = fragment
+        .visibility_scopes
+        .first()
+        .ok_or("no pub(super) scope emitted")?;
+    assert!(scope.expressible.is_empty());
     Ok(())
 }
