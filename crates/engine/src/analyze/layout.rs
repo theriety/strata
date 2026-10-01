@@ -1131,12 +1131,7 @@ pub(in crate::analyze) fn cluster_level(
     // each quotient vertex is one container of the level below, so capacity
     // weights are all one: the cap counts members directly.
     let unit_weights = vec![1_u32; graph.vertex_count()];
-    let cap = match level {
-        SeedLevel::Folder => caps.folder,
-        SeedLevel::Domain => caps.domain,
-        SeedLevel::Package => caps.package,
-        SeedLevel::PackageGroup => caps.package_group,
-    };
+    let cap = level.cap(caps);
     let chain = coarsen_chain(graph, &layers, &unit_weights, cap.max(1));
     let Some(top) = chain.last() else {
         return Partition::from_assignment(Vec::new(), 0);

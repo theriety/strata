@@ -129,6 +129,23 @@ impl Csr {
         }
     }
 
+    /// Returns the graph with every edge reversed, weights preserved.
+    ///
+    /// Self-loops are kept. Rows of the result are sorted ascending, so the
+    /// predecessors of a vertex appear in ascending source order.
+    #[must_use]
+    pub fn reversed(&self) -> Self {
+        let mut edges: Vec<(u32, u32, f32)> = Vec::with_capacity(self.edge_count());
+        for vertex in 0..self.vertex_count() {
+            let from = u32::try_from(vertex).unwrap_or(u32::MAX);
+            let weights = self.weights(from);
+            for (slot, &to) in self.neighbors(from).iter().enumerate() {
+                edges.push((to, from, weights.get(slot).copied().unwrap_or(0.0)));
+            }
+        }
+        Self::from_weighted_edges(self.vertex_count(), &edges)
+    }
+
     /// Returns the number of vertices.
     #[must_use]
     pub fn vertex_count(&self) -> usize {
@@ -419,6 +436,16 @@ mod tests {
             (graph.forward.vertex_count(), graph.forward.edge_count()),
             (3, 2)
         );
+    }
+
+    #[test]
+    fn should_reverse_edges_keeping_self_loops_and_weights() {
+        let graph = Csr::from_weighted_edges(3, &[(0, 1, 2.0), (1, 1, 3.0), (2, 1, 4.0)]);
+        let reversed = graph.reversed();
+        assert_eq!(reversed.neighbors(1), &[0, 1, 2]);
+        assert_eq!(reversed.weights(1), &[2.0, 3.0, 4.0]);
+        assert!(reversed.neighbors(0).is_empty());
+        assert_eq!(reversed.reversed(), graph);
     }
 
     #[test]
