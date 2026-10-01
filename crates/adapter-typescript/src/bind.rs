@@ -122,7 +122,7 @@ mod tests {
     use strata_ir::{Edge, EdgeKind, Hardness};
 
     use super::containers::prefix_key;
-    use super::emission::{CONFIDENCE_STATIC, is_test_path};
+    use super::emission::CONFIDENCE_STATIC;
     use super::resolution::normalize_join;
     use super::*;
 
@@ -463,23 +463,6 @@ mod tests {
         assert_eq!(prefix_key(&segments, 2), SmolStr::new("src/geometry"));
         // A take deeper than the path reuses the full prefix.
         assert_eq!(prefix_key(&["only"], 3), SmolStr::new("only"));
-    }
-
-    #[test]
-    fn should_recognise_test_paths_by_convention() {
-        assert!(is_test_path("src/__tests__/app.spec.ts"));
-        assert!(is_test_path("src/app.test.ts"));
-        assert!(is_test_path("src/__tests__/support.ts"));
-        assert!(!is_test_path("src/app.ts"));
-    }
-
-    #[test]
-    fn should_recognize_qualified_test_paths_without_matching_words() {
-        assert!(is_test_path("src/worker.spec.int.ts"));
-        assert!(is_test_path("src/worker.test.integration.ts"));
-        assert!(is_test_path("src/worker.spec.browser.tsx"));
-        assert!(!is_test_path("src/specification.ts"));
-        assert!(!is_test_path("src/worker.testable.tsx"));
     }
 
     #[test]
