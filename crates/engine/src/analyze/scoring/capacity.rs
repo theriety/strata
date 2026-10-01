@@ -51,7 +51,7 @@ pub(super) fn capacity_pressure(
     pressure
 }
 
-pub(super) fn normalized_overage(measure: u32, cap: u32) -> f64 {
+fn normalized_overage(measure: u32, cap: u32) -> f64 {
     if measure <= cap {
         0.0
     } else if cap == 0 {
@@ -61,9 +61,7 @@ pub(super) fn normalized_overage(measure: u32, cap: u32) -> f64 {
     }
 }
 
-pub(super) fn children_by_container(
-    tree: &ContainerTree,
-) -> BTreeMap<ContainerId, Vec<ContainerId>> {
+fn children_by_container(tree: &ContainerTree) -> BTreeMap<ContainerId, Vec<ContainerId>> {
     let mut children: BTreeMap<ContainerId, Vec<ContainerId>> = BTreeMap::new();
     for container in tree.containers() {
         if let Some(parent) = container.parent {
@@ -73,7 +71,7 @@ pub(super) fn children_by_container(
     children
 }
 
-pub(super) fn count_bound_structural_members(
+fn count_bound_structural_members(
     tree: &ContainerTree,
     children: &BTreeMap<ContainerId, Vec<ContainerId>>,
     root: ContainerId,
@@ -108,7 +106,7 @@ pub(super) fn count_bound_structural_members(
     count
 }
 
-pub(super) fn subtree_binds_file(
+fn subtree_binds_file(
     children: &BTreeMap<ContainerId, Vec<ContainerId>>,
     by_id: &BTreeMap<ContainerId, &Container>,
     root: ContainerId,

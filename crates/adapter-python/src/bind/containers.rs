@@ -97,13 +97,13 @@ impl ContainerBuilder {
 }
 
 /// Builds a stable container key from the first `take` path segments.
-pub(super) fn prefix_key(segments: &[&str], take: usize) -> SmolStr {
+fn prefix_key(segments: &[&str], take: usize) -> SmolStr {
     let bounded = take.clamp(1, segments.len().max(1));
     SmolStr::new(segments.get(..bounded).unwrap_or(segments).join("/"))
 }
 
 /// Interns a container by `(level, key)`, returning the existing id on a hit.
-pub(super) fn intern(
+fn intern(
     containers: &mut Vec<Container>,
     by_key: &mut BTreeMap<(ScopeLevel, SmolStr), ContainerId>,
     level: ScopeLevel,

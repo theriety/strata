@@ -55,7 +55,7 @@ impl LevelCaps {
     /// deliberately independent of the engine's `CapacityConfig::default()`,
     /// which owns the caps of a config-less run.
     #[must_use]
-    pub const fn defaults() -> Self {
+    const fn defaults() -> Self {
         Self {
             folder: 15,
             domain: 12,

@@ -188,7 +188,7 @@ impl ConsumerBranchGuard {
     }
 }
 
-pub(in crate::analyze) fn physical_folder_segments(file: &str) -> Vec<SmolStr> {
+fn physical_folder_segments(file: &str) -> Vec<SmolStr> {
     file.rsplit_once('/').map_or_else(Vec::new, |(folder, _)| {
         folder
             .split('/')
