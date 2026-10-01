@@ -6,7 +6,7 @@ Ladder item FIX07 of the WS-D defect burn-down. Hypothesis under test:
 > consulted, so a large share of final-structure error originates at seed
 > granularity rather than in polish.
 
-Instrument: `crates/eval/examples/fix07_scc_split.rs` (new, read-only over
+Instrument: `crates/eval/examples/fix07_scc_split/main.rs` (new, read-only over
 public APIs; production behavior untouched and byte-identical). Measured across
 all seven fixtures in `crates/eval/fixtures`.
 
@@ -79,7 +79,7 @@ perfect.
 
 ## 2. Instrumentation design
 
-A single example binary, `crates/eval/examples/fix07_scc_split.rs`, mirroring
+A single example binary, `crates/eval/examples/fix07_scc_split/main.rs`, mirroring
 the harness invocation per fixture (`load_target` + same `AnalyzeConfig`
 construction as `run_case`, then `snapshot_from_root` + `analyze`). It reads
 only public APIs; no production code path changes, so non-enabled behavior is
