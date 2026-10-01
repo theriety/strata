@@ -38,14 +38,7 @@ const CONFIDENCE_DYNAMIC: f64 = 0.5;
 ///
 /// `root` is the repository root the module paths are relative to; it anchors
 /// the package container at the top of the laminar tree.
-///
-/// # Errors
-///
-/// This binder never fails on unresolved references — Python's dynamic
-/// constructs become low-confidence edges and unknown names are dropped — so it
-/// returns `Ok` for every well-formed parse. The `Result` preserves the adapter
-/// contract.
-pub fn bind(modules: &[ParsedModule], root: &Path) -> Result<IrFragment, BindOutcome> {
+pub fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
     let resolver = Resolver::new(modules);
     let containers = ContainerBuilder::build(modules, root);
 
@@ -100,27 +93,14 @@ pub fn bind(modules: &[ParsedModule], root: &Path) -> Result<IrFragment, BindOut
     let polarity = classify_polarity(modules, &nodes, &local, &exported, &edges);
     apply_polarity(&mut nodes, &polarity);
 
-    Ok(IrFragment {
+    IrFragment {
         nodes,
         edges,
         affinities: Vec::new(),
         containers: containers.tree.containers().to_vec(),
         visibility_scopes: Vec::new(),
-    })
-}
-
-/// A binding failure. Reserved for future resolution errors; the binder is
-/// currently infallible, so this enum is never constructed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BindOutcome {}
-
-impl std::fmt::Display for BindOutcome {
-    fn fmt(&self, _formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {}
     }
 }
-
-impl std::error::Error for BindOutcome {}
 
 /// Returns `true` if a name is part of the importable surface (no `_` prefix).
 fn is_public(name: &str) -> bool {
@@ -992,7 +972,7 @@ mod tests {
         let mut provider = module_at("pkg/target.py");
         provider.declarations.push(leaf("run_target"));
 
-        let fragment = bind(&[consumer, provider], Path::new("repo")).expect("bind succeeds");
+        let fragment = bind(&[consumer, provider], Path::new("repo"));
 
         let calls: Vec<&Edge> = fragment
             .edges
@@ -1019,7 +999,7 @@ mod tests {
         module.declarations.push(reader("encode", &["LIMIT"]));
         module.declarations.push(leaf("LIMIT"));
 
-        let fragment = bind(&[module], Path::new("repo")).expect("bind succeeds");
+        let fragment = bind(&[module], Path::new("repo"));
 
         let values: Vec<&Edge> = fragment
             .edges
@@ -1042,7 +1022,7 @@ mod tests {
         let mut module = module_at("pkg/walk.py");
         module.declarations.push(reader("walk", &["walk"]));
 
-        let fragment = bind(&[module], Path::new("repo")).expect("bind succeeds");
+        let fragment = bind(&[module], Path::new("repo"));
 
         assert!(
             fragment.edges.is_empty(),
@@ -1067,7 +1047,7 @@ mod tests {
         });
         consumer.declarations.push(reader("refund", &["_ledger"]));
 
-        let fragment = bind(&[consumer, provider], Path::new("repo")).expect("bind succeeds");
+        let fragment = bind(&[consumer, provider], Path::new("repo"));
 
         let value_imports: Vec<&Edge> = fragment
             .edges
@@ -1099,7 +1079,7 @@ mod tests {
         let mut builder = module_at("pkg/build.py");
         builder.declarations.push(leaf("build"));
 
-        let fragment = bind(&[holder, builder], Path::new("repo")).expect("bind succeeds");
+        let fragment = bind(&[holder, builder], Path::new("repo"));
 
         let calls: Vec<&Edge> = fragment
             .edges
@@ -1123,7 +1103,7 @@ mod tests {
         let mut provider = module_at("pkg/util.py");
         provider.declarations.push(leaf("helper"));
 
-        let fragment = bind(&[consumer, provider], Path::new("repo")).expect("bind succeeds");
+        let fragment = bind(&[consumer, provider], Path::new("repo"));
 
         let calls: Vec<&Edge> = fragment
             .edges
@@ -1148,7 +1128,7 @@ mod tests {
         widget.is_class = true;
         provider.declarations.push(widget);
 
-        let fragment = bind(&[barrel, provider], Path::new("repo")).expect("bind succeeds");
+        let fragment = bind(&[barrel, provider], Path::new("repo"));
 
         let re_exports: Vec<&Edge> = fragment
             .edges
@@ -1187,7 +1167,7 @@ mod tests {
         provider.declarations.push(leaf("public"));
         provider.declarations.push(leaf("hidden"));
 
-        let fragment = bind(&[consumer, provider], Path::new("repo")).expect("bind succeeds");
+        let fragment = bind(&[consumer, provider], Path::new("repo"));
 
         let dynamic: Vec<&Edge> = fragment
             .edges
@@ -1214,7 +1194,7 @@ mod tests {
         let mut provider = module_at("pkg/plugins.py");
         provider.declarations.push(leaf("registry"));
 
-        let fragment = bind(&[consumer, provider], Path::new("repo")).expect("bind succeeds");
+        let fragment = bind(&[consumer, provider], Path::new("repo"));
 
         let dynamic: Vec<&Edge> = fragment
             .edges
@@ -1235,7 +1215,7 @@ mod tests {
         provider.declarations.push(leaf("entry"));
         provider.declarations.push(leaf("hidden"));
 
-        let fragment = bind(&[consumer, provider], Path::new("repo")).expect("bind succeeds");
+        let fragment = bind(&[consumer, provider], Path::new("repo"));
 
         let dynamic: Vec<&Edge> = fragment
             .edges
@@ -1258,7 +1238,7 @@ mod tests {
         loader.dynamic = vec![DynamicRef::ImportModule(SmolStr::new("does.not.exist"))];
         consumer.declarations.push(loader);
 
-        let fragment = bind(&[consumer], Path::new("repo")).expect("bind succeeds");
+        let fragment = bind(&[consumer], Path::new("repo"));
 
         let dynamic = fragment
             .edges
@@ -1290,7 +1270,7 @@ mod tests {
         let mut support = module_at("tests/conftest.py");
         support.declarations.push(leaf("make_fixture"));
 
-        let fragment = bind(&[support], Path::new("repo")).expect("bind succeeds");
+        let fragment = bind(&[support], Path::new("repo"));
 
         assert!(
             fragment

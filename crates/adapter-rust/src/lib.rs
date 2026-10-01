@@ -1,28 +1,25 @@
 //! The Rust language adapter for Strata.
 //!
-//! It implements the two-phase [`strata_ir::Adapter`] contract: [`parse`] turns
+//! It implements the two-phase [`strata_ir::Adapter`] contract: `parse` turns
 //! `.rs` sources into per-file syntax summaries (via syn, in parallel), and
-//! [`bind`] resolves the cross-crate graph into a language-agnostic
+//! `bind` resolves the cross-crate graph into a language-agnostic
 //! [`strata_ir::IrFragment`] — typed edges, three-valued test polarity, and
 //! per-symbol production SLOC.
 //!
-//! Resolution is semantic: [`bind`] loads the on-disk cargo workspace into the
+//! Resolution is semantic: `bind` loads the on-disk cargo workspace into the
 //! rust-analyzer (`ra_ap_*`) database and resolves each recorded reference
 //! through `goto_definition`, mapping the resolved definition back to the
 //! declaration whose byte range contains it. Macro-expanded references resolve
 //! at confidence below `1.0` — honest uncertainty instead of silence (per the
 //! AD-4 binder go decision, CN-1).
 //!
-//! The trait threads the intermediate [`parse::ParsedFile`] summary through the
+//! The trait threads the intermediate `parse::ParsedFile` summary through the
 //! opaque [`strata_ir::ParseTree`] payload as JSON, so the engine never needs to
 //! understand Rust to merge fragments.
-//!
-//! [`parse`]: parse::parse
-//! [`bind`]: bind::bind
 
-pub mod bind;
-pub mod parse;
-pub mod sloc;
+mod bind;
+mod parse;
+mod sloc;
 
 use std::path::{Path, PathBuf};
 
@@ -37,8 +34,7 @@ use crate::parse::ParsedFile;
 /// The adapter is anchored at a `manifest` (the workspace `Cargo.toml`) for
 /// semantic resolution and a repository `root` that the parsed file paths are
 /// relative to. By convention the manifest's directory is the repository root,
-/// which [`RustAdapter::new`] assumes; [`RustAdapter::with_root`] separates them
-/// when sources are reported relative to a different anchor.
+/// which [`RustAdapter::new`] assumes.
 #[derive(Debug, Clone)]
 pub struct RustAdapter {
     /// Path to the workspace `Cargo.toml` the semantic database loads from.
@@ -57,16 +53,6 @@ impl RustAdapter {
             .parent()
             .map_or_else(|| manifest.clone(), Path::to_path_buf);
         Self { manifest, root }
-    }
-
-    /// Creates an adapter with an explicit repository `root` distinct from the
-    /// manifest's directory.
-    #[must_use]
-    pub fn with_root(manifest: impl Into<PathBuf>, root: impl Into<PathBuf>) -> Self {
-        Self {
-            manifest: manifest.into(),
-            root: root.into(),
-        }
     }
 }
 

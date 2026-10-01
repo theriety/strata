@@ -1,8 +1,8 @@
 //! The Python language adapter for Strata.
 //!
-//! It implements the two-phase [`strata_ir::Adapter`] contract: [`parse`]
+//! It implements the two-phase [`strata_ir::Adapter`] contract: `parse`
 //! turns `.py` sources into syntax summaries (via rustpython-parser, in
-//! parallel), and [`bind`] runs a custom scope resolver over the module graph,
+//! parallel), and `bind` runs a custom scope resolver over the module graph,
 //! emitting a language-agnostic [`strata_ir::IrFragment`] — typed edges,
 //! three-valued test polarity, and per-symbol production SLOC.
 //!
@@ -12,21 +12,17 @@
 //! as the folder barrel, and honest low-confidence edges for Python's dynamic
 //! constructs (`getattr`, `importlib`, star imports via `__all__`).
 //!
-//! The trait threads the intermediate [`parse::ParsedModule`] summary through
+//! The trait threads the intermediate `parse::ParsedModule` summary through
 //! the opaque [`strata_ir::ParseTree`] payload as canonical JSON, so the engine
 //! never needs to understand Python to merge fragments.
-//!
-//! [`parse`]: parse::parse
-//! [`bind`]: bind::bind
 
-pub mod bind;
-pub mod parse;
-pub mod scope;
-pub mod sloc;
+mod bind;
+mod parse;
+mod scope;
+mod sloc;
 
 use std::path::PathBuf;
 
-use smol_str::SmolStr;
 use strata_ir::{Adapter, AdapterError, IrFragment, ParseTree, SourceFile};
 
 use crate::parse::ParsedModule;
@@ -67,10 +63,7 @@ impl Adapter for PythonAdapter {
             .iter()
             .map(deserialize_module)
             .collect::<Result<Vec<_>, _>>()?;
-        bind::bind(&modules, &self.root).map_err(|outcome| AdapterError::Bind {
-            path: SmolStr::new(""),
-            reason: outcome.to_string(),
-        })
+        Ok(bind::bind(&modules, &self.root))
     }
 }
 
