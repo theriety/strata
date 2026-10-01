@@ -80,6 +80,32 @@ pub(in crate::analyze) fn score_current_with_affinity(
     same_file_symbol: f64,
     same_file_type: f64,
 ) -> CoreBreakdown {
+    score_current_with_overlay(
+        snapshot,
+        coefficients,
+        weights,
+        capacity,
+        same_file_symbol,
+        same_file_type,
+        &BTreeMap::new(),
+    )
+}
+
+/// Scores the current tree with some declarations placed in other current
+/// files: the price of a candidate that moves no file but relocates symbols.
+///
+/// `overlay` maps a node id to the current file container it moves to. Every
+/// other node stays where it is, and the move-distance term counts exactly the
+/// relocated nodes, so an empty overlay prices the current layout itself.
+pub(in crate::analyze) fn score_current_with_overlay(
+    snapshot: &Snapshot,
+    coefficients: &Coefficients,
+    weights: &KindWeights,
+    capacity: &CapacityConfig,
+    same_file_symbol: f64,
+    same_file_type: f64,
+    overlay: &BTreeMap<u32, ContainerId>,
+) -> CoreBreakdown {
     let ir = snapshot.ir();
     let (files, _) = file_inventory(ir);
     let namespaces: BTreeMap<ContainerId, SmolStr> = files
@@ -89,8 +115,12 @@ pub(in crate::analyze) fn score_current_with_affinity(
     let container_of: BTreeMap<u32, ContainerId> = ir
         .nodes
         .iter()
-        .map(|node| (node.id.0, node.container))
+        .map(|node| {
+            let file = overlay.get(&node.id.0).copied().unwrap_or(node.container);
+            (node.id.0, file)
+        })
         .collect();
+    let placement = |id: u32| container_of.get(&id).copied();
     let pass_start_file_by_candidate: BTreeMap<ContainerId, ContainerId> = ir
         .containers
         .containers()
@@ -98,13 +128,18 @@ pub(in crate::analyze) fn score_current_with_affinity(
         .filter(|container| container.level == ScopeLevel::File)
         .map(|container| (container.id, container.id))
         .collect();
+    let distance = if overlay.is_empty() {
+        0.0
+    } else {
+        move_distance(snapshot, &ir.containers, &placement)
+    };
     let candidate = score_candidate(
         snapshot,
-        &|id| container_of.get(&id).copied(),
+        &placement,
         &pass_start_file_by_candidate,
         &ir.containers,
         &namespaces,
-        0.0,
+        distance,
         capacity,
         same_file_symbol,
         same_file_type,
