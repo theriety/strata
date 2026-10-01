@@ -31,6 +31,7 @@ fn node(id: u32, name: &str, file: u32, polarity: Polarity) -> Node {
         container: ContainerId(file),
         visibility: ScopeLevel::File,
         effective_size: 1,
+        re_export: false,
     }
 }
 

@@ -1,6 +1,6 @@
 Strata report — nested-python
 6 files · 12 symbols · 15 edges
-Snapshot `908dd56719a4dd47cdb57e3c77b0a96aadd6b26edac973edda49371019b2da15`
+Snapshot `39c51ab8ba1c7a846b18a62f8c8fcb61aa410289f7a483b4bdbb0d4f50e6acd8`
 
 Structural findings
 Shared findings (0)

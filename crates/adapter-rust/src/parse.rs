@@ -57,6 +57,10 @@ pub enum RefKind {
     Call,
     /// An identifier in a type position (type-reference).
     TypeRef,
+    /// The immediate qualifier of a multi-segment value path (`Type` in
+    /// `Type::new()`). It becomes a type-reference only when it binds to a type
+    /// declaration; a module qualifier (`render::report()`) never does.
+    Qualifier,
     /// The trait named in an `impl Trait for T` header (inheritance).
     TraitImpl,
 }
@@ -673,10 +677,17 @@ impl<'ast> Visit<'ast> for ReferenceCollector {
         // name a cross-item dependency; bare single-segment paths are usually
         // locals, so only multi-segment paths are recorded. Direct call callees
         // are already handled by `visit_expr_call`; duplicates collapse in bind.
-        if expr_path.path.segments.len() > 1
-            && let Some(segment) = expr_path.path.segments.last()
+        // The qualifier is a dependency too when it names a type: `Type::new()`
+        // resolves its leaf to the associated function, so the qualifier is
+        // recorded separately and bind keeps it only if it lands on a type.
+        let segments = &expr_path.path.segments;
+        if segments.len() > 1
+            && let Some(segment) = segments.last()
         {
             self.record(RefKind::Call, &segment.ident);
+            if let Some(qualifier) = segments.iter().nth_back(1) {
+                self.record(RefKind::Qualifier, &qualifier.ident);
+            }
         }
         syn::visit::visit_expr_path(self, expr_path);
     }
@@ -830,6 +841,27 @@ mod tests {
     }
 
     #[test]
+    fn should_record_the_qualifier_of_an_associated_call_as_a_qualifier_reference() {
+        let declarations =
+            parse_text("fn build() -> () {\n    let _ = adapters::Report::new();\n}\n");
+
+        let references = declarations
+            .iter()
+            .flat_map(|decl| &decl.references)
+            .collect::<Vec<_>>();
+        assert!(
+            references
+                .iter()
+                .any(|r| r.kind == RefKind::Qualifier && r.name == "Report"),
+            "`Type::new()` depends on `Type`, not only on its constructor; got {references:?}"
+        );
+        assert!(
+            !references.iter().any(|r| r.name == "adapters"),
+            "only the immediate qualifier is recorded; got {references:?}"
+        );
+    }
+
+    #[test]
     fn should_not_record_a_bare_local_path_as_a_reference() {
         let declarations = parse_text("fn build() -> i32 {\n    let total = 1;\n    total\n}\n");
 
@@ -900,6 +932,18 @@ mod tests {
         assert_eq!(
             re_exports.first().map(|re| re.name.clone()),
             Some(SmolStr::new("Renamed"))
+        );
+    }
+
+    #[test]
+    fn should_record_a_crate_root_alias_as_a_re_export() {
+        // `pub use strata_ir as ir;` names a crate root, which is never a node;
+        // it is still a re-export declaration (ADR-0020).
+        let re_exports = parse_re_exports("pub use strata_ir as ir;\n");
+
+        assert_eq!(
+            re_exports.first().map(|re| re.name.clone()),
+            Some(SmolStr::new("ir"))
         );
     }
 

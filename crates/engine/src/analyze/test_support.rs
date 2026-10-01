@@ -47,6 +47,7 @@ pub(in crate::analyze) fn node(id: u32, name: &str, container: u32, polarity: Po
         container: ContainerId(container),
         visibility: ScopeLevel::File,
         effective_size: 1,
+        re_export: false,
     }
 }
 
@@ -64,6 +65,7 @@ pub(in crate::analyze) fn sloc_node(
         container,
         visibility: ScopeLevel::File,
         effective_size: sloc,
+        re_export: false,
     }
 }
 

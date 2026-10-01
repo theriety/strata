@@ -308,6 +308,7 @@ mod tests {
             container: ContainerId(0),
             visibility: ScopeLevel::File,
             effective_size: 1,
+            re_export: false,
         }
     }
 
