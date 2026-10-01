@@ -17,6 +17,7 @@ smol_str = { workspace = true }
 rayon = { workspace = true }
 syn = { version = "2", features = ["full", "extra-traits", "visit"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
 ra_ap_ide = "0.0.336"
 ra_ap_load-cargo = "0.0.336"
 ra_ap_project_model = "0.0.336"

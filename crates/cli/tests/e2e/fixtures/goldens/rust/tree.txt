@@ -1,9 +1,8 @@
 rust [packageGroup]
   rust [package]
-    src/lib.rs [file] 16 sloc
+    src/lib.rs [file] 18 sloc
       - Shape (package)
       - describe_shape (package)
       - Rectangle (package)
-      - Rectangle (file)
-      - area (file)
+      - impl Shape for Rectangle (file)
       - summarize (package)

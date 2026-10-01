@@ -169,7 +169,7 @@ fn should_deliver_the_analyze_summary_for_the_rust_fixture() {
     );
     // the census and the claimed-vs-listed candidate counts are the contracted surface.
     assert!(
-        outcome.stdout.contains("1 files · 6 symbols · 4 edges"),
+        outcome.stdout.contains("1 files · 5 symbols · 4 edges"),
         "the expected node/edge census is delivered"
     );
     assert!(
@@ -446,7 +446,7 @@ fn should_deliver_the_current_tree_for_the_rust_fixture() {
         "the tree is rooted at the package group"
     );
     assert!(
-        outcome.stdout.contains("src/lib.rs [file] 16 sloc"),
+        outcome.stdout.contains("src/lib.rs [file] 18 sloc"),
         "the file node carries its production sloc summed from effective_size"
     );
 }
