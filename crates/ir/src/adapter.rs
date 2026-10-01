@@ -30,6 +30,17 @@ pub struct ParseTree {
     pub payload: String,
 }
 
+/// One scope a language can spell for a declaration, as repository files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeRung {
+    /// Complete file set of the scope.
+    pub files: Vec<SmolStr>,
+    /// Definition file of the scope's module, stated like
+    /// [`VisibilityScope::definition_file`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition_file: Option<SmolStr>,
+}
+
 /// A node's resolved Rust module scope, expressed as repository-relative files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisibilityScope {
@@ -42,6 +53,11 @@ pub struct VisibilityScope {
     /// adapter states it so the engine never guesses it from file names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition_file: Option<SmolStr>,
+    /// Every scope the language can spell for this declaration, narrowest
+    /// first. Empty when the language has no fixed ladder or the adapter could
+    /// not resolve it, in which case no floor applies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expressible: Vec<ScopeRung>,
 }
 
 /// A partial IR produced by one adapter; the engine merges fragments into one IR.
