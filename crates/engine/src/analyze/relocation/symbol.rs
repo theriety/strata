@@ -34,17 +34,22 @@ impl PipelineSolver<'_> {
         let ir = self.snapshot.ir();
         let assembled = self.assemble_with_mirror_evidence(parts, evidence);
         let mut pass = SymbolPass::new_with_policy(
-            self.snapshot,
-            &self.coefficients,
-            &self.weights,
-            self.same_file_symbol,
-            self.same_file_type,
-            self.capacity,
-            &assembled,
-            &ir.nodes,
-            &ir.edges,
-            self.symbol_source_blocks(&assembled),
-            self.symbol_destination_blocks(&assembled),
+            PassInputs {
+                snapshot: self.snapshot,
+                coefficients: &self.coefficients,
+                weights: &self.weights,
+                same_file_symbol: self.same_file_symbol,
+                same_file_type: self.same_file_type,
+                capacity: self.capacity,
+                assembled: &assembled,
+                nodes: &ir.nodes,
+                edges: &ir.edges,
+            },
+            RelocationPolicy {
+                forbidden_sources: self.symbol_source_blocks(&assembled),
+                forbidden_destinations: self.symbol_destination_blocks(&assembled),
+                pin_test_polarity: self.pin_detected_test_symbols(),
+            },
         );
         pass.run();
         let overlay = pass.overlay;
@@ -125,9 +130,9 @@ impl PipelineSolver<'_> {
     }
 
     fn pin_detected_test_symbols(&self) -> bool {
-        // Test symbols are pinned whenever test files themselves are pinned by
-        // the default policy. Explicit symbol-only opt-out is represented by
-        // the absence of a test-zone glob in the compiled policy below.
+        // `pin-detected-test-symbols` pins two things: declarations inside a
+        // detected test zone, and test-polarity declarations anywhere, even
+        // in a production file (ADR-22). Turning it off releases both.
         self.pin_test_symbols
     }
     /// Wraps a finished partition, re-pricing it at the true current tree when
@@ -678,6 +683,9 @@ pub(in crate::analyze) struct SymbolPass<'a> {
     forbidden_sources: BTreeSet<ContainerId>,
     /// Candidate files that no declaration may enter.
     forbidden_destinations: BTreeSet<ContainerId>,
+    /// Whether detected test declarations (`TestCase`/`TestSupport` polarity)
+    /// are pinned wherever they live, per `pin-detected-test-symbols`.
+    pin_test_polarity: bool,
     /// Nodes already relocated in this pass. A symbol moves at most once per
     /// candidate (FIX12-C), so no reader is ever told two contradictory
     /// destinations for the same name.
@@ -699,22 +707,50 @@ pub(in crate::analyze) struct SymbolPass<'a> {
     relocations: Vec<SymbolRelocation>,
 }
 
+/// The read-only analysis inputs a [`SymbolPass`] prices placements against.
+#[derive(Clone, Copy)]
+struct PassInputs<'a> {
+    snapshot: &'a Snapshot,
+    coefficients: &'a Coefficients,
+    weights: &'a KindWeights,
+    same_file_symbol: f64,
+    same_file_type: f64,
+    capacity: CapacityConfig,
+    assembled: &'a CandidateTree,
+    nodes: &'a [Node],
+    edges: &'a [Edge],
+}
+
+/// Which symbols a [`SymbolPass`] may not nominate or land on.
+#[derive(Default)]
+struct RelocationPolicy {
+    /// Files whose symbols may not leave.
+    forbidden_sources: BTreeSet<ContainerId>,
+    /// Files that may not receive a symbol.
+    forbidden_destinations: BTreeSet<ContainerId>,
+    /// Refuse any non-production-polarity declaration, wherever it lives.
+    pin_test_polarity: bool,
+}
+
 impl<'a> SymbolPass<'a> {
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_lines)]
-    fn new_with_policy(
-        snapshot: &'a Snapshot,
-        coefficients: &'a Coefficients,
-        weights: &'a KindWeights,
-        same_file_symbol: f64,
-        same_file_type: f64,
-        capacity: CapacityConfig,
-        assembled: &'a CandidateTree,
-        nodes: &'a [Node],
-        edges: &'a [Edge],
-        forbidden_sources: BTreeSet<ContainerId>,
-        forbidden_destinations: BTreeSet<ContainerId>,
-    ) -> Self {
+    fn new_with_policy(inputs: PassInputs<'a>, policy: RelocationPolicy) -> Self {
+        let PassInputs {
+            snapshot,
+            coefficients,
+            weights,
+            same_file_symbol,
+            same_file_type,
+            capacity,
+            assembled,
+            nodes,
+            edges,
+        } = inputs;
+        let RelocationPolicy {
+            forbidden_sources,
+            forbidden_destinations,
+            pin_test_polarity,
+        } = policy;
         let base = &assembled.placement;
         let mut sloc: BTreeMap<ContainerId, u32> = BTreeMap::new();
         let mut residents: BTreeMap<ContainerId, u32> = BTreeMap::new();
@@ -839,6 +875,7 @@ impl<'a> SymbolPass<'a> {
             pass_start,
             forbidden_sources,
             forbidden_destinations,
+            pin_test_polarity,
             sloc,
             residents,
             native,
@@ -859,31 +896,8 @@ impl<'a> SymbolPass<'a> {
     }
 
     #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        snapshot: &'a Snapshot,
-        coefficients: &'a Coefficients,
-        weights: &'a KindWeights,
-        same_file_symbol: f64,
-        same_file_type: f64,
-        capacity: CapacityConfig,
-        assembled: &'a CandidateTree,
-        nodes: &'a [Node],
-        edges: &'a [Edge],
-    ) -> Self {
-        Self::new_with_policy(
-            snapshot,
-            coefficients,
-            weights,
-            same_file_symbol,
-            same_file_type,
-            capacity,
-            assembled,
-            nodes,
-            edges,
-            BTreeSet::new(),
-            BTreeSet::new(),
-        )
+    fn new(inputs: PassInputs<'a>) -> Self {
+        Self::new_with_policy(inputs, RelocationPolicy::default())
     }
 
     /// Sweeps every symbol in ascending id order, at most
@@ -1053,6 +1067,12 @@ impl<'a> SymbolPass<'a> {
         // One move per symbol per candidate (FIX12-C): a second relocation
         // would narrate the same name twice with contradictory destinations.
         if self.moved.contains(&node.id.0) {
+            return false;
+        }
+        // A detected test declaration stays pinned by its own polarity, not
+        // only by its file's zone: a `#[cfg(test)]` helper or `#[test]` case
+        // living in a production file would otherwise be free to move.
+        if self.pin_test_polarity && node.polarity != Polarity::Production {
             return false;
         }
         let Some(source_file) = self.effective(node.id.0) else {
