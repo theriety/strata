@@ -17,8 +17,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use ra_ap_ide::{
-    AnalysisHost, FilePosition, GotoDefinitionConfig, RaFixtureConfig, Semantics, SymbolKind,
-    TextSize,
+    AnalysisHost, FilePosition, GotoDefinitionConfig, RaFixtureConfig, RootDatabase, Semantics,
+    SymbolKind, TextSize,
 };
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::{CargoConfig, RustLibSource};
@@ -303,7 +303,7 @@ impl Database {
         visibility_path: &str,
         repository_root: &Path,
         parsed_paths: &BTreeSet<SmolStr>,
-    ) -> Option<Vec<SmolStr>> {
+    ) -> Option<ResolvedScope> {
         let file_id = self.file_id_for(path, repository_root)?;
         let semantics = Semantics::new(self.host.raw_database());
         if semantics.file_to_module_defs(file_id).count() != 1 {
@@ -311,14 +311,17 @@ impl Database {
         }
 
         let parsed = semantics.parse_guess_edition(file_id);
-        let position = TextSize::new(offset);
-        if !parsed.syntax().text_range().contains(position) {
+        let recorded = TextSize::new(offset);
+        if !parsed.syntax().text_range().contains(recorded) {
             return None;
         }
-        let token = parsed.syntax().token_at_offset(position).right_biased()?;
-        if token.kind().is_trivia() || !token.text_range().contains(position) {
-            return None;
+        let mut token = parsed.syntax().token_at_offset(recorded).right_biased()?;
+        // a declaration's recorded start may sit on its leading doc comment;
+        // the module scope is the same, so move on to the first real token.
+        while token.kind().is_trivia() {
+            token = token.next_token()?;
         }
+        let position = token.text_range().start();
         let scope_node = token.parent()?;
         let current = semantics.scope_at_offset(&scope_node, position)?.module();
         let mut target = current;
@@ -351,6 +354,7 @@ impl Database {
         }
 
         let mut files = BTreeSet::new();
+        let mut definition_file = None;
         let mut pending = vec![target];
         while let Some(module) = pending.pop() {
             let definition = semantics.module_definition_node(module);
@@ -359,6 +363,12 @@ impl Database {
                 self.relative_path(original.file_id.file_id(semantics.db), repository_root)?;
             if !parsed_paths.contains(&relative) {
                 return None;
+            }
+            if module == target
+                && module.parent(semantics.db).is_some()
+                && ast::SourceFile::can_cast(definition.value.kind())
+            {
+                definition_file = Some(relative.clone());
             }
 
             let children = module.children(semantics.db).collect::<Vec<_>>();
@@ -370,7 +380,7 @@ impl Database {
                         .map(|name| name.as_str().to_owned())
                 })
                 .collect::<Option<Vec<_>>>()?;
-            let mut syntactic_names = direct_module_names(&definition.value)?;
+            let mut syntactic_names = direct_module_names(&semantics, &definition.value)?;
             semantic_names.sort();
             syntactic_names.sort();
             if semantic_names != syntactic_names {
@@ -380,24 +390,59 @@ impl Database {
             files.insert(relative);
             pending.extend(children);
         }
-        (!files.is_empty()).then(|| files.into_iter().collect())
+        if files.is_empty() {
+            return None;
+        }
+        // the definition file only counts when it owns a folder holding every
+        // other file of the scope: `foo.rs` beside `foo/`, or `foo/mod.rs`.
+        let definition_file = definition_file.filter(|definition| {
+            let folder = match definition.strip_suffix("/mod.rs") {
+                Some(directory) => format!("{directory}/"),
+                None => format!("{}/", definition.trim_end_matches(".rs")),
+            };
+            files.len() > 1
+                && files
+                    .iter()
+                    .all(|file| file == definition || file.starts_with(&folder))
+        });
+        Some(ResolvedScope {
+            files: files.into_iter().collect(),
+            definition_file,
+        })
     }
+}
+
+/// A resolved restricted-visibility module: its files and definition file.
+struct ResolvedScope {
+    files: Vec<SmolStr>,
+    definition_file: Option<SmolStr>,
 }
 
 /// Returns direct syntactic child-module names for a module definition.
-fn direct_module_names(node: &SyntaxNode) -> Option<Vec<String>> {
+fn direct_module_names(
+    semantics: &Semantics<'_, RootDatabase>,
+    node: &SyntaxNode,
+) -> Option<Vec<String>> {
     if let Some(source) = ast::SourceFile::cast(node.clone()) {
-        return module_item_names(source.items());
+        return module_item_names(semantics, source.items());
     }
     let module = ast::Module::cast(node.clone())?;
-    module_item_names(module.item_list()?.items())
+    module_item_names(semantics, module.item_list()?.items())
 }
 
 /// Collects module names from one syntactic module-item list.
-fn module_item_names(items: impl Iterator<Item = ast::Item>) -> Option<Vec<String>> {
+fn module_item_names(
+    semantics: &Semantics<'_, RootDatabase>,
+    items: impl Iterator<Item = ast::Item>,
+) -> Option<Vec<String>> {
     let mut names = Vec::new();
     for item in items {
         if let ast::Item::Module(module) = item {
+            // a module the analyzer does not define (`cfg`-disabled in any
+            // form) is absent from the semantic children, so skip it here too.
+            if semantics.to_module_def(&module).is_none() {
+                continue;
+            }
             let name = module.name()?.text().to_string();
             names.push(name.strip_prefix("r#").unwrap_or(&name).to_owned());
         }
@@ -426,7 +471,7 @@ fn resolve_visibility_scopes(
             else {
                 continue;
             };
-            if let Some(scope_files) = database.visibility_files(
+            if let Some(resolved) = database.visibility_files(
                 &file.path,
                 declaration.byte_start,
                 visibility_path,
@@ -435,7 +480,8 @@ fn resolve_visibility_scopes(
             ) {
                 scopes.push(VisibilityScope {
                     node,
-                    files: scope_files,
+                    files: resolved.files,
+                    definition_file: resolved.definition_file,
                 });
             }
         }
@@ -447,7 +493,7 @@ fn resolve_visibility_scopes(
             else {
                 continue;
             };
-            if let Some(scope_files) = database.visibility_files(
+            if let Some(resolved) = database.visibility_files(
                 &file.path,
                 re_export.offset,
                 visibility_path,
@@ -456,7 +502,8 @@ fn resolve_visibility_scopes(
             ) {
                 scopes.push(VisibilityScope {
                     node,
-                    files: scope_files,
+                    files: resolved.files,
+                    definition_file: resolved.definition_file,
                 });
             }
         }
