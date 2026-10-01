@@ -39,7 +39,7 @@ pub struct Scope {
 
 /// `global` / `nonlocal` declarations found in a scope body.
 #[derive(Default)]
-pub struct Declared {
+struct Declared {
     globals: HashSet<SmolStr>,
     nonlocals: HashSet<SmolStr>,
 }

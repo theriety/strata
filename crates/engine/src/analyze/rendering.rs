@@ -108,7 +108,7 @@ pub(in crate::analyze) struct RenderScope<'tree> {
 /// the level above — so it is suppressed the same way: its folders and files
 /// hang directly under the package. The internal tree keeps both containers;
 /// only the DTO drops them. Every other container contributes itself.
-pub(in crate::analyze) fn render_contributions(
+fn render_contributions(
     container: &Container,
     children_by_parent: &BTreeMap<u32, Vec<&Container>>,
     contents: &BTreeMap<u32, FileContents>,
@@ -162,7 +162,7 @@ pub(in crate::analyze) fn render_contributions(
 /// ([`folder_increment`]), so a cross-domain real directory displays relative
 /// to its own package instead of re-embedding the package segment as a
 /// fabricated directory.
-pub(in crate::analyze) fn render_node(
+fn render_node(
     container: &Container,
     children_by_parent: &BTreeMap<u32, Vec<&Container>>,
     contents: &BTreeMap<u32, FileContents>,
@@ -235,7 +235,7 @@ pub(in crate::analyze) fn render_node(
 
 /// A file container's rendered contents: the symbols placed in it and the sum of
 /// production SLOC over its production-polarity symbols.
-pub(in crate::analyze) struct FileContents {
+struct FileContents {
     /// The symbol placements rendered for the file, in node order.
     symbols: Vec<SymbolPlacement>,
     /// True production SLOC: the sum of `effective_size` over the production
@@ -246,7 +246,7 @@ pub(in crate::analyze) struct FileContents {
 /// Groups symbol placements and sums production SLOC by the container each node
 /// is placed in, using `placement` to map a node to its (current or candidate)
 /// file container.
-pub(in crate::analyze) fn file_contents_by_container(
+fn file_contents_by_container(
     nodes: &[Node],
     placement: &dyn Fn(&Node) -> Option<ContainerId>,
 ) -> BTreeMap<u32, FileContents> {

@@ -183,7 +183,7 @@ impl TestPolicy {
 
     /// Whether `path` matches any configured pattern; bare patterns face the
     /// final segment alone so `*.spec.*` needs no directory knowledge.
-    pub(in crate::analyze::relocation) fn matches(&self, path: &str) -> bool {
+    fn matches(&self, path: &str) -> bool {
         let basename = path.rsplit('/').next().unwrap_or(path);
         self.base_patterns
             .iter()
@@ -197,7 +197,7 @@ impl TestPolicy {
     /// Built-in path conventions also classify support files whose declarations
     /// remain production-polarity. Directory segments are exact so ordinary
     /// names such as `contest` do not become test roots accidentally.
-    pub(in crate::analyze::relocation) fn matches_builtin_path(path: &str) -> bool {
+    fn matches_builtin_path(path: &str) -> bool {
         let mut segments = path.split('/');
         let basename = path.rsplit('/').next().unwrap_or(path);
         segments.any(|segment| matches!(segment, "spec" | "test" | "tests"))

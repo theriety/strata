@@ -28,7 +28,7 @@ use strata_engine::{
 /// # Errors
 ///
 /// Returns [`StrataError::ConfigInvalid`] if the file is present but invalid.
-pub fn resolve_config(
+fn resolve_config(
     config_path: &Path,
     overrides: ConfigOverrides,
 ) -> Result<AnalyzeConfig, StrataError> {
@@ -43,7 +43,7 @@ pub fn resolve_config(
 }
 
 /// Returns shared findings first, followed by profile-specific findings.
-pub fn findings(result: &AnalyzeResult) -> Vec<Violation> {
+fn findings(result: &AnalyzeResult) -> Vec<Violation> {
     let mut findings = result.current.shared_findings.clone();
     if let Some(profile) = &result.profiles.anchored {
         findings.extend(profile.current.unique_findings.iter().cloned());
@@ -102,7 +102,7 @@ impl ConfigOverrides {
 /// Returns [`StrataError::InputUnreadable`] if the file cannot be read, does not
 /// deserialize into an `AnalyzeResult`, or carries an unsupported
 /// `schemaVersion`.
-pub fn read_result(path: &Path) -> Result<AnalyzeResult, StrataError> {
+fn read_result(path: &Path) -> Result<AnalyzeResult, StrataError> {
     let text = std::fs::read_to_string(path).map_err(|error| StrataError::InputUnreadable {
         path: path.to_path_buf(),
         reason: error.to_string(),
@@ -138,10 +138,7 @@ pub fn read_result(path: &Path) -> Result<AnalyzeResult, StrataError> {
 /// # Errors
 ///
 /// Returns [`StrataError::CandidateNotFound`] when the named mode is absent.
-pub fn mode_result<'a>(
-    result: &'a AnalyzeResult,
-    mode: &str,
-) -> Result<&'a ModeResult, StrataError> {
+fn mode_result<'a>(result: &'a AnalyzeResult, mode: &str) -> Result<&'a ModeResult, StrataError> {
     let found = match mode {
         "anchored" => result.profiles.anchored.as_ref(),
         "greenfield" => result.profiles.greenfield.as_ref(),
@@ -158,7 +155,7 @@ pub fn mode_result<'a>(
 /// # Errors
 ///
 /// Returns [`StrataError::CandidateNotFound`] when the index is out of range.
-pub fn candidate_at<'a>(
+fn candidate_at<'a>(
     result: &'a AnalyzeResult,
     mode: &str,
     index: usize,

@@ -107,7 +107,7 @@ pub struct ParsedModule {
 ///
 /// Returns [`AdapterError::Parse`] for the first file (in input order) that
 /// contains a syntax error; the reason embeds the line and column of the failure.
-pub fn parse(files: &[SourceFile]) -> Result<Vec<ParsedModule>, AdapterError> {
+pub(super) fn parse(files: &[SourceFile]) -> Result<Vec<ParsedModule>, AdapterError> {
     files.par_iter().map(parse_one).collect()
 }
 
