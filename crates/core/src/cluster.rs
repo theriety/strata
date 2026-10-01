@@ -18,6 +18,7 @@
 //! coefficients.
 
 pub mod coarsen;
+mod quotient;
 pub mod refine;
 pub mod seed;
 

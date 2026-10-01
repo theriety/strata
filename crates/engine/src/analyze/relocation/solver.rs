@@ -222,7 +222,7 @@ impl<'a> PipelineSolver<'a> {
             })
             .collect();
         let caps = level_caps(&profile.capacity);
-        let reverse_dag = reverse_csr(&condensation.dag);
+        let reverse_dag = condensation.dag.reversed();
 
         // folders are reality: the identity layout and the search's folder
         // partition start as the same object — each file SCC in its real
@@ -672,17 +672,4 @@ pub(in crate::analyze) fn build_file_graph(
         crossings.push((from, to, weight));
     }
     Csr::from_weighted_edges(file_count, &crossings)
-}
-
-/// Returns `graph` with every edge reversed, weights preserved.
-pub(in crate::analyze) fn reverse_csr(graph: &Csr) -> Csr {
-    let mut edges: Vec<(u32, u32, f32)> = Vec::with_capacity(graph.edge_count());
-    for vertex in 0..graph.vertex_count() {
-        let from = u32::try_from(vertex).unwrap_or(u32::MAX);
-        let weights = graph.weights(from);
-        for (slot, &to) in graph.neighbors(from).iter().enumerate() {
-            edges.push((to, from, weights.get(slot).copied().unwrap_or(0.0)));
-        }
-    }
-    Csr::from_weighted_edges(graph.vertex_count(), &edges)
 }
