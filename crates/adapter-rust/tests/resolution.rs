@@ -282,3 +282,38 @@ fn should_name_fall_back_a_qualifier_under_a_workspace_path_root() -> Result<(),
     );
     Ok(())
 }
+
+#[test]
+fn should_count_a_function_used_as_a_value_as_a_hard_call() -> Result<(), String> {
+    let fragment = fragment()?;
+    let source = node_id(fragment, "value_use_caller")?;
+    let target = node_id(fragment, "double_value")?;
+
+    assert!(
+        fragment.edges.iter().any(|edge| edge.source == source
+            && edge.target == target
+            && edge.kind == EdgeKind::Call
+            && edge.hardness == Hardness::Hard),
+        "a fn passed as a value is a hard call: {:?}",
+        fragment.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn should_not_name_fall_back_a_bare_function_value_rust_analyzer_cannot_resolve()
+-> Result<(), String> {
+    let fragment = fragment()?;
+    let source = node_id(fragment, "unindexed_value_caller")?;
+    let target = node_id(fragment, "double_value")?;
+
+    assert!(
+        !fragment
+            .edges
+            .iter()
+            .any(|edge| edge.source == source && edge.target == target),
+        "a bare value never binds by name: {:?}",
+        fragment.edges
+    );
+    Ok(())
+}
