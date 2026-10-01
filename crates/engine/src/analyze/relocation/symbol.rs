@@ -7,7 +7,8 @@ use strata_core::score::{Coefficients, KindWeights, score};
 use strata_core::visibility::derive_visibility;
 use strata_ir::{ContainerId, Edge, Node, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot};
 
-use crate::analyze::relocation::mirror::MirrorEvidence;
+use crate::analyze::relocation::collision::CollisionFold;
+use crate::analyze::relocation::mirror::PolishEvidence;
 use crate::analyze::relocation::{
     CandidateTree, PipelineSolver, SYMBOL_MIN_IMPROVEMENT, SYMBOL_SWEEPS, SYMBOL_TARGETS,
 };
@@ -23,13 +24,13 @@ impl PipelineSolver<'_> {
     /// veto and accepting only strict objective improvement.
     #[cfg(test)]
     fn symbol_polish(&self, parts: &Partition) -> SymbolOutcome {
-        self.symbol_polish_with_mirror_evidence(parts, &MirrorEvidence::default())
+        self.symbol_polish_with_polish_evidence(parts, &PolishEvidence::default())
     }
 
-    pub(super) fn symbol_polish_with_mirror_evidence(
+    pub(super) fn symbol_polish_with_polish_evidence(
         &self,
         parts: &Partition,
-        evidence: &MirrorEvidence,
+        evidence: &PolishEvidence,
     ) -> SymbolOutcome {
         let ir = self.snapshot.ir();
         // A faithful layout renders as the current tree (FIX05), so its symbol
@@ -57,6 +58,7 @@ impl PipelineSolver<'_> {
                 allow_cross_package: self.relocation_identity.allows_cross_package_moves(),
             },
         );
+        pass.fold(&evidence.folds);
         pass.run();
         let overlay = pass.overlay;
         let relocations = pass.relocations;
@@ -103,12 +105,12 @@ impl PipelineSolver<'_> {
         &self,
         faithful: bool,
         parts: &Partition,
-        evidence: &MirrorEvidence,
+        evidence: &PolishEvidence,
     ) -> CandidateTree {
         if faithful {
             self.current_candidate_tree()
         } else {
-            self.assemble_with_mirror_evidence(parts, evidence)
+            self.assemble_with_polish_evidence(parts, evidence)
         }
     }
 
@@ -266,8 +268,14 @@ pub(in crate::analyze) struct SymbolRelocation {
     from_file: ContainerId,
     /// The candidate file container the symbol joins.
     to_file: ContainerId,
-    /// The objective improvement contributed (positive; J drops by this much).
+    /// The objective improvement contributed (J drops by this much). Positive
+    /// for an ordinary relocation; within a fold it is the marginal change in
+    /// acceptance order, and only the fold's sum is guaranteed positive.
     delta: f64,
+    /// The collision fold this relocation belongs to (ADR-21), as the
+    /// pass-start id of the file it drains; `None` for an ordinary relocation.
+    /// A fold is accepted or refused as one unit.
+    fold: Option<ContainerId>,
 }
 
 /// The outcome of one symbol polish pass: the effective placement overlay, the
@@ -282,6 +290,15 @@ pub(in crate::analyze) struct SymbolOutcome {
 }
 
 impl SymbolOutcome {
+    /// Pass-start ids of the files whose collision fold (ADR-21) the pass
+    /// accepted.
+    pub(super) fn accepted_folds(&self) -> BTreeSet<u32> {
+        self.relocations
+            .iter()
+            .filter_map(|relocation| relocation.fold.map(|file| file.0))
+            .collect()
+    }
+
     pub(super) fn preserves_namespaces(&self, assembled: &CandidateTree) -> bool {
         self.relocations.iter().all(|relocation| {
             assembled.shares_namespace(relocation.from_file, relocation.to_file)
@@ -945,6 +962,110 @@ impl<'a> SymbolPass<'a> {
         Self::new_with_policy(inputs, RelocationPolicy::default())
     }
 
+    /// Offers each collision fold (ADR-21) before the ordinary sweep. A fold
+    /// the collision pass marked as not offered (its file is a module root,
+    /// or an earlier round refused it) only pins its file and is skipped here.
+    fn fold(&mut self, folds: &[CollisionFold]) {
+        if folds.is_empty() {
+            return;
+        }
+        let candidate_of: BTreeMap<u32, ContainerId> = self
+            .assembled
+            .pass_start_file_by_candidate
+            .iter()
+            .map(|(candidate, pass_start)| (pass_start.0, *candidate))
+            .collect();
+        for fold in folds.iter().filter(|fold| fold.offered) {
+            if let (Some(&source), Some(&destination)) =
+                (candidate_of.get(&fold.file), candidate_of.get(&fold.into))
+            {
+                self.try_fold(ContainerId(fold.file), source, destination);
+            }
+        }
+    }
+
+    /// Moves every movable declaration the assembly placed in `source` into
+    /// `destination` as one unit, or none of them; `file` is the source's
+    /// pass-start id, recorded on each relocation so the solver can tell an
+    /// accepted fold from a refused one.
+    ///
+    /// A fold replaces a file move that would have overwritten `destination`.
+    /// Its members are the file's declarations other than the executable file
+    /// body and, under the polarity pin, its test-polarity declarations: those
+    /// stay in the source file and do not refuse the unit. Each member must
+    /// pass every veto an ordinary relocation obeys, the reach guards included
+    /// ([`Self::admits_nominated`]); the unit must fit the destination's SLOC
+    /// cap, raise neither cycle dimension nor the visibility finding count, and
+    /// improve the objective by more than [`SYMBOL_MIN_IMPROVEMENT`]. A fold
+    /// may drain the source of every production declaration: the file is being
+    /// retired, and the collision pass never offers a module root.
+    fn try_fold(
+        &mut self,
+        file: ContainerId,
+        source: ContainerId,
+        destination: ContainerId,
+    ) -> bool {
+        let nodes = self.nodes;
+        let members: Vec<&Node> = nodes
+            .iter()
+            .filter(|node| node.kind != NodeKind::FileBody)
+            .filter(|node| self.base.get(&node.id.0) == Some(&source))
+            .filter(|node| !(self.pin_test_polarity && node.polarity != Polarity::Production))
+            .collect();
+        let admissible = !members.is_empty()
+            && !self.forbidden_sources.contains(&source)
+            && members.iter().all(|node| {
+                let taken =
+                    self.moved.contains(&node.id.0) || self.overlay.contains_key(&node.id.0);
+                !taken && self.admits_nominated(node, source, destination)
+            });
+        let arriving: u32 = members
+            .iter()
+            .filter(|node| node.polarity == Polarity::Production)
+            .map(|node| node.effective_size)
+            .sum();
+        if !admissible
+            || self
+                .sloc
+                .get(&destination)
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(arriving)
+                > self.capacity.file
+        {
+            return false;
+        }
+
+        let before = self.best;
+        let mut running = before;
+        let mut priced = Vec::with_capacity(members.len());
+        for node in &members {
+            self.place_tentatively(node.id.0, destination);
+            let total = self.score_with(&self.overlay);
+            priced.push((*node, running - total));
+            running = total;
+        }
+        let cyclic_now = CycleCounts::from_graph(&self.crossing_csr());
+        let vis_now = self.count_findings();
+        if cyclic_now.exceeds(self.cyclic_base)
+            || vis_now > self.vis_base
+            || before - running <= SYMBOL_MIN_IMPROVEMENT
+        {
+            for node in &members {
+                self.revert_relocation(node.id.0, None, source);
+            }
+            return false;
+        }
+
+        self.best = running;
+        self.cyclic_base = cyclic_now;
+        self.vis_base = vis_now;
+        for (node, delta) in priced {
+            self.record_relocation(node, source, destination, delta, Some(file));
+        }
+        true
+    }
+
     /// Sweeps every symbol in ascending id order, at most
     /// [`SYMBOL_SWEEPS`] times, stopping early once a sweep relocates
     /// nothing.
@@ -1104,7 +1225,7 @@ impl<'a> SymbolPass<'a> {
     /// Offers one symbol its strongest-pulling destinations under the full
     /// veto family; records an accepted relocation and returns whether the
     /// sweep made progress.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines)] // reason: one ordered veto ladder; splitting it would scatter the rules that must run in this order
     fn try_relocate(&mut self, node: &Node) -> bool {
         if node.kind == NodeKind::FileBody {
             return false;
@@ -1126,79 +1247,14 @@ impl<'a> SymbolPass<'a> {
         if self.forbidden_sources.contains(&source_file) {
             return false;
         }
+        // No empty shells: the origin keeps at least one of the production
+        // symbols the assembly placed there. Counted over `native`, so an
+        // arrival cannot unlock the drain (FIX12-A).
+        if self.native.get(&source_file).copied().unwrap_or(0) <= 1 {
+            return false;
+        }
         for destination in self.nominate(node, source_file) {
-            if self.forbidden_destinations.contains(&destination) {
-                continue;
-            }
-            // No empty shells: the origin keeps at least one of the
-            // production symbols the assembly placed there. Counted over
-            // `native`, so an arrival cannot unlock the drain (FIX12-A).
-            if self.native.get(&source_file).copied().unwrap_or(0) <= 1 {
-                break;
-            }
-            // A declaration never leaves its manifest package unless the
-            // profile lifts the wall (ADR-17): a move across crates changes
-            // a package's public surface and manifest dependencies.
-            if !self.assembled.shares_namespace(source_file, destination)
-                || (!self.allow_cross_package
-                    && !self.assembled.shares_package(source_file, destination))
-            {
-                continue;
-            }
-            if self.file_depth.get(&destination).copied().unwrap_or(0)
-                > self.file_depth.get(&source_file).copied().unwrap_or(0)
-            {
-                continue;
-            }
-            if self.collides_in_destination(node, destination)
-                || self.consumer_branches.blocks(node.id.0, destination)
-            {
-                continue;
-            }
-            // FIX11 source/test boundary: a relocation whose origin and
-            // destination sit on opposite sides of the test zone is barred
-            // outright, in either direction. This static check runs before any
-            // evaluation; nomination should already keep zone files out of
-            // `ranked` because the incidence map zero-prices every
-            // zone-touching edge, so the veto is defense in depth against
-            // future nomination paths. Every emitted file gets a zone entry,
-            // so the map is empty only on the no-files early return — where
-            // placement is empty and `try_relocate` declines before ever
-            // reaching this check; lookups nonetheless default to false on
-            // both sides.
-            if self
-                .assembled
-                .zone_by_file
-                .get(&source_file)
-                .copied()
-                .unwrap_or(false)
-                != self
-                    .assembled
-                    .zone_by_file
-                    .get(&destination)
-                    .copied()
-                    .unwrap_or(false)
-            {
-                continue;
-            }
-            // FIX13: never hand one of the symbol's dependants a folder it
-            // does not already depend on (see `ReachGuard`).
-            if self
-                .reach
-                .invents_a_reach(node.id.0, source_file, destination)
-                && !self
-                    .consumer_branches
-                    .is_neutral_shared_destination(node.id.0, destination)
-            {
-                continue;
-            }
-            if node.kind == NodeKind::Symbol && self.type_only_files.contains(&destination) {
-                continue;
-            }
-            if self.reach.invents_an_outbound_reach(node.id.0, destination) {
-                continue;
-            }
-            if self.pass_start.blocks(node.id.0, destination) {
+            if !self.admits_nominated(node, source_file, destination) {
                 continue;
             }
             // SLOC cap on the destination, priced in production SLOC.
@@ -1212,18 +1268,16 @@ impl<'a> SymbolPass<'a> {
             }
 
             // Tentatively relocate, then run the structural vetoes.
-            let previous = self.overlay.insert(node.id.0, destination);
+            let previous = self.place_tentatively(node.id.0, destination);
             let crossing = self.crossing_csr();
             let cyclic_now = CycleCounts::from_graph(&crossing);
             if cyclic_now.exceeds(self.cyclic_base) {
-                Self::undo(&mut self.overlay, node.id.0, previous);
+                self.revert_relocation(node.id.0, previous, source_file);
                 continue;
             }
-            self.set_visible(node.id.0, destination);
             let vis_now = self.count_findings();
             if vis_now > self.vis_base {
-                Self::undo(&mut self.overlay, node.id.0, previous);
-                self.set_visible(node.id.0, source_file);
+                self.revert_relocation(node.id.0, previous, source_file);
                 continue;
             }
 
@@ -1235,35 +1289,167 @@ impl<'a> SymbolPass<'a> {
                 self.best = total;
                 self.cyclic_base = cyclic_now;
                 self.vis_base = vis_now;
-                if node.polarity == Polarity::Production {
-                    if let Some(slot) = self.sloc.get_mut(&source_file) {
-                        *slot = slot.saturating_sub(node.effective_size);
-                    }
-                    *self.sloc.entry(destination).or_insert(0) += node.effective_size;
-                    if let Some(slot) = self.residents.get_mut(&source_file) {
-                        *slot = slot.saturating_sub(1);
-                    }
-                    *self.residents.entry(destination).or_insert(0) += 1;
-                    // A departure lowers the origin's native count; the
-                    // arrival deliberately does not raise the destination's.
-                    if let Some(slot) = self.native.get_mut(&source_file) {
-                        *slot = slot.saturating_sub(1);
-                    }
-                }
-                self.moved.insert(node.id.0);
-                self.relocations.push(SymbolRelocation {
-                    node: node.id.0,
-                    from_file: source_file,
-                    to_file: destination,
-                    delta,
-                });
+                self.record_relocation(node, source_file, destination, delta, None);
                 return true;
             }
             // Rejected: undo the tentative relocation.
-            Self::undo(&mut self.overlay, node.id.0, previous);
-            self.set_visible(node.id.0, source_file);
+            self.revert_relocation(node.id.0, previous, source_file);
         }
         false
+    }
+
+    /// Books one accepted relocation: moves the symbol's production SLOC and
+    /// resident count from `source` to `destination`, marks the symbol moved
+    /// and records it. A departure lowers the origin's native count; the
+    /// arrival deliberately does not raise the destination's (FIX12-A). `fold`
+    /// is the pass-start id of the collision-folded file, if any.
+    fn record_relocation(
+        &mut self,
+        node: &Node,
+        source: ContainerId,
+        destination: ContainerId,
+        delta: f64,
+        fold: Option<ContainerId>,
+    ) {
+        if node.polarity == Polarity::Production {
+            if let Some(slot) = self.sloc.get_mut(&source) {
+                *slot = slot.saturating_sub(node.effective_size);
+            }
+            *self.sloc.entry(destination).or_insert(0) += node.effective_size;
+            if let Some(slot) = self.residents.get_mut(&source) {
+                *slot = slot.saturating_sub(1);
+            }
+            *self.residents.entry(destination).or_insert(0) += 1;
+            if let Some(slot) = self.native.get_mut(&source) {
+                *slot = slot.saturating_sub(1);
+            }
+        }
+        self.moved.insert(node.id.0);
+        self.relocations.push(SymbolRelocation {
+            node: node.id.0,
+            from_file: source,
+            to_file: destination,
+            delta,
+            fold,
+        });
+    }
+
+    /// Tentatively places one symbol in `destination`: overlays it and moves its
+    /// visibility home there. Returns the overlay entry it had before, for
+    /// [`Self::revert_relocation`].
+    fn place_tentatively(&mut self, node: u32, destination: ContainerId) -> Option<ContainerId> {
+        let previous = self.overlay.insert(node, destination);
+        self.set_visible(node, destination);
+        previous
+    }
+
+    /// Undoes one tentative relocation: restores the overlay entry the symbol
+    /// had before (`previous`) and its visibility home in `source`.
+    fn revert_relocation(&mut self, node: u32, previous: Option<ContainerId>, source: ContainerId) {
+        Self::undo(&mut self.overlay, node, previous);
+        self.set_visible(node, source);
+    }
+
+    /// Whether a relocation may take `node` from `source_file` to
+    /// `destination`: every structural veto ([`Self::admits`]) plus the two
+    /// reach guards (FIX13, ADR-6). Ordinary relocations and collision folds
+    /// (ADR-21) both pass through here, and no profile, key or flag reaches the
+    /// guards.
+    ///
+    /// The inbound guard is defined as: never give a dependant a folder it
+    /// does not already depend on, except a neutral unoccupied sibling branch
+    /// under the consumers' common ancestor (ADR-11). That carve-out is part of
+    /// the guard's definition, not a switch: it is fixed, configuration cannot
+    /// widen or narrow it, and the outbound guard has none.
+    fn admits_nominated(
+        &self,
+        node: &Node,
+        source_file: ContainerId,
+        destination: ContainerId,
+    ) -> bool {
+        if !self.admits(node, source_file, destination) {
+            return false;
+        }
+        // FIX13: never hand one of the symbol's dependants a folder it
+        // does not already depend on (see `ReachGuard`), except a neutral
+        // unoccupied sibling branch under the consumers' common ancestor
+        // (ADR-11), the guard's one defined carve-out (ADR-6).
+        if self
+            .reach
+            .invents_a_reach(node.id.0, source_file, destination)
+            && !self
+                .consumer_branches
+                .is_neutral_shared_destination(node.id.0, destination)
+        {
+            return false;
+        }
+        if self.reach.invents_an_outbound_reach(node.id.0, destination) {
+            return false;
+        }
+        true
+    }
+
+    /// The destination-specific structural vetoes every symbol relocation
+    /// obeys, ordinary or folded (ADR-21): policy pins, namespace and package,
+    /// depth, name collision, consumer branches, the test-zone boundary, file
+    /// role, and pass-start dependency order. Capacity and the objective are
+    /// checked by the caller.
+    fn admits(&self, node: &Node, source_file: ContainerId, destination: ContainerId) -> bool {
+        if self.forbidden_destinations.contains(&destination) {
+            return false;
+        }
+        // A declaration never leaves its manifest package unless the
+        // profile lifts the wall (ADR-17): a move across crates changes
+        // a package's public surface and manifest dependencies.
+        if !self.assembled.shares_namespace(source_file, destination)
+            || (!self.allow_cross_package
+                && !self.assembled.shares_package(source_file, destination))
+        {
+            return false;
+        }
+        if self.file_depth.get(&destination).copied().unwrap_or(0)
+            > self.file_depth.get(&source_file).copied().unwrap_or(0)
+        {
+            return false;
+        }
+        if self.collides_in_destination(node, destination)
+            || self.consumer_branches.blocks(node.id.0, destination)
+        {
+            return false;
+        }
+        // FIX11 source/test boundary: a relocation whose origin and
+        // destination sit on opposite sides of the test zone is barred
+        // outright, in either direction. This static check runs before any
+        // evaluation; nomination should already keep zone files out of
+        // `ranked` because the incidence map zero-prices every
+        // zone-touching edge, so the veto is defense in depth against
+        // future nomination paths. Every emitted file gets a zone entry,
+        // so the map is empty only on the no-files early return — where
+        // placement is empty and `try_relocate` declines before ever
+        // reaching this check; lookups nonetheless default to false on
+        // both sides.
+        if self
+            .assembled
+            .zone_by_file
+            .get(&source_file)
+            .copied()
+            .unwrap_or(false)
+            != self
+                .assembled
+                .zone_by_file
+                .get(&destination)
+                .copied()
+                .unwrap_or(false)
+        {
+            return false;
+        }
+        if node.kind == NodeKind::Symbol && self.type_only_files.contains(&destination) {
+            return false;
+        }
+        if self.pass_start.blocks(node.id.0, destination) {
+            return false;
+        }
+        true
     }
 
     /// Restores the prior overlay entry for one node.

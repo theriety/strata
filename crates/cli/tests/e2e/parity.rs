@@ -132,12 +132,17 @@ fn assert_parity(name: &str) {
 /// consume exactly what `analyze` emits. A failing analyze leaves the assertion
 /// in the caller to fail rather than panicking here.
 fn analyze_to_file(name: &str) -> PathBuf {
+    analyze_to_file_with(name, &[])
+}
+
+/// [`analyze_to_file`] with extra `analyze` flags appended.
+fn analyze_to_file_with(name: &str, extra: &[&str]) -> PathBuf {
     let root = fixture(name);
     let root_str = root.to_str().unwrap_or_default();
     let path = std::env::temp_dir().join(format!("strata-e2e-{name}-{}.json", nanos()));
     let path_str = path.to_str().unwrap_or_default();
 
-    let (code, _) = run_strata(&[
+    let mut args = vec![
         "analyze",
         "--root",
         root_str,
@@ -147,7 +152,9 @@ fn analyze_to_file(name: &str) -> PathBuf {
         "json",
         "--output",
         path_str,
-    ]);
+    ];
+    args.extend_from_slice(extra);
+    let (code, _) = run_strata(&args);
     assert_eq!(code, 0, "analyze writes a result file for {name}");
     path
 }
@@ -197,6 +204,14 @@ fn on_disk(name: &str, path: &str) -> PathBuf {
 /// Returns the parent of a `/`-separated path, or `""` at the top.
 fn parent_of(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(parent, _)| parent)
+}
+
+/// ADR-21: a file moved to `to` lands at `<to>/<its file name>`, which must
+/// not be a path another file already holds.
+fn overwrite_violation(name: &str, path: &str, to: &str) -> Option<String> {
+    let landing = format!("{to}/{}", path.rsplit('/').next().unwrap_or_default());
+    (landing != path && on_disk(name, &landing).is_file())
+        .then(|| format!("{path} would overwrite the existing {landing}"))
 }
 
 /// Collects every real-path violation of one candidate's narration (ADR-18).
@@ -262,6 +277,7 @@ fn move_path_violations(name: &str, candidate: &serde_json::Value) -> Vec<String
         {
             found.push(format!("to {to} has no real or created parent"));
         }
+        found.extend(to.and_then(|to| overwrite_violation(name, path, to)));
     };
     for relocation in moves {
         let to = text(relocation, "to");
@@ -529,7 +545,9 @@ fn should_narrate_only_real_or_created_move_paths_for_every_fixture_in_both_wall
     // ADR-18 across every fixture, not only the golden set: a move target's
     // parent is an existing directory or a new folder the same candidate
     // creates. `workspace-ts-leak` once printed `atlas/src/atlas/core` — the
-    // package key re-joined under its own see-through source root.
+    // package key re-joined under its own see-through source root. ADR-21's
+    // parity invariant rides the same sweep: no file move, in either wall
+    // mode, lands on a path an existing file holds.
     let inspected = AtomicUsize::new(0);
     let counter = &inspected;
     let violations: Vec<String> = std::thread::scope(|scope| {
@@ -562,7 +580,7 @@ fn should_narrate_only_real_or_created_move_paths_for_every_fixture_in_both_wall
     );
     assert!(
         violations.is_empty(),
-        "move endpoints must be real or created paths: {violations:#?}"
+        "move endpoints must be real or created paths and never overwrite a file: {violations:#?}"
     );
 }
 
@@ -681,6 +699,89 @@ fn should_narrate_a_same_package_move_through_a_source_root_for_the_workspace_mo
             package(path) == package(to)
         }),
         "no default-profile move may leave its crate; got {moves:#?}"
+    );
+}
+
+#[test]
+fn should_pin_a_colliding_crate_root_without_moving_or_folding_it() {
+    // ADR-21: with the wall lifted the solver sends util's `lib.rs` into
+    // core's `src`, where `crates/core/src/lib.rs` already lives. The move must
+    // never be printed (it would overwrite core's crate root), and because
+    // util's `lib.rs` is itself a crate root it is never folded either:
+    // retiring it would break the crate. It only stays where it is.
+    let result_path = analyze_to_file_with("workspace-move-rust", &["--allow-cross-package-moves"]);
+    let result_json = std::fs::read_to_string(&result_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&result_path);
+    let parsed: serde_json::Value = serde_json::from_str(&result_json).unwrap_or_default();
+    let candidates: Vec<serde_json::Value> = ["anchored", "greenfield"]
+        .iter()
+        .filter_map(|profile| {
+            parsed
+                .pointer(&format!("/profiles/{profile}/candidates"))
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+        })
+        .flatten()
+        .collect();
+    let text = |value: &serde_json::Value, key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let array = |value: &serde_json::Value, key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+
+    let root = fixture("workspace-move-rust");
+    let mut landings = Vec::new();
+    for relocation in candidates
+        .iter()
+        .flat_map(|candidate| array(candidate, "deltaNarration"))
+    {
+        let to = text(&relocation, "to");
+        for file in array(&relocation, "files") {
+            let path = text(&file, "path");
+            let name = path.rsplit('/').next().unwrap_or_default().to_owned();
+            landings.push((path, format!("{to}/{name}")));
+        }
+    }
+    let overwrites: Vec<_> = landings
+        .iter()
+        .filter(|(_, landing)| {
+            landing
+                .strip_prefix("workspace-move-rust/")
+                .is_some_and(|relative| root.join(relative).exists())
+        })
+        .collect();
+    assert!(
+        !landings.is_empty() && overwrites.is_empty(),
+        "no file move may land on an existing file; got {overwrites:#?} of {landings:#?}"
+    );
+
+    let util_root = "crates/util/src/lib.rs";
+    let moved_root: Vec<_> = landings
+        .iter()
+        .filter(|(path, _)| path.ends_with(util_root))
+        .collect();
+    assert!(
+        moved_root.is_empty(),
+        "util's crate root must stay where it is; got {moved_root:#?}"
+    );
+    let folded: Vec<String> = candidates
+        .iter()
+        .flat_map(|candidate| array(candidate, "symbolMoves"))
+        .filter(|relocation| text(relocation, "fromPath") == util_root)
+        .map(|relocation| text(&relocation, "symbol"))
+        .collect();
+    assert!(
+        folded.is_empty(),
+        "a crate root is never folded into symbol moves; got {folded:#?}"
     );
 }
 
