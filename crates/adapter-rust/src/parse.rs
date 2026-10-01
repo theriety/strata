@@ -764,9 +764,21 @@ struct ReferenceCollector {
     references: Vec<Reference>,
     /// Macro-invocation nesting depth; non-zero marks macro-expanded context.
     macro_depth: u32,
+    /// Names bound in the lexical scopes enclosing the cursor (parameters, let,
+    /// closure parameters, patterns); bare uses of them are locals, not items.
+    /// Blocks, closures, match arms, and `if`/`while`/`for` truncate it on exit.
+    bound: Vec<String>,
 }
 
 impl ReferenceCollector {
+    /// Runs `visit`, then forgets every name it bound, so a binding does not
+    /// outlive the block, closure, arm, or loop that introduced it.
+    fn scoped(&mut self, visit: impl FnOnce(&mut Self)) {
+        let depth = self.bound.len();
+        visit(self);
+        self.bound.truncate(depth);
+    }
+
     /// Records a reference of `kind` to `ident`, stamping the current macro
     /// context onto it. The identifier's text is retained so binding can fall
     /// back to name-based resolution when `goto_definition` comes up empty.
@@ -781,6 +793,50 @@ impl ReferenceCollector {
 }
 
 impl<'ast> Visit<'ast> for ReferenceCollector {
+    fn visit_pat_ident(&mut self, pat: &'ast syn::PatIdent) {
+        self.bound.push(pat.ident.to_string());
+        syn::visit::visit_pat_ident(self, pat);
+    }
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        // The initializer (and let-else block) is evaluated before the pattern
+        // binds, so `let helper = helper;` still reads the outer `helper`.
+        for attr in &local.attrs {
+            self.visit_attribute(attr);
+        }
+        if let Some(init) = &local.init {
+            self.visit_expr(&init.expr);
+            if let Some((_, diverge)) = &init.diverge {
+                self.visit_expr(diverge);
+            }
+        }
+        self.visit_pat(&local.pat);
+    }
+
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        self.scoped(|this| syn::visit::visit_block(this, block));
+    }
+
+    fn visit_expr_closure(&mut self, closure: &'ast syn::ExprClosure) {
+        self.scoped(|this| syn::visit::visit_expr_closure(this, closure));
+    }
+
+    fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+        self.scoped(|this| syn::visit::visit_arm(this, arm));
+    }
+
+    fn visit_expr_if(&mut self, expr: &'ast syn::ExprIf) {
+        self.scoped(|this| syn::visit::visit_expr_if(this, expr));
+    }
+
+    fn visit_expr_while(&mut self, expr: &'ast syn::ExprWhile) {
+        self.scoped(|this| syn::visit::visit_expr_while(this, expr));
+    }
+
+    fn visit_expr_for_loop(&mut self, expr: &'ast syn::ExprForLoop) {
+        self.scoped(|this| syn::visit::visit_expr_for_loop(this, expr));
+    }
+
     fn visit_use_path(&mut self, use_path: &'ast syn::UsePath) {
         self.record(RefKind::UsePath, &use_path.ident);
         syn::visit::visit_use_path(self, use_path);
@@ -822,6 +878,22 @@ impl<'ast> Visit<'ast> for ReferenceCollector {
         // resolves its leaf to the associated function, so the qualifier is
         // recorded separately and bind keeps it only if it lands on a type.
         let segments = &expr_path.path.segments;
+        if segments.len() == 1
+            && expr_path.qself.is_none()
+            && expr_path.path.leading_colon.is_none()
+            && let Some(segment) = segments.first()
+        {
+            // A bare name is a function used as a value (`.map_or(0, f)`) unless
+            // the declaration binds it (let, parameter, closure, pattern) or it
+            // is a path keyword. Bind resolves it only through the semantic
+            // database, never by name.
+            let name = segment.ident.to_string();
+            if !matches!(name.as_str(), "self" | "Self" | "crate" | "super")
+                && !self.bound.contains(&name)
+            {
+                self.record(RefKind::Call, &segment.ident);
+            }
+        }
         if segments.len() > 1
             && let Some(segment) = segments.last()
         {
@@ -1154,16 +1226,144 @@ mod tests {
     }
 
     #[test]
-    fn should_not_record_a_bare_local_path_as_a_reference() {
-        let declarations = parse_text("fn build() -> i32 {\n    let total = 1;\n    total\n}\n");
+    fn should_record_a_bare_fn_used_as_a_value_as_a_call() {
+        let declarations =
+            parse_text("fn build(x: Option<u32>) -> Option<u32> {\n    x.map(double)\n}\n");
 
-        // `total` is a bare single-segment path expression (a local), so it must
-        // not be recorded as a reference — only qualified paths are.
-        let bare = declarations
+        let value = declarations
             .iter()
             .flat_map(|decl| &decl.references)
-            .any(|r| r.name == "total");
-        assert!(!bare, "a bare local path is not recorded as a reference");
+            .find(|r| r.name == "double");
+        assert_eq!(value.map(|r| r.kind), Some(RefKind::Call));
+    }
+
+    /// Whether any reference in `text` carries `name`.
+    fn records_name(text: &str, name: &str) -> bool {
+        parse_text(text)
+            .iter()
+            .flat_map(|decl| &decl.references)
+            .any(|r| r.name == name)
+    }
+
+    #[test]
+    fn should_not_record_a_let_bound_name_as_a_reference() {
+        assert!(!records_name(
+            "fn build() -> i32 {\n    let total = 1;\n    total\n}\n",
+            "total"
+        ));
+    }
+
+    #[test]
+    fn should_record_the_initializer_use_of_a_name_a_let_then_shadows() {
+        for text in [
+            "fn helper() {}\nfn build() {\n    let helper = helper;\n    let _ = helper;\n}\n",
+            "fn helper() {}\nfn build() {\n    let helper: fn() = helper;\n    let _ = helper;\n}\n",
+        ] {
+            let hits = parse_text(text)
+                .iter()
+                .flat_map(|decl| &decl.references)
+                .filter(|r| r.name == "helper" && r.kind == RefKind::Call)
+                .count();
+            assert_eq!(hits, 1, "only the initializer is the outer fn: {text}");
+        }
+    }
+
+    #[test]
+    fn should_keep_a_later_use_of_a_shadowing_let_local() {
+        assert!(!records_name(
+            "fn build() -> i32 {\n    let helper = 1;\n    helper\n}\n",
+            "helper"
+        ));
+    }
+
+    #[test]
+    fn should_not_record_a_param_bound_name_as_a_reference() {
+        assert!(!records_name(
+            "fn build(total: i32) -> i32 {\n    total\n}\n",
+            "total"
+        ));
+    }
+
+    #[test]
+    fn should_not_record_a_closure_param_as_a_reference() {
+        assert!(!records_name(
+            "fn build(v: Vec<i32>) -> Vec<i32> {\n    v.into_iter().map(|item| item).collect()\n}\n",
+            "item"
+        ));
+    }
+
+    #[test]
+    fn should_not_record_a_pattern_bound_name_as_a_reference() {
+        assert!(!records_name(
+            "fn build(o: Option<i32>) -> i32 {\n    match o {\n        Some(inner) => inner,\n        None => 0,\n    }\n}\n",
+            "inner"
+        ));
+    }
+
+    #[test]
+    fn should_skip_bare_self_and_path_root_keywords() {
+        for keyword in ["self", "Self", "crate", "super"] {
+            let text = format!(
+                "struct S;\nimpl S {{\n    fn f(&self) {{\n        let _x = {keyword};\n        let _y = sentinel;\n    }}\n}}\n"
+            );
+            let references: Vec<_> = parse_text(&text)
+                .into_iter()
+                .flat_map(|decl| decl.references)
+                .collect();
+
+            assert!(
+                references.iter().any(|r| r.name == "sentinel"),
+                "{keyword}: the fixture parsed and records a real bare value"
+            );
+            assert!(
+                !references
+                    .iter()
+                    .any(|r| r.name == keyword && r.kind == RefKind::Call),
+                "{keyword} is not a value reference: {references:?}"
+            );
+        }
+    }
+
+    /// How many references named `name` the first declaration of `text` records.
+    fn count_named(text: &str, name: &str) -> usize {
+        parse_text(text)
+            .iter()
+            .flat_map(|decl| &decl.references)
+            .filter(|r| r.name == name)
+            .count()
+    }
+
+    #[test]
+    fn should_scope_a_closure_param_to_its_closure() {
+        let text = "fn f(v: Vec<u32>) {\n    let _a = v.iter().map(|double| double);\n    let _b = v.iter().map(double);\n}\n";
+
+        assert_eq!(
+            count_named(text, "double"),
+            1,
+            "only the use after the closure"
+        );
+    }
+
+    #[test]
+    fn should_scope_a_match_arm_binding_to_its_arm() {
+        let text = "fn f(o: Option<u32>) {\n    let _a = match o { Some(double) => double, None => 0 };\n    let _b = o.map(double);\n}\n";
+
+        assert_eq!(
+            count_named(text, "double"),
+            1,
+            "only the use after the match"
+        );
+    }
+
+    #[test]
+    fn should_scope_a_block_let_to_its_block() {
+        let text = "fn f(o: Option<u32>) {\n    {\n        let double = 1;\n        let _a = double;\n    }\n    let _b = o.map(double);\n}\n";
+
+        assert_eq!(
+            count_named(text, "double"),
+            1,
+            "only the use after the block"
+        );
     }
 
     #[test]
