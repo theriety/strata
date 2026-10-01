@@ -37,6 +37,11 @@ pub struct VisibilityScope {
     pub node: NodeId,
     /// Complete file set of the resolved module subtree.
     pub files: Vec<SmolStr>,
+    /// Definition file of the target module, set only for a non-root module
+    /// defined in `foo.rs` beside its `foo/` folder (or in `foo/mod.rs`); the
+    /// adapter states it so the engine never guesses it from file names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition_file: Option<SmolStr>,
 }
 
 /// A partial IR produced by one adapter; the engine merges fragments into one IR.
