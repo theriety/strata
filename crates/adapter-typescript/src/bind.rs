@@ -115,6 +115,8 @@ pub(super) fn bind(
         affinities,
         containers: containers.tree.containers().to_vec(),
         visibility_scopes: Vec::new(),
+        exposures: Vec::new(),
+        advisory_uses: Vec::new(),
     }
 }
 

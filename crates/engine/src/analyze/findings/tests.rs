@@ -930,7 +930,7 @@ fn should_distinguish_same_named_visibility_findings_by_original_file() -> Resul
 }
 
 #[test]
-fn should_retain_visibility_identity_without_a_file_container() -> Result<(), String> {
+fn should_stay_silent_for_a_non_file_need_without_a_ladder() -> Result<(), String> {
     let mut exported = node(0, "orphan", 0, Polarity::Production);
     exported.visibility = ScopeLevel::Package;
     let snapshot = snapshot(
@@ -940,27 +940,35 @@ fn should_retain_visibility_identity_without_a_file_container() -> Result<(), St
     );
     let result =
         analyze(&snapshot, &AnalyzeConfig::default()).map_err(|error| error.to_string())?;
-    let finding = result
-        .current
-        .shared_findings
-        .iter()
-        .find(|finding| finding.kind == ViolationKind::Visibility)
-        .ok_or("missing folder-container visibility finding")?;
-    assert_eq!(finding.location, ["orphan"]);
-    assert_eq!(
-        finding.detail,
-        "`orphan` is exported at Package but needed only at Folder"
+    // no ladder: a need above its own file is not known to be spellable.
+    assert!(
+        !result
+            .current
+            .shared_findings
+            .iter()
+            .any(|finding| finding.kind == ViolationKind::Visibility)
     );
     Ok(())
 }
 
+/// A ladder verdict for the fixture's `item`: declared at `Package`, needed at
+/// `needed` (a strictly narrower rung) with an optional spelling.
+fn verdict(needed: Option<ScopeLevel>, spelling: Option<&str>) -> ScopeLadder {
+    ScopeLadder {
+        node: NodeId(0),
+        declared: Some(ScopeLevel::Package),
+        needed,
+        spelling: spelling.map(smol_str::SmolStr::new),
+    }
+}
+
 /// Builds a package holding `src/` (files `args`, `main`) and `src/sub/` (files
 /// `a`, `b`) with one `Package`-declared `item` in `home` consumed from
-/// `consumer_file`, optionally with an expressible-scope ladder for the item.
+/// `consumer_file`, optionally with an adapter ladder verdict for the item.
 fn ladder_fixture(
     home: u32,
     consumer_file: Option<u32>,
-    ladder: Option<Vec<ScopeLevel>>,
+    ladder: Option<ScopeLadder>,
 ) -> Result<Snapshot, String> {
     let containers = vec![
         container(0, "pkg", ScopeLevel::Package, None),
@@ -980,45 +988,56 @@ fn ladder_fixture(
         edges.push(edge(1, 0));
     }
     let mut ir = IntermediateRepresentation::new(nodes, edges, ContainerTree::new(containers));
-    ir.scope_ladders = ladder
-        .into_iter()
-        .map(|levels| ScopeLadder {
-            node: NodeId(0),
-            levels,
-        })
-        .collect();
+    ir.scope_ladders = ladder.into_iter().collect();
     Snapshot::assemble(ir).map_err(|error| error.to_string())
 }
 
-const CRATE_ROOT_LADDER: [ScopeLevel; 2] = [ScopeLevel::File, ScopeLevel::Package];
-
 #[test]
 fn should_not_flag_a_crate_root_sibling_that_no_narrower_spelling_reaches() -> Result<(), String> {
-    let snapshot = ladder_fixture(2, Some(3), Some(CRATE_ROOT_LADDER.to_vec()))?;
+    let snapshot = ladder_fixture(2, Some(3), Some(verdict(None, None)))?;
     assert_eq!(visibility_violations(&snapshot), []);
     Ok(())
 }
 
 #[test]
-fn should_still_flag_the_same_item_without_a_ladder() -> Result<(), String> {
-    let found = visibility_violations(&ladder_fixture(2, Some(3), None)?);
+fn should_stay_silent_for_a_laddered_item_the_adapter_could_not_judge() -> Result<(), String> {
+    let silent = ScopeLadder {
+        declared: None,
+        ..verdict(None, None)
+    };
+    let snapshot = ladder_fixture(2, None, Some(silent))?;
+    assert_eq!(visibility_violations(&snapshot), []);
+    Ok(())
+}
+
+#[test]
+fn should_flag_an_item_with_a_narrower_needed_rung_and_name_its_spelling() -> Result<(), String> {
+    let ladder = verdict(Some(ScopeLevel::File), Some("private (no `pub`)"));
+    let found = visibility_violations(&ladder_fixture(2, None, Some(ladder))?);
+    let finding = found.first().ok_or("missing finding")?;
+    assert_eq!(
+        finding.detail,
+        "`item` in `src/args.rs` is exported at Package but needed only at File; narrowest spelling: private (no `pub`)"
+    );
+    Ok(())
+}
+
+#[test]
+fn should_stay_silent_without_a_ladder_unless_the_need_is_its_own_file() -> Result<(), String> {
+    // no ladder: a cross-file consumer gives no spellable scope, silence.
+    assert_eq!(
+        visibility_violations(&ladder_fixture(2, Some(3), None)?),
+        []
+    );
+    // no ladder and no outside user: the need is File, so it is flagged.
+    let found = visibility_violations(&ladder_fixture(2, None, None)?);
     assert_eq!(found.len(), 1, "{found:?}");
     Ok(())
 }
 
 #[test]
-fn should_still_flag_an_item_nobody_outside_its_file_uses_despite_a_ladder() -> Result<(), String> {
-    let snapshot = ladder_fixture(2, None, Some(CRATE_ROOT_LADDER.to_vec()))?;
-    let found = visibility_violations(&snapshot);
-    assert_eq!(found.len(), 1, "{found:?}");
-    Ok(())
-}
-
-#[test]
-fn should_still_flag_a_nested_item_consumed_only_inside_its_own_subtree() -> Result<(), String> {
-    // item in `src/sub/a.rs`, consumer in `src/sub/b.rs`; the `sub` folder rung
-    // is narrower than the declared crate-wide scope and covers the consumer.
-    let ladder = vec![ScopeLevel::File, ScopeLevel::Folder, ScopeLevel::Package];
+fn should_flag_a_nested_item_when_the_ladder_names_a_narrower_folder() -> Result<(), String> {
+    let ladder = verdict(Some(ScopeLevel::Folder), None);
     let found = visibility_violations(&ladder_fixture(5, Some(6), Some(ladder))?);
     let finding = found.first().ok_or("missing finding")?;
     assert!(

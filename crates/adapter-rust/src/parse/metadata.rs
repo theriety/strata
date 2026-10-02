@@ -153,3 +153,50 @@ fn implies_test(predicate: &syn::Meta) -> bool {
         _ => false,
     }
 }
+
+/// Returns `true` when any `#[cfg(..)]` attribute is false whenever `test` is
+/// set, as `cfg(not(test))` is: the semantic loader drops such an item. Doubt
+/// (an unknown option decides the predicate) resolves to `false`.
+pub(super) fn has_cfg_not_test(attrs: &[syn::Attribute]) -> bool {
+    attrs
+        .iter()
+        .filter_map(cfg_predicate)
+        .any(|predicate| holds_under_test(&predicate) == Some(false))
+}
+
+/// Three-valued evaluation with `test` set and every other option unknown.
+fn holds_under_test(predicate: &syn::Meta) -> Option<bool> {
+    let values = |list: &syn::MetaList| -> Vec<Option<bool>> {
+        arms(list).iter().map(holds_under_test).collect()
+    };
+    match predicate {
+        syn::Meta::Path(path) if path.is_ident("test") => Some(true),
+        syn::Meta::List(list) if list.path.is_ident("not") => arms(list)
+            .first()
+            .and_then(holds_under_test)
+            .map(|held| !held),
+        syn::Meta::List(list) if list.path.is_ident("all") => {
+            let values = values(list);
+            if values.contains(&Some(false)) {
+                Some(false)
+            } else {
+                values
+                    .iter()
+                    .all(|held| *held == Some(true))
+                    .then_some(true)
+            }
+        }
+        syn::Meta::List(list) if list.path.is_ident("any") => {
+            let values = values(list);
+            if values.contains(&Some(true)) {
+                Some(true)
+            } else {
+                values
+                    .iter()
+                    .all(|held| *held == Some(false))
+                    .then_some(false)
+            }
+        }
+        _ => None,
+    }
+}

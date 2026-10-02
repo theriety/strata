@@ -7,11 +7,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use strata_ir::{Edge, EdgeKind, Hardness, NodeId, NodeKind};
+use strata_ir::{Edge, EdgeKind, Exposure, Hardness, NodeId, NodeKind};
 
 use super::assignment::NodeAssignment;
 use super::database::{Database, ResolvedTarget};
-use crate::parse::{ParsedFile, RefKind, Reference};
+use crate::parse::{Declaration, ParsedFile, RefKind, Reference, VisibilityKind};
 
 /// Confidence assigned to a soft re-export edge: the `pub use` binding is
 /// statically certain even though it imposes no runtime dependency of its own.
@@ -29,66 +29,99 @@ const CONFIDENCE_MACRO: f64 = 0.5;
 /// in-workspace declaration matches, so the dependency is likely but uncertain.
 const CONFIDENCE_NAME_FALLBACK: f64 = 0.6;
 
-/// Resolves every recorded reference into the typed edge set.
+/// Resolves every recorded reference into the typed edge set, plus the
+/// signature exposures between declarations (ADR-25).
 pub(super) fn resolve_edges(
     files: &[ParsedFile],
     assignment: &NodeAssignment,
     database: &Database,
     workspace_root: &Path,
-) -> Vec<Edge> {
+) -> (Vec<Edge>, Vec<Exposure>) {
     let mut edges = Vec::new();
+    let mut exposures = BTreeMap::new();
     for file in files {
         for declaration in &file.declarations {
             let Some(source) = assignment.node_at(&file.path, declaration.byte_start) else {
                 continue;
             };
+            let states_reach = states_reach(declaration);
             for reference in &declaration.references {
-                resolve_reference(
-                    source,
-                    &file.path,
-                    reference,
-                    assignment,
-                    database,
-                    workspace_root,
-                    &mut edges,
-                );
+                let Some((target, confidence)) =
+                    resolve_reference(&file.path, reference, assignment, database, workspace_root)
+                else {
+                    continue;
+                };
+                let (kind, mut hardness) = edge_shape(reference.kind);
+                // a name-only match imposes no certain dependency.
+                if confidence == CONFIDENCE_NAME_FALLBACK {
+                    hardness = Hardness::Soft;
+                }
+                if reference.kind != RefKind::HeaderType {
+                    push_edge(&mut edges, source, target, kind, hardness, confidence);
+                }
+                let header = reference.kind == RefKind::HeaderType;
+                // a signature type counts only for a declaration whose reach is
+                // stated; a header's self type counts as a use of its file.
+                let exposed = reference.in_signature && states_reach;
+                if source != target && (exposed || (header && !reference.in_signature)) {
+                    *exposures.entry((source.0, target.0)).or_insert(false) |= exposed;
+                }
             }
         }
     }
-    edges
+    let exposures = exposures
+        .into_iter()
+        .map(|((exposer, exposed), reach)| Exposure {
+            exposer: NodeId(exposer),
+            exposed: NodeId(exposed),
+            reach,
+        })
+        .collect();
+    (edges, exposures)
 }
 
-/// Resolves a single reference and appends its edge when it lands on a node.
+/// Whether a declaration's signature exposes the types it names beyond its own
+/// file: a `pub`-family item does, and so does a trait impl, whose reach is the
+/// narrower of its trait and its type and is left unstated.
+fn states_reach(declaration: &Declaration) -> bool {
+    declaration.visibility_kind != VisibilityKind::Inherited
+        || declaration
+            .references
+            .iter()
+            .any(|reference| reference.kind == RefKind::TraitImpl)
+}
+
+/// Resolves a single reference to the node it lands on and the edge confidence.
 fn resolve_reference(
-    source: NodeId,
     path: &str,
     reference: &Reference,
     assignment: &NodeAssignment,
     database: &Database,
     workspace_root: &Path,
-    edges: &mut Vec<Edge>,
-) {
-    let (kind, hardness) = edge_shape(reference.kind);
-
+) -> Option<(NodeId, f64)> {
     // a known definition stays authoritative even when absent from this snapshot.
     if let Some(resolved) = database.resolve(path, reference.offset, workspace_root) {
-        if let ResolvedTarget::Workspace {
+        let ResolvedTarget::Workspace {
             path: target_path,
             offset: target_offset,
             module,
         } = resolved
-            && !(module && reference.kind == RefKind::Qualifier)
-            && let Some(target) = assignment.node_at(&target_path, target_offset)
-            && binds(reference.kind, assignment, target)
-        {
-            let confidence = if reference.macro_expanded {
-                CONFIDENCE_MACRO
-            } else {
-                CONFIDENCE_STATIC
-            };
-            push_edge(edges, source, target, kind, hardness, confidence);
+        else {
+            return None;
+        };
+        if module && reference.kind == RefKind::Qualifier {
+            return None;
         }
-        return;
+        let target = assignment.node_at(&target_path, target_offset)?;
+        if !binds(reference.kind, assignment, target) {
+            return None;
+        }
+        let confidence = if reference.macro_expanded {
+            CONFIDENCE_MACRO
+        } else {
+            CONFIDENCE_STATIC
+        };
+        return Some((target, confidence));
     }
 
     // unresolved receiver calls require type information; a matching global
@@ -99,15 +132,9 @@ fn resolve_reference(
         && let Some(target) = assignment.unique_node_named(&reference.name)
         && binds(reference.kind, assignment, target)
     {
-        push_edge(
-            edges,
-            source,
-            target,
-            kind,
-            Hardness::Soft,
-            CONFIDENCE_NAME_FALLBACK,
-        );
+        return Some((target, CONFIDENCE_NAME_FALLBACK));
     }
+    None
 }
 
 /// Whether a reference of `kind` may bind to `target`. A path qualifier is a
@@ -157,7 +184,9 @@ fn edge_shape(kind: RefKind) -> (EdgeKind, Hardness) {
     match kind {
         RefKind::UsePath => (EdgeKind::ValueImport, Hardness::Hard),
         RefKind::Call => (EdgeKind::Call, Hardness::Hard),
-        RefKind::TypeRef | RefKind::Qualifier => (EdgeKind::TypeReference, Hardness::Hard),
+        RefKind::TypeRef | RefKind::HeaderType | RefKind::Qualifier => {
+            (EdgeKind::TypeReference, Hardness::Hard)
+        }
         RefKind::TraitImpl => (EdgeKind::Inheritance, Hardness::Hard),
     }
 }

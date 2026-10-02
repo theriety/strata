@@ -15,3 +15,10 @@ mod any_mixed;
 mod cases;
 #[cfg(not(test))]
 mod real;
+
+#[cfg(not(test))]
+pub fn inline_drive(h: &Helper) {
+    h.run();
+    // shares its name with a cfg(test) helper, which must not count.
+    h.path_support();
+}

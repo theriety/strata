@@ -166,6 +166,11 @@ impl NodeAssignment {
         }
     }
 
+    /// Returns every node declared under `name`.
+    pub(super) fn nodes_named(&self, name: &str) -> &[NodeId] {
+        self.by_name.get(name).map_or(&[], Vec::as_slice)
+    }
+
     /// Consumes the assignment, yielding the assembled node set.
     pub(super) fn into_nodes(self) -> Vec<Node> {
         self.nodes

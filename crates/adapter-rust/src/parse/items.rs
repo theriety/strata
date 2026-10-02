@@ -11,7 +11,7 @@ use syn::{ImplItem, Item, ItemImpl};
 
 use super::declaration::{byte_offset, declaration};
 use super::metadata::{has_cfg_test, has_test_attr, push_re_exports};
-use super::references::collect_references;
+use super::references::{collect_header_references, collect_references};
 use super::tokens::trait_impl_header;
 use super::{DeclKind, Declaration, ReExport, RefKind, Reference};
 
@@ -175,6 +175,9 @@ fn push_impl(
     let owner = owner_name(&item_impl.self_ty);
     for impl_item in &item_impl.items {
         if let ImplItem::Fn(method) = impl_item {
+            // every method carries the header's type uses: its file names them.
+            let mut references = collect_references(method);
+            references.extend(collect_header_references(item_impl));
             let mut decl = declaration(
                 &method.sig.ident.to_string(),
                 DeclKind::Symbol,
@@ -182,7 +185,7 @@ fn push_impl(
                 cfg_test || has_cfg_test(&method.attrs),
                 method.span(),
                 contents,
-                collect_references(method),
+                references,
             );
             decl.test_case = has_test_attr(&method.attrs);
             decl.owner.clone_from(&owner);
@@ -247,7 +250,9 @@ fn push_trait_impl(
         name: SmolStr::new(segment.ident.to_string()),
         offset: byte_offset(segment.ident.span()),
         macro_expanded: false,
+        in_signature: false,
     }];
+    references.extend(collect_header_references(item_impl));
     for impl_item in &item_impl.items {
         references.extend(collect_references(impl_item));
     }

@@ -111,6 +111,8 @@ pub(super) fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
         affinities: Vec::new(),
         containers: containers.tree.containers().to_vec(),
         visibility_scopes: Vec::new(),
+        exposures: Vec::new(),
+        advisory_uses: Vec::new(),
     }
 }
 
