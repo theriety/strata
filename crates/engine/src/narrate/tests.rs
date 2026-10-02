@@ -741,7 +741,7 @@ fn should_not_move_a_spec_when_only_its_domain_label_is_regrouped() {
 
     let moves = narrate(&current, &candidate, &facts);
 
-    assert!(moves.is_empty());
+    assert_eq!(moves, []);
 }
 
 #[test]
@@ -915,5 +915,5 @@ fn should_narrate_nothing_for_identical_trees() {
 
     let moves = narrate(&tree, &tree, &plain_facts());
 
-    assert!(moves.is_empty());
+    assert_eq!(moves, []);
 }

@@ -247,7 +247,7 @@ mod tests {
             input: input.clone(),
             output: Some(output.clone()),
         };
-        let mut sink = Vec::new();
+        let mut sink: Vec<u8> = Vec::new();
 
         let outcome = run(&args, &mut sink);
 
@@ -255,7 +255,7 @@ mod tests {
         let _ = std::fs::remove_file(&input);
         let _ = std::fs::remove_file(&output);
         assert!(outcome.is_ok());
-        assert!(sink.is_empty());
+        assert_eq!(sink, b"");
         assert!(written.contains("# Strata report"));
     }
 

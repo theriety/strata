@@ -217,6 +217,6 @@ fn should_state_no_ladder_when_an_enclosing_rung_is_not_analyzed() -> Result<(),
         .visibility_scopes
         .first()
         .ok_or("no pub(super) scope emitted")?;
-    assert!(scope.expressible.is_empty());
+    assert_eq!(scope.expressible, []);
     Ok(())
 }
