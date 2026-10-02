@@ -36,7 +36,7 @@ type ExportTable = HashMap<SmolStr, HashMap<SmolStr, NodeId>>;
 ///
 /// `root` is the repository root the module paths are relative to; it anchors
 /// `tsconfig` alias resolution and package-entry lookup.
-pub fn bind(
+pub(super) fn bind(
     modules: &[ParsedModule],
     root: &Path,
     aliases: &BTreeMap<SmolStr, SmolStr>,

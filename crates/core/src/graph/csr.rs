@@ -207,7 +207,7 @@ pub fn build_csr(snapshot: &Snapshot, filter: HardnessFilter) -> GraphViews {
 /// [`build_csr`] with an explicit per-kind weight table (the `[weights]` config)
 /// pricing every edge instead of the built-in defaults.
 #[must_use]
-pub fn build_csr_with(
+fn build_csr_with(
     snapshot: &Snapshot,
     filter: HardnessFilter,
     weights: &KindWeights,

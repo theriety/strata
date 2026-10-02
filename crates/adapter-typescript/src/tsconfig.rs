@@ -34,7 +34,7 @@ struct CompilerOptions {
 /// the trailing `*` stripped. Only the first candidate target is used. Targets
 /// are made relative to `root` via `base_url` (default `.`).
 #[must_use]
-pub fn load_aliases(root: &Path) -> BTreeMap<SmolStr, SmolStr> {
+pub(super) fn load_aliases(root: &Path) -> BTreeMap<SmolStr, SmolStr> {
     let path = root.join("tsconfig.json");
     let Ok(contents) = std::fs::read_to_string(path) else {
         return BTreeMap::new();

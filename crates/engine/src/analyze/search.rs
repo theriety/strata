@@ -137,9 +137,7 @@ pub(in crate::analyze) fn build_profile_result(
 }
 
 /// Returns the variation-of-information matrix over the diversified candidates.
-pub(in crate::analyze) fn pairwise_distances(
-    candidates: &[SolvedCandidate<PolishEvidence>],
-) -> Vec<Vec<f64>> {
+fn pairwise_distances(candidates: &[SolvedCandidate<PolishEvidence>]) -> Vec<Vec<f64>> {
     candidates
         .iter()
         .map(|left| {
@@ -152,7 +150,7 @@ pub(in crate::analyze) fn pairwise_distances(
 }
 
 /// Translates the engine config into the diversifier's [`ModeConfig`].
-pub(in crate::analyze) fn mode_config(profile: &ProfileConfig) -> ModeConfig {
+fn mode_config(profile: &ProfileConfig) -> ModeConfig {
     ModeConfig {
         k: profile.candidates as usize,
         base_seed: profile.seed,

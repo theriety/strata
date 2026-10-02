@@ -49,7 +49,7 @@ const CONFIDENCE_DYNAMIC: f64 = 0.5;
 ///
 /// `root` is the repository root the module paths are relative to; it anchors
 /// the package container at the top of the laminar tree.
-pub fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
+pub(super) fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
     let resolver = Resolver::new(modules);
     let containers = ContainerBuilder::build(modules, root);
 

@@ -66,7 +66,11 @@ impl std::error::Error for BindOutcome {}
 /// # Errors
 ///
 /// Returns [`BindOutcome::LoadFailed`] when the cargo workspace cannot be loaded.
-pub fn bind(files: &[ParsedFile], manifest: &Path, root: &Path) -> Result<IrFragment, BindOutcome> {
+pub(super) fn bind(
+    files: &[ParsedFile],
+    manifest: &Path,
+    root: &Path,
+) -> Result<IrFragment, BindOutcome> {
     let workspace_root = manifest.parent().unwrap_or(manifest);
     let database = Database::load(manifest)?;
 

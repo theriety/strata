@@ -83,7 +83,7 @@ pub fn render_diff(candidate: &Candidate, out: &mut impl Write) -> io::Result<()
 /// moved file reading `{path} [{from} → {to}]`; step numbers run continuously
 /// across the candidate so the whole change reads as one ordered plan. Lines
 /// carry no trailing newline. An empty source or destination renders as `(root)`.
-pub(crate) fn move_step_lines(moves: &[Move]) -> Vec<String> {
+fn move_step_lines(moves: &[Move]) -> Vec<String> {
     let mut lines = Vec::new();
     let mut step = 1_usize;
     for entry in moves {

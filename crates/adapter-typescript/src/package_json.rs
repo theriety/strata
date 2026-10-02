@@ -34,7 +34,7 @@ enum ImportTarget {
 /// only their first string entry, mirroring the first matching runtime
 /// condition.
 #[must_use]
-pub fn load_subpath_imports(root: &Path) -> BTreeMap<SmolStr, SmolStr> {
+pub(super) fn load_subpath_imports(root: &Path) -> BTreeMap<SmolStr, SmolStr> {
     let path = root.join("package.json");
     let Ok(contents) = std::fs::read_to_string(path) else {
         return BTreeMap::new();

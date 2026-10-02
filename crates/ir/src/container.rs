@@ -95,7 +95,7 @@ impl ContainerTree {
     }
 
     /// Sorts the containers by id, producing a canonical ordering.
-    pub fn sort_by_id(&mut self) {
+    pub(super) fn sort_by_id(&mut self) {
         self.containers.sort_by_key(|container| container.id.0);
     }
 

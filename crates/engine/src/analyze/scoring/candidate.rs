@@ -101,7 +101,7 @@ pub(in crate::analyze) fn score_candidate(
 /// Walks the ancestor chain of `left` into a set, then ascends `right` until a
 /// shared ancestor is found; the highest endpoints share is the package-group root
 /// of an empty intersection, so disjoint subtrees cross at the coarsest level.
-pub(super) fn lca_container(
+fn lca_container(
     parent_of: &BTreeMap<u32, Option<ContainerId>>,
     left: ContainerId,
     right: ContainerId,
