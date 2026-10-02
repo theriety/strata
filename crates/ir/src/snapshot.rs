@@ -8,11 +8,12 @@ use thiserror::Error;
 use crate::Affinity;
 use crate::container::{ContainerTree, TreeError};
 use crate::edge::{Edge, EdgeKind};
-use crate::node::{Node, NodeId};
+use crate::node::{Node, NodeId, ScopeLevel};
 
 /// Current IR schema version, bumped on any contract change.
 ///
-/// Version 3 added [`Node::re_export`] (ADR-20).
+/// Version 3 added [`Node::re_export`] (ADR-20). Additive default-empty sidecar
+/// fields such as `scope_ladders` do not bump it (ADR-24).
 pub const SCHEMA_VERSION: u32 = 3;
 
 /// Oldest IR schema version this build still reads.
@@ -36,6 +37,24 @@ pub struct IntermediateRepresentation {
     pub affinities: Vec<Affinity>,
     /// The laminar container tree.
     pub containers: ContainerTree,
+    /// Per-node scope levels the source language can express, where the
+    /// language restricts them to a ladder; empty for every other node.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope_ladders: Vec<ScopeLadder>,
+}
+
+/// The scope levels a language can express for one declaration.
+///
+/// A language whose visibility spellings form a fixed ladder cannot narrow a
+/// declaration to an arbitrary scope; the visibility finding never advises a
+/// level that no rung of this ladder reaches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeLadder {
+    /// The declaration the ladder belongs to.
+    pub node: NodeId,
+    /// Levels of every expressible scope that reaches all of the declaration's
+    /// consumers, in ascending order.
+    pub levels: Vec<ScopeLevel>,
 }
 
 impl IntermediateRepresentation {
@@ -48,6 +67,7 @@ impl IntermediateRepresentation {
             edges,
             affinities: Vec::new(),
             containers,
+            scope_ladders: Vec::new(),
         }
     }
 }
