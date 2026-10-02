@@ -10,10 +10,10 @@ use strata_ir::{Adapter, IrFragment, SourceFile};
 /// Parses and binds the `scope/app` fixture, whose `parse` module holds
 /// `cfg`-disabled children beside a doc-commented `pub(super)` item.
 ///
-/// The fixture relies on the loader leaving `cfg(test)` off: `tests`,
-/// `extra_tests` and the feature-gated `gated` module have no semantic module,
-/// so a scope surviving beside them proves the syntactic and semantic child
-/// lists are compared after skipping them.
+/// The loader enables `cfg(test)`: `tests` is a live child module, while
+/// `prod_only` (`cfg(not(test))`) and the feature-gated `gated` module have no
+/// semantic module, so a scope surviving beside them proves the syntactic and
+/// semantic child lists are compared after skipping them.
 fn bind_fixture() -> Result<IrFragment, String> {
     bind_fixture_files(&[
         "src/lib.rs",
@@ -44,7 +44,8 @@ fn bind_fixture_files(paths: &[&str]) -> Result<IrFragment, String> {
 
 #[test]
 fn should_emit_a_scope_for_a_pub_super_item_beside_cfg_disabled_modules() -> Result<(), String> {
-    // also covers the feature-gated `gated` module: exactly one scope remains.
+    // also covers the feature-gated `gated` module: exactly one scope remains,
+    // and the live `cfg(test)` child `tests` belongs to the `parse` subtree.
     let fragment = bind_fixture()?;
     assert_eq!(fragment.visibility_scopes.len(), 1);
     let scoped: Vec<&str> = fragment
@@ -54,7 +55,7 @@ fn should_emit_a_scope_for_a_pub_super_item_beside_cfg_disabled_modules() -> Res
         .collect();
     assert_eq!(
         scoped,
-        ["src/parse.rs", "src/parse/refs.rs"],
+        ["src/parse.rs", "src/parse/refs.rs", "src/parse/tests.rs"],
         "scopes: {:?}",
         fragment.visibility_scopes
     );
@@ -204,7 +205,7 @@ fn should_state_every_enclosing_module_as_a_rung_for_a_nested_pub_super_item() -
         .iter()
         .map(|rung| rung.files.len())
         .collect();
-    assert_eq!(sizes, [1, 2, 3]);
+    assert_eq!(sizes, [1, 3, 4]);
     Ok(())
 }
 
@@ -212,7 +213,8 @@ fn should_state_every_enclosing_module_as_a_rung_for_a_nested_pub_super_item() -
 fn should_state_no_ladder_when_an_enclosing_rung_is_not_analyzed() -> Result<(), String> {
     // without `src/lib.rs` among the analyzed files the crate-root rung cannot
     // be resolved, so the whole ladder is dropped rather than left with a gap.
-    let fragment = bind_fixture_files(&["src/parse.rs", "src/parse/refs.rs"])?;
+    let fragment =
+        bind_fixture_files(&["src/parse.rs", "src/parse/refs.rs", "src/parse/tests.rs"])?;
     let scope = fragment
         .visibility_scopes
         .first()
