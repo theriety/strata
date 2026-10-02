@@ -17,3 +17,4 @@ test-heavy-ts [packageGroup]
         src/adapters/anthropic/models.ts [file] 6 sloc
           - modelName (file)
           - modelContext (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

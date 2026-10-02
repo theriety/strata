@@ -111,6 +111,34 @@ fn should_count_a_surviving_source_consumer_as_an_import_to_repoint() {
     );
 }
 
+#[test]
+fn should_display_a_moved_method_as_type_method_while_its_key_stays_bare() {
+    let mut method = node(0, "shared_step", 2, Polarity::Production);
+    method.display_name = Some("Widget::shared_step".into());
+    let snapshot = snapshot(
+        vec![
+            method,
+            node(1, "source_consumer", 2, Polarity::Production),
+            node(2, "destination_dependency", 3, Polarity::Production),
+        ],
+        vec![edge(1, 0), edge(0, 2)],
+        vec![
+            container(0, "workspace", ScopeLevel::PackageGroup, None),
+            container(1, "area", ScopeLevel::Folder, Some(0)),
+            container(2, "area/source.ts", ScopeLevel::File, Some(1)),
+            container(3, "area/destination.ts", ScopeLevel::File, Some(1)),
+        ],
+    );
+
+    let moves = relocates_and_narrates_first_symbol(&snapshot);
+
+    assert!(
+        moves.iter().any(|entry| entry.symbol == "shared_step"
+            && entry.display.as_deref() == Some("Widget::shared_step")),
+        "the matching key stays bare while display names the type; moves {moves:?}"
+    );
+}
+
 fn relocates_and_narrates_first_symbol(snapshot: &Snapshot) -> Vec<SymbolMove> {
     let tests = TestPolicy::defaults();
     let config = AnalyzeConfig::default();

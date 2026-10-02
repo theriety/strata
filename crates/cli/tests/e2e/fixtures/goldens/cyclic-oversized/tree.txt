@@ -6,3 +6,4 @@ cyclic-oversized [packageGroup]
       - stepBeta (file)
     gamma.ts [file] 139 sloc
       - stepGamma (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

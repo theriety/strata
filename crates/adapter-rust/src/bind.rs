@@ -118,6 +118,7 @@ mod tests {
             byte_start: start,
             byte_end: end,
             sloc: 1,
+            owner: None,
             references: Vec::new(),
         }
     }
@@ -142,6 +143,24 @@ mod tests {
 
         let ids: Vec<u32> = nodes.iter().map(|node| node.id.0).collect();
         assert_eq!(ids, vec![0, 1]);
+    }
+
+    #[test]
+    fn should_give_an_impl_method_the_display_name_type_method_and_keep_its_name() {
+        let mut method = declaration("new", 0, 10);
+        method.owner = Some(SmolStr::new("Interner"));
+        let files = [file_with(
+            "crates/app/src/lib.rs",
+            vec![method, declaration("free", 10, 20)],
+        )];
+
+        let nodes = NodeAssignment::build(&files, Path::new("repo")).into_nodes();
+
+        let shown: Vec<_> = nodes
+            .iter()
+            .map(|node| (node.name.as_str(), node.display_name.as_deref()))
+            .collect();
+        assert_eq!(shown, vec![("new", Some("Interner::new")), ("free", None)]);
     }
 
     #[test]
@@ -269,6 +288,7 @@ mod tests {
             visibility: ScopeLevel::File,
             effective_size: 1,
             re_export: false,
+            display_name: None,
         };
         let test_case = Node {
             id: NodeId(1),
@@ -279,6 +299,7 @@ mod tests {
             visibility: ScopeLevel::File,
             effective_size: 0,
             re_export: false,
+            display_name: None,
         };
         let mut nodes = vec![helper, test_case];
         let edges = vec![Edge {
@@ -310,6 +331,7 @@ mod tests {
             visibility: ScopeLevel::File,
             effective_size: 1,
             re_export: false,
+            display_name: None,
         };
         let producer = Node {
             id: NodeId(1),
@@ -320,6 +342,7 @@ mod tests {
             visibility: ScopeLevel::File,
             effective_size: 1,
             re_export: false,
+            display_name: None,
         };
         let test_case = Node {
             id: NodeId(2),
@@ -330,6 +353,7 @@ mod tests {
             visibility: ScopeLevel::File,
             effective_size: 0,
             re_export: false,
+            display_name: None,
         };
         let mut nodes = vec![helper, producer, test_case];
         let edges = vec![

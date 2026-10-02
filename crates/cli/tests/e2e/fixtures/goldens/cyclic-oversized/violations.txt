@@ -1,1 +1,2 @@
-cycle [violation] alpha.ts, beta.ts, gamma.ts :: 3-symbol cycle; symbols form one placement unit and must remain in one file unless a suggested dependency edge is broken; break stepGamma -> stepAlpha (w=1.0, exact)
+cycle [violation] alpha.ts, beta.ts, gamma.ts :: 3-symbol cycle; strata keeps a dependency cycle in one file; to split it, break stepGamma -> stepAlpha (w=1.0, exact)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

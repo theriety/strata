@@ -103,13 +103,13 @@ fn edge_breaks(solution: &SccSolution, names: &BTreeMap<u32, String>) -> Vec<Edg
 
 /// Renders a cycle violation's detail line, leading with the cheapest break.
 fn cycle_detail(size: usize, breaks: &[EdgeBreak]) -> String {
-    const CONSEQUENCE: &str = "symbols form one placement unit and must remain in one file unless a suggested dependency edge is broken";
+    const CONSEQUENCE: &str = "strata keeps a dependency cycle in one file";
     let Some(first) = breaks.first() else {
         return format!("{size}-symbol cycle; {CONSEQUENCE}");
     };
     let method = if first.exact { "exact" } else { "heuristic" };
     let mut detail = format!(
-        "{size}-symbol cycle; {CONSEQUENCE}; break {} -> {} (w={:.1}, {method})",
+        "{size}-symbol cycle; {CONSEQUENCE}; to split it, break {} -> {} (w={:.1}, {method})",
         first.source, first.target, first.weight
     );
     if breaks.len() > 1 {

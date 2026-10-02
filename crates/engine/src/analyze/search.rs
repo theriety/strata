@@ -173,7 +173,11 @@ pub(in crate::analyze) fn node_names(snapshot: &Snapshot) -> BTreeMap<u32, Strin
         .ir()
         .nodes
         .iter()
-        .map(|node| (node.id.0, node.name.to_string()))
+        .map(|node| {
+            let shown = node.display_name.as_ref().unwrap_or(&node.name);
+
+            (node.id.0, shown.to_string())
+        })
         .collect()
 }
 

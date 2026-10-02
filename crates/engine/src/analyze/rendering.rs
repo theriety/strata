@@ -263,6 +263,7 @@ fn file_contents_by_container(
             });
         entry.symbols.push(SymbolPlacement {
             name: node.name.to_string(),
+            display: node.display_name.as_ref().map(ToString::to_string),
             visibility: Level::from(node.visibility),
         });
         if node.polarity == Polarity::Production {

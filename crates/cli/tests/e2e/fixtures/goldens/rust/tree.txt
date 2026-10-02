@@ -6,3 +6,4 @@ rust [packageGroup]
       - Rectangle (package)
       - impl Shape for Rectangle (file)
       - summarize (package)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

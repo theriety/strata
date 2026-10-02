@@ -38,8 +38,8 @@ impl Changes {
             } else {
                 "symbol"
             };
-            let outgoing = format!("{kind} `{}` [to {after_destination}]", entry.symbol);
-            let incoming = format!("{kind} `{}` [from {source}]", entry.symbol);
+            let outgoing = format!("{kind} `{}` [to {after_destination}]", entry.label());
+            let incoming = format!("{kind} `{}` [from {source}]", entry.label());
             changes.before.entry(source).or_default().push(outgoing);
             changes
                 .after

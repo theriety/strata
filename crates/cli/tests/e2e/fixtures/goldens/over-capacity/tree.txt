@@ -381,3 +381,4 @@ over-capacity [packageGroup]
             - nested_097 (file)
             - nested_098 (file)
             - nested_099 (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

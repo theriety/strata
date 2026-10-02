@@ -22,3 +22,4 @@ nested-ts [packageGroup]
         src/geometry/shape.ts [file] 7 sloc
           - Shape (file)
           - Dimensions (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

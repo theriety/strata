@@ -36,6 +36,18 @@ pub struct SymbolMove {
     /// Distinct files other than the origin housing a direct caller or callee
     /// that is NOT a future co-resident — the imports this move severs.
     pub broken_imports: u32,
+    /// Human-facing name when it differs from `symbol` (a method reads
+    /// `Type::method`). Display only: matching keys on `symbol`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+}
+
+impl SymbolMove {
+    /// The name a human reads: `display` when present, else `symbol`.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        self.display.as_deref().unwrap_or(&self.symbol)
+    }
 }
 
 /// The kind of a narrated change.

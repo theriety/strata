@@ -105,6 +105,7 @@ fn file(name: &str, symbol: Option<&str>) -> ContainerNode {
             symbol
                 .into_iter()
                 .map(|symbol_name| SymbolPlacement {
+                    display: None,
                     name: symbol_name.into(),
                     visibility: Level::File,
                 })
@@ -143,6 +144,7 @@ fn should_place_moved_symbol_under_actual_before_and_after_files() -> TestResult
     candidate.tree = tree(None, Some("Options"));
     candidate.delta_narration.clear();
     candidate.symbol_moves = vec![SymbolMove {
+        display: None,
         symbol: "Options".into(),
         kind: SymbolKind::Type,
         from_path: "source.ts".into(),
@@ -262,6 +264,7 @@ fn should_wrap_long_symbol_paths_without_losing_their_characters() -> TestResult
     let to = format!("src/{}/options.ts", "different_component_".repeat(8));
     candidate.delta_narration.clear();
     candidate.symbol_moves = vec![SymbolMove {
+        display: None,
         symbol: "LongOptions".into(),
         kind: SymbolKind::Type,
         from_path: from.clone(),
@@ -376,6 +379,7 @@ fn should_follow_relocated_symbol_destination_and_mirrored_test_in_paired_trees(
         blocked_mirrors: vec![],
     }];
     candidate.symbol_moves = vec![SymbolMove {
+        display: None,
         symbol: "Options".into(),
         kind: SymbolKind::Type,
         from_path: "source.ts".into(),
@@ -461,6 +465,7 @@ fn should_keep_duplicate_filenames_distinct_across_roots() -> TestResult {
     );
     candidate.delta_narration.clear();
     candidate.symbol_moves = vec![SymbolMove {
+        display: None,
         symbol: "Options".into(),
         kind: SymbolKind::Type,
         from_path: "left/options.ts".into(),
@@ -520,6 +525,7 @@ fn should_preserve_symbol_directory_named_like_project_root() -> TestResult {
         .ok_or("missing candidate")?;
     candidate.delta_narration.clear();
     candidate.symbol_moves = vec![SymbolMove {
+        display: None,
         symbol: "Options".into(),
         kind: SymbolKind::Type,
         from_path: "project/source.ts".into(),
@@ -633,6 +639,7 @@ fn should_preserve_literal_repeated_spaces_and_backticks_in_move_paths() -> Test
         .ok_or("missing candidate")?;
     candidate.delta_narration.clear();
     candidate.symbol_moves = vec![SymbolMove {
+        display: None,
         symbol: "Options".into(),
         kind: SymbolKind::Type,
         from_path: "src/a`  b.ts".into(),

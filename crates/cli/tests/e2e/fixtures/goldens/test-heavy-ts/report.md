@@ -2,6 +2,7 @@
 
 6 files · 9 symbols · 9 edges
 Snapshot `587c672e981db77d5fd32e9a3cba14ca7f8000050f368987ce93ea2fdabac307`
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings
 

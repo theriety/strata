@@ -32,7 +32,7 @@ pub(crate) fn symbol_move_line(entry: &SymbolMove) -> String {
     };
     format!(
         " - move{kind} `{}` from {} to {} (delta {:+.4}, {} import(s) to re-point)",
-        entry.symbol,
+        entry.label(),
         nq(&entry.from_path),
         nq(&entry.to_path),
         entry.delta,
@@ -46,6 +46,22 @@ pub(crate) fn symbol_move_line(entry: &SymbolMove) -> String {
 ///
 /// Returns an [`io::Error`] if writing fails.
 pub fn render_diff(candidate: &Candidate, out: &mut impl Write) -> io::Result<()> {
+    write_moves(candidate, out)?;
+    writeln!(out, "{}", super::ADVICE_DISCLAIMER)
+}
+
+/// Writes the move list without the trailing disclaimer, for callers that
+/// append more output before closing with it.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if writing fails.
+pub fn render_moves(candidate: &Candidate, out: &mut impl Write) -> io::Result<()> {
+    write_moves(candidate, out)
+}
+
+/// Writes the move list itself, without the trailing disclaimer.
+fn write_moves(candidate: &Candidate, out: &mut impl Write) -> io::Result<()> {
     let no_symbols = candidate.symbol_moves.is_empty();
     if candidate.delta_narration.is_empty() && no_symbols {
         return writeln!(out, "no moves");
