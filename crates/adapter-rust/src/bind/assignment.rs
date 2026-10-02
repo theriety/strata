@@ -226,7 +226,11 @@ fn re_export_node(re_export: &ReExport, id: NodeId, container: ContainerId) -> N
         id,
         name: re_export.name.clone(),
         kind: NodeKind::Symbol,
-        polarity: Polarity::Production,
+        polarity: if re_export.cfg_test {
+            Polarity::TestSupport
+        } else {
+            Polarity::Production
+        },
         container,
         visibility: declared_visibility(re_export.visibility_kind, true),
         effective_size: 0,

@@ -44,6 +44,9 @@ impl Database {
     pub(super) fn load(manifest: &Path) -> Result<Self, BindOutcome> {
         let cargo_config = CargoConfig {
             sysroot: Some(RustLibSource::Discover),
+            // Workspace crates are analysed with `cfg(test)` on, so test modules
+            // resolve semantically and count as users of the items they touch.
+            set_test: true,
             ..CargoConfig::default()
         };
         let load_config = LoadCargoConfig {
