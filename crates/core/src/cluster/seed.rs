@@ -37,7 +37,7 @@ pub enum SeedLevel {
 impl SeedLevel {
     /// Returns the member cap this level enforces from `caps`.
     #[must_use]
-    fn cap(self, caps: &LevelCaps) -> u32 {
+    pub fn cap(self, caps: &LevelCaps) -> u32 {
         match self {
             Self::Folder => caps.folder,
             Self::Domain => caps.domain,
