@@ -42,6 +42,7 @@ pub(super) fn declaration(
         sloc,
         owner: None,
         references,
+        advisory_names: Vec::new(),
     }
 }
 

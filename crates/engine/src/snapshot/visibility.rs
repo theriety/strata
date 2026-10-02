@@ -1,36 +1,57 @@
-//! Scope-ladder projection (ADR-24): resolves adapter-stated visibility scopes
-//! onto the final laminar container tree.
+//! Scope-ladder verdicts (ADR-24, ADR-25): resolves adapter-stated visibility
+//! scopes onto the final laminar container tree and decides, per declaration,
+//! whether a strictly narrower spellable rung holds every user.
 
-use std::collections::{HashMap, HashSet};
+mod project;
+mod rung;
+
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use smol_str::SmolStr;
 use strata_ir::{
-    ContainerId, ContainerTree, Edge, EdgeKind, Node, NodeId, ScopeLadder, ScopeLevel,
-    VisibilityScope,
+    AdvisoryUse, ContainerId, ContainerTree, Edge, EdgeKind, Exposure, Node, NodeId, ScopeLadder,
+    ScopeLevel, VisibilityScope,
 };
 
+use self::project::scope_level;
+use self::rung::needed_index;
 use super::reexport::{name_lookup, re_export_targets, resolve_re_export};
 
-/// Projects complete visibility sidecars onto the final laminar tree and
-/// returns the expressible-scope ladders they state.
+/// Everything a verdict reads besides the declaration itself.
+struct Facts<'a> {
+    tree: &'a ContainerTree,
+    files: &'a HashMap<SmolStr, ContainerId>,
+    path_of: HashMap<ContainerId, &'a SmolStr>,
+    /// File containers of each declaration's users, after re-export flattening.
+    consumers: HashMap<NodeId, HashSet<ContainerId>>,
+    /// The single scope statement of each declaration; two or more are unusable.
+    scopes: HashMap<NodeId, Vec<&'a VisibilityScope>>,
+    /// Signature and header exposures, keyed by the exposed declaration.
+    exposures: HashMap<NodeId, Vec<&'a Exposure>>,
+    /// Container each declaration lives in.
+    containers: HashMap<NodeId, ContainerId>,
+}
+
+/// Projects visibility sidecars onto the final laminar tree and returns the
+/// ladder verdict of every declaration whose adapter stated a scope.
 pub(super) fn apply_visibility_scopes(
     nodes: &mut [Node],
     tree: &ContainerTree,
     files: &HashMap<SmolStr, ContainerId>,
     edges: &[Edge],
     visibility_scopes: &[VisibilityScope],
+    exposures: &[Exposure],
+    advisory_uses: &[AdvisoryUse],
 ) -> Vec<ScopeLadder> {
-    // a rung is a real spelling for a declaration only if it reaches every file
-    // that uses it; the file containers of each declaration's consumers decide.
-    // the set is read the way `derive_visibility` reads it, after re-export
-    // flattening: a consumer of a re-export node is a consumer of its original.
-    let node_containers: HashMap<NodeId, ContainerId> =
+    let containers: HashMap<NodeId, ContainerId> =
         nodes.iter().map(|node| (node.id, node.container)).collect();
+    // consumers are read the way `derive_visibility` reads them, after
+    // re-export flattening: a consumer of a re-export is one of its original.
     let re_export_target = re_export_targets(edges);
     let name_of = name_lookup(nodes);
     let mut consumers: HashMap<NodeId, HashSet<ContainerId>> = HashMap::new();
     for edge in edges {
-        if let Some(container) = node_containers.get(&edge.source) {
+        if let Some(container) = containers.get(&edge.source) {
             let target = if edge.kind == EdgeKind::ReExport {
                 edge.target
             } else {
@@ -39,20 +60,47 @@ pub(super) fn apply_visibility_scopes(
             consumers.entry(target).or_default().insert(*container);
         }
     }
-    let path_of: HashMap<ContainerId, &SmolStr> =
-        files.iter().map(|(path, id)| (*id, path)).collect();
-
-    let mut scopes_by_node: HashMap<NodeId, Vec<&VisibilityScope>> = HashMap::new();
-    for visibility_scope in visibility_scopes {
-        scopes_by_node
-            .entry(visibility_scope.node)
-            .or_default()
-            .push(visibility_scope);
+    // name-matched uses of code the loader cannot see: production users for
+    // this verdict only, never edges, so nothing but advice reads them.
+    for advisory in advisory_uses {
+        if let Some(container) = containers.get(&advisory.user) {
+            consumers
+                .entry(advisory.used)
+                .or_default()
+                .insert(*container);
+        }
     }
+    let mut scopes: HashMap<NodeId, Vec<&VisibilityScope>> = HashMap::new();
+    for scope in visibility_scopes {
+        scopes.entry(scope.node).or_default().push(scope);
+    }
+    let mut by_exposed: HashMap<NodeId, Vec<&Exposure>> = HashMap::new();
+    for exposure in exposures {
+        by_exposed
+            .entry(exposure.exposed)
+            .or_default()
+            .push(exposure);
+    }
+    let facts = Facts {
+        tree,
+        files,
+        path_of: files.iter().map(|(path, id)| (*id, path)).collect(),
+        consumers,
+        scopes,
+        exposures: by_exposed,
+        containers,
+    };
 
     let mut ladders = Vec::new();
     for node in nodes {
-        let Some([visibility_scope]) = scopes_by_node.get(&node.id).map(Vec::as_slice) else {
+        // a re-export publishes its original; only the original is judged.
+        if re_export_target.contains_key(&node.id) {
+            continue;
+        }
+        let Some([scope]) = facts.scopes.get(&node.id).map(Vec::as_slice) else {
+            if facts.scopes.contains_key(&node.id) {
+                ladders.push(silent(node.id));
+            }
             continue;
         };
         let Some(owner) = tree.containers().get(node.container.0 as usize) else {
@@ -61,180 +109,103 @@ pub(super) fn apply_visibility_scopes(
         if owner.id != node.container || owner.level != ScopeLevel::File {
             continue;
         }
-
-        let Some(level) = scope_level(
-            tree,
-            files,
-            node.container,
-            &visibility_scope.files,
-            visibility_scope.definition_file.as_ref(),
-        ) else {
-            continue;
-        };
-        node.visibility = level;
-
-        // a consumer no rung lists (a `cfg(test)` module the analyzer never
-        // defined, a file outside the module tree) cannot be judged by the
-        // ladder, so it is left out of the rung check rather than wiping the
-        // ladder. `derive_visibility` still counts it in the derived need, so
-        // the floored level is never below that need. An item whose only
-        // unplaced consumer sits in a folder whose rung shares the need's level
-        // label may still be flagged, as it would be with no ladder.
-        let used_from: Option<HashSet<ContainerId>> = consumers.get(&node.id).map(|containers| {
-            containers
-                .iter()
-                .copied()
-                .filter(|consumer| {
-                    path_of.get(consumer).is_some_and(|path| {
-                        visibility_scope
-                            .expressible
-                            .iter()
-                            .any(|rung| rung.files.binary_search(path).is_ok())
-                    })
-                })
-                .collect()
-        });
-        // all-or-nothing: one rung that cannot project drops the whole ladder
-        // (a gap could only hide a narrower spelling); rungs that project but
-        // miss a placed consumer are skipped individually.
-        let mut levels = visibility_scope
-            .expressible
-            .iter()
-            .map(|rung| {
-                rung_reaches(
-                    tree,
-                    files,
-                    &path_of,
-                    node.container,
-                    used_from.as_ref(),
-                    rung,
-                )
-            })
-            .collect::<Option<Vec<_>>>()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|(covered, reaches)| reaches.then_some(covered))
-            .collect::<Vec<_>>();
-        levels.sort();
-        levels.dedup();
-        if !levels.is_empty() {
-            ladders.push(ScopeLadder {
-                node: node.id,
-                levels,
-            });
+        // only a restricted declaration restates its declared level.
+        if !scope.files.is_empty() {
+            let Some(level) = scope_level(
+                tree,
+                files,
+                node.container,
+                &scope.files,
+                scope.definition_file.as_ref(),
+            ) else {
+                ladders.push(silent(node.id));
+                continue;
+            };
+            node.visibility = level;
         }
+        ladders.push(verdict(&facts, node, scope));
     }
     ladders
 }
 
-/// Projects one rung to its level, or `None` when it cannot project.
-///
-/// The flag is `false` when the rung leaves a consumer file out: such a rung can
-/// share its level with the need yet cover another folder, so it is not a
-/// spelling for this declaration.
-fn rung_reaches(
-    tree: &ContainerTree,
-    files: &HashMap<SmolStr, ContainerId>,
-    path_of: &HashMap<ContainerId, &SmolStr>,
-    home: ContainerId,
-    used_from: Option<&HashSet<ContainerId>>,
-    rung: &strata_ir::ScopeRung,
-) -> Option<(ScopeLevel, bool)> {
-    let level = scope_level(
-        tree,
-        files,
-        home,
-        &rung.files,
-        rung.definition_file.as_ref(),
-    )?;
-    // `scope_level` verified `rung.files` is strictly sorted.
-    let reaches = used_from.is_none_or(|containers| {
-        containers.iter().all(|consumer| {
-            *consumer == home
-                || path_of
-                    .get(consumer)
-                    .is_some_and(|path| rung.files.binary_search(path).is_ok())
-        })
-    });
-    Some((level, reaches))
+/// A ladder entry that never advises: the scope was stated but cannot be judged.
+fn silent(node: NodeId) -> ScopeLadder {
+    ScopeLadder {
+        node,
+        declared: None,
+        needed: None,
+        spelling: None,
+    }
 }
 
-/// Resolves one stated scope to its level on the final tree, or `None` when the
-/// scope is unsorted, empty, or names a file the tree does not hold.
-fn scope_level(
-    tree: &ContainerTree,
-    files: &HashMap<SmolStr, ContainerId>,
-    home: ContainerId,
-    scope_files: &[SmolStr],
-    definition_file: Option<&SmolStr>,
-) -> Option<ScopeLevel> {
-    if scope_files.is_empty()
-        || !scope_files.windows(2).all(|pair| {
-            pair.first()
-                .zip(pair.get(1))
-                .is_some_and(|(left, right)| left < right)
-        })
-    {
-        return None;
+/// Compares the declared rung with the narrowest rung that holds every user.
+fn verdict(facts: &Facts<'_>, node: &Node, scope: &VisibilityScope) -> ScopeLadder {
+    let compared = compare(facts, node, scope);
+    let Some((declared, needed, spelling)) = compared else {
+        return silent(node.id);
+    };
+    ScopeLadder {
+        node: node.id,
+        declared: Some(declared),
+        needed,
+        spelling,
     }
+}
 
-    // a `dir/foo.rs` definition file sits beside the `dir/foo/` folder it
-    // owns; the module's own level is that folder, so the definition file
-    // is left out of the common-ancestor walk. Dropping it is deliberate
-    // per R2 (pub(super)/pub(in) resolve to the module's own folder), and
-    // the adapter states it: it is never guessed from file names, so a
-    // miss widens instead of narrowing.
-    // a definition file outside the stated scope is not trusted: keeping
-    // it in the walk can only widen.
-    let definition = definition_file.filter(|path| scope_files.contains(path));
-    let definition_container = definition.and_then(|path| files.get(path).copied());
+/// Returns the declared level and, when strictly narrower, the needed one.
+fn compare(
+    facts: &Facts<'_>,
+    node: &Node,
+    scope: &VisibilityScope,
+) -> Option<(ScopeLevel, Option<ScopeLevel>, Option<SmolStr>)> {
+    let declared_index = usize::try_from(scope.declared_rung?).ok()?;
+    let declared_rung = scope.expressible.get(declared_index)?;
+    let level_of = |rung: &strata_ir::ScopeRung| {
+        scope_level(
+            facts.tree,
+            facts.files,
+            node.container,
+            &rung.files,
+            rung.definition_file.as_ref(),
+        )
+    };
+    let declared = level_of(declared_rung)?;
 
-    let mut containers = Vec::with_capacity(scope_files.len() + 1);
-    if definition_container != Some(home) {
-        containers.push(home);
+    let footprint = footprint(facts, node)?;
+    let Some(needed_index) = needed_index(&scope.expressible, &footprint) else {
+        return Some((declared, None, None));
+    };
+    if needed_index >= declared_index {
+        return Some((declared, None, None));
     }
-    for path in scope_files {
-        let container = files.get(path).copied()?;
-        if Some(path) != definition {
-            containers.push(container);
+    let needed_rung = scope.expressible.get(needed_index)?;
+    let needed = level_of(needed_rung)?;
+    Some((declared, Some(needed), needed_rung.spelling.clone()))
+}
+
+/// Every file that uses the declaration: its home, its consumers, and the files
+/// of any exposer's declared reach. `None` when a user cannot be placed.
+fn footprint<'a>(facts: &Facts<'a>, node: &Node) -> Option<BTreeSet<&'a SmolStr>> {
+    let mut footprint = BTreeSet::new();
+    footprint.insert(*facts.path_of.get(&node.container)?);
+    for consumer in facts.consumers.get(&node.id).into_iter().flatten() {
+        footprint.insert(*facts.path_of.get(consumer)?);
+    }
+    for exposure in facts.exposures.get(&node.id).into_iter().flatten() {
+        let exposer_container = facts.containers.get(&exposure.exposer)?;
+        footprint.insert(*facts.path_of.get(exposer_container)?);
+        if !exposure.reach {
+            continue;
         }
-    }
-    let level = common_ancestor_level(tree, &containers)?;
-    // a lone remaining file still lives in the module's own folder.
-    Some(if definition.is_some() && level == ScopeLevel::File {
-        ScopeLevel::Folder
-    } else {
-        level
-    })
-}
-
-/// Returns the deepest actual ancestor shared by every supplied container.
-fn common_ancestor_level(tree: &ContainerTree, containers: &[ContainerId]) -> Option<ScopeLevel> {
-    let mut containers = containers.iter().copied();
-    let mut common = ancestor_chain(tree, containers.next()?)?;
-    for container in containers {
-        let ancestors = ancestor_chain(tree, container)?;
-        common.retain(|candidate| ancestors.contains(candidate));
-    }
-    let common_id = common.first()?;
-    let common_container = tree.containers().get(common_id.0 as usize)?;
-    (common_container.id == *common_id).then_some(common_container.level)
-}
-
-/// Returns one container's validated leaf-to-root ancestry.
-fn ancestor_chain(tree: &ContainerTree, start: ContainerId) -> Option<Vec<ContainerId>> {
-    let mut chain = Vec::new();
-    let mut current = Some(start);
-    while let Some(id) = current {
-        if chain.len() >= tree.containers().len() || chain.contains(&id) {
+        // an exposer without one resolved declared rung (a trait impl, whose
+        // reach is the narrower of trait and type) leaves the reach unknown.
+        let [exposer] = facts.scopes.get(&exposure.exposer)?.as_slice() else {
             return None;
-        }
-        let container = tree.containers().get(id.0 as usize)?;
-        if container.id != id {
-            return None;
-        }
-        chain.push(id);
-        current = container.parent;
+        };
+        let rung = exposer
+            .expressible
+            .get(usize::try_from(exposer.declared_rung?).ok()?)?;
+        footprint.extend(rung.files.iter());
     }
-    Some(chain)
+    Some(footprint)
 }

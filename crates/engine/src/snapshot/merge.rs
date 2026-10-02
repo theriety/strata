@@ -29,6 +29,8 @@ pub(super) fn merge_fragments(
     let mut edges = Vec::new();
     let mut affinities = Vec::new();
     let mut visibility_scopes = Vec::new();
+    let mut exposures = Vec::new();
+    let mut advisory_uses = Vec::new();
     // the file path each merged node belongs to, parallel to `nodes`.
     let mut node_paths: Vec<SmolStr> = Vec::new();
     let mut all_paths: Vec<SmolStr> = Vec::new();
@@ -72,6 +74,16 @@ pub(super) fn merge_fragments(
             visibility_scope.node = NodeId(visibility_scope.node.0 + node_offset);
             visibility_scopes.push(visibility_scope);
         }
+        for mut exposure in fragment.exposures {
+            exposure.exposer = NodeId(exposure.exposer.0 + node_offset);
+            exposure.exposed = NodeId(exposure.exposed.0 + node_offset);
+            exposures.push(exposure);
+        }
+        for mut advisory in fragment.advisory_uses {
+            advisory.user = NodeId(advisory.user.0 + node_offset);
+            advisory.used = NodeId(advisory.used.0 + node_offset);
+            advisory_uses.push(advisory);
+        }
         node_offset += node_span;
     }
 
@@ -85,6 +97,8 @@ pub(super) fn merge_fragments(
         &built.files,
         &edges,
         &visibility_scopes,
+        &exposures,
+        &advisory_uses,
     );
 
     let mut ir = IntermediateRepresentation::new(nodes, edges, built.tree);

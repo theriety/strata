@@ -11,6 +11,7 @@
 //! to resolve them to definitions, then maps the resolved definition offset back
 //! to the declaration whose byte range contains it.
 
+mod advisory;
 mod declaration;
 mod items;
 mod metadata;
@@ -23,8 +24,9 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use strata_ir::{AdapterError, SourceFile};
 
+use self::advisory::mark_inline;
 use self::items::push_item;
-use self::modules::{ModDecl, collect_mod_decls, propagate_cfg_test};
+use self::modules::{Modules, collect_mod_decls, propagate_gates};
 
 /// The category of a top-level declaration: a value symbol or a type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +69,11 @@ pub enum RefKind {
     Qualifier,
     /// The trait named in an `impl Trait for T` header (inheritance).
     TraitImpl,
+    /// A type named in an `impl` header (generics, bounds, self type, trait
+    /// arguments). It adds no dependency edge of its own: it only states that
+    /// the declaration's file uses the type and, with
+    /// [`Reference::in_signature`], that the type is exposed.
+    HeaderType,
 }
 
 /// A reference whose target [`crate::bind`] resolves through the semantic
@@ -85,6 +92,10 @@ pub struct Reference {
     /// `true` when the reference textually originates inside a macro invocation,
     /// so its resolution carries reduced confidence (honest uncertainty).
     pub macro_expanded: bool,
+    /// `true` when a type reference sits in the declaration's signature rather
+    /// than its body, so the declaration exposes the type to its own users.
+    #[serde(default)]
+    pub in_signature: bool,
 }
 
 /// A top-level declaration extracted from a file, with its byte range and SLOC.
@@ -120,6 +131,11 @@ pub struct Declaration {
     pub owner: Option<SmolStr>,
     /// References reachable from this declaration's body and header.
     pub references: Vec<Reference>,
+    /// Identifiers of a declaration the semantic loader cannot see (under
+    /// `cfg(not(test))`); each counts as a use of every same-named declaration,
+    /// for visibility advice only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub advisory_names: Vec<SmolStr>,
 }
 
 /// A `pub use` re-export: the name surfaced in this file's export surface and the
@@ -175,13 +191,13 @@ pub(super) fn parse(files: &[SourceFile]) -> Result<Vec<ParsedFile>, AdapterErro
         .par_iter()
         .map(parse_one)
         .collect::<Result<Vec<_>, _>>()?;
-    propagate_cfg_test(&mut parsed);
+    propagate_gates(&mut parsed);
     Ok(parsed.into_iter().map(|(file, _)| file).collect())
 }
 
 /// Parses a single source file into a [`ParsedFile`] and its out-of-line
 /// module declarations.
-fn parse_one(file: &SourceFile) -> Result<(ParsedFile, Vec<ModDecl>), AdapterError> {
+fn parse_one(file: &SourceFile) -> Result<(ParsedFile, Modules), AdapterError> {
     let ast = syn::parse_file(&file.contents).map_err(|error| AdapterError::Parse {
         path: file.path.clone(),
         reason: format_parse_error(&error),
@@ -199,12 +215,17 @@ fn parse_one(file: &SourceFile) -> Result<(ParsedFile, Vec<ModDecl>), AdapterErr
         );
     }
 
+    mark_inline(&mut declarations, &ast.items, &file.contents);
+    let modules = Modules {
+        decls: collect_mod_decls(&ast.items),
+        source: file.contents.clone(),
+    };
     let file = ParsedFile {
         path: file.path.clone(),
         declarations,
         re_exports,
     };
-    Ok((file, collect_mod_decls(&ast.items)))
+    Ok((file, modules))
 }
 
 /// Renders a syn error as a `line L, column C: message` string.
@@ -259,6 +280,7 @@ mod tests {
         sloc: u32::MAX,
         owner: None,
         references: Vec::new(),
+        advisory_names: Vec::new(),
     };
 
     #[test]

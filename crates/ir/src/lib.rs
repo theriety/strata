@@ -14,7 +14,8 @@ pub mod node;
 pub mod snapshot;
 
 pub use adapter::{
-    Adapter, AdapterError, IrFragment, ParseTree, ScopeRung, SourceFile, VisibilityScope,
+    Adapter, AdapterError, AdvisoryUse, Exposure, IrFragment, ParseTree, ScopeRung, SourceFile,
+    VisibilityScope,
 };
 pub use affinity::{Affinity, AffinityKind};
 pub use container::{Container, ContainerId, ContainerTree, TreeError};
