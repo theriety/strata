@@ -70,6 +70,7 @@ pub(super) fn bind(
                 visibility: ScopeLevel::File,
                 effective_size: declaration.sloc,
                 re_export: false,
+                display_name: None,
             });
             exported.push(declaration.exported);
             module_local.insert(declaration.name.clone(), id);

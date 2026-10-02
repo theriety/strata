@@ -267,6 +267,7 @@ mod tests {
             visibility: ScopeLevel::File,
             effective_size: 1,
             re_export: false,
+            display_name: None,
         }
     }
 
@@ -375,6 +376,7 @@ mod tests {
         let original = node(0, "original");
         let re_export = Node {
             re_export: true,
+            display_name: None,
             ..node(1, "alias")
         };
 

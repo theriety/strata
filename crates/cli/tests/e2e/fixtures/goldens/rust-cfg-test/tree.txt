@@ -5,3 +5,4 @@ rust-cfg-test [packageGroup]
       - halve (package)
       - exercises_double (file)
       - exercises_halve (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

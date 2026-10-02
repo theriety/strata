@@ -14,3 +14,4 @@ workspace-move-rust [packageGroup]
   crates/util [package]
     workspace [domain]
       crates/util/src/lib.rs [file] 6 sloc
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

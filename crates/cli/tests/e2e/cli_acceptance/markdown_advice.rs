@@ -59,6 +59,7 @@ fn report_with_detail(result: &AnalyzeResult, verbose: bool) -> Result<String, S
 
 fn relocation() -> SymbolMove {
     SymbolMove {
+        display: None,
         symbol: "RecordOptions".to_owned(),
         kind: SymbolKind::Type,
         from_path: "origin/options.ts".to_owned(),

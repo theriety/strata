@@ -209,6 +209,10 @@ fn node_for(declaration: &Declaration, id: NodeId, container: ContainerId) -> No
         visibility: declared_visibility(declaration.visibility_kind, declaration.exported),
         effective_size: declaration.sloc,
         re_export: false,
+        display_name: declaration
+            .owner
+            .as_ref()
+            .map(|owner| SmolStr::new(format!("{owner}::{}", declaration.name))),
     }
 }
 
@@ -227,6 +231,7 @@ fn re_export_node(re_export: &ReExport, id: NodeId, container: ContainerId) -> N
         visibility: declared_visibility(re_export.visibility_kind, true),
         effective_size: 0,
         re_export: true,
+        display_name: None,
     }
 }
 

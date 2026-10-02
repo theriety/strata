@@ -23,4 +23,5 @@ workspace-move-rust [packageGroup]
   crates/util [package]
     crates/util/src/lib.rs [file] 6 sloc
       - Weight (package)
-      - new (package)
+      - Weight::new (package)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

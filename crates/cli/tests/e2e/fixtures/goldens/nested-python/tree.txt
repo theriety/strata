@@ -20,3 +20,4 @@ nested-python [packageGroup]
         geometry/shape.py [file] 5 sloc
           - Dimensions (file)
           - Shape (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

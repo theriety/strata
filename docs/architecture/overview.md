@@ -210,7 +210,7 @@ A finding is shared only when its complete serialized content is identical in bo
 
 Capacity findings are profile-dependent because caps belong to profiles. A physical folder measures direct files plus immediate child folders; descendants below those children do not inflate it. Measures at or below the cap produce no finding, values above the cap through 110% are `Borderline`, and larger values are `Violation`.
 
-Cycle findings report only components spanning distinct source-file identities; intra-file recursion is not a violation. The optimizer still keeps mutually recursive symbols in one placement unit. Reported cycles resolve every member to repository-relative paths and explain the placement consequence: the members form one placement unit and must remain in one file unless the suggested dependency edge is broken. The cheapest cut and its exact-or-heuristic method remain profile-specific when dependency weights change its serialized content.
+Cycle findings report only components spanning distinct source-file identities; intra-file recursion is not a violation. The optimizer still keeps mutually recursive symbols in one placement unit. Reported cycles resolve every member to repository-relative paths and explain the placement consequence: the members form one placement unit, and strata keeps a dependency cycle in one file; to split it, break the suggested dependency edge. The cheapest cut and its exact-or-heuristic method remain profile-specific when dependency weights change its serialized content.
 
 ## Main components
 

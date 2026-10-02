@@ -8,3 +8,4 @@ twin-follow-ts [packageGroup]
       specs [folder]
         src/specs/openai.spec.ts [file] 0 sloc
           - shouldComplete (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

@@ -77,6 +77,7 @@ pub(super) fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
                 visibility: ScopeLevel::File,
                 effective_size: declaration.sloc,
                 re_export: false,
+                display_name: None,
             });
             // Python has no `export` keyword: a module-level definition not
             // prefixed with `_` is part of the importable surface.

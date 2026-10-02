@@ -82,6 +82,7 @@ impl PipelineSolver<'_> {
             }
             moves.push(SymbolMove {
                 symbol: symbol.name.to_string(),
+                display: symbol.display_name.as_ref().map(ToString::to_string),
                 kind: kind_of(symbol),
                 from_path: current_name
                     .get(&symbol.container.0)

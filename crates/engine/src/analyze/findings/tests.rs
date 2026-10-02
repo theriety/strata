@@ -95,9 +95,11 @@ fn should_emit_identical_findings_once_as_shared() {
         Some(["src/left.rs".to_owned(), "src/right.rs".to_owned()].as_slice())
     );
     assert!(cycle.is_some_and(|finding| {
-        finding.detail.contains("one placement unit")
-            && finding.detail.contains("must remain in one file")
-            && finding.detail.contains("break")
+        finding
+            .detail
+            .contains("strata keeps a dependency cycle in one file")
+            && finding.detail.contains("to split it, break")
+            && !finding.detail.contains("must remain")
     }));
     assert_eq!(anchored_unique, []);
     assert_eq!(greenfield_unique, []);
@@ -255,7 +257,65 @@ fn should_report_a_test_support_dependency_on_a_test_case() {
         .unwrap_or_default();
 
     assert!(violations.iter().any(|v| v.kind == ViolationKind::Polarity
-        && v.detail == "test support `helper` depends on test case `spec`"));
+        && v.detail == "test support `helper` (file) depends on test case `spec` (file)"));
+}
+
+#[test]
+fn should_locate_a_polarity_breach_by_source_and_target_file_paths() {
+    let snapshot = snapshot(
+        vec![
+            node(0, "same", 0, Polarity::Production),
+            node(1, "same", 1, Polarity::TestSupport),
+        ],
+        vec![edge(0, 1)],
+        vec![
+            container(0, "src/facade.rs", ScopeLevel::File, None),
+            container(1, "src/origin.rs", ScopeLevel::File, None),
+        ],
+    );
+
+    let violations = analyze(&snapshot, &AnalyzeConfig::default())
+        .map(|result| result.current.shared_findings)
+        .unwrap_or_default();
+    let polarity: Vec<&Violation> = violations
+        .iter()
+        .filter(|v| v.kind == ViolationKind::Polarity)
+        .collect();
+
+    assert_eq!(polarity.len(), 1);
+    assert_eq!(
+        polarity.first().map(|v| v.location.clone()),
+        Some(vec!["src/facade.rs".to_owned(), "src/origin.rs".to_owned()])
+    );
+    assert_eq!(
+        polarity.first().map(|v| v.detail.as_str()),
+        Some(
+            "production symbol `same` (src/facade.rs) depends on test code `same` \
+             (src/origin.rs)"
+        )
+    );
+}
+
+#[test]
+fn should_locate_a_same_file_polarity_breach_by_one_path() {
+    let snapshot = snapshot(
+        vec![
+            node(0, "prod", 0, Polarity::Production),
+            node(1, "helper", 0, Polarity::TestSupport),
+        ],
+        vec![edge(0, 1)],
+        vec![container(0, "src/a.rs", ScopeLevel::File, None)],
+    );
+
+    let violations = analyze(&snapshot, &AnalyzeConfig::default())
+        .map(|result| result.current.shared_findings)
+        .unwrap_or_default();
+
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.kind == ViolationKind::Polarity && v.location == ["src/a.rs".to_owned()])
+    );
 }
 
 #[test]

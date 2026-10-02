@@ -93,6 +93,7 @@ pub(super) fn assign_re_export_nodes(
                     visibility: ScopeLevel::File,
                     effective_size: 0,
                     re_export: true,
+                    display_name: None,
                 });
                 exported.push(true);
                 local

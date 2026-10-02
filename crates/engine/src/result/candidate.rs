@@ -131,6 +131,18 @@ impl From<ScopeLevel> for Level {
 pub struct SymbolPlacement {
     /// The symbol's source-declared name.
     pub name: String,
+    /// Human-facing name when it differs from `name` (a method reads
+    /// `Type::method`). Display only: matching keys on `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
     /// The declared external visibility of the symbol.
     pub visibility: Level,
+}
+
+impl SymbolPlacement {
+    /// The name a human reads: `display` when present, else `name`.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        self.display.as_deref().unwrap_or(&self.name)
+    }
 }

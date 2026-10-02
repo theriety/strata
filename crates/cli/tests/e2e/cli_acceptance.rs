@@ -146,6 +146,9 @@ fn nanos() -> u128 {
         .unwrap_or_default()
 }
 
+/// The one advice disclaimer every human-readable output carries.
+const ADVICE: &str = "All findings and moves are suggestions. Applying them may break the build; use your own judgement.";
+
 #[test]
 fn should_deliver_the_analyze_summary_for_the_rust_fixture() {
     let root = fixture("rust");
@@ -722,7 +725,8 @@ fn should_report_no_violations_for_a_clean_fixture() {
 
         assert_eq!(outcome.code, 0, "a clean fixture exits 0 for {name}");
         assert_eq!(
-            outcome.stdout, "no violations\n",
+            outcome.stdout,
+            format!("no violations\n{ADVICE}\n"),
             "a clean fixture reports no violations for {name}"
         );
     }
@@ -1103,8 +1107,8 @@ fn should_populate_break_suggestions_with_real_names_weights_and_exactness() {
             .unwrap_or_default();
         assert!(
             detail.contains("-symbol cycle;")
-                && detail.contains("must remain in one file")
-                && detail.contains("; break ")
+                && detail.contains("strata keeps a dependency cycle in one file")
+                && detail.contains("; to split it, break ")
                 && detail.contains("exact"),
             "the detail states the placement consequence and first break: {detail}"
         );
@@ -1428,8 +1432,12 @@ fn should_report_no_moves_for_a_self_diff() {
     let _ = std::fs::remove_file(&result);
     assert_eq!(outcome.code, 0, "a self-diff renders and exits 0");
     assert_eq!(
-        outcome.stdout, "no moves\n",
-        "a current-vs-current diff is the `no moves` sentinel"
+        outcome.stdout.lines().collect::<Vec<_>>(),
+        vec![
+            "no moves",
+            "All findings and moves are suggestions. Applying them may break the build; use your own judgement."
+        ],
+        "a current-vs-current diff is the `no moves` sentinel plus the advice disclaimer"
     );
 }
 
@@ -1469,7 +1477,8 @@ fn should_truncate_a_candidate_tree_at_each_requested_depth() {
     assert_eq!(full.code, 0, "the untruncated tree renders");
     // depth 0 is the root line alone.
     assert_eq!(
-        at_zero.stdout, "constellation-ts [packageGroup]\n",
+        at_zero.stdout,
+        format!("constellation-ts [packageGroup]\n{ADVICE}\n"),
         "depth 0 prints only the root container"
     );
     // depth 1 adds exactly the next container level and no deeper. The
@@ -1820,7 +1829,7 @@ fn should_report_borderline_capacity_without_gating() {
     ]);
 
     assert_eq!(outcome.code, 0, "an exactly-at-cap file never gates");
-    assert_eq!(outcome.stdout.trim(), "no violations");
+    assert_eq!(outcome.stdout.trim(), format!("no violations\n{ADVICE}"));
 }
 
 #[test]
@@ -1872,9 +1881,10 @@ fn should_report_a_test_support_dependency_on_a_test_case_end_to_end() {
 
     assert_eq!(outcome.code, 2, "a test-support leak gates on polarity");
     assert!(
-        outcome
-            .stdout
-            .contains("test support `shared_fixture` depends on test case `sample_case`"),
+        outcome.stdout.contains(
+            "test support `shared_fixture` (conftest.py) depends on test case \
+                 `sample_case` (test_app.py)"
+        ),
         "the finding carries the support/case wording: {}",
         outcome.stdout
     );
