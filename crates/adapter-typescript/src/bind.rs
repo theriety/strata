@@ -36,18 +36,12 @@ type ExportTable = HashMap<SmolStr, HashMap<SmolStr, NodeId>>;
 ///
 /// `root` is the repository root the module paths are relative to; it anchors
 /// `tsconfig` alias resolution and package-entry lookup.
-///
-/// # Errors
-///
-/// This binder never fails on unresolved references — they are emitted as
-/// low-confidence or dropped per the spec — so it currently returns `Ok` for
-/// every well-formed parse. The `Result` preserves the adapter contract.
 pub fn bind(
     modules: &[ParsedModule],
     root: &Path,
     aliases: &BTreeMap<SmolStr, SmolStr>,
     subpath_imports: &BTreeMap<SmolStr, SmolStr>,
-) -> Result<IrFragment, BindOutcome> {
+) -> IrFragment {
     let resolver = Resolver::new(modules, aliases.clone(), subpath_imports.clone());
 
     // Assign a dense node id to every parsed entity, in module-then-parser order.
@@ -114,27 +108,14 @@ pub fn bind(
     let polarity = classify_polarity(modules, &nodes, &local, &exported, &edges);
     apply_polarity(&mut nodes, &polarity);
 
-    Ok(IrFragment {
+    IrFragment {
         nodes,
         edges,
         affinities,
         containers: containers.tree.containers().to_vec(),
         visibility_scopes: Vec::new(),
-    })
-}
-
-/// A binding failure. Reserved for future resolution errors; the binder is
-/// currently infallible, so this enum is never constructed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BindOutcome {}
-
-impl std::fmt::Display for BindOutcome {
-    fn fmt(&self, _formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {}
     }
 }
-
-impl std::error::Error for BindOutcome {}
 
 #[cfg(test)]
 mod tests {
@@ -197,8 +178,7 @@ mod tests {
             Path::new("repo"),
             &BTreeMap::new(),
             &BTreeMap::new(),
-        )
-        .expect("bind succeeds");
+        );
 
         let calls: Vec<&Edge> = fragment
             .edges
@@ -255,8 +235,7 @@ mod tests {
             Path::new("repo"),
             &BTreeMap::new(),
             &BTreeMap::new(),
-        )
-        .expect("bind succeeds");
+        );
 
         let values: Vec<&Edge> = fragment
             .edges
@@ -287,8 +266,7 @@ mod tests {
             Path::new("repo"),
             &BTreeMap::new(),
             &BTreeMap::new(),
-        )
-        .expect("bind succeeds");
+        );
 
         let types: Vec<&Edge> = fragment
             .edges
@@ -325,8 +303,7 @@ mod tests {
             Path::new("repo"),
             &BTreeMap::new(),
             &BTreeMap::new(),
-        )
-        .expect("bind succeeds");
+        );
 
         assert!(
             fragment.edges.is_empty(),
@@ -363,8 +340,7 @@ mod tests {
             Path::new("repo"),
             &BTreeMap::new(),
             &BTreeMap::new(),
-        )
-        .expect("bind succeeds");
+        );
 
         let re_exports: Vec<&Edge> = fragment
             .edges
@@ -526,8 +502,7 @@ mod tests {
             Path::new("repo"),
             &BTreeMap::new(),
             &BTreeMap::new(),
-        )
-        .expect("bind succeeds");
+        );
         let body = fragment
             .nodes
             .iter()
@@ -579,8 +554,7 @@ mod tests {
             Path::new("repo"),
             &BTreeMap::new(),
             &BTreeMap::new(),
-        )
-        .expect("bind succeeds");
+        );
 
         let body = fragment
             .nodes
