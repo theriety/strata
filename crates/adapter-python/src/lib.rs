@@ -21,6 +21,7 @@
 
 pub mod bind;
 pub mod parse;
+pub mod scope;
 pub mod sloc;
 
 use std::path::PathBuf;

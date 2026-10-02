@@ -11,6 +11,8 @@
 //! collected from each declaration's body so the binder can resolve them
 //! through the scope chain.
 
+use std::collections::HashSet;
+
 use rayon::prelude::*;
 use rustpython_parser::Parse;
 use rustpython_parser::ast::{
@@ -21,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use strata_ir::{AdapterError, SourceFile};
 
+use crate::scope::{Scope, ScopeKind, argument_names, is_bound, pattern_names, target_names};
 use crate::sloc::production_sloc;
 
 /// A dynamic-resolution construct that yields a confidence below `1.0`.
@@ -178,36 +181,46 @@ fn extract(path: &SmolStr, suite: &[Stmt], source: &str) -> ParsedModule {
 
 /// Builds a [`Declaration`] for a synchronous function definition.
 fn function_declaration(function: &StmtFunctionDef, source: &str) -> Declaration {
-    let mut collector = ReferenceCollector::default();
-    collect_arguments(&function.args, &mut collector);
-    if let Some(returns) = &function.returns {
-        collector.collect_annotation(returns);
-    }
-    collect_body(&function.body, &mut collector);
-    Declaration {
-        name: SmolStr::new(function.name.as_str()),
-        is_class: false,
-        sloc: body_sloc(&function.body, source),
-        bases: Vec::new(),
-        annotations: collector.annotations,
-        referenced: collector.referenced,
-        called: collector.called,
-        dynamic: collector.dynamic,
-    }
+    function_like_declaration(
+        function.name.as_str(),
+        &function.args,
+        function.returns.as_deref(),
+        &function.body,
+        source,
+    )
 }
 
 /// Builds a [`Declaration`] for an `async def` function definition.
 fn async_function_declaration(function: &StmtAsyncFunctionDef, source: &str) -> Declaration {
+    function_like_declaration(
+        function.name.as_str(),
+        &function.args,
+        function.returns.as_deref(),
+        &function.body,
+        source,
+    )
+}
+
+/// Shared builder for `def` and `async def`: annotations, then the body walked
+/// inside the function's own scope.
+fn function_like_declaration(
+    name: &str,
+    arguments: &rustpython_parser::ast::Arguments,
+    returns: Option<&Expr>,
+    body: &[Stmt],
+    source: &str,
+) -> Declaration {
     let mut collector = ReferenceCollector::default();
-    collect_arguments(&function.args, &mut collector);
-    if let Some(returns) = &function.returns {
+    collect_arguments(arguments, &mut collector);
+    if let Some(returns) = returns {
         collector.collect_annotation(returns);
     }
-    collect_body(&function.body, &mut collector);
+    collector.scopes.push(Scope::function(arguments, body));
+    collect_body(body, &mut collector);
     Declaration {
-        name: SmolStr::new(function.name.as_str()),
+        name: SmolStr::new(name),
         is_class: false,
-        sloc: body_sloc(&function.body, source),
+        sloc: body_sloc(body, source),
         bases: Vec::new(),
         annotations: collector.annotations,
         referenced: collector.referenced,
@@ -220,7 +233,7 @@ fn async_function_declaration(function: &StmtAsyncFunctionDef, source: &str) -> 
 fn class_declaration(class: &StmtClassDef, source: &str) -> Declaration {
     let mut collector = ReferenceCollector::default();
     let bases = class.bases.iter().filter_map(leading_name).collect();
-    collect_body(&class.body, &mut collector);
+    collector.collect_class_body(&class.body);
     Declaration {
         name: SmolStr::new(class.name.as_str()),
         is_class: true,
@@ -469,6 +482,7 @@ fn collect_arguments(
 fn collect_body(body: &[Stmt], collector: &mut ReferenceCollector) {
     for statement in body {
         collector.collect_statement(statement);
+        collector.bind_class_statement(statement);
     }
 }
 
@@ -485,9 +499,31 @@ struct ReferenceCollector {
     annotations: Vec<SmolStr>,
     /// Dynamic-resolution constructs (`getattr`, `importlib`).
     dynamic: Vec<DynamicRef>,
+    /// Enclosing function, lambda, and comprehension scopes, innermost last;
+    /// a name bound in any of them is a local, not a declaration reference.
+    scopes: Vec<Scope>,
 }
 
 impl ReferenceCollector {
+    /// Whether `name` is bound by an enclosing local scope.
+    fn is_local(&self, name: &str) -> bool {
+        is_bound(&self.scopes, name)
+    }
+
+    /// Binds `names` in the innermost non-comprehension scope (PEP 572 walrus
+    /// targets leak out of a comprehension), opening one when none exists.
+    fn bind_locals(&mut self, names: HashSet<SmolStr>) {
+        match self
+            .scopes
+            .iter_mut()
+            .rev()
+            .find(|scope| scope.kind != ScopeKind::Comprehension)
+        {
+            Some(scope) => scope.names.extend(names),
+            None => self.scopes.push(Scope::plain(ScopeKind::Function, names)),
+        }
+    }
+
     /// Records every name appearing in an annotation expression.
     fn collect_annotation(&mut self, expr: &Expr) {
         match expr {
@@ -517,6 +553,34 @@ impl ReferenceCollector {
         }
     }
 
+    /// Walks a class body in its own scope. Class names bind in execution
+    /// order, not up front, so `helper = helper` still reads the outer name.
+    fn collect_class_body(&mut self, body: &[Stmt]) {
+        self.scopes.push(Scope::class());
+        collect_body(body, self);
+        self.scopes.pop();
+    }
+
+    /// In a class scope, binds what `statement` bound once it has run, so the
+    /// name is local only to the statements after it, at every nesting level.
+    fn bind_class_statement(&mut self, statement: &Stmt) {
+        if let Some(scope) = self
+            .scopes
+            .last_mut()
+            .filter(|s| s.kind == ScopeKind::Class)
+        {
+            scope.bind_after(statement);
+        }
+    }
+
+    /// Binds a loop or `with` target before its body runs; in a class scope
+    /// the target is otherwise unbound inside that body.
+    fn bind_target(&mut self, target: &Expr) {
+        let mut names = HashSet::new();
+        target_names(target, &mut names);
+        self.bind_locals(names);
+    }
+
     /// Walks a statement, dispatching annotations, expressions, and nested bodies.
     fn collect_statement(&mut self, statement: &Stmt) {
         match statement {
@@ -526,20 +590,26 @@ impl ReferenceCollector {
                 if let Some(returns) = &function.returns {
                     self.collect_annotation(returns);
                 }
+                self.scopes
+                    .push(Scope::function(&function.args, &function.body));
                 collect_body(&function.body, self);
+                self.scopes.pop();
             }
             Stmt::AsyncFunctionDef(function) => {
                 collect_arguments(&function.args, self);
                 if let Some(returns) = &function.returns {
                     self.collect_annotation(returns);
                 }
+                self.scopes
+                    .push(Scope::function(&function.args, &function.body));
                 collect_body(&function.body, self);
+                self.scopes.pop();
             }
             Stmt::ClassDef(class) => {
                 for base in &class.bases {
                     self.collect_expression(base);
                 }
-                collect_body(&class.body, self);
+                self.collect_class_body(&class.body);
             }
             other => collect_child_expressions(other, self),
         }
@@ -557,7 +627,11 @@ impl ReferenceCollector {
     fn collect_expression(&mut self, expr: &Expr) {
         match expr {
             Expr::Call(call) => self.collect_call(call),
-            Expr::Name(name) => self.referenced.push(SmolStr::new(name.id.as_str())),
+            Expr::Name(name) => {
+                if !self.is_local(name.id.as_str()) {
+                    self.referenced.push(SmolStr::new(name.id.as_str()));
+                }
+            }
             _ => collect_child_expressions_of_expr(expr, self),
         }
     }
@@ -567,7 +641,9 @@ impl ReferenceCollector {
         if let Some(dynamic) = dynamic_call(call) {
             self.dynamic.push(dynamic);
         } else if let Expr::Name(name) = call.func.as_ref() {
-            self.called.push(SmolStr::new(name.id.as_str()));
+            if !self.is_local(name.id.as_str()) {
+                self.called.push(SmolStr::new(name.id.as_str()));
+            }
         } else {
             self.collect_expression(&call.func);
         }
@@ -629,14 +705,45 @@ fn collect_child_expressions(statement: &Stmt, collector: &mut ReferenceCollecto
         }
         Stmt::For(statement) => {
             collector.collect_expression(&statement.iter);
+            collector.bind_target(&statement.target);
+            collect_body(&statement.body, collector);
+            collect_body(&statement.orelse, collector);
+        }
+        Stmt::AsyncFor(statement) => {
+            collector.collect_expression(&statement.iter);
+            collector.bind_target(&statement.target);
             collect_body(&statement.body, collector);
             collect_body(&statement.orelse, collector);
         }
         Stmt::With(statement) => {
             for item in &statement.items {
                 collector.collect_expression(&item.context_expr);
+                if let Some(vars) = &item.optional_vars {
+                    collector.bind_target(vars);
+                }
             }
             collect_body(&statement.body, collector);
+        }
+        Stmt::AsyncWith(statement) => {
+            for item in &statement.items {
+                collector.collect_expression(&item.context_expr);
+                if let Some(vars) = &item.optional_vars {
+                    collector.bind_target(vars);
+                }
+            }
+            collect_body(&statement.body, collector);
+        }
+        Stmt::Match(statement) => {
+            collector.collect_expression(&statement.subject);
+            for case in &statement.cases {
+                let mut captures = HashSet::new();
+                pattern_names(&case.pattern, &mut captures);
+                collector.bind_locals(captures);
+                if let Some(guard) = &case.guard {
+                    collector.collect_expression(guard);
+                }
+                collect_body(&case.body, collector);
+            }
         }
         Stmt::Raise(statement) => {
             if let Some(exception) = &statement.exc {
@@ -655,6 +762,21 @@ fn collect_child_expressions(statement: &Stmt, collector: &mut ReferenceCollecto
             collect_body(&statement.finalbody, collector);
             for handler in &statement.handlers {
                 let rustpython_parser::ast::ExceptHandler::ExceptHandler(handler) = handler;
+                if let Some(name) = &handler.name {
+                    collector.bind_locals(HashSet::from([SmolStr::new(name.as_str())]));
+                }
+                collect_body(&handler.body, collector);
+            }
+        }
+        Stmt::TryStar(statement) => {
+            collect_body(&statement.body, collector);
+            collect_body(&statement.orelse, collector);
+            collect_body(&statement.finalbody, collector);
+            for handler in &statement.handlers {
+                let rustpython_parser::ast::ExceptHandler::ExceptHandler(handler) = handler;
+                if let Some(name) = &handler.name {
+                    collector.bind_locals(HashSet::from([SmolStr::new(name.as_str())]));
+                }
                 collect_body(&handler.body, collector);
             }
         }
@@ -713,8 +835,88 @@ fn collect_child_expressions_of_expr(expr: &Expr, collector: &mut ReferenceColle
             collector.collect_expression(&expression.body);
             collector.collect_expression(&expression.orelse);
         }
+        Expr::Lambda(lambda) => {
+            collector.scopes.push(Scope::plain(
+                ScopeKind::Function,
+                argument_names(&lambda.args),
+            ));
+            collector.collect_expression(&lambda.body);
+            collector.scopes.pop();
+        }
+        Expr::ListComp(comp) => collect_comprehension(&comp.generators, &[&comp.elt], collector),
+        Expr::SetComp(comp) => collect_comprehension(&comp.generators, &[&comp.elt], collector),
+        Expr::GeneratorExp(comp) => {
+            collect_comprehension(&comp.generators, &[&comp.elt], collector);
+        }
+        Expr::DictComp(comp) => {
+            collect_comprehension(&comp.generators, &[&comp.key, &comp.value], collector);
+        }
+        Expr::JoinedStr(joined) => {
+            for value in &joined.values {
+                collector.collect_expression(value);
+            }
+        }
+        Expr::FormattedValue(formatted) => {
+            collector.collect_expression(&formatted.value);
+            if let Some(spec) = &formatted.format_spec {
+                collector.collect_expression(spec);
+            }
+        }
+        Expr::NamedExpr(named) => {
+            collector.collect_expression(&named.value);
+            let mut targets = HashSet::new();
+            target_names(&named.target, &mut targets);
+            collector.bind_locals(targets);
+        }
+        Expr::Yield(expression) => {
+            if let Some(value) = &expression.value {
+                collector.collect_expression(value);
+            }
+        }
+        Expr::YieldFrom(expression) => collector.collect_expression(&expression.value),
+        Expr::Slice(slice) => {
+            for bound in [&slice.lower, &slice.upper, &slice.step]
+                .into_iter()
+                .flatten()
+            {
+                collector.collect_expression(bound);
+            }
+        }
         _ => {}
     }
+}
+
+/// Walks a comprehension: generator iterables and filters, then the element
+/// expressions, with the generator targets bound as locals for its duration.
+fn collect_comprehension(
+    generators: &[rustpython_parser::ast::Comprehension],
+    elements: &[&Expr],
+    collector: &mut ReferenceCollector,
+) {
+    let mut targets = HashSet::new();
+    for generator in generators {
+        target_names(&generator.target, &mut targets);
+    }
+    // The first iterable is evaluated in the enclosing scope, before any target
+    // is bound.
+    if let Some(first) = generators.first() {
+        collector.collect_expression(&first.iter);
+    }
+    collector
+        .scopes
+        .push(Scope::plain(ScopeKind::Comprehension, targets));
+    for (index, generator) in generators.iter().enumerate() {
+        if index > 0 {
+            collector.collect_expression(&generator.iter);
+        }
+        for condition in &generator.ifs {
+            collector.collect_expression(condition);
+        }
+    }
+    for element in elements {
+        collector.collect_expression(element);
+    }
+    collector.scopes.pop();
 }
 
 #[cfg(test)]
@@ -978,5 +1180,219 @@ mod tests {
         assert!(
             matches!(result, Err(AdapterError::Parse { ref path, .. }) if path == "pkg/broken.py")
         );
+    }
+
+    /// Names referenced (`false`) or called (`true`) by the first declaration of
+    /// `source`, which must define `f`.
+    fn first_names(source: &str, called: bool) -> Result<Vec<String>, AdapterError> {
+        let module = parse_source("pkg/mod.py", source)?;
+        let declaration = first_declaration(&module)?;
+        let names = if called {
+            &declaration.called
+        } else {
+            &declaration.referenced
+        };
+        Ok(names.iter().map(ToString::to_string).collect())
+    }
+
+    /// Asserts `source` references `name` as a value in its first declaration.
+    fn assert_value_use(source: &str, name: &str) -> Result<(), AdapterError> {
+        let referenced = first_names(source, false)?;
+        assert!(
+            referenced.iter().any(|n| n == name),
+            "{name} should be a value use in {source:?}: {referenced:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn should_record_a_function_used_as_a_value_in_a_lambda() -> Result<(), AdapterError> {
+        assert_value_use(
+            "def f(xs):\n    return sorted(xs, key=lambda x: helper)\n",
+            "helper",
+        )?;
+        let referenced = first_names("def f():\n    return lambda x: x\n", false)?;
+        assert!(
+            referenced.is_empty(),
+            "a lambda parameter is local: {referenced:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn should_record_value_uses_inside_comprehensions() -> Result<(), AdapterError> {
+        assert_value_use("def f(xs):\n    return [helper for x in xs]\n", "helper")?;
+        assert_value_use("def f(xs):\n    return {helper for x in xs}\n", "helper")?;
+        assert_value_use("def f(xs):\n    return {x: helper for x in xs}\n", "helper")?;
+        assert_value_use(
+            "def f(xs):\n    return (helper for x in xs if x)\n",
+            "helper",
+        )?;
+        let referenced = first_names("def f(xs):\n    return [x for x in xs]\n", false)?;
+        assert!(!referenced.iter().any(|n| n == "x"), "{referenced:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn should_record_value_uses_in_fstrings_walrus_yield_slice_and_await()
+    -> Result<(), AdapterError> {
+        assert_value_use("def f():\n    return f\"{helper}\"\n", "helper")?;
+        assert_value_use(
+            "def f():\n    if (n := helper):\n        return n\n",
+            "helper",
+        )?;
+        assert_value_use("def f():\n    yield helper\n", "helper")?;
+        assert_value_use("def f():\n    yield from helper\n", "helper")?;
+        assert_value_use("def f(xs):\n    return xs[helper:]\n", "helper")?;
+        let referenced = first_names("def f():\n    if (n := 1):\n        return n\n", false)?;
+        assert!(
+            referenced.is_empty(),
+            "a walrus target is local: {referenced:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn should_record_value_uses_in_async_for_with_and_match() -> Result<(), AdapterError> {
+        assert_value_use(
+            "async def f(xs):\n    async for x in xs:\n        helper\n",
+            "helper",
+        )?;
+        assert_value_use(
+            "async def f(xs):\n    async with xs as c:\n        helper\n",
+            "helper",
+        )?;
+        assert_value_use(
+            "def f(v):\n    match v:\n        case 1:\n            helper\n",
+            "helper",
+        )?;
+        let referenced = first_names(
+            "def f(v):\n    match v:\n        case [a, b]:\n            return a\n",
+            false,
+        )?;
+        assert!(!referenced.iter().any(|n| n == "a"), "{referenced:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn should_not_record_a_shadowed_local_as_a_reference() -> Result<(), AdapterError> {
+        let referenced = first_names(
+            "def f(arg):\n    helper = 1\n    return helper + arg\n",
+            false,
+        )?;
+        assert!(referenced.is_empty(), "{referenced:?}");
+        let called = first_names("def f():\n    helper = make()\n    return helper()\n", true)?;
+        assert!(!called.iter().any(|n| n == "helper"), "{called:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn should_record_a_class_body_rebinding_of_a_module_name() -> Result<(), AdapterError> {
+        // A class body reads the module name before its own binding lands.
+        assert_value_use("class C:\n    helper = helper\n", "helper")
+    }
+
+    #[test]
+    fn should_bind_a_class_body_loop_target_inside_its_loop() -> Result<(), AdapterError> {
+        let referenced = first_names(
+            "class C:\n    for item in range(3):\n        y = item\n",
+            false,
+        )?;
+        assert!(!referenced.iter().any(|n| n == "item"), "{referenced:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn should_bind_a_class_body_name_inside_its_own_if_block() -> Result<(), AdapterError> {
+        let referenced = first_names(
+            "class C:\n    if cond:\n        x = 1\n        y = x\n",
+            false,
+        )?;
+        assert!(!referenced.iter().any(|n| n == "x"), "{referenced:?}");
+        assert!(referenced.iter().any(|n| n == "cond"), "{referenced:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn should_bind_class_body_with_and_except_targets() -> Result<(), AdapterError> {
+        let referenced = first_names(
+            "class C:\n    with open(p) as fh:\n        a = fh\n    try:\n        pass\n    except E as err:\n        b = err\n",
+            false,
+        )?;
+        assert!(
+            !referenced.iter().any(|n| n == "fh" || n == "err"),
+            "{referenced:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn should_keep_a_global_name_bound_at_module_level() -> Result<(), AdapterError> {
+        assert_value_use(
+            "def f():\n    global helper\n    helper = 1\n    return helper\n",
+            "helper",
+        )
+    }
+
+    #[test]
+    fn should_let_an_inner_global_win_over_an_enclosing_binding() -> Result<(), AdapterError> {
+        assert_value_use(
+            "def f():\n    helper = 1\n    def g():\n        global helper\n        return helper\n    return g\n",
+            "helper",
+        )
+    }
+
+    #[test]
+    fn should_resolve_a_nonlocal_name_to_the_enclosing_binding() -> Result<(), AdapterError> {
+        let referenced = first_names(
+            "def f():\n    helper = 0\n    def g():\n        nonlocal helper\n        helper = 1\n        return helper\n    return g\n",
+            false,
+        )?;
+        assert!(!referenced.iter().any(|n| n == "helper"), "{referenced:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn should_not_record_a_class_body_binding_as_a_reference() -> Result<(), AdapterError> {
+        let referenced = first_names("class C:\n    helper = 1\n    alias = helper\n", false)?;
+        assert!(!referenced.iter().any(|n| n == "helper"), "{referenced:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn should_not_expose_class_scope_to_a_method() -> Result<(), AdapterError> {
+        assert_value_use(
+            "class C:\n    helper = 1\n    def m(self):\n        return helper\n",
+            "helper",
+        )
+    }
+
+    #[test]
+    fn should_walk_the_first_comprehension_iterable_in_the_enclosing_scope()
+    -> Result<(), AdapterError> {
+        assert_value_use(
+            "def f():\n    return [helper for helper in helper]\n",
+            "helper",
+        )
+    }
+
+    #[test]
+    fn should_bind_a_comprehension_walrus_in_the_enclosing_function() -> Result<(), AdapterError> {
+        let referenced = first_names(
+            "def f(xs):\n    [n := x for x in xs]\n    return n\n",
+            false,
+        )?;
+        assert!(!referenced.iter().any(|n| n == "n"), "{referenced:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn should_keep_a_function_local_import_name_as_a_reference() -> Result<(), AdapterError> {
+        let called = first_names(
+            "def f():\n    from .m import helper\n    return helper()\n",
+            true,
+        )?;
+        assert!(called.iter().any(|n| n == "helper"), "{called:?}");
+        Ok(())
     }
 }

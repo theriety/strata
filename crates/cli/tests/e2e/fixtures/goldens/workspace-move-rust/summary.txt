@@ -1,6 +1,6 @@
 Strata report — workspace-move-rust
-8 files · 11 symbols · 17 edges
-Snapshot `3027913ba8b0852017ba2a3f16bcc60569d3dff3845df8291300559271a3995c`
+8 files · 11 symbols · 18 edges
+Snapshot `59ec491c4bb3967fa032b18e57540ebc2e9c72e69adc3862fc07061da678a314`
 
 Structural findings
 Shared findings (6)
@@ -30,17 +30,17 @@ candidate is a proposed layout; inclusion does not make a move Recommended. Part
 rescored.
 
 anchored — 0 candidate(s)
-Baseline score: 0.5846
+Baseline score: 0.5502
 Fewer than the requested candidates survived; the solution space converged.
 Current layout is already optimal under this profile's search.
 No candidates were produced.
 
 greenfield — 1 candidate(s)
-Baseline score: 0.7846
+Baseline score: 0.7502
 Fewer than the requested candidates survived; the solution space converged.
 
 greenfield — candidate 1
-  Score: 0.7846 → 0.6279; improvement +0.1567
+  Score: 0.7502 → 0.6111; improvement +0.1390
   Proposed moves
     - Move file `crates/core/src/beta/scale.rs` → `crates/core/src/alpha/scale.rs`
       Why: pulled toward `crates/core/src/alpha/parse.rs` — weight 5.0.

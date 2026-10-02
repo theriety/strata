@@ -17,3 +17,7 @@ pub fn unindexed_crate_qualifier_caller() -> u32 {
 pub fn unindexed_module_qualifier_caller() -> u32 {
     render::Frame::new()
 }
+
+pub fn unindexed_value_caller() -> Option<u32> {
+    Some(1).map(double_value)
+}
