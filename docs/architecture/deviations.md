@@ -144,7 +144,7 @@
 - **Impact on spec**: surface-change
 - **Severity**: minor
 
-### D-19: Visibility and projection entry points take the data the spec signatures omit
+### D-19: Visibility and projection entry points (historical: `project.rs` since removed) take the data the spec signatures omit
 - **When**: Commit 6 (feat(core): LCA visibility derivation and test projection)
 - **Draft said**: `derive_visibility(tree: &ContainerTree, edges: &[Edge])`, `project(candidate: &mut Candidate, polarity: &[Polarity])`, and `detect_convention(package: &PackageView)` over undefined `Candidate`/`PackageView` types
 - **What I did instead**: added a `nodes: &[Node]` parameter to `derive_visibility` (an `Edge` carries only `NodeId`s, so the node→container map and declared visibility must come from the node list) and a `convention: SpecConvention` parameter to `project`; defined the local view/result DTOs (`VisibilityResult`, `DerivedScope`, `Finding`, `Candidate`, `PackageView`, `Violation`, ...) the spec referenced but never declared, mirroring how `pack.rs` defines its `FolderView`
@@ -154,7 +154,7 @@
 
 ### D-20: Scoring consumes a pre-extracted candidate view rather than a whole tree
 - **When**: Commit 7 (feat(core): objective scoring and VI diversification)
-- **Draft said**: `score(c: &Candidate, k: &Coefficients) -> ScoreBreakdown` over a `Candidate`/`Coefficients` the draft never defines (and a `Candidate` already exists in `project.rs` meaning something unrelated)
+- **Draft said**: `score(c: &Candidate, k: &Coefficients) -> ScoreBreakdown` over a `Candidate`/`Coefficients` the draft never defines (and a `Candidate` already existed in `project.rs`, since removed, meaning something unrelated)
 - **What I did instead**: defined `score::Candidate` as the pre-extracted projections the objective actually scores (`edges: Vec<ScoredEdge>` carrying each edge's kind/confidence/LCA level, `containers` child sizes for imbalance, `cohesion_groups` for naming, `path_cohesion`, `move_distance`) plus `Coefficients` with `anchored()`/`greenfield()` presets — mirroring how `pack.rs`/`visibility.rs` own only the view they consume (the established D-19 pattern); cohesion terms are pre-negated into the breakdown so it sums to `total`
 - **Reason**: wrong-integration
 - **Impact on spec**: surface-change

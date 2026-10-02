@@ -99,8 +99,8 @@ fn should_emit_identical_findings_once_as_shared() {
             && finding.detail.contains("must remain in one file")
             && finding.detail.contains("break")
     }));
-    assert!(anchored_unique.is_empty());
-    assert!(greenfield_unique.is_empty());
+    assert_eq!(anchored_unique, []);
+    assert_eq!(greenfield_unique, []);
 
     let json = result
         .and_then(|result| serde_json::to_value(result).ok())
@@ -156,9 +156,9 @@ fn should_keep_profile_cap_findings_under_only_the_applicable_profile() {
             profile.current.unique_findings.as_slice()
         });
 
-    assert!(shared.is_empty());
+    assert_eq!(shared, []);
     assert_eq!(anchored_unique.len(), 1);
-    assert!(greenfield_unique.is_empty());
+    assert_eq!(greenfield_unique, []);
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn should_leave_shared_findings_empty_for_a_single_profile_run() {
             profile.current.unique_findings.as_slice()
         });
 
-    assert!(shared.is_empty());
+    assert_eq!(shared, []);
     assert_eq!(anchored_unique.len(), 1);
     assert!(result.is_some_and(|result| result.profiles.greenfield.is_none()));
 }
@@ -435,7 +435,7 @@ fn should_measure_transparent_source_roots_as_distinct_physical_folders() {
         .filter(|violation| violation.capacity.is_some())
         .map(|violation| (violation.location.clone(), violation.severity))
         .collect();
-    assert!(folder_findings.is_empty());
+    assert_eq!(folder_findings, []);
 }
 
 #[test]
@@ -603,7 +603,7 @@ fn should_count_domain_capacity_by_top_level_directory_subtrees() {
         .filter(|(level, _)| *level == Level::Domain)
         .map(|(_, violation)| violation.severity)
         .collect();
-    assert!(domain_findings.is_empty());
+    assert_eq!(domain_findings, []);
 }
 
 #[test]
@@ -680,7 +680,7 @@ fn should_not_report_a_file_well_under_its_cap() {
 
     let findings = capacity_violations(&tree, &config_with_file_cap(100));
 
-    assert!(findings.is_empty());
+    assert_eq!(findings, []);
 }
 
 #[test]

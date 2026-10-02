@@ -41,11 +41,11 @@ fn should_default_to_pinning_detected_tests_without_custom_exclusions() {
     for profile in [&config.profiles.anchored, &config.profiles.greenfield] {
         assert!(profile.relocation.pin_detected_test_files);
         assert!(profile.relocation.pin_detected_test_symbols);
-        assert!(profile.relocation.forbid_file_moves.is_empty());
-        assert!(profile.relocation.forbid_symbol_moves.is_empty());
+        assert_eq!(profile.relocation.forbid_file_moves, Vec::<String>::new());
+        assert_eq!(profile.relocation.forbid_symbol_moves, Vec::<String>::new());
         assert!(profile.relocation.test_mirroring.enabled);
         assert!(profile.relocation.test_mirroring.builtins);
-        assert!(profile.relocation.test_mirroring.rules.is_empty());
+        assert_eq!(profile.relocation.test_mirroring.rules, []);
     }
 }
 

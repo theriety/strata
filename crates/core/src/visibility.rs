@@ -351,7 +351,7 @@ mod tests {
                 level: ScopeLevel::File,
             }]
         );
-        assert!(result.findings.is_empty());
+        assert_eq!(result.findings, []);
     }
 
     #[test]
@@ -518,7 +518,7 @@ mod tests {
 
         let result = derive_visibility(&tree2, &nodes, &edges);
 
-        assert!(result.findings.is_empty());
+        assert_eq!(result.findings, []);
     }
 
     #[test]

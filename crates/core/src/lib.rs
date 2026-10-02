@@ -12,9 +12,7 @@
 //! production-SLOC cap, with conditional splits for oversized cyclic groups
 //! ([`pack`]). Commit 6 derives visibility from consumption — LCA over each
 //! symbol's consumers widened by the transitive type-exposure fixpoint
-//! ([`visibility`]) — and projects test code: specs follow their subjects under
-//! the per-package convention while the polarity matrix is enforced as a hard
-//! veto ([`project`]). Commit 7 closes the pipeline: the objective J(T) scores a
+//! ([`visibility`]). Commit 7 closes the pipeline: the objective J(T) scores a
 //! candidate tree with a per-term breakdown ([`score`]), and multi-start
 //! diversification returns k genuinely different candidates by max-min variation
 //! of information ([`diversify`]). It re-exports the IR contract so downstream
@@ -26,7 +24,6 @@ pub mod diversify;
 pub mod graph;
 pub mod layer;
 pub mod pack;
-pub mod project;
 pub mod score;
 pub mod shatter;
 pub mod visibility;

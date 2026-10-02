@@ -285,7 +285,7 @@ mod tests {
 
         let import = first_import(&module)?;
         assert!(import.star);
-        assert!(import.names.is_empty());
+        assert_eq!(import.names, Vec::<SmolStr>::new());
         Ok(())
     }
 
@@ -363,7 +363,7 @@ mod tests {
     fn should_not_mint_a_symbol_for_dunder_all() -> Result<(), AdapterError> {
         let module = parse_source("pkg/__init__.py", "__all__ = [\"a\", \"b\"]\n")?;
 
-        assert!(module.declarations.is_empty());
+        assert_eq!(module.declarations, []);
         assert_eq!(
             module.dunder_all,
             vec![SmolStr::new("a"), SmolStr::new("b")]
@@ -375,7 +375,7 @@ mod tests {
     fn should_skip_augmented_assignment_and_bare_annotations() -> Result<(), AdapterError> {
         let module = parse_source("pkg/mod.py", "total += 1\ncount: int\n")?;
 
-        assert!(module.declarations.is_empty());
+        assert_eq!(module.declarations, []);
         Ok(())
     }
 

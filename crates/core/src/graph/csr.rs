@@ -444,7 +444,7 @@ mod tests {
         let reversed = graph.reversed();
         assert_eq!(reversed.neighbors(1), &[0, 1, 2]);
         assert_eq!(reversed.weights(1), &[2.0, 3.0, 4.0]);
-        assert!(reversed.neighbors(0).is_empty());
+        assert_eq!(reversed.neighbors(0), Vec::<u32>::new());
         assert_eq!(reversed.reversed(), graph);
     }
 

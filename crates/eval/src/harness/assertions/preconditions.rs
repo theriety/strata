@@ -227,6 +227,9 @@ mod tests {
             severity: Some(SeverityFilter::Violation),
             ..precondition
         };
-        assert!(matching_violations(&precondition_narrower, &violations).is_empty());
+        assert_eq!(
+            matching_violations(&precondition_narrower, &violations),
+            Vec::<&Violation>::new()
+        );
     }
 }
