@@ -19,6 +19,8 @@ fn container(id: u32, name: &str, level: ScopeLevel, parent: Option<u32>) -> Con
 
 fn node(id: u32, name: &str, file: u32, size: u32) -> Node {
     Node {
+        public_api: false,
+        advice_exempt: false,
         id: NodeId(id),
         name: name.into(),
         kind: NodeKind::Symbol,

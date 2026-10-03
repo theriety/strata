@@ -137,9 +137,12 @@ fn should_not_count_a_name_shared_with_test_code_or_the_user_itself() -> Result<
 fn should_emit_advisory_uses_only_from_code_the_loader_cannot_see() -> Result<(), String> {
     let fragment = fragment()?;
 
+    // `all_tests.rs` sits behind `all(test, not(windows))`: the loader may drop
+    // it (unknown platform), so it is gated code too (ADR-25 rule 7).
     let gated = [
         node(&fragment, "drive")?.id,
         node(&fragment, "inline_drive")?.id,
+        node(&fragment, "all_support")?.id,
     ];
     assert!(
         fragment

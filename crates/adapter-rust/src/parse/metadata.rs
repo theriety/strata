@@ -154,14 +154,16 @@ fn implies_test(predicate: &syn::Meta) -> bool {
     }
 }
 
-/// Returns `true` when any `#[cfg(..)]` attribute is false whenever `test` is
-/// set, as `cfg(not(test))` is: the semantic loader drops such an item. Doubt
-/// (an unknown option decides the predicate) resolves to `false`.
-pub(super) fn has_cfg_not_test(attrs: &[syn::Attribute]) -> bool {
+/// Returns `true` when the semantic loader may drop an item carrying `attrs`:
+/// some `#[cfg(..)]` is not certainly true with `test` set and nothing else
+/// known (`cfg(not(test))`, a feature, a platform, `all(test, feature = ..)`).
+/// Doubt resolves to "may drop", the side that only adds advisory uses
+/// (ADR-25 rule 7). `cfg_test` polarity marking is separate and unchanged.
+pub(super) fn loader_may_drop(attrs: &[syn::Attribute]) -> bool {
     attrs
         .iter()
         .filter_map(cfg_predicate)
-        .any(|predicate| holds_under_test(&predicate) == Some(false))
+        .any(|predicate| holds_under_test(&predicate) != Some(true))
 }
 
 /// Three-valued evaluation with `test` set and every other option unknown.

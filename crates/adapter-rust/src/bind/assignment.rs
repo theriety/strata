@@ -203,6 +203,8 @@ fn node_for(declaration: &Declaration, id: NodeId, container: ContainerId) -> No
         Polarity::Production
     };
     Node {
+        public_api: false,
+        advice_exempt: false,
         id,
         name: declaration.name.clone(),
         kind: match declaration.kind {
@@ -228,6 +230,8 @@ fn node_for(declaration: &Declaration, id: NodeId, container: ContainerId) -> No
 /// surface), and has zero size — it owns no source of its own.
 fn re_export_node(re_export: &ReExport, id: NodeId, container: ContainerId) -> Node {
     Node {
+        public_api: false,
+        advice_exempt: false,
         id,
         name: re_export.name.clone(),
         kind: NodeKind::Symbol,

@@ -46,6 +46,8 @@ pub(in crate::analyze) fn empty_profile_result() -> ProfileResult {
 /// Builds a symbol node owning a container.
 pub(in crate::analyze) fn node(id: u32, name: &str, container: u32, polarity: Polarity) -> Node {
     Node {
+        public_api: false,
+        advice_exempt: false,
         id: NodeId(id),
         name: SmolStr::new(name),
         kind: NodeKind::Symbol,
@@ -65,6 +67,8 @@ pub(in crate::analyze) fn sloc_node(
     sloc: u32,
 ) -> Node {
     Node {
+        public_api: false,
+        advice_exempt: false,
         id: NodeId(id),
         name: SmolStr::new(name),
         kind: NodeKind::Symbol,

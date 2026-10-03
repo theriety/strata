@@ -13,6 +13,8 @@
 
 mod advisory;
 mod declaration;
+mod dropped;
+mod globs;
 mod items;
 mod metadata;
 mod modules;
@@ -24,8 +26,10 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use strata_ir::{AdapterError, SourceFile};
 
-use self::advisory::mark_inline;
+use self::advisory::{identifiers, mark_inline};
+use self::dropped::{DroppedUses, has_pub_use};
 use self::items::push_item;
+use self::metadata::loader_may_drop;
 use self::modules::{Modules, collect_mod_decls, propagate_gates};
 
 /// The category of a top-level declaration: a value symbol or a type.
@@ -178,6 +182,27 @@ pub struct ParsedFile {
     pub declarations: Vec<Declaration>,
     /// `pub use` re-exports surfaced at this file's module root, emitted as-is.
     pub re_exports: Vec<ReExport>,
+    /// Every identifier of the file. Binding reads it only when the loader
+    /// never loaded the file, whose code then counts as one maybe-dropped body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<SmolStr>,
+    /// Names imported by `use` items the loader may drop, for advice only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped_uses: Vec<SmolStr>,
+    /// The subset of `dropped_uses` whose `use` is not private (a re-export).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped_re_exports: Vec<SmolStr>,
+    /// The `::`-joined path before each glob `use` the loader may drop; the
+    /// glob's targets are unknown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped_globs: Vec<SmolStr>,
+    /// Files whose declarations those globs may import (resolved through the
+    /// module tree, or every file of the crate when that is not exact).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped_glob_files: Vec<SmolStr>,
+    /// Whether the file holds a `use` that is not private (names flow onward).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pub_use: bool,
 }
 
 /// Parses Rust sources into [`ParsedFile`]s, one rayon task per file.
@@ -216,14 +241,23 @@ fn parse_one(file: &SourceFile) -> Result<(ParsedFile, Modules), AdapterError> {
     }
 
     mark_inline(&mut declarations, &ast.items, &file.contents);
+    let mut dropped = DroppedUses::default();
+    dropped.collect(&ast.items, false);
     let modules = Modules {
         decls: collect_mod_decls(&ast.items),
         source: file.contents.clone(),
+        file_gated: loader_may_drop(&ast.attrs),
     };
     let file = ParsedFile {
         path: file.path.clone(),
         declarations,
         re_exports,
+        names: identifiers(&file.contents),
+        dropped_uses: dropped.imported,
+        dropped_re_exports: dropped.re_exported,
+        dropped_globs: dropped.globs,
+        dropped_glob_files: Vec::new(),
+        pub_use: has_pub_use(&ast.items),
     };
     Ok((file, modules))
 }
