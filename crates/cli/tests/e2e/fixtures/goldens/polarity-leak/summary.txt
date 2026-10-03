@@ -1,6 +1,6 @@
 Strata report — polarity-leak
 2 files · 2 symbols · 1 edges
-Snapshot `1263702a99bb85e1e25cda532596c5a6def25e6b3bdb9e69425c4043913b547f`
+Snapshot `4a3648adf18cf1d8bcbff4a788d0cabc55e1b60d743b6a331137cb0743109119`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 Structural findings

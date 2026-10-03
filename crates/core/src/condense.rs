@@ -264,6 +264,8 @@ mod tests {
             effective_size: 1,
             re_export: false,
             display_name: None,
+            test_source: false,
+            owner: None,
         }
     }
 

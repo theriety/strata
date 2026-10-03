@@ -7,7 +7,7 @@ use strata_ir::ScopeLevel;
 use super::*;
 
 #[test]
-fn should_serialize_schema_version_nine_with_two_advice_groups() {
+fn should_serialize_schema_version_ten_with_two_advice_groups() {
     let result = AnalyzeResult {
         schema_version: RESULT_SCHEMA_VERSION,
         snapshot_hash: "snapshot".to_owned(),
@@ -36,7 +36,7 @@ fn should_serialize_schema_version_nine_with_two_advice_groups() {
     assert_eq!(
         json.pointer("/schemaVersion")
             .and_then(serde_json::Value::as_u64),
-        Some(9)
+        Some(10)
     );
     assert!(json.get("profiles").is_some());
     assert!(json.get("modes").is_none());

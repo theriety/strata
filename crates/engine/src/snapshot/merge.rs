@@ -57,6 +57,7 @@ pub(super) fn merge_fragments(
                 .cloned()
                 .unwrap_or_default();
             node.id = NodeId(node.id.0 + node_offset);
+            node.owner = node.owner.map(|owner| NodeId(owner.0 + node_offset));
             nodes.push(node);
             node_paths.push(path);
         }
@@ -104,6 +105,7 @@ pub(super) fn merge_fragments(
     let mut ir = IntermediateRepresentation::new(nodes, edges, built.tree);
     ir.affinities = affinities;
     ir.scope_ladders = ladders;
+    ir.advisory_uses = advisory_uses;
     ir
 }
 

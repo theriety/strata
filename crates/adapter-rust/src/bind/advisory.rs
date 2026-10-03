@@ -5,10 +5,10 @@
 //! else: it is returned apart from the edges and never joins them, so no score,
 //! cohesion, cycle or move can read it.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use smol_str::SmolStr;
-use strata_ir::{AdvisoryUse, Node, NodeId, Polarity};
+use strata_ir::{AdvisoryUse, Node, NodeId};
 
 use super::assignment::NodeAssignment;
 use crate::parse::ParsedFile;
@@ -19,23 +19,35 @@ pub(super) fn candidates(
     files: &[ParsedFile],
     assignment: &NodeAssignment,
     unloaded: &HashSet<SmolStr>,
-) -> BTreeSet<(NodeId, NodeId)> {
-    let mut found = BTreeSet::new();
+) -> BTreeMap<(NodeId, NodeId), bool> {
+    // the flag stays true only while every source of a pair is test-only code.
+    let mut found: BTreeMap<(NodeId, NodeId), bool> = BTreeMap::new();
+    let mut note = |pair: (NodeId, NodeId), from_test: bool| {
+        let entry = found.entry(pair).or_insert(true);
+        *entry &= from_test;
+    };
     for file in files {
-        // A dropped `use` has no declaration; the file's first one stands in
-        // as the user (a file with none yields no pair; backlog).
-        let file_user = file
+        // A dropped `use` has no declaration; a declaration of the file stands
+        // in as the user: the first non-test one that is not the used item, else
+        // the first (a file with none yields no pair; backlog).
+        let stand_ins: Vec<NodeId> = file
             .declarations
-            .first()
-            .and_then(|declaration| assignment.node_at(&file.path, declaration.byte_start));
-        if let Some(user) = file_user {
-            for used in file
-                .dropped_uses
-                .iter()
-                .flat_map(|name| assignment.nodes_named(name))
-            {
-                if *used != user {
-                    found.insert((user, *used));
+            .iter()
+            // a test declaration would turn a production file's names into test names.
+            .filter(|declaration| !declaration.cfg_test && !declaration.test_case)
+            .filter_map(|declaration| assignment.node_at(&file.path, declaration.byte_start))
+            .take(2)
+            .collect();
+        for (names, from_test) in [(&file.dropped_uses, false), (&file.test_dropped_uses, true)] {
+            for used in names.iter().flat_map(|name| assignment.nodes_named(name)) {
+                // the used item stands in for itself when it is the file's only
+                // production declaration: the use is still a production use.
+                if let Some(user) = stand_ins
+                    .iter()
+                    .find(|user| *user != used)
+                    .or_else(|| stand_ins.first())
+                {
+                    note((*user, *used), from_test);
                 }
             }
         }
@@ -52,7 +64,7 @@ pub(super) fn candidates(
                 .flat_map(|name| assignment.nodes_named(name))
             {
                 if *used != user {
-                    found.insert((user, *used));
+                    note((user, *used), false);
                 }
             }
         }
@@ -60,17 +72,30 @@ pub(super) fn candidates(
     found
 }
 
-/// Keeps the pairs whose target is production code, once polarity is final: a
+/// Keeps the pairs whose target is production code in the source (never the
+/// final polarity: tests-only users demote a production item to test support): a
 /// name matching test-only code is no reason to keep a production item wide.
-pub(super) fn settle(candidates: BTreeSet<(NodeId, NodeId)>, nodes: &[Node]) -> Vec<AdvisoryUse> {
+pub(super) fn settle(
+    candidates: BTreeMap<(NodeId, NodeId), bool>,
+    nodes: &[Node],
+) -> Vec<AdvisoryUse> {
     let production = |id: NodeId| {
         nodes
             .get(id.0 as usize)
-            .is_some_and(|node| node.id == id && node.polarity == Polarity::Production)
+            .is_some_and(|node| node.id == id && !node.test_source)
     };
     candidates
         .into_iter()
-        .filter(|(_, used)| production(*used))
-        .map(|(user, used)| AdvisoryUse { user, used })
+        .filter(|((_, used), _)| production(*used))
+        .map(|((user, used), from_test)| AdvisoryUse {
+            user,
+            used,
+            // a user the source declares as test code (a test file, an
+            // inner `cfg(test)`) is no production user whatever its names.
+            from_test: from_test
+                || nodes
+                    .get(user.0 as usize)
+                    .is_some_and(|node| node.id == user && node.test_source),
+        })
         .collect()
 }

@@ -43,6 +43,7 @@ pub(super) fn declaration(
         owner: None,
         references,
         advisory_names: Vec::new(),
+        trait_impl: false,
     }
 }
 

@@ -47,3 +47,18 @@ fn should_count_a_function_passed_as_a_value_as_a_hard_edge() -> Result<(), Stri
     );
     Ok(())
 }
+
+#[test]
+fn should_mark_exports_as_public_api_and_leave_other_declarations_alone() -> Result<(), String> {
+    let fragment = bind_inline(
+        "export function shown(): number { return hidden(); }\n\
+         function hidden(): number { return 1; }\n",
+    )?;
+    let flags: Vec<(&str, bool)> = fragment
+        .nodes
+        .iter()
+        .map(|node| (node.name.as_str(), node.public_api))
+        .collect();
+    assert_eq!(flags, [("shown", true), ("hidden", false)]);
+    Ok(())
+}

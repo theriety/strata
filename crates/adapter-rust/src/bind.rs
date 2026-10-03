@@ -102,9 +102,10 @@ pub(super) fn bind(
             .into_iter()
             .collect();
     let mut nodes = assignment.into_nodes();
+    link_owners(&mut nodes);
     for node in &mut nodes {
         node.public_api = public_api.contains(&node.id);
-        node.advice_exempt = exempt.contains(&node.id);
+        node.advice_exempt |= exempt.contains(&node.id);
     }
     classify_polarity(files, &mut nodes, &edges);
     let advisory_uses = advisory::settle(advisory, &nodes);
@@ -118,6 +119,31 @@ pub(super) fn bind(
         exposures,
         advisory_uses,
     })
+}
+
+/// Points each inherent member (`Type::member`) at the type node of the same
+/// file; an ambiguous or missing owner leaves the member without one.
+fn link_owners(nodes: &mut [strata_ir::Node]) {
+    let types: Vec<(smol_str::SmolStr, strata_ir::ContainerId, strata_ir::NodeId)> = nodes
+        .iter()
+        .filter(|node| node.kind == strata_ir::NodeKind::Type && !node.re_export)
+        .map(|node| (node.name.clone(), node.container, node.id))
+        .collect();
+    for node in nodes.iter_mut() {
+        let Some((owner, _)) = node
+            .display_name
+            .as_deref()
+            .and_then(|shown| shown.split_once("::"))
+        else {
+            continue;
+        };
+        let mut found = types
+            .iter()
+            .filter(|(name, container, _)| name == owner && *container == node.container);
+        if let (Some((_, _, id)), None) = (found.next(), found.next()) {
+            node.owner = Some(*id);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -150,6 +176,7 @@ mod tests {
             owner: None,
             references: Vec::new(),
             advisory_names: Vec::new(),
+            trait_impl: false,
         }
     }
 
@@ -163,6 +190,7 @@ mod tests {
             dropped_re_exports: Vec::new(),
             dropped_globs: Vec::new(),
             dropped_glob_files: Vec::new(),
+            test_dropped_uses: Vec::new(),
             pub_use: false,
         }
     }
@@ -197,6 +225,29 @@ mod tests {
             .map(|node| (node.name.as_str(), node.display_name.as_deref()))
             .collect();
         assert_eq!(shown, vec![("new", Some("Interner::new")), ("free", None)]);
+    }
+
+    #[test]
+    fn should_link_an_impl_method_to_the_type_of_its_file_and_only_when_unambiguous() {
+        let mut ty = declaration("Interner", 0, 10);
+        ty.kind = DeclKind::Type;
+        let mut method = declaration("new", 10, 20);
+        method.owner = Some(SmolStr::new("Interner"));
+        let files = [file_with("crates/app/src/lib.rs", vec![ty, method])];
+        let mut nodes = NodeAssignment::build(&files, Path::new("repo")).into_nodes();
+        super::link_owners(&mut nodes);
+        let owners: Vec<_> = nodes.iter().map(|node| node.owner.map(|id| id.0)).collect();
+        assert_eq!(owners, vec![None, Some(0)]);
+
+        let mut orphan = declaration("new", 0, 10);
+        orphan.owner = Some(SmolStr::new("Missing"));
+        let lone = [file_with("crates/app/src/lib.rs", vec![orphan])];
+        let mut lone_nodes = NodeAssignment::build(&lone, Path::new("repo")).into_nodes();
+        super::link_owners(&mut lone_nodes);
+        assert_eq!(
+            lone_nodes.iter().map(|node| node.owner).collect::<Vec<_>>(),
+            vec![None]
+        );
     }
 
     #[test]
@@ -327,6 +378,8 @@ mod tests {
             effective_size: 1,
             re_export: false,
             display_name: None,
+            test_source: false,
+            owner: None,
         };
         let test_case = Node {
             public_api: false,
@@ -340,6 +393,8 @@ mod tests {
             effective_size: 0,
             re_export: false,
             display_name: None,
+            test_source: false,
+            owner: None,
         };
         let mut nodes = vec![helper, test_case];
         let edges = vec![Edge {
@@ -355,6 +410,14 @@ mod tests {
         assert_eq!(
             nodes.first().map(|node| node.polarity),
             Some(Polarity::TestSupport)
+        );
+        // demoted production is not test code in source; the test case is.
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| node.test_source)
+                .collect::<Vec<_>>(),
+            [false, true]
         );
     }
 
@@ -374,6 +437,8 @@ mod tests {
             effective_size: 1,
             re_export: false,
             display_name: None,
+            test_source: false,
+            owner: None,
         };
         let producer = Node {
             public_api: false,
@@ -387,6 +452,8 @@ mod tests {
             effective_size: 1,
             re_export: false,
             display_name: None,
+            test_source: false,
+            owner: None,
         };
         let test_case = Node {
             public_api: false,
@@ -400,6 +467,8 @@ mod tests {
             effective_size: 0,
             re_export: false,
             display_name: None,
+            test_source: false,
+            owner: None,
         };
         let mut nodes = vec![helper, producer, test_case];
         let edges = vec![
@@ -466,6 +535,7 @@ mod tests {
             dropped_re_exports: Vec::new(),
             dropped_globs: Vec::new(),
             dropped_glob_files: Vec::new(),
+            test_dropped_uses: Vec::new(),
             pub_use: false,
         };
         let assignment = NodeAssignment::build(&[file], Path::new("repo"));

@@ -95,6 +95,10 @@ pub struct AdvisoryUse {
     pub user: NodeId,
     /// Fragment-local node sharing a name with an identifier of `user`.
     pub used: NodeId,
+    /// Every identifier match behind this pair sits in test-only code (a macro
+    /// body inside a `cfg(test)` module), so it is no production user.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_test: bool,
 }
 
 /// A partial IR produced by one adapter; the engine merges fragments into one IR.

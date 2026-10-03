@@ -35,6 +35,8 @@ fn node(id: u32, name: &str, file: u32, polarity: Polarity) -> Node {
         effective_size: 1,
         re_export: false,
         display_name: None,
+        test_source: false,
+        owner: None,
     }
 }
 
@@ -274,10 +276,10 @@ fn should_link_an_exact_nested_mirror_despite_a_colliding_basename() {
 }
 
 #[test]
-fn should_serialize_linked_relocations_as_schema_version_nine() {
+fn should_serialize_linked_relocations_as_schema_version_ten() {
     let json = serialized_analysis(&exact_mirror_snapshot(true, false), &mirror_config());
 
-    assert_eq!(json.get("schemaVersion").and_then(Value::as_u64), Some(9));
+    assert_eq!(json.get("schemaVersion").and_then(Value::as_u64), Some(10));
 }
 
 #[test]

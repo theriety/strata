@@ -34,6 +34,9 @@ pub struct Declaration {
     pub called: Vec<SmolStr>,
     /// Literal specifiers of `import('...')` calls inside this declaration.
     pub dynamic_imports: Vec<SmolStr>,
+    /// Literal specifiers of `require('...')` calls, which only suppress advice.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<SmolStr>,
     /// Signature types whose names uniquely match this declaration as owner.
     #[serde(default)]
     pub signature_companions: Vec<SmolStr>,
@@ -59,6 +62,10 @@ pub struct StaticImport {
     pub names: Vec<SmolStr>,
     /// `true` for `import type` / type-only specifiers (erased at runtime).
     pub type_only: bool,
+    /// `true` when the import binds the module object (`import * as ns`), whose
+    /// members are reached by property access.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub namespace: bool,
 }
 
 /// A re-export (`export { x } from '...'`) emitted verbatim for the engine.

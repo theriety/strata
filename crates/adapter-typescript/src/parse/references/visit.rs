@@ -204,6 +204,13 @@ impl Visit for ReferenceCollector {
             Callee::Expr(expr) => {
                 if let Expr::Ident(ident) = expr.as_ref() {
                     self.called.push(SmolStr::new(ident.sym.as_str()));
+                    // `require('./a')` only suppresses advice; it adds no edge
+                    if ident.sym.as_str() == "require"
+                        && let Some(first) = call.args.first()
+                        && let Expr::Lit(Lit::Str(literal)) = first.expr.as_ref()
+                    {
+                        self.requires.push(specifier(literal));
+                    }
                 }
             }
             Callee::Super(_) => {}

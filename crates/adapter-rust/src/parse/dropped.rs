@@ -9,7 +9,7 @@ use smol_str::SmolStr;
 use syn::Item;
 
 use super::advisory::token_names;
-use super::metadata::loader_may_drop;
+use super::metadata::{has_cfg_test, loader_may_drop};
 
 /// Names and globs of the `use` items the loader may drop.
 #[derive(Default)]
@@ -20,12 +20,30 @@ pub(super) struct DroppedUses {
     pub(super) re_exported: Vec<SmolStr>,
     /// The `::`-joined path before each dropped glob (any visibility).
     pub(super) globs: Vec<SmolStr>,
+    /// Names of item-position macros inside `cfg(test)` modules: test code.
+    pub(super) test_imported: Vec<SmolStr>,
 }
 
 impl DroppedUses {
     /// Collects the dropped `use` items of `items`; `inherited` says an
     /// enclosing module or file is already dropped.
     pub(super) fn collect(&mut self, items: &[Item], inherited: bool) {
+        // `in_test`: nested `cfg(test)` modules; a wholly test file is settled
+        // at settle time from its users' `test_source`.
+        self.walk(items, inherited, false);
+        for list in [
+            &mut self.imported,
+            &mut self.re_exported,
+            &mut self.globs,
+            &mut self.test_imported,
+        ] {
+            list.sort();
+            list.dedup();
+        }
+    }
+
+    /// `in_test` says an enclosing module exists only under `cfg(test)`.
+    fn walk(&mut self, items: &[Item], inherited: bool, in_test: bool) {
         for item in items {
             match item {
                 Item::Use(item_use) if inherited || loader_may_drop(&item_use.attrs) => {
@@ -38,34 +56,43 @@ impl DroppedUses {
                 }
                 Item::Mod(item_mod) => {
                     if let Some((_, nested)) = &item_mod.content {
-                        self.collect(nested, inherited || loader_may_drop(&item_mod.attrs));
+                        self.walk(
+                            nested,
+                            inherited || loader_may_drop(&item_mod.attrs),
+                            in_test || has_cfg_test(&item_mod.attrs),
+                        );
                     }
                 }
                 // an item-position macro (`cfg_if!`, ..) expands to code the
                 // loader may show only in part: its names count as uses.
                 Item::Macro(item_macro) => {
-                    token_names(item_macro.mac.tokens.clone(), &mut self.imported);
+                    token_names(item_macro.mac.tokens.clone(), self.macro_sink(in_test));
                 }
                 Item::Impl(item_impl) => {
                     for nested in &item_impl.items {
                         if let syn::ImplItem::Macro(found) = nested {
-                            token_names(found.mac.tokens.clone(), &mut self.imported);
+                            token_names(found.mac.tokens.clone(), self.macro_sink(in_test));
                         }
                     }
                 }
                 Item::Trait(item_trait) => {
                     for nested in &item_trait.items {
                         if let syn::TraitItem::Macro(found) = nested {
-                            token_names(found.mac.tokens.clone(), &mut self.imported);
+                            token_names(found.mac.tokens.clone(), self.macro_sink(in_test));
                         }
                     }
                 }
                 _ => {}
             }
         }
-        for list in [&mut self.imported, &mut self.re_exported, &mut self.globs] {
-            list.sort();
-            list.dedup();
+    }
+
+    /// Where the names of a macro invocation go.
+    fn macro_sink(&mut self, in_test: bool) -> &mut Vec<SmolStr> {
+        if in_test {
+            &mut self.test_imported
+        } else {
+            &mut self.imported
         }
     }
 }

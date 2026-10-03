@@ -1,6 +1,6 @@
 Strata report — cyclic-oversized
 3 files · 3 symbols · 3 edges
-Snapshot `c51792430242b5990bdcf9c2ef33e7d89d835047b1930dad349d1ce8921889cf`
+Snapshot `a1b47905f884a928b2a62c9c2e27d280e17c4c49b2c850f5d57fc091591bb732`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 Structural findings

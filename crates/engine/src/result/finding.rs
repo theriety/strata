@@ -49,6 +49,8 @@ pub enum ViolationKind {
     Capacity,
     /// A declared visibility wider than the derived scope.
     Visibility,
+    /// A production item whose every user is test code.
+    TestOnly,
 }
 
 /// The severity of a finding.

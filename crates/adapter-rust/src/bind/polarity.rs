@@ -27,6 +27,12 @@ pub(super) fn classify_polarity(files: &[ParsedFile], nodes: &mut [Node], edges:
         }
     }
 
+    // what the source declares as test code, before any production node is
+    // demoted below: `Node::test_source` keeps the two apart.
+    for node in nodes.iter_mut() {
+        node.test_source = node.polarity != Polarity::Production;
+    }
+
     // Both test cases and test-support already carry test polarity, so anything
     // they consume is a test consumer for the reachability rule below.
     let is_test_node: Vec<bool> = nodes
