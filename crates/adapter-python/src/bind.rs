@@ -17,6 +17,7 @@
 mod containers;
 mod dynamic;
 mod edges;
+mod module_objects;
 mod polarity;
 mod reexport;
 mod resolver;
@@ -31,7 +32,8 @@ use strata_ir::{
 
 use self::containers::ContainerBuilder;
 use self::edges::emit_edges;
-use self::polarity::{apply_polarity, classify_polarity};
+use self::module_objects::exempt_module_objects;
+use self::polarity::{apply_polarity, classify_polarity, mark_test_source};
 use self::reexport::{assign_re_export_nodes, emit_re_exports};
 use self::resolver::Resolver;
 use crate::parse::ParsedModule;
@@ -80,6 +82,8 @@ pub(super) fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
                 effective_size: declaration.sloc,
                 re_export: false,
                 display_name: None,
+                test_source: false,
+                owner: None,
             });
             // Python has no `export` keyword: a module-level definition not
             // prefixed with `_` is part of the importable surface.
@@ -104,8 +108,15 @@ pub(super) fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
 
     let mut edges = emit_edges(modules, &resolver, &exports, &local);
     emit_re_exports(&re_export_links, &mut edges);
+    mark_test_source(modules, &mut nodes, &local);
+    exempt_module_objects(modules, &resolver, &local, &mut nodes);
     let polarity = classify_polarity(modules, &nodes, &local, &exported, &edges);
     apply_polarity(&mut nodes, &polarity);
+    // a public module-level name (no leading `_`) or a re-export is importable from outside the analysed tree, so it is public API
+    // whatever the in-tree users are (exact entry-point detection is deferred).
+    for (node, &importable) in nodes.iter_mut().zip(&exported) {
+        node.public_api = importable;
+    }
 
     IrFragment {
         nodes,

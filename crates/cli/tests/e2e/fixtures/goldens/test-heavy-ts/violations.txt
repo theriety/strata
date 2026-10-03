@@ -1,2 +1,5 @@
-no violations
+testOnly [violation] src/adapters/anthropic/client.ts, closeClient :: Only tests in this repo use `closeClient`. It is public, so code outside this repo may use it too; check before moving or deleting it.
+testOnly [violation] src/adapters/anthropic/client.ts, createClient :: Only tests in this repo use `createClient`. It is public, so code outside this repo may use it too; check before moving or deleting it.
+testOnly [violation] src/adapters/anthropic/client.ts, sendMessage :: Only tests in this repo use `sendMessage`. It is public, so code outside this repo may use it too; check before moving or deleting it.
+testOnly [violation] src/adapters/anthropic/models.ts, modelContext :: Only tests in this repo use `modelContext`. It is public, so code outside this repo may use it too; check before moving or deleting it.
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.

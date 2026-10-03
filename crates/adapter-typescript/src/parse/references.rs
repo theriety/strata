@@ -17,6 +17,7 @@ pub(super) struct References {
     pub(super) referenced: Vec<SmolStr>,
     pub(super) called: Vec<SmolStr>,
     pub(super) dynamic_imports: Vec<SmolStr>,
+    pub(super) requires: Vec<SmolStr>,
 }
 
 /// Collects references from a class body.

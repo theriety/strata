@@ -1,14 +1,15 @@
 # Strata report — nested-python
 
 6 files · 12 symbols · 15 edges
-Snapshot `39c51ab8ba1c7a846b18a62f8c8fcb61aa410289f7a483b4bdbb0d4f50e6acd8`
+Snapshot `852221ba6d724d78ea5bbb361dd5e881dd8fc9f8ad1bc4dca176edb8bddf4132`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings
 
 ```text
-Shared findings (0)
-  None.
+Shared findings (1)
+  - testOnly [violation] at `app.py`, `run`: Only tests in this repo use `run`. It is public, so 
+    code outside this repo may use it too; check before moving or deleting it.
 
 anchored profile-specific findings (0)
   None.

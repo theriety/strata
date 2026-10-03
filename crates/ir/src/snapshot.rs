@@ -41,6 +41,11 @@ pub struct IntermediateRepresentation {
     /// ladder; empty for every other node.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scope_ladders: Vec<ScopeLadder>,
+    /// Name-matched uses of code the loader cannot see, merged from every
+    /// fragment. Advice reads them as production users; no graph edge,
+    /// score or move does (ADR-25). Added to schema 3; empty when absent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub advisory_uses: Vec<crate::AdvisoryUse>,
 }
 
 /// What the language's scope ladder says about one declaration (ADR-25).
@@ -76,6 +81,7 @@ impl IntermediateRepresentation {
             affinities: Vec::new(),
             containers,
             scope_ladders: Vec::new(),
+            advisory_uses: Vec::new(),
         }
     }
 }
@@ -278,6 +284,8 @@ mod tests {
             effective_size: 1,
             re_export: false,
             display_name: None,
+            test_source: false,
+            owner: None,
         }
     }
 
@@ -387,6 +395,8 @@ mod tests {
         let re_export = Node {
             re_export: true,
             display_name: None,
+            test_source: false,
+            owner: None,
             ..node(1, "alias")
         };
 

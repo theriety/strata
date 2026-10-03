@@ -1047,3 +1047,183 @@ fn should_flag_a_nested_item_when_the_ladder_names_a_narrower_folder() -> Result
     );
     Ok(())
 }
+
+/// Builds a one-file snapshot where `item` (id 0, `Package`-declared) is used
+/// only by a test node (id 1, `test_source`), after `adjust` edits the item and
+/// the users.
+fn test_only_fixture(
+    adjust: impl FnOnce(&mut strata_ir::Node, &mut strata_ir::Node),
+) -> Result<Snapshot, String> {
+    let mut item = node(0, "item", 0, Polarity::Production);
+    item.visibility = ScopeLevel::Package;
+    let mut user = node(1, "check", 0, Polarity::TestCase);
+    user.test_source = true;
+    adjust(&mut item, &mut user);
+    let nodes = vec![item, user];
+    let ir = IntermediateRepresentation::new(
+        nodes,
+        vec![edge(1, 0)],
+        ContainerTree::new(vec![container(0, "src/a.rs", ScopeLevel::File, None)]),
+    );
+    Snapshot::assemble(ir).map_err(|error| error.to_string())
+}
+
+/// Counts the test-only and visibility findings of `snapshot`.
+fn test_only_and_visibility(snapshot: &Snapshot) -> (usize, usize) {
+    (
+        test_only::test_only_violations(snapshot).len(),
+        visibility_violations(snapshot).len(),
+    )
+}
+
+#[test]
+fn should_report_an_item_used_only_by_test_sources_once_and_not_as_visibility() -> Result<(), String>
+{
+    let snapshot = test_only_fixture(|_, _| {})?;
+    assert_eq!(test_only_and_visibility(&snapshot), (1, 0));
+    let found = test_only::test_only_violations(&snapshot);
+    assert_eq!(
+        found
+            .iter()
+            .map(|v| (v.kind, v.detail.as_str()))
+            .collect::<Vec<_>>(),
+        [(
+            ViolationKind::TestOnly,
+            "`item` is used only by tests; move it under test-only code or delete it"
+        )]
+    );
+    Ok(())
+}
+
+#[test]
+fn should_never_report_test_only_for_a_node_advice_must_not_touch() -> Result<(), String> {
+    type Flag = fn(&mut strata_ir::Node);
+    let flags: [(&str, Flag); 2] = [
+        ("re_export", |node| node.re_export = true),
+        ("advice_exempt", |node| node.advice_exempt = true),
+    ];
+    for (label, flag) in flags {
+        let snapshot = test_only_fixture(|item, _| flag(item))?;
+        assert_eq!(
+            test_only::test_only_violations(&snapshot),
+            [],
+            "{label} is exempt from test-only advice"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn should_report_a_public_api_item_used_only_by_tests_with_the_public_wording() -> Result<(), String>
+{
+    let snapshot = test_only_fixture(|item, _| item.public_api = true)?;
+    assert_eq!(test_only_and_visibility(&snapshot), (1, 0));
+    let found = test_only::test_only_violations(&snapshot);
+    assert_eq!(
+        found.iter().map(|v| v.detail.as_str()).collect::<Vec<_>>(),
+        [
+            "Only tests in this repo use `item`. It is public, so code outside this repo may use it too; check before moving or deleting it."
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn should_not_report_test_only_for_test_code_or_a_user_the_source_does_not_call_test()
+-> Result<(), String> {
+    // the item itself is declared as test code.
+    let test_item = test_only_fixture(|item, _| item.test_source = true)?;
+    assert_eq!(test_only::test_only_violations(&test_item), []);
+    // a user demoted to test support by reachability is not a test in source.
+    let demoted_user = test_only_fixture(|_, user| user.test_source = false)?;
+    assert_eq!(test_only::test_only_violations(&demoted_user), []);
+    Ok(())
+}
+
+#[test]
+fn should_not_report_test_only_for_a_self_loop_alone_or_an_advisory_use() -> Result<(), String> {
+    let mut ir = IntermediateRepresentation::new(
+        vec![node(0, "item", 0, Polarity::Production)],
+        vec![edge(0, 0)],
+        ContainerTree::new(vec![container(0, "src/a.rs", ScopeLevel::File, None)]),
+    );
+    let loop_only = Snapshot::assemble(ir.clone()).map_err(|error| error.to_string())?;
+    assert_eq!(test_only::test_only_violations(&loop_only), []);
+    ir.nodes.push({
+        let mut user = node(1, "check", 0, Polarity::TestCase);
+        user.test_source = true;
+        user
+    });
+    ir.edges = vec![edge(1, 0)];
+    ir.advisory_uses = vec![strata_ir::AdvisoryUse {
+        user: NodeId(0),
+        used: NodeId(0),
+        from_test: false,
+    }];
+    let advised = Snapshot::assemble(ir).map_err(|error| error.to_string())?;
+    assert_eq!(test_only::test_only_violations(&advised), []);
+    Ok(())
+}
+
+#[test]
+fn should_not_let_an_advisory_use_from_test_code_silence_test_only() -> Result<(), String> {
+    let mut ir = IntermediateRepresentation::new(
+        vec![node(0, "item", 0, Polarity::Production), {
+            let mut user = node(1, "check", 0, Polarity::TestCase);
+            user.test_source = true;
+            user
+        }],
+        vec![edge(1, 0)],
+        ContainerTree::new(vec![container(0, "src/a.rs", ScopeLevel::File, None)]),
+    );
+    ir.advisory_uses = vec![strata_ir::AdvisoryUse {
+        user: NodeId(1),
+        used: NodeId(0),
+        from_test: true,
+    }];
+    let snapshot = Snapshot::assemble(ir).map_err(|error| error.to_string())?;
+    assert_eq!(test_only::test_only_violations(&snapshot).len(), 1);
+    Ok(())
+}
+
+/// A type `Owner`, its member `Owner::new`, a test, and optionally a
+/// production caller of the member.
+fn owner_fixture(production_caller: bool) -> Result<Snapshot, String> {
+    let mut test = node(2, "check", 0, Polarity::TestCase);
+    test.test_source = true;
+    let mut owner = node(0, "Owner", 0, Polarity::Production);
+    owner.display_name = Some("Owner".into());
+    let mut member = node(1, "new", 0, Polarity::Production);
+    member.display_name = Some("Owner::new".into());
+    member.owner = Some(NodeId(0));
+    let mut nodes = vec![owner, member, test];
+    let mut edges = vec![edge(1, 0), edge(2, 1), edge(2, 0)];
+    if production_caller {
+        nodes.push(node(3, "run", 0, Polarity::Production));
+        edges.push(edge(3, 1));
+    }
+    let ir = IntermediateRepresentation::new(
+        nodes,
+        edges,
+        ContainerTree::new(vec![container(0, "src/a.rs", ScopeLevel::File, None)]),
+    );
+    Snapshot::assemble(ir).map_err(|error| error.to_string())
+}
+
+#[test]
+fn should_report_a_type_whose_only_other_user_is_its_own_test_only_member() -> Result<(), String> {
+    let names: Vec<u32> = test_only::test_only_nodes(&owner_fixture(false)?)
+        .into_iter()
+        .collect();
+    assert_eq!(names, [0, 1]);
+    Ok(())
+}
+
+#[test]
+fn should_not_report_a_type_whose_member_has_a_production_caller() -> Result<(), String> {
+    let found: Vec<u32> = test_only::test_only_nodes(&owner_fixture(true)?)
+        .into_iter()
+        .collect();
+    assert_eq!(found, Vec::<u32>::new());
+    Ok(())
+}

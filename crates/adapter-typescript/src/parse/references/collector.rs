@@ -19,6 +19,8 @@ pub(super) struct ReferenceCollector {
     pub(super) called: Vec<SmolStr>,
     /// Literal specifiers of `import('...')` calls within the subtree.
     pub(super) dynamic_imports: Vec<SmolStr>,
+    /// Literal specifiers of `require('...')` calls within the subtree.
+    pub(super) requires: Vec<SmolStr>,
 }
 
 impl ReferenceCollector {
@@ -34,6 +36,7 @@ impl ReferenceCollector {
             referenced: self.referenced,
             called: self.called,
             dynamic_imports: self.dynamic_imports,
+            requires: self.requires,
         }
     }
 
@@ -74,6 +77,7 @@ impl ReferenceCollector {
         self.referenced.extend(scoped.referenced);
         self.called.extend(scoped.called);
         self.dynamic_imports.extend(scoped.dynamic_imports);
+        self.requires.extend(scoped.requires);
     }
 }
 

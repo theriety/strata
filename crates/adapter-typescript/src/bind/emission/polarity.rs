@@ -79,6 +79,59 @@ pub(in crate::bind) fn classify_polarity(
     polarity
 }
 
+/// Records [`Node::test_source`] for every node declared in a test file, before
+/// [`classify_polarity`] demotes production helpers that only tests use.
+pub(in crate::bind) fn mark_test_source(
+    modules: &[ParsedModule],
+    nodes: &mut [Node],
+    local: &HashMap<SmolStr, HashMap<SmolStr, NodeId>>,
+) {
+    for module in modules.iter().filter(|module| is_test_path(&module.path)) {
+        for id in local
+            .get(&module.path)
+            .into_iter()
+            .flat_map(HashMap::values)
+        {
+            if let Some(node) = nodes.get_mut(id.0 as usize) {
+                node.test_source = true;
+            }
+        }
+    }
+}
+
+/// Exempts from advice every export of a module a production file loads as a
+/// whole (`import * as ns`, literal `require('./a')`): the member read through
+/// the module object is not tracked, so no export may be called test-only.
+/// The dependency graph is untouched.
+pub(in crate::bind) fn exempt_module_objects(
+    modules: &[ParsedModule],
+    resolver: &crate::bind::resolution::Resolver,
+    exports: &crate::bind::ExportTable,
+    nodes: &mut [Node],
+) {
+    for module in modules.iter().filter(|module| !is_test_path(&module.path)) {
+        let namespaces = module
+            .imports
+            .iter()
+            .filter(|import| import.namespace)
+            .map(|import| &import.source);
+        let requires = module
+            .declarations
+            .iter()
+            .flat_map(|declaration| &declaration.requires);
+        for source in namespaces.chain(requires) {
+            let Some(target) = resolver.resolve(&module.path, source) else {
+                continue;
+            };
+            for id in exports.get(&target).into_iter().flat_map(HashMap::values) {
+                if let Some(node) = nodes.get_mut(id.0 as usize) {
+                    node.advice_exempt = true;
+                }
+            }
+        }
+    }
+}
+
 /// Overwrites each node's polarity from the classification vector.
 pub(in crate::bind) fn apply_polarity(nodes: &mut [Node], polarity: &[Polarity]) {
     for (node, &class) in nodes.iter_mut().zip(polarity) {

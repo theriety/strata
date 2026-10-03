@@ -25,7 +25,7 @@ use crate::parse::{DeclarationKind, ParsedModule};
 use containers::ContainerBuilder;
 use emission::{
     apply_polarity, assign_re_export_nodes, classify_polarity, emit_companion_affinities,
-    emit_edges, emit_re_exports,
+    emit_edges, emit_re_exports, exempt_module_objects, mark_test_source,
 };
 use resolution::Resolver;
 
@@ -73,6 +73,8 @@ pub(super) fn bind(
                 effective_size: declaration.sloc,
                 re_export: false,
                 display_name: None,
+                test_source: false,
+                owner: None,
             });
             exported.push(declaration.exported);
             module_local.insert(declaration.name.clone(), id);
@@ -108,8 +110,15 @@ pub(super) fn bind(
         &re_export_links,
     );
     emit_re_exports(&re_export_links, &mut edges);
+    mark_test_source(modules, &mut nodes, &local);
+    exempt_module_objects(modules, &resolver, &exports, &mut nodes);
     let polarity = classify_polarity(modules, &nodes, &local, &exported, &edges);
     apply_polarity(&mut nodes, &polarity);
+    // an `export`ed item is importable from outside the analysed tree, so it is public API
+    // whatever the in-tree users are (exact entry-point detection is deferred).
+    for (node, &importable) in nodes.iter_mut().zip(&exported) {
+        node.public_api = importable;
+    }
 
     IrFragment {
         nodes,
@@ -152,6 +161,7 @@ mod tests {
             referenced: called.iter().copied().map(SmolStr::new).collect(),
             called: called.iter().copied().map(SmolStr::new).collect(),
             dynamic_imports: Vec::new(),
+            requires: Vec::new(),
             signature_companions: Vec::new(),
         }
     }
@@ -163,6 +173,7 @@ mod tests {
             source: SmolStr::new("./target"),
             names: vec![SmolStr::new("target")],
             type_only: false,
+            namespace: false,
         });
         consumer.declarations.push(caller("run", &["target"]));
         let mut provider = module_at("src/target.ts");
@@ -175,6 +186,7 @@ mod tests {
             referenced: Vec::new(),
             called: Vec::new(),
             dynamic_imports: Vec::new(),
+            requires: Vec::new(),
             signature_companions: Vec::new(),
         });
 
@@ -223,6 +235,7 @@ mod tests {
             referenced: referenced.iter().copied().map(SmolStr::new).collect(),
             called: Vec::new(),
             dynamic_imports: Vec::new(),
+            requires: Vec::new(),
             signature_companions: Vec::new(),
         }
     }
@@ -337,6 +350,7 @@ mod tests {
             referenced: Vec::new(),
             called: Vec::new(),
             dynamic_imports: Vec::new(),
+            requires: Vec::new(),
             signature_companions: Vec::new(),
         });
 
@@ -482,6 +496,7 @@ mod tests {
             referenced: Vec::new(),
             called: Vec::new(),
             dynamic_imports: Vec::new(),
+            requires: Vec::new(),
             signature_companions: Vec::new(),
         });
 
@@ -512,6 +527,7 @@ mod tests {
             source: SmolStr::new("./subject"),
             names: vec![SmolStr::new("executeSubject")],
             type_only: false,
+            namespace: false,
         });
         spec.declarations.push(crate::parse::Declaration {
             name: SmolStr::new("<module>"),
@@ -522,6 +538,7 @@ mod tests {
             referenced: vec![SmolStr::new("describe"), SmolStr::new("executeSubject")],
             called: vec![SmolStr::new("describe"), SmolStr::new("executeSubject")],
             dynamic_imports: Vec::new(),
+            requires: Vec::new(),
             signature_companions: Vec::new(),
         });
         let mut twin = module_at("src/subject.ts");
@@ -534,6 +551,7 @@ mod tests {
             referenced: Vec::new(),
             called: Vec::new(),
             dynamic_imports: Vec::new(),
+            requires: Vec::new(),
             signature_companions: Vec::new(),
         });
 

@@ -327,6 +327,8 @@ mod tests {
             effective_size: 1,
             re_export: false,
             display_name: None,
+            test_source: false,
+            owner: None,
         }
     }
 
@@ -456,6 +458,8 @@ mod tests {
         Node {
             re_export: true,
             display_name: None,
+            test_source: false,
+            owner: None,
             ..node(id, container, NodeKind::Symbol, ScopeLevel::Package)
         }
     }

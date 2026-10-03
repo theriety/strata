@@ -32,6 +32,7 @@ pub(super) fn class_declaration(
         referenced: references.referenced,
         called: references.called,
         dynamic_imports: references.dynamic_imports,
+        requires: references.requires,
         signature_companions: class_signature_companions(class.ident.sym.as_str(), &class.class),
     }
 }
@@ -53,6 +54,7 @@ pub(super) fn fn_declaration(
         referenced: references.referenced,
         called: references.called,
         dynamic_imports: references.dynamic_imports,
+        requires: references.requires,
         signature_companions: function_signature_companions(
             function.ident.sym.as_str(),
             &function.function,
@@ -85,6 +87,7 @@ pub(super) fn var_declarations(
             referenced: references.referenced,
             called: references.called,
             dynamic_imports: references.dynamic_imports,
+            requires: references.requires,
             signature_companions: Vec::new(),
         });
     }
@@ -107,6 +110,7 @@ pub(super) fn interface_declaration(
         referenced: references.referenced,
         called: references.called,
         dynamic_imports: references.dynamic_imports,
+        requires: references.requires,
         signature_companions: Vec::new(),
     }
 }
@@ -128,6 +132,7 @@ pub(super) fn type_alias_declaration(
         referenced: references.referenced,
         called: references.called,
         dynamic_imports: references.dynamic_imports,
+        requires: references.requires,
         signature_companions: Vec::new(),
     }
 }
@@ -148,6 +153,7 @@ pub(super) fn enum_declaration(
         referenced: Vec::new(),
         called: Vec::new(),
         dynamic_imports: Vec::new(),
+        requires: Vec::new(),
         signature_companions: Vec::new(),
     }
 }

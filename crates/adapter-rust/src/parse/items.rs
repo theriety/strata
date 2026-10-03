@@ -257,7 +257,7 @@ fn push_trait_impl(
         references.extend(collect_references(impl_item));
     }
 
-    out.push(declaration(
+    let mut decl = declaration(
         &name,
         DeclKind::Type,
         &syn::Visibility::Inherited,
@@ -265,5 +265,7 @@ fn push_trait_impl(
         item_impl.span(),
         contents,
         references,
-    ));
+    );
+    decl.trait_impl = true;
+    out.push(decl);
 }

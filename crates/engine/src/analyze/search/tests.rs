@@ -507,6 +507,8 @@ fn sized_node(id: u32, name: &str, container: u32, size: u32) -> Node {
         effective_size: size,
         re_export: false,
         display_name: None,
+        test_source: false,
+        owner: None,
         ..node(id, name, container, Polarity::Production)
     }
 }

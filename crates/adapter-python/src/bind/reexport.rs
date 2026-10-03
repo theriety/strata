@@ -96,6 +96,8 @@ pub(super) fn assign_re_export_nodes(
                     effective_size: 0,
                     re_export: true,
                     display_name: None,
+                    test_source: false,
+                    owner: None,
                 });
                 exported.push(true);
                 local
