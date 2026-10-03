@@ -150,12 +150,17 @@ fn binds(kind: RefKind, assignment: &NodeAssignment, target: NodeId) -> bool {
 ///
 /// The edge is emitted as-is — chain flattening is the engine's job — and is soft
 /// because a re-export imposes no runtime dependency of its own.
+///
+/// Each re-export also exposes its original (E0364, E0365): the original must be
+/// at least as visible as the `use` that publishes it, so the exposure carries
+/// the re-export's declared reach (ADR-25).
 pub(super) fn resolve_re_exports(
     assignment: &NodeAssignment,
     database: &Database,
     workspace_root: &Path,
     edges: &mut Vec<Edge>,
-) {
+) -> Vec<Exposure> {
+    let mut exposures = Vec::new();
     for link in &assignment.re_export_links {
         let Some(ResolvedTarget::Workspace { path, offset, .. }) =
             database.resolve(&link.path, link.offset, workspace_root)
@@ -173,7 +178,13 @@ pub(super) fn resolve_re_exports(
             Hardness::Soft,
             CONFIDENCE_REEXPORT,
         );
+        exposures.push(Exposure {
+            exposer: link.source,
+            exposed: target,
+            reach: true,
+        });
     }
+    exposures
 }
 /// Maps a reference category to its emitted edge kind and hardness.
 ///

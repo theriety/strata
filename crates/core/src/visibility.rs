@@ -267,18 +267,31 @@ fn collect_scopes(
 /// A snapshot upgraded from schema 2 is the exception: its flag is derived from
 /// `ReExport` edges, and a crate-root alias (`pub use crate as alias`) has no
 /// such edge, so that alias stays unflagged there until the IR is regenerated.
+///
+/// A public-API node ([`Node::public_api`], ADR-25) is exempt as well: its users
+/// live outside the analysed tree, so no derived scope can tell it is too wide.
 fn collect_findings(by_id: &NodeIndex, scopes: &[DerivedScope]) -> Vec<Finding> {
     scopes
         .iter()
         .filter_map(|scope| {
             let node = by_id.get(scope.node.0)?;
-            (!node.re_export && node.visibility > scope.level).then_some(Finding {
+            (!exempt_from_advice(node) && node.visibility > scope.level).then_some(Finding {
                 node: scope.node,
                 declared: node.visibility,
                 derived: scope.level,
             })
         })
         .collect()
+}
+
+/// Whether visibility advice must never narrow `node`: a re-export publishes
+/// another entity (ADR-20), a public-API node is used outside the analysed
+/// tree, and an advice-exempt node may be used where the adapter cannot see
+/// (ADR-25). Every path that can emit a visibility finding asks this one
+/// predicate.
+#[must_use]
+pub const fn exempt_from_advice(node: &Node) -> bool {
+    node.re_export || node.public_api || node.advice_exempt
 }
 
 #[cfg(test)]
@@ -303,6 +316,8 @@ mod tests {
     /// `visibility`.
     fn node(id: u32, container: u32, kind: NodeKind, visibility: ScopeLevel) -> Node {
         Node {
+            public_api: false,
+            advice_exempt: false,
             id: NodeId(id),
             name: SmolStr::new(format!("n{id}")),
             kind,

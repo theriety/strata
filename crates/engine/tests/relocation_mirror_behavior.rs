@@ -24,6 +24,8 @@ fn container(id: u32, name: &str, level: ScopeLevel, parent: Option<u32>) -> Con
 
 fn node(id: u32, name: &str, file: u32, polarity: Polarity) -> Node {
     Node {
+        public_api: false,
+        advice_exempt: false,
         id: NodeId(id),
         name: SmolStr::new(name),
         kind: NodeKind::Symbol,

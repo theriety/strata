@@ -103,6 +103,8 @@ pub(in crate::bind) fn assign_re_export_nodes(
                     }
                     let id = NodeId(u32::try_from(nodes.len()).unwrap_or(u32::MAX));
                     nodes.push(Node {
+                        public_api: false,
+                        advice_exempt: false,
                         id,
                         name: name.clone(),
                         kind: if re_export.type_only {
@@ -192,6 +194,8 @@ fn push_namespace_node(
 ) -> NodeId {
     let id = NodeId(u32::try_from(nodes.len()).unwrap_or(u32::MAX));
     nodes.push(Node {
+        public_api: false,
+        advice_exempt: false,
         id,
         name: SmolStr::new(namespace),
         kind: NodeKind::Symbol,

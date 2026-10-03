@@ -4,14 +4,17 @@
 //! the primitives the other binding phases build on: loading, `goto_definition`
 //! resolution, and vfs path mapping.
 
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use ra_ap_ide::{
     AnalysisHost, FilePosition, GotoDefinitionConfig, RaFixtureConfig, SymbolKind, TextSize,
 };
-use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
-use ra_ap_project_model::{CargoConfig, RustLibSource};
-use ra_ap_vfs::Vfs;
+use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace};
+use ra_ap_project_model::{
+    CargoConfig, ProjectManifest, ProjectWorkspace, ProjectWorkspaceKind, RustLibSource, TargetKind,
+};
+use ra_ap_vfs::{AbsPathBuf, Vfs};
 use smol_str::SmolStr;
 
 use super::BindOutcome;
@@ -23,6 +26,39 @@ pub(super) struct Database {
     pub(super) host: AnalysisHost,
     /// The virtual file system mapping file ids to on-disk paths.
     pub(super) vfs: Vfs,
+    /// Root source file of every library target of the cargo workspace, or
+    /// `None` when the project is not a cargo workspace and they are unknown.
+    lib_roots: Option<BTreeSet<PathBuf>>,
+}
+
+/// Discovers and loads the project at `manifest`, and reads the root file of
+/// each of its library targets. The error is the loader's message.
+fn load_project(
+    manifest: &Path,
+    config: &CargoConfig,
+) -> Result<(ProjectWorkspace, Option<BTreeSet<PathBuf>>), String> {
+    let current = std::env::current_dir().map_err(|error| error.to_string())?;
+    let root = AbsPathBuf::assert_utf8(current.join(manifest));
+    let found = ProjectManifest::discover_single(&root).map_err(|error| error.to_string())?;
+    let workspace = ProjectWorkspace::load(found, config, &|_progress| {})
+        .map_err(|error| error.to_string())?;
+    let lib_roots = match &workspace.kind {
+        ProjectWorkspaceKind::Cargo { cargo, .. } => Some(
+            cargo
+                .packages()
+                .flat_map(|package| cargo[package].targets.iter().copied())
+                .filter(|target| matches!(cargo[*target].kind, TargetKind::Lib { .. }))
+                .map(|target| canonical(AsRef::<Path>::as_ref(&cargo[target].root)))
+                .collect(),
+        ),
+        _ => None,
+    };
+    Ok((workspace, lib_roots))
+}
+
+/// The canonical form of `path`, or `path` itself when it cannot be resolved.
+fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// A semantic target, including definitions outside the analyzed workspace.
@@ -56,15 +92,36 @@ impl Database {
             num_worker_threads: 1,
             proc_macro_processes: 0,
         };
+        // the same two steps `load_workspace_at` takes, split so the cargo
+        // targets are read before the workspace is consumed by the loader.
+        let (workspace, lib_roots) = load_project(manifest, &cargo_config)
+            .map_err(|reason| BindOutcome::LoadFailed { reason })?;
         let (db, vfs, _proc_macro) =
-            load_workspace_at(manifest, &cargo_config, &load_config, &|_progress| {}).map_err(
-                |error| BindOutcome::LoadFailed {
+            load_workspace(workspace, &cargo_config.extra_env, &load_config).map_err(|error| {
+                BindOutcome::LoadFailed {
                     reason: error.to_string(),
-                },
-            )?;
+                }
+            })?;
         Ok(Self {
             host: AnalysisHost::with_database(db),
             vfs,
+            lib_roots,
+        })
+    }
+
+    /// Whether `file` is the root source file of a library target. A project
+    /// whose targets are unknown (not a cargo workspace) counts every root as a
+    /// library, the side that only silences advice.
+    pub(super) fn is_lib_root(&self, file: ra_ap_ide::FileId) -> bool {
+        let Some(roots) = &self.lib_roots else {
+            return true;
+        };
+        let vfs_path = self.vfs.file_path(file);
+        vfs_path.as_path().is_none_or(|on_disk| {
+            let on_disk: &Path = on_disk.as_ref();
+            // symlinked roots compare equal once canonical; a path that cannot
+            // be canonicalised is compared as given.
+            roots.contains(on_disk) || roots.contains(&canonical(on_disk))
         })
     }
 

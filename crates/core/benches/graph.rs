@@ -30,6 +30,8 @@ fn snapshot() -> Option<Snapshot> {
 
     let nodes: Vec<Node> = (0..node_count)
         .map(|id| Node {
+            public_api: false,
+            advice_exempt: false,
             id: NodeId(id),
             name: SmolStr::new(format!("n{id}")),
             kind: NodeKind::Symbol,
