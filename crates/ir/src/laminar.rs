@@ -402,7 +402,7 @@ mod tests {
         // an empty repository has no files, so it has no root container — snapshot
         // validation must still reject it as before this shared builder existed.
         let built = build_laminar_tree(&[], "ai", &layout(&[], &["src"]));
-        assert!(built.tree.containers().is_empty());
+        assert_eq!(built.tree.containers(), []);
         assert!(built.files.is_empty());
     }
 

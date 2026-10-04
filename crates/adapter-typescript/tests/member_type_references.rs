@@ -102,7 +102,7 @@ fn should_emit_one_soft_type_reference_for_a_type_literal_alias() -> Result<(), 
 fn should_not_treat_an_interface_property_key_as_a_reference() -> Result<(), String> {
     let fragment = bind_inline("type Value = string; interface Request { Value: number; }")?;
 
-    assert!(edges_from(&fragment, "Request")?.is_empty());
+    assert_eq!(edges_from(&fragment, "Request")?, []);
     Ok(())
 }
 
@@ -110,7 +110,7 @@ fn should_not_treat_an_interface_property_key_as_a_reference() -> Result<(), Str
 fn should_not_treat_a_type_literal_property_key_as_a_reference() -> Result<(), String> {
     let fragment = bind_inline("interface Value {} type Request = { Value: number };")?;
 
-    assert!(edges_from(&fragment, "Request")?.is_empty());
+    assert_eq!(edges_from(&fragment, "Request")?, []);
     Ok(())
 }
 
@@ -154,7 +154,7 @@ fn should_not_treat_a_mapped_type_binding_as_a_reference() -> Result<(), String>
 fn should_not_resolve_an_interface_type_parameter_to_an_outer_type() -> Result<(), String> {
     let fragment = bind_inline("type Item = string; interface Box<Item> { value: Item; }")?;
 
-    assert!(edges_from(&fragment, "Box")?.is_empty());
+    assert_eq!(edges_from(&fragment, "Box")?, []);
     Ok(())
 }
 
@@ -162,7 +162,7 @@ fn should_not_resolve_an_interface_type_parameter_to_an_outer_type() -> Result<(
 fn should_not_resolve_an_alias_type_parameter_to_an_outer_type() -> Result<(), String> {
     let fragment = bind_inline("type Item = string; type Box<Item> = { value: Item };")?;
 
-    assert!(edges_from(&fragment, "Box")?.is_empty());
+    assert_eq!(edges_from(&fragment, "Box")?, []);
     Ok(())
 }
 
@@ -290,7 +290,7 @@ fn should_traverse_nested_generic_union_optional_and_array_member_types() -> Res
 fn should_not_emit_a_self_edge_for_a_recursive_member_type() -> Result<(), String> {
     let fragment = bind_inline("interface Tree { child?: Tree; }")?;
 
-    assert!(edges_from(&fragment, "Tree")?.is_empty());
+    assert_eq!(edges_from(&fragment, "Tree")?, []);
     Ok(())
 }
 

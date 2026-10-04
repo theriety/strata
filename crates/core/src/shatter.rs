@@ -258,7 +258,7 @@ mod tests {
 
         let result = shatter(&scc, &EdgeWeights::default(), &SolverLimits::default());
 
-        assert!(result.edges.is_empty());
+        assert_eq!(result.edges, []);
         assert!(result.exact);
     }
 

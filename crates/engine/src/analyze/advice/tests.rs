@@ -482,12 +482,12 @@ fn should_keep_same_named_type_and_runtime_relocations_as_distinct_advice() {
     let advice = build_advice(&snapshot, &config, &profiles);
 
     assert_eq!(advice.recommended.len(), 2);
-    assert!(advice.review_candidates.is_empty());
+    assert_eq!(advice.review_candidates, []);
     for item in &advice.recommended {
         assert_eq!(item.supporting_profiles.len(), 2);
         assert_eq!(item.qualified_profiles.len(), 2);
-        assert!(item.absent_profiles.is_empty());
-        assert!(item.conflicting_destinations.is_empty());
+        assert_eq!(item.absent_profiles, []);
+        assert_eq!(item.conflicting_destinations, []);
     }
     let identities = advice
         .recommended
@@ -790,7 +790,7 @@ fn should_keep_lexical_only_consensus_in_review_at_zero_thresholds() -> Result<(
     let item = result.advice.recommended.iter().chain(&result.advice.review_candidates).find(|item| {
         matches!(&item.proposal, RelocationProposal::Symbol { relocation } if relocation.symbol == "AssembleRecordParams" && relocation.to_path == "destination/assemble-record.ts")
     }).ok_or("fixture must produce the actual companion advice")?;
-    assert!(!item.assessments.is_empty());
+    assert_ne!(item.assessments, []);
     assert!(
         result.advice.recommended.is_empty(),
         "lexical-only evidence cannot recommend: {:?}",

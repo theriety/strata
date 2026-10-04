@@ -625,7 +625,7 @@ mod tests {
 
         let result = diversify(&solver, &cfg);
 
-        assert!(result.candidates.is_empty());
+        assert_eq!(result.candidates, []);
         // zero requested, zero returned: exactly satisfied, not a convergence.
         assert!(!result.solution_space_converged);
     }
