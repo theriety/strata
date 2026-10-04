@@ -27,6 +27,7 @@ fn node(id: u32, name: &str, file: u32, size: u32) -> Node {
         visibility: ScopeLevel::File,
         effective_size: size,
         re_export: false,
+        display_name: None,
     }
 }
 

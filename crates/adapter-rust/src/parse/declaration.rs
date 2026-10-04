@@ -40,6 +40,7 @@ pub(super) fn declaration(
         byte_start,
         byte_end,
         sloc,
+        owner: None,
         references,
     }
 }

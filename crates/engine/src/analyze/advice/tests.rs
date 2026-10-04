@@ -78,6 +78,7 @@ pub(super) fn symbol_advice(symbol: &str, from_path: &str, to_path: &str) -> Adv
     AdviceProposal {
         proposal: RelocationProposal::Symbol {
             relocation: SymbolMove {
+                display: None,
                 symbol: symbol.to_owned(),
                 kind: SymbolKind::Type,
                 from_path: from_path.to_owned(),
@@ -454,6 +455,7 @@ fn should_keep_same_named_type_and_runtime_relocations_as_distinct_advice() {
     };
     let mut profiles = template.profiles;
     let make_relocation = |kind, to_path: &str| SymbolMove {
+        display: None,
         symbol: "Record".to_owned(),
         kind,
         from_path: "origin/records.ts".to_owned(),

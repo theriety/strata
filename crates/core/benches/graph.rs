@@ -38,6 +38,7 @@ fn snapshot() -> Option<Snapshot> {
             visibility: ScopeLevel::File,
             effective_size: 1,
             re_export: false,
+            display_name: None,
         })
         .collect();
 

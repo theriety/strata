@@ -139,6 +139,7 @@ mod tests {
             level: Level::File,
             children: None,
             symbols: Some(vec![SymbolPlacement {
+                display: None,
                 name: "sym".to_owned(),
                 visibility: Level::File,
             }]),

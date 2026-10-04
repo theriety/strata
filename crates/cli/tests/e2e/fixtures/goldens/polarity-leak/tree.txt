@@ -4,3 +4,4 @@ polarity-leak [packageGroup]
       - sample_fixture (file)
     service.py [file] 1 sloc
       - serve (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

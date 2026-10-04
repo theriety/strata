@@ -2,6 +2,7 @@
 
 2 files · 2 symbols · 1 edges
 Snapshot `89296d41fb0f4241cd469bb29eea316562fbd60964c95d8dd2d825d61b3cc88e`
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings
 

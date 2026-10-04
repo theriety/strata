@@ -172,6 +172,7 @@ fn push_impl(
         return;
     }
 
+    let owner = owner_name(&item_impl.self_ty);
     for impl_item in &item_impl.items {
         if let ImplItem::Fn(method) = impl_item {
             let mut decl = declaration(
@@ -184,8 +185,24 @@ fn push_impl(
                 collect_references(method),
             );
             decl.test_case = has_test_attr(&method.attrs);
+            decl.owner.clone_from(&owner);
             out.push(decl);
         }
+    }
+}
+
+/// The last path segment of an `impl` self type (`Interner` for `Interner<T>`).
+fn owner_name(self_ty: &syn::Type) -> Option<SmolStr> {
+    match self_ty {
+        syn::Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .map(|segment| SmolStr::new(segment.ident.to_string())),
+        syn::Type::Reference(reference) => owner_name(&reference.elem),
+        syn::Type::Paren(paren) => owner_name(&paren.elem),
+        syn::Type::Group(group) => owner_name(&group.elem),
+        _ => None,
     }
 }
 

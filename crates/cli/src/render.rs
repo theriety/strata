@@ -19,7 +19,11 @@ use std::io::{self, Write};
 
 use strata_engine::{AnalyzeResult, ModeResult, ProfileConfig, ScoreBreakdown};
 
-pub use diff::render_diff;
+/// The one honesty line every human-readable output carries: strata proposes,
+/// it does not guarantee. JSON output is a data contract and omits it.
+pub const ADVICE_DISCLAIMER: &str = "All findings and moves are suggestions. Applying them may break the build; use your own judgement.";
+
+pub use diff::{render_diff, render_moves};
 pub use findings::write_violation_table;
 pub use tree::render_tree;
 
@@ -436,6 +440,7 @@ mod tests {
             level: Level::File,
             children: None,
             symbols: Some(vec![SymbolPlacement {
+                display: None,
                 name: "thing".to_owned(),
                 visibility: Level::File,
             }]),
@@ -527,7 +532,10 @@ mod tests {
 
         write_violation_table(&[], &mut buffer).unwrap_or_default();
 
-        assert_eq!(buffer, b"no violations\n");
+        assert_eq!(
+            buffer,
+            format!("no violations\n{ADVICE_DISCLAIMER}\n").as_bytes()
+        );
     }
 
     #[test]
@@ -537,7 +545,10 @@ mod tests {
         write_violation_table(&[cycle()], &mut buffer).unwrap_or_default();
 
         let text = String::from_utf8(buffer).unwrap_or_default();
-        assert_eq!(text, "cycle [violation] a, b :: dependency cycle\n");
+        assert_eq!(
+            text,
+            format!("cycle [violation] a, b :: dependency cycle\n{ADVICE_DISCLAIMER}\n")
+        );
     }
 
     #[test]
@@ -547,7 +558,10 @@ mod tests {
         render_tree(&file_node("lib", 1), true, None, &mut buffer).unwrap_or_default();
 
         let text = String::from_utf8(buffer).unwrap_or_default();
-        assert_eq!(text, "lib [file] 1 sloc\n  - thing (file)\n");
+        assert_eq!(
+            text,
+            format!("lib [file] 1 sloc\n  - thing (file)\n{ADVICE_DISCLAIMER}\n")
+        );
     }
 
     #[test]
@@ -564,7 +578,7 @@ mod tests {
         render_tree(&root, false, Some(0), &mut buffer).unwrap_or_default();
 
         let text = String::from_utf8(buffer).unwrap_or_default();
-        assert_eq!(text, "root [folder]\n");
+        assert_eq!(text, format!("root [folder]\n{ADVICE_DISCLAIMER}\n"));
     }
 
     #[test]
@@ -668,7 +682,20 @@ mod tests {
 
         assert_eq!(
             cycle_finding_text(&violation),
-            "`alpha`/`beta` — 2-symbol cycle; break `beta` -> `alpha` (w=1.0, exact), +1 more"
+            "`alpha`/`beta` — 2-symbol cycle; to split it, break `beta` -> `alpha` (w=1.0, exact), +1 more"
+        );
+    }
+
+    #[test]
+    fn should_end_every_text_surface_with_the_one_advice_disclaimer() {
+        let mut table = Vec::new();
+        assert!(write_violation_table(&[], &mut table).is_ok());
+        let table = String::from_utf8_lossy(&table);
+        assert_eq!(table.matches(ADVICE_DISCLAIMER).count(), 1, "{table}");
+        assert!(table.trim_end().ends_with(ADVICE_DISCLAIMER));
+        assert_eq!(
+            ADVICE_DISCLAIMER,
+            "All findings and moves are suggestions. Applying them may break the build; use your own judgement."
         );
     }
 
@@ -678,7 +705,7 @@ mod tests {
             kind: ViolationKind::Cycle,
             severity: Severity::Violation,
             location: vec!["src/core/left.ts".to_owned(), "src/core/right.ts".to_owned()],
-            detail: "`left`/`right` form one placement unit and must remain in one file unless a suggested dependency edge is broken".to_owned(),
+            detail: "2-symbol cycle; strata keeps a dependency cycle in one file; to split it, break right -> left (w=1.0, exact)".to_owned(),
             break_suggestions: Some(vec![EdgeBreak {
                 source: "right".to_owned(),
                 target: "left".to_owned(),
@@ -692,9 +719,9 @@ mod tests {
 
         assert!(rendered.contains("src/core/left.ts"));
         assert!(rendered.contains("src/core/right.ts"));
-        assert!(rendered.contains("one placement unit"));
-        assert!(rendered.contains("must remain in one file"));
-        assert!(rendered.contains("break `right` -> `left` (w=1.0, exact)"));
+        assert!(rendered.contains("strata keeps a dependency cycle in one file"));
+        assert!(!rendered.contains("must remain"));
+        assert!(rendered.contains("to split it, break `right` -> `left` (w=1.0, exact)"));
     }
 
     #[test]
@@ -703,7 +730,7 @@ mod tests {
             kind: ViolationKind::Cycle,
             severity: Severity::Violation,
             location: vec!["left.ts".to_owned(), "right.ts".to_owned()],
-            detail: "2-symbol cycle; symbols must remain in one file; break right -> left (w=1.0, exact)".to_owned(),
+            detail: "2-symbol cycle; strata keeps a dependency cycle in one file; to split it, break right -> left (w=1.0, exact)".to_owned(),
             break_suggestions: Some(vec![EdgeBreak {
                 source: "right".to_owned(),
                 target: "left".to_owned(),
@@ -754,6 +781,7 @@ mod tests {
     #[test]
     fn should_prefix_type_moves_without_prefixing_runtime_moves() {
         let make = |kind| SymbolMove {
+            display: None,
             symbol: "WorkInput".to_owned(),
             kind,
             from_path: "src/task/run.rs".to_owned(),
@@ -951,6 +979,7 @@ mod tests {
             .and_then(|profile| profile.candidates.first_mut())
         {
             candidate.symbol_moves = vec![SymbolMove {
+                display: None,
                 symbol: "helper".to_owned(),
                 kind: SymbolKind::Symbol,
                 from_path: "src/a.ts".to_owned(),
@@ -1156,6 +1185,7 @@ mod tests {
             .and_then(|profile| profile.candidates.first_mut())
             .ok_or("missing candidate")?;
         candidate.symbol_moves = vec![SymbolMove {
+            display: None,
             symbol: symbol.clone(),
             kind: SymbolKind::Type,
             from_path: source.clone(),
@@ -1255,6 +1285,7 @@ mod tests {
             .and_then(|profile| profile.candidates.first_mut())
             .ok_or("missing candidate")?;
         candidate.symbol_moves = vec![SymbolMove {
+            display: None,
             symbol: "Options".into(),
             kind: SymbolKind::Type,
             from_path: format!("{ancestry}界a.ts"),
@@ -1383,6 +1414,7 @@ mod tests {
             qualified: true,
         };
         let relocation = SymbolMove {
+            display: None,
             symbol: "RecordOptions".to_owned(),
             kind: SymbolKind::Type,
             from_path: "origin/options.ts".to_owned(),
@@ -1592,7 +1624,10 @@ mod tests {
 
         render_diff(&candidate, &mut buffer).unwrap_or_default();
 
-        assert_eq!(buffer, b"no moves\n");
+        assert_eq!(
+            buffer,
+            format!("no moves\n{ADVICE_DISCLAIMER}\n").as_bytes()
+        );
     }
 
     #[test]
@@ -1621,7 +1656,9 @@ mod tests {
         let text = String::from_utf8(buffer).unwrap_or_default();
         assert_eq!(
             text,
-            "moves (1 group(s), 1 file(s); gain +1.2500):\nmove — regrouped by clustering\n  1. alpha [old → new]\n"
+            format!(
+                "moves (1 group(s), 1 file(s); gain +1.2500):\nmove — regrouped by clustering\n  1. alpha [old → new]\n{ADVICE_DISCLAIMER}\n"
+            )
         );
     }
 
@@ -1653,6 +1690,7 @@ mod tests {
             conditional_splits: Vec::new(),
             delta_narration: Vec::new(),
             symbol_moves: vec![SymbolMove {
+                display: None,
                 symbol: "WorkInput".to_owned(),
                 kind: SymbolKind::Type,
                 from_path: "src/task/run.rs".to_owned(),

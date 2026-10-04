@@ -100,12 +100,12 @@ pub(super) fn cycle_finding_text(violation: &Violation) -> String {
     let Some(first) = breaks.first() else {
         return format!("{members} — {detail}");
     };
-    if let Some(index) = detail.find("; break ") {
+    if let Some(index) = detail.find("; to split it, break ") {
         detail.truncate(index);
     }
     let method = if first.exact { "exact" } else { "heuristic" };
     let mut text = format!(
-        "{members} — {detail}; break {} -> {} (w={:.1}, {method})",
+        "{members} — {detail}; to split it, break {} -> {} (w={:.1}, {method})",
         nq(&first.source),
         nq(&first.target),
         first.weight
@@ -123,7 +123,8 @@ pub(super) fn cycle_finding_text(violation: &Violation) -> String {
 /// Returns an [`io::Error`] if writing fails.
 pub fn write_violation_table(violations: &[Violation], out: &mut impl Write) -> io::Result<()> {
     if violations.is_empty() {
-        return writeln!(out, "no violations");
+        writeln!(out, "no violations")?;
+        return writeln!(out, "{}", super::ADVICE_DISCLAIMER);
     }
     for violation in violations {
         writeln!(
@@ -135,7 +136,7 @@ pub fn write_violation_table(violations: &[Violation], out: &mut impl Write) -> 
             violation.detail
         )?;
     }
-    Ok(())
+    writeln!(out, "{}", super::ADVICE_DISCLAIMER)
 }
 
 /// Returns the lowercase tag of a violation kind.

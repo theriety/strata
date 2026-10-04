@@ -1,1 +1,2 @@
 capacity [violation] relief-nest-py, hub :: folder `relief-nest-py/hub` holds 24 against a cap of 20
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

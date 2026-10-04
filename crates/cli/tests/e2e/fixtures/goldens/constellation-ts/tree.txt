@@ -66,3 +66,4 @@ constellation-ts [packageGroup]
           - lerp (file)
         src/util/logger.ts [file] 3 sloc
           - logger (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

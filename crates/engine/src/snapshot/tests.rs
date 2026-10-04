@@ -36,6 +36,7 @@ fn node(id: u32, name: &str, container: u32) -> Node {
         visibility: ScopeLevel::File,
         effective_size: 1,
         re_export: false,
+        display_name: None,
     }
 }
 

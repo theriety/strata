@@ -14,6 +14,7 @@ fn file(name: &str, symbols: &[&str]) -> ContainerNode {
             symbols
                 .iter()
                 .map(|symbol_name| SymbolPlacement {
+                    display: None,
                     name: (*symbol_name).into(),
                     visibility: Level::File,
                 })
@@ -105,6 +106,7 @@ pub fn configure(result: &mut AnalyzeResult) -> Result<(), &'static str> {
         blocked_mirrors: vec![],
     });
     candidate.symbol_moves = vec![SymbolMove {
+        display: None,
         symbol: "Options".into(),
         kind: SymbolKind::Type,
         from_path: "left/source.ts".into(),

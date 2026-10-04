@@ -188,7 +188,8 @@ fn advice_subject(proposal: &RelocationProposal, paths: &Changes) -> String {
             };
             format!(
                 "{prefix}`{}` from `{}`",
-                relocation.symbol, relocation.from_path
+                relocation.label(),
+                relocation.from_path
             )
         }
     }

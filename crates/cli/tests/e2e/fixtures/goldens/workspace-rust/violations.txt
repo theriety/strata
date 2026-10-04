@@ -1,2 +1,3 @@
 visibility [violation] crates/app/src/lib.rs, combined_total :: `combined_total` in `crates/app/src/lib.rs` is exported at Package but needed only at File
 visibility [violation] crates/app/src/lib.rs, describe :: `describe` in `crates/app/src/lib.rs` is exported at Package but needed only at File
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

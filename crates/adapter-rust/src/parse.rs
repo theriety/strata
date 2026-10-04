@@ -113,6 +113,9 @@ pub struct Declaration {
     pub byte_end: u32,
     /// Production SLOC attributed to this declaration.
     pub sloc: u32,
+    /// Owning type of an inherent method (`Interner` for `Interner::new`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<SmolStr>,
     /// References reachable from this declaration's body and header.
     pub references: Vec<Reference>,
 }
@@ -241,8 +244,29 @@ mod tests {
         byte_start: u32::MAX,
         byte_end: u32::MAX,
         sloc: u32::MAX,
+        owner: None,
         references: Vec::new(),
     };
+
+    #[test]
+    fn should_record_the_impl_self_type_as_a_methods_owner() {
+        let declarations = parse_text(
+            "pub struct Interner<T>(T);\nimpl<T> Interner<T> {\n    pub fn new() {}\n}\npub fn free() {}\n",
+        );
+
+        let owners: Vec<_> = declarations
+            .iter()
+            .map(|decl| (decl.name.as_str(), decl.owner.as_deref()))
+            .collect();
+        assert_eq!(
+            owners,
+            vec![
+                ("Interner", None),
+                ("new", Some("Interner")),
+                ("free", None)
+            ]
+        );
+    }
 
     #[test]
     fn should_extract_a_public_function_as_a_symbol() {

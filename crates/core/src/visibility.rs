@@ -311,6 +311,7 @@ mod tests {
             visibility,
             effective_size: 1,
             re_export: false,
+            display_name: None,
         }
     }
 
@@ -439,6 +440,7 @@ mod tests {
     fn re_export(id: u32, container: u32) -> Node {
         Node {
             re_export: true,
+            display_name: None,
             ..node(id, container, NodeKind::Symbol, ScopeLevel::Package)
         }
     }
