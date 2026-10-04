@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use strata_core::cluster::Partition;
 use strata_core::score::score;
-use strata_ir::{ContainerId, ScopeLevel};
+use strata_ir::{ContainerId, NodeKind, Polarity, ScopeLevel};
 
 use crate::analyze::relocation::mirror::PolishEvidence;
 use crate::analyze::relocation::{CandidateTree, PipelineSolver};
@@ -49,6 +49,7 @@ impl PipelineSolver<'_> {
                 forbidden_destinations: self.symbol_destination_blocks(&assembled),
                 pin_test_polarity: self.pin_detected_test_symbols(),
                 allow_cross_package: self.relocation_identity.allows_cross_package_moves(),
+                start_symbols: start_symbol_nodes(self.snapshot.ir()),
             },
         );
         pass.fold(&evidence.folds);
@@ -158,4 +159,32 @@ impl PipelineSolver<'_> {
         // in a production file (ADR-22). Turning it off releases both.
         self.pin_test_symbols
     }
+}
+
+/// The production symbols the adapter named as a program's start function
+/// (`FileFact::start`): a file fact names the function, the file's own nodes
+/// say which ones carry that name.
+pub(super) fn start_symbol_nodes(ir: &strata_ir::IntermediateRepresentation) -> BTreeSet<u32> {
+    let files: BTreeMap<&str, ContainerId> = ir
+        .containers
+        .containers()
+        .iter()
+        .filter(|container| container.level == ScopeLevel::File)
+        .map(|container| (container.name.as_str(), container.id))
+        .collect();
+    ir.file_facts
+        .iter()
+        .filter_map(|fact| Some((files.get(fact.file.as_str())?, fact.start.as_ref()?)))
+        .flat_map(|(file, start)| {
+            ir.nodes
+                .iter()
+                .filter(move |node| {
+                    node.container == *file
+                        && node.name == *start
+                        && node.kind == NodeKind::Symbol
+                        && node.polarity == Polarity::Production
+                })
+                .map(|node| node.id.0)
+        })
+        .collect()
 }

@@ -33,10 +33,17 @@ pub(super) struct Database {
     /// binary, example, integration test, bench, build script), or `None` when
     /// the project is not a cargo workspace.
     entry_roots: Option<BTreeSet<PathBuf>>,
+    /// Root files of the targets that start a program (every target but a
+    /// library); `fn main` at such a root is the start symbol.
+    start_roots: Option<BTreeSet<PathBuf>>,
 }
 
 /// The root source files of the cargo targets, by role.
-type TargetRoots = (Option<BTreeSet<PathBuf>>, Option<BTreeSet<PathBuf>>);
+type TargetRoots = (
+    Option<BTreeSet<PathBuf>>,
+    Option<BTreeSet<PathBuf>>,
+    Option<BTreeSet<PathBuf>>,
+);
 
 /// Discovers and loads the project at `manifest`, and reads the root file of
 /// each of its library targets. The error is the loader's message.
@@ -62,11 +69,25 @@ fn load_project(
             (
                 Some(roots(|kind| matches!(kind, TargetKind::Lib { .. }))),
                 Some(roots(|kind| !matches!(kind, TargetKind::Other))),
+                Some(roots(|kind| {
+                    !matches!(kind, TargetKind::Lib { .. } | TargetKind::Other)
+                })),
             )
         }
-        _ => (None, None),
+        _ => (None, None, None),
     };
     Ok((workspace, targets))
+}
+
+/// The paths in `roots` relative to `root`, `/`-separated.
+fn relative_paths(roots: Option<&BTreeSet<PathBuf>>, root: &Path) -> BTreeSet<SmolStr> {
+    let base = canonical(root);
+    roots
+        .into_iter()
+        .flatten()
+        .filter_map(|target| target.strip_prefix(&base).ok())
+        .map(|relative| SmolStr::new(relative.to_string_lossy().replace('\\', "/")))
+        .collect()
 }
 
 /// The canonical form of `path`, or `path` itself when it cannot be resolved.
@@ -107,8 +128,9 @@ impl Database {
         };
         // the same two steps `load_workspace_at` takes, split so the cargo
         // targets are read before the workspace is consumed by the loader.
-        let (workspace, (lib_roots, entry_roots)) = load_project(manifest, &cargo_config)
-            .map_err(|reason| BindOutcome::LoadFailed { reason })?;
+        let (workspace, (lib_roots, entry_roots, start_roots)) =
+            load_project(manifest, &cargo_config)
+                .map_err(|reason| BindOutcome::LoadFailed { reason })?;
         let (db, vfs, _proc_macro) =
             load_workspace(workspace, &cargo_config.extra_env, &load_config).map_err(|error| {
                 BindOutcome::LoadFailed {
@@ -120,6 +142,7 @@ impl Database {
             vfs,
             lib_roots,
             entry_roots,
+            start_roots,
         })
     }
 
@@ -142,13 +165,13 @@ impl Database {
     /// Repo-relative paths (under `root`) of the cargo target root files; empty
     /// when the targets are unknown, so nothing is called an entry by guess.
     pub(super) fn entry_paths(&self, root: &Path) -> BTreeSet<SmolStr> {
-        let base = canonical(root);
-        self.entry_roots
-            .iter()
-            .flatten()
-            .filter_map(|target| target.strip_prefix(&base).ok())
-            .map(|relative| SmolStr::new(relative.to_string_lossy().replace('\\', "/")))
-            .collect()
+        relative_paths(self.entry_roots.as_ref(), root)
+    }
+
+    /// Repo-relative paths of the root files of program-starting targets
+    /// (everything but libraries); empty when the targets are unknown.
+    pub(super) fn start_paths(&self, root: &Path) -> BTreeSet<SmolStr> {
+        relative_paths(self.start_roots.as_ref(), root)
     }
 
     /// Resolves the reference at `(relative_path, offset)` to the definition's

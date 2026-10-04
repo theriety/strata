@@ -992,6 +992,7 @@ fn should_merge_file_facts_from_every_fragment_without_touching_the_graph() {
         file: SmolStr::new(file),
         test_of: test_of.map(SmolStr::new),
         entry,
+        start: None,
     };
     let fragment = |path: &str, facts: Vec<FileFact>| IrFragment {
         nodes: vec![node(0, "a", 0)],

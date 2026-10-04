@@ -30,6 +30,13 @@ pub struct FileFact {
     /// package entry). An entry file never moves.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub entry: bool,
+    /// The name of the program's start function declared at this entry file's
+    /// root (Rust `fn main` of a binary, example or build script). The symbol
+    /// pass never moves it out of the file; other symbols in the file may
+    /// still move. Only an adapter that can name a start symbol sets it (the
+    /// TypeScript and Python adapters have none), so absent means "none".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<SmolStr>,
 }
 
 impl FileFact {
@@ -40,6 +47,7 @@ impl FileFact {
             file: file.into(),
             test_of: Some(source.into()),
             entry: false,
+            start: None,
         }
     }
 
@@ -50,6 +58,19 @@ impl FileFact {
             file: file.into(),
             test_of: None,
             entry: true,
+            start: None,
+        }
+    }
+
+    /// A fact stating that `file` is a program entry point whose start function
+    /// is `start`.
+    #[must_use]
+    pub fn entry_with_start(file: impl Into<SmolStr>, start: impl Into<SmolStr>) -> Self {
+        Self {
+            file: file.into(),
+            test_of: None,
+            entry: true,
+            start: Some(start.into()),
         }
     }
 }

@@ -100,7 +100,6 @@ patterns = []
 builtins = true
 
 [profiles.anchored.relocation]
-pin-detected-test-files = true
 pin-detected-test-symbols = true
 # Let relocations cross manifest package boundaries (off by default). The
 # `analyze --allow-cross-package-moves` flag turns it on for every profile.
@@ -169,7 +168,6 @@ patterns = []
 builtins = true
 
 [profiles.greenfield.relocation]
-pin-detected-test-files = true
 pin-detected-test-symbols = true
 # Let relocations cross manifest package boundaries (off by default). The
 # `analyze --allow-cross-package-moves` flag turns it on for every profile.

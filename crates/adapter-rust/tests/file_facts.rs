@@ -6,7 +6,7 @@ use std::path::Path;
 use strata_adapter_rust::RustAdapter;
 use strata_ir::{Adapter, FileFact, SourceFile};
 
-const FILES: [&str; 10] = [
+const FILES: [&str; 11] = [
     "build.rs",
     "src/lib.rs",
     "src/widget.rs",
@@ -14,6 +14,7 @@ const FILES: [&str; 10] = [
     "src/support/check.rs",
     "src/main.rs",
     "src/bin/tool.rs",
+    "src/bin/nested.rs",
     "tests/it.rs",
     "examples/demo.rs",
     "benches/speed.rs",
@@ -68,6 +69,7 @@ fn should_record_every_cargo_target_root_as_an_entry_and_nothing_else() -> Resul
             "benches/speed.rs",
             "build.rs",
             "examples/demo.rs",
+            "src/bin/nested.rs",
             "src/bin/tool.rs",
             "src/lib.rs",
             "src/main.rs",
@@ -81,5 +83,28 @@ fn should_record_every_cargo_target_root_as_an_entry_and_nothing_else() -> Resul
 fn should_record_no_pair_when_the_owning_file_is_absent() -> Result<(), String> {
     let pairs = facts(&["src/widget/tests.rs"])?;
     assert_eq!(pairs, Vec::<FileFact>::new());
+    Ok(())
+}
+
+#[test]
+fn should_name_the_start_symbol_of_a_program_target_and_nothing_else() -> Result<(), String> {
+    let starts: Vec<String> = facts(&FILES)?
+        .into_iter()
+        .filter(|fact| fact.start.is_some())
+        .map(|fact| fact.file.to_string())
+        .collect();
+    // a binary, an example, a bench and a build script start a program; the
+    // library's own `fn main`, the harness test target and the binary whose
+    // only `main` sits inside a nested module (src/bin/nested.rs) add nothing.
+    assert_eq!(
+        starts,
+        [
+            "benches/speed.rs",
+            "build.rs",
+            "examples/demo.rs",
+            "src/bin/tool.rs",
+            "src/main.rs",
+        ]
+    );
     Ok(())
 }

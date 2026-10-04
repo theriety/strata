@@ -164,7 +164,6 @@ fn narrate_with_rootedness(
                 to: destination.join("/"),
                 reason,
                 mirrors: Vec::new(),
-                blocked_mirrors: Vec::new(),
             }
         })
         .collect()
