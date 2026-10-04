@@ -14,6 +14,7 @@
 mod declaration;
 mod items;
 mod metadata;
+mod modules;
 mod references;
 mod tokens;
 
@@ -23,6 +24,7 @@ use smol_str::SmolStr;
 use strata_ir::{AdapterError, SourceFile};
 
 use self::items::push_item;
+use self::modules::{ModDecl, collect_mod_decls, propagate_cfg_test};
 
 /// The category of a top-level declaration: a value symbol or a type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +139,10 @@ pub struct ReExport {
     /// 0-based byte offset of the re-exported leaf identifier; resolution runs
     /// `goto_definition` here to find the original declaration.
     pub offset: u32,
+    /// Whether the `use` exists only under `cfg(test)`: gated by its own
+    /// attribute, an enclosing `cfg(test)` module, or a `cfg(test)` module file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cfg_test: bool,
 }
 
 /// Supplies the compatibility default for re-exports from legacy payloads.
@@ -165,11 +171,17 @@ pub struct ParsedFile {
 /// Returns [`AdapterError::Parse`] for the first file (in input order) that
 /// contains a syntax error; the reason embeds the line and column of the failure.
 pub(super) fn parse(files: &[SourceFile]) -> Result<Vec<ParsedFile>, AdapterError> {
-    files.par_iter().map(parse_one).collect()
+    let mut parsed = files
+        .par_iter()
+        .map(parse_one)
+        .collect::<Result<Vec<_>, _>>()?;
+    propagate_cfg_test(&mut parsed);
+    Ok(parsed.into_iter().map(|(file, _)| file).collect())
 }
 
-/// Parses a single source file into a [`ParsedFile`].
-fn parse_one(file: &SourceFile) -> Result<ParsedFile, AdapterError> {
+/// Parses a single source file into a [`ParsedFile`] and its out-of-line
+/// module declarations.
+fn parse_one(file: &SourceFile) -> Result<(ParsedFile, Vec<ModDecl>), AdapterError> {
     let ast = syn::parse_file(&file.contents).map_err(|error| AdapterError::Parse {
         path: file.path.clone(),
         reason: format_parse_error(&error),
@@ -187,11 +199,12 @@ fn parse_one(file: &SourceFile) -> Result<ParsedFile, AdapterError> {
         );
     }
 
-    Ok(ParsedFile {
+    let file = ParsedFile {
         path: file.path.clone(),
         declarations,
         re_exports,
-    })
+    };
+    Ok((file, collect_mod_decls(&ast.items)))
 }
 
 /// Renders a syn error as a `line L, column C: message` string.
@@ -211,7 +224,7 @@ mod tests {
             path: SmolStr::new("src/lib.rs"),
             contents: text.to_string(),
         })
-        .map(|file| file.declarations)
+        .map(|(file, _)| file.declarations)
         .unwrap_or_default()
     }
 
@@ -221,7 +234,7 @@ mod tests {
             path: SmolStr::new("src/lib.rs"),
             contents: text.to_string(),
         })
-        .map(|file| file.re_exports)
+        .map(|(file, _)| file.re_exports)
         .unwrap_or_default()
     }
 

@@ -11,15 +11,27 @@ use super::{ReExport, VisibilityKind};
 
 /// Records the names a `pub use` re-exports through this module; a plain `use`
 /// is a private import and contributes no export surface.
-pub(super) fn push_re_exports(item_use: &syn::ItemUse, re_exports: &mut Vec<ReExport>) {
+///
+/// `cfg_test_ancestor` carries an enclosing `cfg(test)` module's gate; the
+/// `use`'s own `#[cfg(test)]` adds to it.
+pub(super) fn push_re_exports(
+    item_use: &syn::ItemUse,
+    cfg_test_ancestor: bool,
+    re_exports: &mut Vec<ReExport>,
+) {
     if is_public(&item_use.vis) {
         let (visibility_kind, visibility_path) = visibility(&item_use.vis);
+        let start = re_exports.len();
         collect_re_exports(
             &item_use.tree,
             visibility_kind,
             visibility_path.as_ref(),
             re_exports,
         );
+        let cfg_test = cfg_test_ancestor || has_cfg_test(&item_use.attrs);
+        for re_export in re_exports.iter_mut().skip(start) {
+            re_export.cfg_test = cfg_test;
+        }
     }
 }
 
@@ -55,12 +67,14 @@ fn collect_re_exports(
             visibility_kind,
             visibility_path: visibility_path.cloned(),
             offset: byte_offset(name.ident.span()),
+            cfg_test: false,
         }),
         syn::UseTree::Rename(rename) => re_exports.push(ReExport {
             name: SmolStr::new(rename.rename.to_string()),
             visibility_kind,
             visibility_path: visibility_path.cloned(),
             offset: byte_offset(rename.ident.span()),
+            cfg_test: false,
         }),
         syn::UseTree::Group(group) => {
             for nested in &group.items {
@@ -101,22 +115,41 @@ pub(super) fn visibility(vis: &syn::Visibility) -> (VisibilityKind, Option<SmolS
     }
 }
 
-/// Returns `true` when any attribute is `#[cfg(test)]`.
+/// Returns `true` when any `#[cfg(..)]` attribute implies `test`: the item
+/// exists only when `cfg(test)` holds. Doubt resolves to production.
 pub(super) fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(is_cfg_test_attr)
+    attrs
+        .iter()
+        .filter_map(cfg_predicate)
+        .any(|predicate| implies_test(&predicate))
 }
 
-/// Returns `true` when a single attribute is exactly `#[cfg(test)]`.
-fn is_cfg_test_attr(attr: &syn::Attribute) -> bool {
-    if !attr.path().is_ident("cfg") {
-        return false;
+/// The predicate inside a `#[cfg(..)]` attribute.
+fn cfg_predicate(attr: &syn::Attribute) -> Option<syn::Meta> {
+    if attr.path().is_ident("cfg") {
+        attr.parse_args::<syn::Meta>().ok()
+    } else {
+        None
     }
-    let mut is_test = false;
-    let _ = attr.parse_nested_meta(|meta| {
-        if meta.path.is_ident("test") {
-            is_test = true;
+}
+
+/// The comma-separated arms of an `all`/`any`/`not` predicate.
+fn arms(list: &syn::MetaList) -> Vec<syn::Meta> {
+    list.parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
+        .map(|arms| arms.into_iter().collect())
+        .unwrap_or_default()
+}
+
+/// Whether a predicate can only be true when `test` is set: `test` itself, an
+/// `all` with such an arm, or an `any` whose every arm is such. `not` never is.
+fn implies_test(predicate: &syn::Meta) -> bool {
+    match predicate {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) if list.path.is_ident("all") => arms(list).iter().any(implies_test),
+        syn::Meta::List(list) if list.path.is_ident("any") => {
+            let arms = arms(list);
+            !arms.is_empty() && arms.iter().all(implies_test)
         }
-        Ok(())
-    });
-    is_test
+        _ => false,
+    }
 }

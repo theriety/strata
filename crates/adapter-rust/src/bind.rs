@@ -413,6 +413,7 @@ mod tests {
                 visibility_kind: VisibilityKind::Public,
                 visibility_path: None,
                 offset: 0,
+                cfg_test: false,
             }],
         };
         let assignment = NodeAssignment::build(&[file], Path::new("repo"));
