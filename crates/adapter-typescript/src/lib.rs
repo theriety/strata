@@ -12,6 +12,7 @@
 
 mod bind;
 mod package_json;
+mod pairs;
 mod parse;
 mod sloc;
 mod tsconfig;

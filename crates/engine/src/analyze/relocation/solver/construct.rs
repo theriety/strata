@@ -7,7 +7,7 @@ use strata_core::score::Coefficients;
 use strata_ir::{ScopeLevel, Snapshot};
 
 use crate::analyze::layout::{real_dir_partition, relieve_over_capacity, synthesize_roof_rebuild};
-use crate::analyze::relocation::mirror::mirror_rules;
+use crate::analyze::relocation::mirror::{adapter_pairs, mirror_rules};
 use crate::analyze::relocation::solver::{build_file_graph, test_zone_marks};
 use crate::analyze::relocation::{
     PipelineSolver, RelocationIdentityGuard, TestPolicy, cycle_homes,
@@ -173,6 +173,7 @@ impl<'a> PipelineSolver<'a> {
             pinned_scc,
             forbidden_symbol_files,
             mirror_rules: mirror_rules(profile),
+            adapter_pairs: adapter_pairs(snapshot.ir(), profile),
             mirror_enabled: profile.relocation.test_mirroring.enabled,
             pin_test_symbols: profile.relocation.pin_detected_test_symbols,
             files: relieved_files,

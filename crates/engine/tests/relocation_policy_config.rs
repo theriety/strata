@@ -320,39 +320,6 @@ tests = ["spec/{dir}/{stem}.spec.ts", "spec/{dir}/{stem}.spec.ts"]
 }
 
 #[test]
-fn should_reject_custom_source_that_overlaps_enabled_builtins() {
-    let key = invalid_key(
-        r#"
-[[profiles.anchored.relocation.test-mirroring.rules]]
-source = "src/{dir}/{stem}.ts"
-tests = ["custom/{dir}/{stem}.spec.ts"]
-"#,
-    );
-    assert_eq!(
-        key.as_deref(),
-        Some("profiles.anchored.relocation.test-mirroring.rules[0].source")
-    );
-}
-
-#[test]
-fn should_reject_every_discovered_builtin_source_extension() {
-    for extension in ["ts", "tsx", "mts", "cts", "py"] {
-        let key = invalid_key(&format!(
-            r#"
-[[profiles.anchored.relocation.test-mirroring.rules]]
-source = "src/{{dir}}/{{stem}}.{extension}"
-tests = ["custom/{{dir}}/{{stem}}.check.{extension}"]
-"#
-        ));
-        assert_eq!(
-            key.as_deref(),
-            Some("profiles.anchored.relocation.test-mirroring.rules[0].source"),
-            "built-in source extension was absent from validation: {extension}"
-        );
-    }
-}
-
-#[test]
 fn should_allow_a_custom_source_absent_from_the_builtin_catalog() {
     let loaded = load_toml(
         r#"
@@ -372,13 +339,17 @@ fn should_reject_semantically_overlapping_nested_source_templates() {
     let key = invalid_key(
         r#"
 [[profiles.anchored.relocation.test-mirroring.rules]]
+source = "src/{dir}/{stem}.ts"
+tests = ["checks/{dir}/{stem}.spec.ts"]
+
+[[profiles.anchored.relocation.test-mirroring.rules]]
 source = "src/lib/{dir}/{stem}.ts"
 tests = ["checks/{dir}/{stem}.spec.ts"]
 "#,
     );
     assert_eq!(
         key.as_deref(),
-        Some("profiles.anchored.relocation.test-mirroring.rules[0].source")
+        Some("profiles.anchored.relocation.test-mirroring.rules[1].source")
     );
 }
 

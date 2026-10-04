@@ -217,6 +217,10 @@ pub struct ParsedFile {
     /// Whether the file holds a `use` that is not private (names flow onward).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pub_use: bool,
+    /// The production file this file is the `cfg(test)` module tree of, when
+    /// the module tree proves one (`#[cfg(test)] mod tests;` in that file).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_of: Option<SmolStr>,
 }
 
 /// Parses Rust sources into [`ParsedFile`]s, one rayon task per file.
@@ -273,6 +277,7 @@ fn parse_one(file: &SourceFile) -> Result<(ParsedFile, Modules), AdapterError> {
         dropped_globs: dropped.globs,
         dropped_glob_files: Vec::new(),
         pub_use: has_pub_use(&ast.items),
+        test_of: None,
     };
     Ok((file, modules))
 }

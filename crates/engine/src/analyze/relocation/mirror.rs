@@ -5,12 +5,13 @@ use std::collections::BTreeSet;
 use smol_str::SmolStr;
 
 use crate::analyze::relocation::collision::CollisionFold;
-use crate::config::{
-    MirrorCaptures, MirrorTemplate, ProfileConfig, TestMirrorRule, builtin_test_mirror_rules,
-};
+use crate::config::{MirrorCaptures, MirrorTemplate, ProfileConfig, TestMirrorRule};
 use crate::result::BlockedMirrorReason;
 
+pub(in crate::analyze) use self::pairs::adapter_pairs;
+
 mod links;
+mod pairs;
 mod projection;
 mod shadow;
 #[cfg(test)]
@@ -116,10 +117,7 @@ pub(in crate::analyze) fn parent_path(path: &str) -> String {
         .map_or_else(String::new, |(parent, _)| parent.to_owned())
 }
 
+/// The user's exact mirror rules; language conventions come from adapter facts.
 pub(in crate::analyze) fn mirror_rules(profile: &ProfileConfig) -> Vec<TestMirrorRule> {
-    let mut rules = profile.relocation.test_mirroring.rules.clone();
-    if profile.relocation.test_mirroring.builtins {
-        rules.extend(builtin_test_mirror_rules());
-    }
-    rules
+    profile.relocation.test_mirroring.rules.clone()
 }

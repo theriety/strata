@@ -1,6 +1,6 @@
 Strata report — nested-ts
 6 files · 12 symbols · 13 edges
-Snapshot `2a09c1cbf99ad4fe05101f0549afdc5a6050bc481430cc73190337981557c708`
+Snapshot `7a78215efee4889f9060cb366e53fab26f8254875e90a6ec7fabb14abebd6470`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 Structural findings
@@ -26,40 +26,16 @@ Fewer than the requested candidates survived; the solution space converged.
 Current layout is already optimal under this profile's search.
 No candidates were produced.
 
-greenfield — 1 candidate(s)
+greenfield — 0 candidate(s)
 Baseline score: 0.4553
 Fewer than the requested candidates survived; the solution space converged.
-
-greenfield — candidate 1
-  Score: 0.4553 → 0.3654; improvement +0.0899
-  Proposed moves
-    - Move file `src/app.ts` → `src/geometry/app.ts`
-      Why: pulled toward `src/geometry/rectangle.ts` — weight 2.0.
-  Folder impacts
-    `src`: 1 file(s) leaving · 0 entering
-    `src/geometry`: 0 file(s) leaving · 1 entering
-  Before
-    nested-ts/
-    └── src/
-        └── app.ts *
-  After
-    nested-ts/
-    └── src/
-        └── geometry/
-            └── app.ts *
-  * File moved or its symbol contents changed.
-  Unchanged branches and symbols omitted; excluded files are not shown.
+Current layout is already optimal under this profile's search.
+No candidates were produced.
 
 Advice
 Supporting profiles selected the destination; qualified profiles also passed the evidence 
 thresholds; absent profiles did not select the move; conflicts name alternative destinations. 
 Advice consolidates the best candidate from each executed profile.
- Profiles share analysis-start evidence but apply their own weights and thresholds.
  Recommended (0):
- Review candidate (1):
-   - file `src/app.ts` → `src/geometry` · supporting [greenfield] · qualified [] · absent 
-   [anchored] · conflicts []
-     review reasons: selected by only some executed profiles, destination evidence is below the 
-     configured minimum, no strict majority of executed profiles provides qualifying support for 
-     this destination
+ Review candidate (0):
 
