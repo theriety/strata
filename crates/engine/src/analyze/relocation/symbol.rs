@@ -134,6 +134,9 @@ impl<'a> SymbolPass<'a> {
         if self.admission.policy.pin_test_polarity && node.polarity != Polarity::Production {
             return false;
         }
+        if self.admission.policy.start_symbols.contains(&node.id.0) {
+            return false;
+        }
         let Some(source_file) = self.ledger.effective(node.id.0) else {
             return false;
         };

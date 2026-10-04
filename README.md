@@ -243,7 +243,6 @@ patterns = []
 builtins = true
 
 [profiles.anchored.relocation]
-pin-detected-test-files = true
 pin-detected-test-symbols = true
 allow-cross-package-moves = false
 forbid-file-moves = []
@@ -310,7 +309,6 @@ patterns = []
 builtins = true
 
 [profiles.greenfield.relocation]
-pin-detected-test-files = true
 pin-detected-test-symbols = true
 allow-cross-package-moves = false
 forbid-file-moves = []
@@ -325,7 +323,7 @@ Relocation patterns are repo-relative globs. `forbid-file-moves` pins matching f
 
 By default no relocation crosses a package: a file move, symbol move, test-mirror follower, or new group folder must stay inside the manifest package (the detected `Package` container) its files started in. Set `allow-cross-package-moves = true` in a profile's relocation policy, or pass `--allow-cross-package-moves` to `analyze` for every profile at once, to lift that wall for deliberate monorepo refactors. Every other admission rule still applies, and cross-crate Rust trait-impl moves are then not checked against the orphan rule.
 
-Test mirroring uses exact analysis-start paths rather than basenames. Add custom rules with `{dir}` and `{stem}` captures:
+With mirroring off, a source may move without its paired test; strata then does not enforce pairs. Test mirroring uses exact analysis-start paths rather than basenames. Add custom rules with `{dir}` and `{stem}` captures:
 
 ```toml
 [[profiles.anchored.relocation.test-mirroring.rules]]
@@ -341,13 +339,13 @@ Templates must be non-empty repo-relative paths and may use only `{dir}` and `{s
 
 With `builtins = true`, the test pairs each language adapter states are used; the engine itself holds no language convention. The TypeScript adapter pairs `src` and `source` files with `.spec` and `.test` files under `spec`, `test`, `tests`, beside the source, or in a `__tests__` folder (js, jsx, tsx, mts, cts, mjs and cjs included). The Python adapter pairs `test_{stem}.py` and `{stem}_test.py` under `test`, `tests`, or beside the source. The Rust adapter pairs a file reached through `#[cfg(test)] mod x;` (including `#[path]`) with the production file that declares it. A test that two sources both claim gets no pair; for example a helper `src/__tests__/x.ts` and a source `src/x.ts` both claim `src/__tests__/x.spec.ts`, so that spec is not paired. A test has at most one source: when an adapter pairs it, custom rules claiming that test are ignored (the adapter pair wins), and when two custom rules name different sources for it, it gets no pair. Custom rules apply after the adapter pairs, and add a custom rule only when a repository has a reliable one-to-one convention the adapters do not state.
 
-When a source moves, every exact mirror is attempted as a best-effort follower. Successful mirrors affect final scoring and capacity once and appear under the source recommendation instead of as standalone moves. A mirror blocked by ambiguous mapping, package boundary, namespace boundary, capacity, or path collision remains in place and is reported without vetoing the source move. Set `enabled = false` to disable following, or `builtins = false` to ignore adapter pairs and use only custom rules. Define relocation settings separately under each profile when their policies should differ.
+When a source moves, every exact mirror must follow it; if any mirror is blocked by package boundary, namespace boundary, capacity, or path collision, the whole move is dropped (ADR-26). Successful mirrors affect final scoring and capacity once and appear under the source recommendation instead of as standalone moves. Paired tests are always pinned as standalone movers. The former `pin-detected-test-files` key is removed; a configuration that still sets it is rejected as an unknown field. An unpaired test is analyzed like any file but its moves stay inside its own test folders, and entry files never move. Set `enabled = false` to disable following, or `builtins = false` to ignore adapter pairs and use only custom rules. Define relocation settings separately under each profile when their policies should differ.
 
 The former `analysis.mode`, `analysis.candidates`, `analysis.seed`, and top-level analysis-policy sections are invalid. `--mode` remains a CLI compatibility selector: it chooses which parameter profiles execute but does not define their parameters.
 
 Saved analysis JSON uses result schema version 10; version 10 adds the `testOnly` violation kind (a production item whose every user is test code), version 9 added each profile's `allow-cross-package-moves` relocation parameter, and readers reject version 9 and earlier results. The top-level `advice` object contains `recommended` and `reviewCandidates`; raw per-profile candidates remain available for inspection. Each advice item records `destination`, `supportingProfiles`, `qualifiedProfiles`, `absentProfiles`, `conflictingDestinations`, `assessments`, and `reviewReasons`. An assessment includes all six raw evidence signals, the weighted and structural scores, the ambiguity margin and best alternative, the effective thresholds, and the qualification result. There is no serialized rejected group.
 
-Each score breakdown includes `dependencyOnly` and `companionSeparation`. The latter is the directional charge for keeping a conservatively matched signature type away from its immutable owner file. Each primary file `Move` also has `mirrors` and `blockedMirrors`: successful mirrors contain `sourcePath`, `path`, `from`, and `to`, while blocked mirrors contain `sourcePath`, `path`, `from`, `intendedTo`, and `reason`. Earlier saved result versions are not accepted by `report`, `tree`, or `diff`.
+Each score breakdown includes `dependencyOnly` and `companionSeparation`. The latter is the directional charge for keeping a conservatively matched signature type away from its immutable owner file. Each primary file `Move` also has `mirrors`, whose entries contain `sourcePath`, `path`, `from`, and `to`. Earlier saved result versions are not accepted by `report`, `tree`, or `diff`.
 
 ## How it works
 

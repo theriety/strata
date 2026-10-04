@@ -6,10 +6,11 @@ use smol_str::SmolStr;
 
 use crate::analyze::relocation::collision::CollisionFold;
 use crate::config::{MirrorCaptures, MirrorTemplate, ProfileConfig, TestMirrorRule};
-use crate::result::BlockedMirrorReason;
 
+pub(in crate::analyze) use self::links::exact_links;
 pub(in crate::analyze) use self::pairs::adapter_pairs;
 
+mod integrity;
 mod links;
 mod pairs;
 mod projection;
@@ -29,6 +30,12 @@ pub(in crate::analyze) struct PolishEvidence {
 }
 
 impl PolishEvidence {
+    /// Drops the outcomes of the given test SCCs, whose pairs were reverted.
+    pub(super) fn forget_tests(&mut self, tests: &BTreeSet<u32>) {
+        self.outcomes
+            .retain(|outcome| !tests.contains(&outcome.mirror_scc));
+    }
+
     pub(super) fn applied_sccs(&self) -> BTreeSet<u32> {
         self.outcomes
             .iter()
@@ -37,6 +44,14 @@ impl PolishEvidence {
                     .then_some(outcome.mirror_scc)
             })
             .collect()
+    }
+
+    /// Whether the last follower pass refused any test, so its source's move
+    /// was dropped and the layout must be placed again.
+    pub(super) fn dropped_a_move(&self) -> bool {
+        self.outcomes
+            .iter()
+            .any(|outcome| matches!(outcome.disposition, MirrorDisposition::Blocked(_)))
     }
 
     fn applied_destination(&self, scc: u32) -> Option<&str> {
@@ -59,10 +74,25 @@ pub(in crate::analyze) struct MirrorOutcome {
 }
 
 /// Whether an exact test follower changed placement or met a hard constraint.
+/// A blocked follower drops its source's whole move (ADR-26); the outcome only
+/// tells the settling loop to place the layout again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::analyze) enum MirrorDisposition {
     Applied,
-    Blocked(BlockedMirrorReason),
+    Blocked(MirrorBlock),
+}
+
+/// The first hard constraint that refused a test follower.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::analyze) enum MirrorBlock {
+    /// The follower would leave its pass-start manifest package (ADR-17).
+    PackageBoundary,
+    /// The follower would cross its pass-start render namespace.
+    NamespaceBoundary,
+    /// The destination would exceed its configured physical capacity.
+    Capacity,
+    /// Another file already occupies the derived destination path.
+    PathCollision,
 }
 
 /// Immutable template match between one production source and one present test.

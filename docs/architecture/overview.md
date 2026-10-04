@@ -200,7 +200,7 @@ AnalyzeResult
         └── same shape
 ```
 
-Each primary file `Move` carries `mirrors` and `blockedMirrors`. A successful mirror records its triggering `sourcePath`, test `path`, `from`, and `to`; a blocked best-effort follower records `sourcePath`, `path`, `from`, `intendedTo`, and a deterministic `reason`. Successful followers participate in the candidate layout and its score exactly once but remain part of the primary recommendation rather than becoming standalone moves.
+Each primary file `Move` carries `mirrors`. A mirror records its triggering `sourcePath`, test `path`, `from`, and `to`; a pair whose test cannot follow is dropped as a whole move ([ADR-26](decisions/relocation/adr-26-a-source-and-its-paired-test-move-as-one-unit.md)). Followers participate in the candidate layout and its score exactly once but remain part of the primary recommendation rather than becoming standalone moves.
 
 Each profile's score breakdown serializes the additional terms as `dependencyOnly` and `companionSeparation`. Configuration and human output use `dependency-only` and `companion-separation`. Readers reject earlier result schema versions instead of inferring missing score components.
 

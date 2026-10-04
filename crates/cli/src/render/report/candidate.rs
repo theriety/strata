@@ -4,7 +4,6 @@ use strata_engine::{AnalyzeResult, Candidate};
 
 use crate::render::advice::caption_for;
 use crate::render::changes::Changes;
-use crate::render::diff::blocked_mirror_reason;
 use crate::render::{RenderOptions, nq, sf, wrap};
 
 pub(super) fn candidate_lines(
@@ -124,19 +123,6 @@ fn file_move_lines(candidate: &Candidate, changes: &Changes) -> Vec<String> {
                     changes.path(&mirror.path),
                     changes.destination(&mirror.path, &mirror.to),
                     changes.path(&mirror.source_path)
-                ),
-                4,
-                6,
-            ));
-        }
-        for blocked in &entry.blocked_mirrors {
-            lines.extend(wrap(
-                &format!(
-                    "Test mirror `{}` stays in `{}`; cannot follow to `{}`: {}",
-                    changes.path(&blocked.path),
-                    changes.path(&blocked.from),
-                    changes.path(&blocked.intended_to),
-                    blocked_mirror_reason(blocked.reason)
                 ),
                 4,
                 6,

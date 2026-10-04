@@ -297,14 +297,6 @@ fn move_path_violations(name: &str, candidate: &serde_json::Value) -> Vec<String
                 &mut violations,
             );
         }
-        for blocked in list(relocation, "blockedMirrors") {
-            check_file(
-                &text(&blocked, "path"),
-                &text(&blocked, "from"),
-                None,
-                &mut violations,
-            );
-        }
     }
     for symbol_move in list(candidate, "symbolMoves") {
         let from = text(&symbol_move, "fromPath");

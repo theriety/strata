@@ -8,6 +8,7 @@ use strata_core::condense::Condensation;
 use strata_core::graph::csr::Csr;
 
 use crate::analyze::layout::{rebuild_label, roof_coherence, scc_file_count, token_groups};
+use crate::analyze::relocation::zone_keys;
 use crate::analyze::relocation::{FileInfo, ROOF_COHERENCE_FLOOR, RelocationIdentityGuard};
 
 /// FIX09 (naming-incoherence): synthesizes one alternative search start that
@@ -57,7 +58,14 @@ pub(in crate::analyze) fn synthesize_roof_rebuild(
     names: &mut Vec<SmolStr>,
     synthetic: &mut Vec<bool>,
 ) -> Option<Partition> {
-    let relocation_identity = RelocationIdentityGuard::new(files, condensation, base, base, None);
+    let relocation_identity = RelocationIdentityGuard::new_with_zones(
+        files,
+        condensation,
+        base,
+        base,
+        None,
+        &zone_keys(files, test_zone),
+    );
     // which file vertices carry priced company at all — the bond evidence the
     // trigger reads. Zero-priced edges stay in the graph but bind nothing
     // (D-46), so a vertex whose every incident edge prices zero is exactly the

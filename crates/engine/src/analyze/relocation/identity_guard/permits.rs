@@ -23,7 +23,7 @@ impl RelocationIdentityGuard {
         let Some(allowed) = self.allowed_namespaces.get(target.0 as usize) else {
             return false;
         };
-        if !self.permits_package_join(moving, target) {
+        if !self.permits_package_join(moving, target) || !self.permits_zone_join(moving, target) {
             return false;
         }
         if moving_identities
@@ -104,7 +104,9 @@ impl RelocationIdentityGuard {
                 let Some(allowed) = self.allowed_namespaces.get(cluster.0 as usize) else {
                     return false;
                 };
-                if !self.permits_package_join(scc, cluster) {
+                if !self.permits_package_join(scc, cluster)
+                    || !(applied.contains(&scc) || self.permits_zone_join(scc, cluster))
+                {
                     return false;
                 }
                 identities.iter().all(|(namespace, leaf)| {
@@ -133,6 +135,9 @@ impl RelocationIdentityGuard {
             let packages = self.packages_by_scc.get(scc as usize);
             if let Some((members, occupied)) = subgroups.iter_mut().find(|(members, occupied)| {
                 occupied.is_disjoint(&unique)
+                    && members.first().is_some_and(|&first| {
+                        self.zones_by_scc.get(first as usize) == self.zones_by_scc.get(scc as usize)
+                    })
                     && (!self.package_wall
                         || members.first().is_some_and(|&first| {
                             self.packages_by_scc.get(first as usize) == packages

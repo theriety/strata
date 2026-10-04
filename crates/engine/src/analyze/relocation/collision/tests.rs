@@ -444,3 +444,97 @@ fn should_not_offer_a_refused_fold_again() {
         "an ordinary file is offered"
     );
 }
+
+/// L08: sending a split pair home must not leave another mover on the path the
+/// reverted source now takes; that mover goes home too, so no path repeats.
+#[test]
+fn should_send_a_mover_home_when_a_reverted_source_takes_its_path() {
+    let snapshot = flat_snapshot(
+        &[
+            ("f", "f/m.ts"),
+            ("g", "g/other.ts"),
+            ("t", "t/m.spec.ts"),
+            ("k", "k/m.ts"),
+        ],
+        &[],
+    );
+    let mut config = AnalyzeConfig::default();
+    config
+        .profiles
+        .greenfield
+        .relocation
+        .test_mirroring
+        .builtins = false;
+    config.profiles.greenfield.relocation.test_mirroring.rules =
+        vec![crate::config::TestMirrorRule {
+            source: "f/{dir}/{stem}.ts".into(),
+            tests: vec!["t/{dir}/{stem}.spec.ts".into()],
+        }];
+    let tests = TestPolicy::defaults();
+    let solver = solver(&snapshot, &config, &tests);
+    let mut parts = moved(
+        &solver,
+        &solver.pass_start_partition,
+        "f/m.ts",
+        home(&solver, "g/other.ts"),
+    );
+    parts = moved(&solver, &parts, "k/m.ts", home(&solver, "f/m.ts"));
+    let mut evidence = PolishEvidence::default();
+
+    solver.revert_split_pairs(&mut parts, &mut evidence);
+
+    assert_eq!(
+        parts, solver.pass_start_partition,
+        "the split source and the mover onto its path both go home"
+    );
+    assert_eq!(
+        solver.path_collisions(&parts, &evidence),
+        Vec::<(usize, usize)>::new()
+    );
+}
+
+/// L08: a reverted source can push its home folder past the cap; the mover that
+/// entered that folder meanwhile goes home too.
+#[test]
+fn should_send_a_mover_home_when_a_revert_pushes_its_folder_past_the_cap() {
+    let snapshot = flat_snapshot(
+        &[
+            ("f", "f/m.ts"),
+            ("f", "f/n.ts"),
+            ("g", "g/other.ts"),
+            ("t", "t/m.spec.ts"),
+            ("k", "k/p.ts"),
+        ],
+        &[],
+    );
+    let mut config = AnalyzeConfig::default();
+    config.profiles.greenfield.capacity.folder = 2;
+    config
+        .profiles
+        .greenfield
+        .relocation
+        .test_mirroring
+        .builtins = false;
+    config.profiles.greenfield.relocation.test_mirroring.rules =
+        vec![crate::config::TestMirrorRule {
+            source: "f/{dir}/{stem}.ts".into(),
+            tests: vec!["t/{dir}/{stem}.spec.ts".into()],
+        }];
+    let tests = TestPolicy::defaults();
+    let solver = solver(&snapshot, &config, &tests);
+    let mut parts = moved(
+        &solver,
+        &solver.pass_start_partition,
+        "f/m.ts",
+        home(&solver, "g/other.ts"),
+    );
+    parts = moved(&solver, &parts, "k/p.ts", home(&solver, "f/n.ts"));
+    let mut evidence = PolishEvidence::default();
+
+    solver.revert_split_pairs(&mut parts, &mut evidence);
+
+    assert_eq!(
+        parts, solver.pass_start_partition,
+        "the split source returns to a full folder, so the newcomer returns too"
+    );
+}
