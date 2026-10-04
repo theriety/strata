@@ -462,7 +462,7 @@ fn move_spec_tree_into_its_own_package(containers: &mut Vec<Container>) {
     }
 }
 
-fn assert_actual_mirror_block(fixture: MirrorBlockFixture, expected: BlockedMirrorReason) {
+fn actual_mirror_evidence(fixture: MirrorBlockFixture) -> PolishEvidence {
     let mut containers = vec![
         container(0, "workspace", ScopeLevel::PackageGroup, None),
         container(1, "source/a", ScopeLevel::Folder, Some(0)),
@@ -552,7 +552,11 @@ fn assert_actual_mirror_block(fixture: MirrorBlockFixture, expected: BlockedMirr
     let target = target.unwrap_or(ClusterId(0));
     assert!(parts.move_node(scc(6), target));
 
-    let evidence = solver.shadow_tests(&mut parts, Vec::new());
+    solver.shadow_tests(&mut parts, Vec::new())
+}
+
+fn assert_actual_mirror_block(fixture: MirrorBlockFixture, expected: BlockedMirrorReason) {
+    let evidence = actual_mirror_evidence(fixture);
 
     assert_eq!(evidence.outcomes.len(), 1, "one follower was attempted");
     assert_eq!(
@@ -562,11 +566,12 @@ fn assert_actual_mirror_block(fixture: MirrorBlockFixture, expected: BlockedMirr
 }
 
 #[test]
-fn should_report_actual_ambiguous_mirror_attempt() {
-    assert_actual_mirror_block(
-        MirrorBlockFixture::Ambiguous,
-        BlockedMirrorReason::AmbiguousMapping,
-    );
+fn should_leave_a_test_unpaired_when_two_rules_name_different_sources_for_it() {
+    // two rules claim spec/a/task.spec.ts for source/a and source/b: unsure, so
+    // no link at all (no follower attempted, nothing blocked) and the source move
+    // proceeds as an ordinary unpaired move.
+    let evidence = actual_mirror_evidence(MirrorBlockFixture::Ambiguous);
+    assert_eq!(evidence.outcomes.len(), 0);
 }
 
 #[test]

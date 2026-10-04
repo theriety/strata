@@ -20,6 +20,7 @@ mod database;
 mod dropped_use;
 mod edges;
 mod fallback;
+mod file_facts;
 mod polarity;
 mod public_api;
 mod visibility;
@@ -109,6 +110,7 @@ pub(super) fn bind(
     }
     classify_polarity(files, &mut nodes, &edges);
     let advisory_uses = advisory::settle(advisory, &nodes);
+    let file_facts = file_facts::file_facts(files, &database, root);
 
     Ok(IrFragment {
         nodes,
@@ -118,6 +120,7 @@ pub(super) fn bind(
         visibility_scopes,
         exposures,
         advisory_uses,
+        file_facts,
     })
 }
 
@@ -192,6 +195,7 @@ mod tests {
             dropped_glob_files: Vec::new(),
             test_dropped_uses: Vec::new(),
             pub_use: false,
+            test_of: None,
         }
     }
 
@@ -537,6 +541,7 @@ mod tests {
             dropped_glob_files: Vec::new(),
             test_dropped_uses: Vec::new(),
             pub_use: false,
+            test_of: None,
         };
         let assignment = NodeAssignment::build(&[file], Path::new("repo"));
 

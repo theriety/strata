@@ -1,0 +1,10 @@
+[package]
+name = "facts-app"
+version = "0.0.0"
+edition = "2024"
+
+[[bench]]
+name = "speed"
+harness = false
+
+[workspace]

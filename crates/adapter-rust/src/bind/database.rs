@@ -29,31 +29,44 @@ pub(super) struct Database {
     /// Root source file of every library target of the cargo workspace, or
     /// `None` when the project is not a cargo workspace and they are unknown.
     lib_roots: Option<BTreeSet<PathBuf>>,
+    /// Root source file of every cargo target that is a program entry (library,
+    /// binary, example, integration test, bench, build script), or `None` when
+    /// the project is not a cargo workspace.
+    entry_roots: Option<BTreeSet<PathBuf>>,
 }
+
+/// The root source files of the cargo targets, by role.
+type TargetRoots = (Option<BTreeSet<PathBuf>>, Option<BTreeSet<PathBuf>>);
 
 /// Discovers and loads the project at `manifest`, and reads the root file of
 /// each of its library targets. The error is the loader's message.
 fn load_project(
     manifest: &Path,
     config: &CargoConfig,
-) -> Result<(ProjectWorkspace, Option<BTreeSet<PathBuf>>), String> {
+) -> Result<(ProjectWorkspace, TargetRoots), String> {
     let current = std::env::current_dir().map_err(|error| error.to_string())?;
     let root = AbsPathBuf::assert_utf8(current.join(manifest));
     let found = ProjectManifest::discover_single(&root).map_err(|error| error.to_string())?;
     let workspace = ProjectWorkspace::load(found, config, &|_progress| {})
         .map_err(|error| error.to_string())?;
-    let lib_roots = match &workspace.kind {
-        ProjectWorkspaceKind::Cargo { cargo, .. } => Some(
-            cargo
-                .packages()
-                .flat_map(|package| cargo[package].targets.iter().copied())
-                .filter(|target| matches!(cargo[*target].kind, TargetKind::Lib { .. }))
-                .map(|target| canonical(AsRef::<Path>::as_ref(&cargo[target].root)))
-                .collect(),
-        ),
-        _ => None,
+    let targets = match &workspace.kind {
+        ProjectWorkspaceKind::Cargo { cargo, .. } => {
+            let roots = |keep: fn(&TargetKind) -> bool| -> BTreeSet<PathBuf> {
+                cargo
+                    .packages()
+                    .flat_map(|package| cargo[package].targets.iter().copied())
+                    .filter(|target| keep(&cargo[*target].kind))
+                    .map(|target| canonical(AsRef::<Path>::as_ref(&cargo[target].root)))
+                    .collect()
+            };
+            (
+                Some(roots(|kind| matches!(kind, TargetKind::Lib { .. }))),
+                Some(roots(|kind| !matches!(kind, TargetKind::Other))),
+            )
+        }
+        _ => (None, None),
     };
-    Ok((workspace, lib_roots))
+    Ok((workspace, targets))
 }
 
 /// The canonical form of `path`, or `path` itself when it cannot be resolved.
@@ -94,7 +107,7 @@ impl Database {
         };
         // the same two steps `load_workspace_at` takes, split so the cargo
         // targets are read before the workspace is consumed by the loader.
-        let (workspace, lib_roots) = load_project(manifest, &cargo_config)
+        let (workspace, (lib_roots, entry_roots)) = load_project(manifest, &cargo_config)
             .map_err(|reason| BindOutcome::LoadFailed { reason })?;
         let (db, vfs, _proc_macro) =
             load_workspace(workspace, &cargo_config.extra_env, &load_config).map_err(|error| {
@@ -106,6 +119,7 @@ impl Database {
             host: AnalysisHost::with_database(db),
             vfs,
             lib_roots,
+            entry_roots,
         })
     }
 
@@ -123,6 +137,18 @@ impl Database {
             // be canonicalised is compared as given.
             roots.contains(on_disk) || roots.contains(&canonical(on_disk))
         })
+    }
+
+    /// Repo-relative paths (under `root`) of the cargo target root files; empty
+    /// when the targets are unknown, so nothing is called an entry by guess.
+    pub(super) fn entry_paths(&self, root: &Path) -> BTreeSet<SmolStr> {
+        let base = canonical(root);
+        self.entry_roots
+            .iter()
+            .flatten()
+            .filter_map(|target| target.strip_prefix(&base).ok())
+            .map(|relative| SmolStr::new(relative.to_string_lossy().replace('\\', "/")))
+            .collect()
     }
 
     /// Resolves the reference at `(relative_path, offset)` to the definition's
