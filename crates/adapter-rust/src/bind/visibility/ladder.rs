@@ -85,6 +85,36 @@ impl Database {
     }
 }
 
+/// Writes the visibility that reaches exactly `chain[index]` from the module
+/// at `chain[0]`, where `chain` runs narrowest to the crate root.
+///
+/// Returns `None` when a module on the way has no name to spell.
+pub(super) fn spelling(
+    semantics: &Semantics<'_, RootDatabase>,
+    chain: &[Module],
+    index: usize,
+) -> Option<SmolStr> {
+    let last = chain.len().checked_sub(1)?;
+    Some(SmolStr::new(match index {
+        0 => "private (no `pub`)".to_owned(),
+        1 => "`pub(super)`".to_owned(),
+        _ if index == last => "`pub(crate)`".to_owned(),
+        _ => {
+            let mut names = chain
+                .get(index..last)?
+                .iter()
+                .map(|module| {
+                    module
+                        .name(semantics.db)
+                        .map(|name| name.as_str().to_owned())
+                })
+                .collect::<Option<Vec<_>>>()?;
+            names.reverse();
+            format!("`pub(in crate::{})`", names.join("::"))
+        }
+    }))
+}
+
 /// A module's analyzed subtree and its definition file.
 #[derive(Clone)]
 pub(super) struct ModuleScope {

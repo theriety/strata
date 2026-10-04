@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use strata_core::visibility::{Finding, derive_visibility};
-use strata_ir::{Node, ScopeLevel, Snapshot};
+use strata_ir::{Node, ScopeLadder, ScopeLevel, Snapshot};
 
 use crate::analyze::search::node_names;
 use crate::result::{Severity, Violation, ViolationKind};
@@ -22,31 +22,44 @@ pub(super) fn visibility_violations(snapshot: &Snapshot) -> Vec<Violation> {
         .map(|container| (container.id.0, container.name.to_string()))
         .collect();
 
-    // a language with a fixed ladder of spellable scopes cannot narrow below its
-    // smallest rung that still covers the derived scope.
-    let ladders: BTreeMap<u32, &[ScopeLevel]> = ir
+    // a language that states a scope ladder is judged by the ladder alone: it
+    // advises only a strictly narrower rung that holds every user (ADR-25).
+    let ladders: BTreeMap<u32, &ScopeLadder> = ir
         .scope_ladders
         .iter()
-        .map(|ladder| (ladder.node.0, ladder.levels.as_slice()))
+        .map(|ladder| (ladder.node.0, ladder))
         .collect();
 
     result
         .findings
         .iter()
-        .filter_map(|finding| {
-            let levels = ladders.get(&finding.node.0).copied().unwrap_or_default();
-            let derived = expressible_floor(finding.derived, levels);
-            (finding.declared > derived).then_some(Finding {
-                derived,
-                ..*finding
-            })
+        .filter_map(|finding| match ladders.get(&finding.node.0) {
+            Some(ladder) => {
+                let (declared, derived) = ladder.declared.zip(ladder.needed)?;
+                // equal labels would read "exported at Folder but needed only at
+                // Folder": a different rung with the same label stays silent.
+                if declared == derived {
+                    return None;
+                }
+                Some((
+                    Finding {
+                        declared,
+                        derived,
+                        ..*finding
+                    },
+                    ladder.spelling.as_deref(),
+                ))
+            }
+            // no ladder: only a file-local need is known to be spellable.
+            None => (finding.derived == ScopeLevel::File && finding.declared > ScopeLevel::File)
+                .then_some((*finding, None)),
         })
-        .map(|finding| {
+        .map(|(finding, spelling)| {
             let name = names.get(&finding.node.0).cloned().unwrap_or_default();
             let source_path = nodes
                 .get(&finding.node.0)
                 .and_then(|node| files.get(&node.container.0));
-            let detail = source_path.map_or_else(
+            let mut detail = source_path.map_or_else(
                 || {
                     format!(
                         "`{name}` is exported at {:?} but needed only at {:?}",
@@ -60,6 +73,10 @@ pub(super) fn visibility_violations(snapshot: &Snapshot) -> Vec<Violation> {
                     )
                 },
             );
+            if let Some(spelling) = spelling {
+                detail.push_str("; narrowest spelling: ");
+                detail.push_str(spelling);
+            }
             let location = source_path.map_or_else(
                 || vec![name.clone()],
                 |path| vec![path.clone(), name.clone()],
@@ -74,16 +91,4 @@ pub(super) fn visibility_violations(snapshot: &Snapshot) -> Vec<Violation> {
             }
         })
         .collect()
-}
-
-/// Raises `derived` to the smallest expressible level that covers it.
-///
-/// With no ladder, or when no rung reaches `derived`, the level is unchanged.
-fn expressible_floor(derived: ScopeLevel, ladder: &[ScopeLevel]) -> ScopeLevel {
-    ladder
-        .iter()
-        .copied()
-        .filter(|level| *level >= derived)
-        .min()
-        .unwrap_or(derived)
 }

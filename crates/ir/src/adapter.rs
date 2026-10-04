@@ -39,25 +39,62 @@ pub struct ScopeRung {
     /// [`VisibilityScope::definition_file`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition_file: Option<SmolStr>,
+    /// How the language writes this scope on the declaration (for example
+    /// `pub(super)`), appended to the visibility advice when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spelling: Option<SmolStr>,
 }
 
-/// A node's resolved Rust module scope, expressed as repository-relative files.
+/// A node's language scope statement: the scopes its language can spell and the
+/// one it declares, expressed as repository-relative files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisibilityScope {
     /// Fragment-local node whose visibility is restricted to `files`.
     pub node: NodeId,
-    /// Complete file set of the resolved module subtree.
+    /// Complete file set of the declared module subtree for a restricted
+    /// declaration, which the engine projects as the node's declared level;
+    /// empty for any other declaration and when the scope is unresolved.
     pub files: Vec<SmolStr>,
     /// Definition file of the target module, set only for a non-root module
     /// defined in `foo.rs` beside its `foo/` folder (or in `foo/mod.rs`); the
     /// adapter states it so the engine never guesses it from file names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition_file: Option<SmolStr>,
-    /// Every scope the language can spell for this declaration, narrowest
-    /// first. Empty when the language has no fixed ladder or the adapter could
-    /// not resolve it, in which case no floor applies.
+    /// Every scope the language can spell for this declaration that the adapter
+    /// resolved, narrowest first. A rung that could not be resolved is left out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expressible: Vec<ScopeRung>,
+    /// Index into `expressible` of the rung the declaration states today, or
+    /// `None` when the adapter could not resolve it. Without it the engine knows
+    /// nothing to compare against and stays silent (ADR-25).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_rung: Option<u32>,
+}
+
+/// A declaration that names another one outside its body, so the file of the
+/// exposer uses `exposed` and, for a signature type, the exposed declaration
+/// must also be reachable wherever the exposer is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Exposure {
+    /// Fragment-local node whose signature or header names `exposed`.
+    pub exposer: NodeId,
+    /// Fragment-local node named in the exposer's signature or header.
+    pub exposed: NodeId,
+    /// `true` when `exposed` sits in the exposer's public signature, so its
+    /// declared reach must hold `exposed`; `false` for a header use that only
+    /// needs the exposer's own file (the self type of an `impl`).
+    pub reach: bool,
+}
+
+/// A use the adapter could only match by name, in code its semantic loader
+/// cannot see. It informs visibility advice and nothing else: it is never a
+/// graph edge, so no score, cohesion, cycle or move reads it (ADR-25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdvisoryUse {
+    /// Fragment-local production node whose body names `used`.
+    pub user: NodeId,
+    /// Fragment-local node sharing a name with an identifier of `user`.
+    pub used: NodeId,
 }
 
 /// A partial IR produced by one adapter; the engine merges fragments into one IR.
@@ -74,6 +111,12 @@ pub struct IrFragment {
     /// Resolved language scopes that must be projected onto the merged tree.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub visibility_scopes: Vec<VisibilityScope>,
+    /// Signature exposures between this adapter's declarations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exposures: Vec<Exposure>,
+    /// Name-matched uses that count for visibility advice only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub advisory_uses: Vec<AdvisoryUse>,
 }
 
 /// Failures raised while parsing or binding source with an adapter.

@@ -172,7 +172,7 @@ fn should_deliver_the_analyze_summary_for_the_rust_fixture() {
     );
     // the census and the claimed-vs-listed candidate counts are the contracted surface.
     assert!(
-        outcome.stdout.contains("1 files · 5 symbols · 4 edges"),
+        outcome.stdout.contains("1 files · 5 symbols · 5 edges"),
         "the expected node/edge census is delivered"
     );
     assert!(
@@ -678,9 +678,9 @@ fn should_deliver_a_greenfield_diff_for_a_fixture_with_a_candidate() {
 
 #[test]
 fn should_flag_visibility_violations_for_the_over_exported_rust_fixture() {
-    // the rust fixture over-exports symbols needed only locally; the table must
+    // the workspace fixture over-exports symbols needed only locally; the table must
     // list every flagged visibility violation deterministically.
-    let root = fixture("rust");
+    let root = fixture("workspace-move-rust");
     let root_str = root.to_str().unwrap_or_default();
 
     let outcome = run(&[
@@ -700,7 +700,7 @@ fn should_flag_visibility_violations_for_the_over_exported_rust_fixture() {
     assert!(
         outcome
             .stdout
-            .contains("visibility [violation] src/lib.rs, Shape"),
+            .contains("visibility [violation] crates/core/src/alpha/parse.rs, parse"),
         "an over-exported symbol is flagged"
     );
 }
@@ -734,9 +734,9 @@ fn should_report_no_violations_for_a_clean_fixture() {
 
 #[test]
 fn should_gate_with_exit_two_when_a_fail_on_class_is_present() {
-    // the rust fixture carries hard visibility violations; gating on that class
+    // the workspace fixture carries hard visibility violations; gating on that class
     // raises the reserved exit code 2 — the CI gate the tool exists to provide.
-    let root = fixture("rust");
+    let root = fixture("workspace-move-rust");
     let root_str = root.to_str().unwrap_or_default();
 
     let outcome = run(&[

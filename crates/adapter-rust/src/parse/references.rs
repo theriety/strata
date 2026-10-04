@@ -22,6 +22,41 @@ where
     collector.references
 }
 
+/// Collects the type uses of an `impl` header: generic parameters and bounds,
+/// `where` predicates, the self type, and the trait's arguments.
+///
+/// A header adds no edge of its own, so these are [`RefKind::HeaderType`]
+/// references; the self type is a use of its file only, every other type is
+/// exposed through the header.
+pub(super) fn collect_header_references(item_impl: &syn::ItemImpl) -> Vec<Reference> {
+    let mut exposed = ReferenceCollector::default();
+    exposed.visit_generics(&item_impl.generics);
+    if let Some((_, path, _)) = &item_impl.trait_ {
+        exposed.visit_path(path);
+    }
+    let mut self_type = ReferenceCollector::default();
+    self_type.visit_type(&item_impl.self_ty);
+    // the self type is only a use of the declaring file, not an exposure.
+    let header = |reference: Reference, in_signature: bool| Reference {
+        kind: RefKind::HeaderType,
+        in_signature: in_signature && reference.in_signature,
+        ..reference
+    };
+    exposed
+        .references
+        .into_iter()
+        .filter(|reference| reference.kind == RefKind::TypeRef)
+        .map(|reference| header(reference, true))
+        .chain(
+            self_type
+                .references
+                .into_iter()
+                .filter(|reference| reference.kind == RefKind::TypeRef)
+                .map(|reference| header(reference, false)),
+        )
+        .collect()
+}
+
 /// A node a [`ReferenceCollector`] can be driven over.
 pub(super) trait VisitNode {
     /// Drives `collector` over `self`.
@@ -72,6 +107,12 @@ pub(super) struct ReferenceCollector {
     /// closure parameters, patterns); bare uses of them are locals, not items.
     /// Blocks, closures, match arms, and `if`/`while`/`for` truncate it on exit.
     bound: Vec<String>,
+    /// Expression and block nesting depth; a type seen at depth zero sits in the
+    /// declaration's signature, deeper it is a body-only use.
+    body_depth: u32,
+    /// Enum-variant nesting depth: a variant's fields share the enum's
+    /// visibility, unlike a struct's private fields.
+    variant_depth: u32,
 }
 
 impl ReferenceCollector {
@@ -92,7 +133,15 @@ impl ReferenceCollector {
             name: SmolStr::new(ident.to_string()),
             offset: byte_offset(ident.span()),
             macro_expanded: self.macro_depth > 0,
+            in_signature: kind == RefKind::TypeRef && self.body_depth == 0,
         });
+    }
+
+    /// Runs `visit` one level deeper into a body, where types are not exposed.
+    fn in_body(&mut self, visit: impl FnOnce(&mut Self)) {
+        self.body_depth += 1;
+        visit(self);
+        self.body_depth = self.body_depth.saturating_sub(1);
     }
 }
 
@@ -118,7 +167,34 @@ impl<'ast> Visit<'ast> for ReferenceCollector {
     }
 
     fn visit_block(&mut self, block: &'ast syn::Block) {
-        self.scoped(|this| syn::visit::visit_block(this, block));
+        self.in_body(|this| this.scoped(|inner| syn::visit::visit_block(inner, block)));
+    }
+
+    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+        self.in_body(|this| syn::visit::visit_expr(this, expr));
+    }
+
+    fn visit_variant(&mut self, variant: &'ast syn::Variant) {
+        self.variant_depth += 1;
+        syn::visit::visit_variant(self, variant);
+        self.variant_depth = self.variant_depth.saturating_sub(1);
+    }
+
+    fn visit_field(&mut self, field: &'ast syn::Field) {
+        // a private struct field exposes nothing; an enum variant's field takes
+        // the enum's visibility, so it counts as exposed.
+        if matches!(field.vis, syn::Visibility::Inherited) && self.variant_depth == 0 {
+            self.in_body(|this| syn::visit::visit_field(this, field));
+        } else {
+            syn::visit::visit_field(self, field);
+        }
+    }
+
+    fn visit_trait_bound(&mut self, bound: &'ast syn::TraitBound) {
+        if let Some(segment) = bound.path.segments.last() {
+            self.record(RefKind::TypeRef, &segment.ident);
+        }
+        syn::visit::visit_trait_bound(self, bound);
     }
 
     fn visit_expr_closure(&mut self, closure: &'ast syn::ExprClosure) {

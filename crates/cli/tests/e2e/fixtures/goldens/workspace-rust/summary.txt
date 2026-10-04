@@ -1,14 +1,11 @@
 Strata report — workspace-rust
 3 files · 13 symbols · 19 edges
-Snapshot `703f842c3da85988ea550ca256b542035367fca4073fc28c6333e730fa0170d5`
+Snapshot `95637b1f986902c89cdb6946934c856dce04b0bddf140a3a5e020c437aa077bf`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 Structural findings
-Shared findings (2)
-  - visibility [violation] at `crates/app/src/lib.rs`, `combined_total`: `combined_total` in 
-    `crates/app/src/lib.rs` is exported at Package but needed only at File
-  - visibility [violation] at `crates/app/src/lib.rs`, `describe`: `describe` in 
-    `crates/app/src/lib.rs` is exported at Package but needed only at File
+Shared findings (0)
+  None.
 
 anchored profile-specific findings (0)
   None.

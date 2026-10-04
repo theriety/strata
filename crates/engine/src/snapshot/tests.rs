@@ -2,9 +2,9 @@
 
 use smol_str::SmolStr;
 use strata_ir::{
-    Affinity, AffinityKind, Container, ContainerId, Edge, EdgeKind, Hardness,
-    IntermediateRepresentation, IrFragment, Layout, Node, NodeId, NodeKind, Polarity, ScopeLevel,
-    VisibilityScope, build_laminar_tree,
+    AdvisoryUse, Affinity, AffinityKind, Container, ContainerId, Edge, EdgeKind, Exposure,
+    Hardness, IntermediateRepresentation, IrFragment, Layout, Node, NodeId, NodeKind, Polarity,
+    ScopeLadder, ScopeLevel, VisibilityScope, build_laminar_tree,
 };
 
 use super::discovery::{discover_sources, manifest_dir};
@@ -225,6 +225,8 @@ fn should_reintern_ids_across_fragments_into_one_namespace() {
         }],
         containers: vec![container(0, "src/a.ts")],
         visibility_scopes: Vec::new(),
+        exposures: Vec::new(),
+        advisory_uses: Vec::new(),
     };
     let second = IrFragment {
         nodes: vec![node(0, "b", 0)],
@@ -236,6 +238,8 @@ fn should_reintern_ids_across_fragments_into_one_namespace() {
         }],
         containers: vec![container(0, "src/b.ts")],
         visibility_scopes: Vec::new(),
+        exposures: Vec::new(),
+        advisory_uses: Vec::new(),
     };
 
     let merged = merge_fragments(vec![first, second], "pkg", &Layout::default());
@@ -269,6 +273,8 @@ fn should_rehome_a_file_and_its_test_into_one_package() {
         affinities: Vec::new(),
         containers: vec![container(0, "src/ui/widget.ts")],
         visibility_scopes: Vec::new(),
+        exposures: Vec::new(),
+        advisory_uses: Vec::new(),
     };
     let test = IrFragment {
         nodes: vec![node(0, "widget_test", 0)],
@@ -276,6 +282,8 @@ fn should_rehome_a_file_and_its_test_into_one_package() {
         affinities: Vec::new(),
         containers: vec![container(0, "spec/ui/widget.spec.ts")],
         visibility_scopes: Vec::new(),
+        exposures: Vec::new(),
+        advisory_uses: Vec::new(),
     };
     let layout = Layout {
         package_roots: Vec::new(),
@@ -323,8 +331,17 @@ fn scoped_node(
         files,
         definition_file: definition_file.map(SmolStr::new),
         expressible: Vec::new(),
+        declared_rung: None,
     }];
-    apply_visibility_scopes(&mut nodes, &built.tree, &built.files, &[], &scopes);
+    apply_visibility_scopes(
+        &mut nodes,
+        &built.tree,
+        &built.files,
+        &[],
+        &scopes,
+        &[],
+        &[],
+    );
     let item = nodes.first().expect("the fixture node is present");
     (item.visibility, item.container, expected)
 }
@@ -376,123 +393,105 @@ fn should_resolve_a_pub_super_in_a_mod_rs_module_to_its_own_folder() {
     assert_eq!(level, ScopeLevel::Folder);
 }
 
-#[test]
-#[allow(clippy::expect_used)] // loud failure is the point of this test
-fn should_project_each_stated_rung_to_a_sorted_level_ladder() {
-    let paths: Vec<SmolStr> = ["src/lib.rs", "src/a.rs", "src/b/c.rs", "src/b/d.rs"]
-        .iter()
-        .map(|path| SmolStr::new(*path))
-        .collect();
-    let built = build_laminar_tree(&paths, "pkg", &Layout::default());
-    let home = built.files.get("src/b/c.rs").copied().expect("home file");
-    let mut nodes = vec![node(0, "item", home.0)];
-    let rung = |files: &[&str]| strata_ir::ScopeRung {
-        files: files.iter().map(|file| SmolStr::new(*file)).collect(),
-        definition_file: None,
-    };
-    let scopes = vec![VisibilityScope {
-        node: NodeId(0),
-        files: vec![
-            "src/a.rs".into(),
-            "src/b/c.rs".into(),
-            "src/b/d.rs".into(),
-            "src/lib.rs".into(),
-        ],
-        definition_file: None,
-        expressible: vec![
-            rung(&["src/b/c.rs"]),
-            rung(&["src/b/c.rs", "src/b/d.rs"]),
-            rung(&["src/a.rs", "src/b/c.rs", "src/b/d.rs", "src/lib.rs"]),
-        ],
-    }];
-    let ladders = apply_visibility_scopes(&mut nodes, &built.tree, &built.files, &[], &scopes);
-    let ladder = ladders.first().expect("a ladder is projected");
-    assert_eq!(
-        ladder.levels,
-        vec![ScopeLevel::File, ScopeLevel::Folder, ScopeLevel::Domain]
-    );
-    // the ladder is a sidecar: the declared level still comes from `files`
-    assert_eq!(
-        nodes.first().map(|node| node.visibility),
-        Some(ScopeLevel::Domain)
-    );
+type FixtureRung = (&'static [&'static str], Option<&'static str>);
+
+/// One ladder verdict scenario: an `item` (node 0) homed in `home`, extra
+/// `others` (nodes 1..) with `edges` over them, and the stated `rungs`.
+struct Case<'a> {
+    paths: &'a [&'a str],
+    home: &'a str,
+    others: &'a [&'a str],
+    edges: &'a [(u32, u32, EdgeKind)],
+    rungs: &'a [FixtureRung],
+    declared: Option<u32>,
+    exposures: &'a [Exposure],
+    advisory: &'a [AdvisoryUse],
+    /// A scope statement for node 1, the exposer.
+    exposer_scope: Option<VisibilityScope>,
 }
 
-#[test]
-#[allow(clippy::expect_used)] // loud failure is the point of this test
-fn should_drop_the_whole_ladder_when_any_rung_cannot_project() {
-    let paths: Vec<SmolStr> = ["src/lib.rs", "src/a.rs", "src/b/c.rs", "src/b/d.rs"]
-        .iter()
-        .map(|path| SmolStr::new(*path))
-        .collect();
-    let built = build_laminar_tree(&paths, "pkg", &Layout::default());
-    let home = built.files.get("src/b/c.rs").copied().expect("home file");
-    let mut nodes = vec![node(0, "item", home.0)];
-    let rung = |files: &[&str]| strata_ir::ScopeRung {
-        files: files.iter().map(|file| SmolStr::new(*file)).collect(),
-        definition_file: None,
-    };
-    let scopes = vec![VisibilityScope {
-        node: NodeId(0),
-        files: vec!["src/b/c.rs".into(), "src/b/d.rs".into()],
-        definition_file: None,
-        // the middle rung names a file the tree does not hold
-        expressible: vec![
-            rung(&["src/b/c.rs"]),
-            rung(&["src/missing.rs"]),
-            rung(&["src/b/c.rs", "src/b/d.rs"]),
-        ],
-    }];
-    let ladders = apply_visibility_scopes(&mut nodes, &built.tree, &built.files, &[], &scopes);
-    assert_eq!(ladders, []);
-    // the declared scope still projects; only the ladder is dropped
-    assert_eq!(
-        nodes.first().map(|node| node.visibility),
-        Some(ScopeLevel::Folder)
-    );
-}
-
-/// Projects the ladder of an `item` homed in `home` and consumed from the
-/// `consumers` files, over a laminar tree built from `paths`; each rung
-/// lists its files and optional definition file.
-#[allow(clippy::expect_used)] // loud failure is the point of this test helper
-fn consumed_ladder(
-    paths: &[&str],
-    home: &str,
-    consumers: &[&str],
-    rungs: &[(&[&str], Option<&str>)],
-) -> Vec<ScopeLevel> {
-    let paths: Vec<SmolStr> = paths.iter().map(|path| SmolStr::new(*path)).collect();
-    let built = build_laminar_tree(&paths, "pkg", &Layout::default());
-    let container = |path: &str| built.files.get(path).copied().expect("fixture file").0;
-    let mut nodes = vec![node(0, "item", container(home))];
-    let mut edges = Vec::new();
-    for (index, consumer) in consumers.iter().enumerate() {
-        let id = u32::try_from(index).expect("small fixture") + 1;
-        nodes.push(node(id, "user", container(consumer)));
-        edges.push(edge(id, 0, EdgeKind::Call));
+impl<'a> Case<'a> {
+    fn new(
+        paths: &'a [&'a str],
+        home: &'a str,
+        rungs: &'a [FixtureRung],
+        declared: Option<u32>,
+    ) -> Self {
+        Self {
+            paths,
+            home,
+            others: &[],
+            edges: &[],
+            rungs,
+            declared,
+            exposures: &[],
+            advisory: &[],
+            exposer_scope: None,
+        }
     }
+
+    /// Consumers (nodes 1..) in `files`, each calling the item.
+    fn consumed_by(mut self, files: &'a [&'a str], edges: &'a [(u32, u32, EdgeKind)]) -> Self {
+        self.others = files;
+        self.edges = edges;
+        self
+    }
+
+    /// Projects the verdict the engine reaches for node 0.
+    #[allow(clippy::expect_used)] // loud failure is the point of this test helper
+    fn run(&self) -> ScopeLadder {
+        let paths: Vec<SmolStr> = self.paths.iter().map(|path| SmolStr::new(*path)).collect();
+        let built = build_laminar_tree(&paths, "pkg", &Layout::default());
+        let container = |path: &str| built.files.get(path).copied().expect("fixture file").0;
+        let mut nodes = vec![node(0, "item", container(self.home))];
+        for (index, file) in self.others.iter().enumerate() {
+            let id = u32::try_from(index).expect("small fixture") + 1;
+            nodes.push(node(id, "other", container(file)));
+        }
+        let edges: Vec<Edge> = self
+            .edges
+            .iter()
+            .map(|(source, target, kind)| edge(*source, *target, *kind))
+            .collect();
+        let mut scopes = vec![scope_of(NodeId(0), self.rungs, self.declared)];
+        scopes.extend(self.exposer_scope.clone());
+        apply_visibility_scopes(
+            &mut nodes,
+            &built.tree,
+            &built.files,
+            &edges,
+            &scopes,
+            self.exposures,
+            self.advisory,
+        )
+        .into_iter()
+        .find(|ladder| ladder.node == NodeId(0))
+        .expect("the item states a scope")
+    }
+}
+
+/// States `rungs` for `node`, with the `declared` rung's files as its label.
+fn scope_of(node: NodeId, rungs: &[FixtureRung], declared: Option<u32>) -> VisibilityScope {
     let sorted = |files: &[&str]| -> Vec<SmolStr> {
         let mut files: Vec<SmolStr> = files.iter().map(|file| SmolStr::new(*file)).collect();
         files.sort();
         files
     };
-    let scopes = vec![VisibilityScope {
-        node: NodeId(0),
-        files: sorted(rungs.first().expect("a rung").0),
-        definition_file: rungs.first().and_then(|rung| rung.1).map(SmolStr::new),
+    let label = declared.and_then(|index| rungs.get(usize::try_from(index).ok()?));
+    VisibilityScope {
+        node,
+        files: label.map(|rung| sorted(rung.0)).unwrap_or_default(),
+        definition_file: label.and_then(|rung| rung.1).map(SmolStr::new),
         expressible: rungs
             .iter()
             .map(|(files, definition)| strata_ir::ScopeRung {
                 files: sorted(files),
                 definition_file: definition.map(SmolStr::new),
+                spelling: None,
             })
             .collect(),
-    }];
-    apply_visibility_scopes(&mut nodes, &built.tree, &built.files, &edges, &scopes)
-        .first()
-        .map(|ladder| ladder.levels.clone())
-        .unwrap_or_default()
+        declared_rung: declared,
+    }
 }
 
 const SIBLING_PATHS: [&str; 8] = [
@@ -505,8 +504,6 @@ const SIBLING_PATHS: [&str; 8] = [
     "src/render/tree.rs",
     "src/render/tree/walk.rs",
 ];
-
-type FixtureRung = (&'static [&'static str], Option<&'static str>);
 
 /// Rungs of a `pub(super)` item in `src/render/report.rs`: `report` itself,
 /// the `render` parent, then the crate.
@@ -536,118 +533,111 @@ fn sibling_rungs() -> [FixtureRung; 3] {
     ]
 }
 
+const BCD_PATHS: [&str; 4] = ["src/lib.rs", "src/a.rs", "src/b/c.rs", "src/b/d.rs"];
+const BCD_ALL: [&str; 4] = ["src/a.rs", "src/b/c.rs", "src/b/d.rs", "src/lib.rs"];
+
 #[test]
-fn should_drop_a_rung_that_misses_a_consumer_in_the_parent_definition_file() {
-    // sibling case: `lines` in `render/report.rs`, used by `render.rs`. The
-    // `report` rung projects to the same folder label as the need but never
-    // reaches `render.rs`, so it must not stay on the ladder.
-    let rungs = sibling_rungs();
-    let consumed = consumed_ladder(
-        &SIBLING_PATHS,
-        "src/render/report.rs",
-        &["src/render.rs"],
-        &rungs,
-    );
-    let alone = consumed_ladder(&SIBLING_PATHS, "src/render/report.rs", &[], &rungs);
-    assert_eq!(alone, [ScopeLevel::Folder, ScopeLevel::Domain]);
-    assert_eq!(consumed, [ScopeLevel::Domain]);
+fn should_name_the_narrowest_rung_that_holds_the_home_and_every_consumer() {
+    let rungs: [FixtureRung; 3] = [
+        (&["src/b/c.rs"], None),
+        (&["src/b/c.rs", "src/b/d.rs"], None),
+        (&BCD_ALL, None),
+    ];
+    let case = Case::new(&BCD_PATHS, "src/b/c.rs", &rungs, Some(2))
+        .consumed_by(&["src/b/d.rs"], &[(1, 0, EdgeKind::Call)]);
+    let ladder = case.run();
+    assert_eq!(ladder.declared, Some(ScopeLevel::Domain));
+    assert_eq!(ladder.needed, Some(ScopeLevel::Folder));
 }
 
-/// Like [`consumed_ladder`] but with free-form extra nodes (`(file, kind)`
-/// pairs numbered from 1) and edges over them.
-#[allow(clippy::expect_used)] // loud failure is the point of this test helper
-fn ladder_over_graph(
-    paths: &[&str],
-    home: &str,
-    others: &[&str],
-    edges: &[(u32, u32, EdgeKind)],
-    rungs: &[FixtureRung],
-) -> Vec<ScopeLevel> {
-    let paths: Vec<SmolStr> = paths.iter().map(|path| SmolStr::new(*path)).collect();
+#[test]
+fn should_state_the_declared_level_of_a_restricted_item_from_its_files() {
+    let rungs: [FixtureRung; 2] = [(&["src/b/c.rs", "src/b/d.rs"], None), (&BCD_ALL, None)];
+    let paths: Vec<SmolStr> = BCD_PATHS.iter().map(|path| SmolStr::new(*path)).collect();
     let built = build_laminar_tree(&paths, "pkg", &Layout::default());
-    let container = |path: &str| built.files.get(path).copied().expect("fixture file").0;
-    let mut nodes = vec![node(0, "item", container(home))];
-    for (index, file) in others.iter().enumerate() {
-        let id = u32::try_from(index).expect("small fixture") + 1;
-        nodes.push(node(id, "other", container(file)));
-    }
-    let edges: Vec<Edge> = edges
-        .iter()
-        .map(|(source, target, kind)| edge(*source, *target, *kind))
-        .collect();
-    let sorted = |files: &[&str]| -> Vec<SmolStr> {
-        let mut files: Vec<SmolStr> = files.iter().map(|file| SmolStr::new(*file)).collect();
-        files.sort();
-        files
-    };
-    let scopes = vec![VisibilityScope {
-        node: NodeId(0),
-        files: sorted(rungs.first().expect("a rung").0),
-        definition_file: rungs.first().and_then(|rung| rung.1).map(SmolStr::new),
-        expressible: rungs
-            .iter()
-            .map(|(files, definition)| strata_ir::ScopeRung {
-                files: sorted(files),
-                definition_file: definition.map(SmolStr::new),
-            })
-            .collect(),
-    }];
-    apply_visibility_scopes(&mut nodes, &built.tree, &built.files, &edges, &scopes)
-        .first()
-        .map(|ladder| ladder.levels.clone())
-        .unwrap_or_default()
+    let home = built.files.get("src/b/c.rs").map_or(0, |id| id.0);
+    let mut nodes = vec![node(0, "item", home)];
+    let scopes = [scope_of(NodeId(0), &rungs, Some(0))];
+    apply_visibility_scopes(
+        &mut nodes,
+        &built.tree,
+        &built.files,
+        &[],
+        &scopes,
+        &[],
+        &[],
+    );
+    assert_eq!(
+        nodes.first().map(|item| item.visibility),
+        Some(ScopeLevel::Folder)
+    );
+}
+
+#[test]
+fn should_stay_silent_when_the_needed_rung_cannot_project() {
+    // the narrowest rung names a file the tree does not hold.
+    let rungs: [FixtureRung; 2] = [
+        (&["src/b/c.rs", "src/missing.rs"], None),
+        (&["src/b/c.rs", "src/b/d.rs"], None),
+    ];
+    let ladder = Case::new(&BCD_PATHS, "src/b/c.rs", &rungs, Some(1)).run();
+    assert_eq!(ladder.needed, None);
+    assert_eq!(ladder.declared, None);
+}
+
+#[test]
+fn should_stay_silent_when_the_declared_rung_is_unresolved() {
+    let rungs: [FixtureRung; 2] = [(&["src/b/c.rs"], None), (&BCD_ALL, None)];
+    let ladder = Case::new(&BCD_PATHS, "src/b/c.rs", &rungs, None).run();
+    assert_eq!((ladder.declared, ladder.needed), (None, None));
+}
+
+#[test]
+fn should_not_advise_when_the_needed_rung_is_the_declared_one() {
+    // `lines` in `render/report.rs` is `pub(super)` and used by `render.rs`: the
+    // `report` rung never reaches `render.rs`, so the parent rung is both
+    // needed and declared.
+    let rungs = sibling_rungs();
+    let consumed = Case::new(&SIBLING_PATHS, "src/render/report.rs", &rungs, Some(1))
+        .consumed_by(&["src/render.rs"], &[(1, 0, EdgeKind::Call)])
+        .run();
+    let alone = Case::new(&SIBLING_PATHS, "src/render/report.rs", &rungs, Some(1)).run();
+    assert_eq!(alone.needed, Some(ScopeLevel::Folder));
+    assert_eq!(consumed.needed, None);
+    assert_eq!(consumed.declared, Some(ScopeLevel::Domain));
 }
 
 #[test]
 fn should_read_consumers_after_re_export_flattening() {
-    // `item` is re-exported by node 1 in `report/fit.rs` (inside the private
-    // rung); node 2 in `other/x.rs` consumes the re-export node. Flattened,
-    // node 2 consumes `item` directly, so the private rung must go.
-    let edges = [(1, 0, EdgeKind::ReExport), (2, 1, EdgeKind::Call)];
-    let ladder = ladder_over_graph(
-        &SIBLING_PATHS,
-        "src/render/report.rs",
-        &["src/render/report/fit.rs", "src/other/x.rs"],
-        &edges,
-        &sibling_rungs(),
-    );
-    assert_eq!(ladder, [ScopeLevel::Domain]);
+    // node 1 re-exports `item` from inside the private rung, node 2 consumes the
+    // re-export from `other/x.rs`; flattened, node 2 consumes `item` directly.
+    let rungs = sibling_rungs();
+    let ladder = Case::new(&SIBLING_PATHS, "src/render/report.rs", &rungs, Some(1))
+        .consumed_by(
+            &["src/render/report/fit.rs", "src/other/x.rs"],
+            &[(1, 0, EdgeKind::ReExport), (2, 1, EdgeKind::Call)],
+        )
+        .run();
+    assert_eq!(ladder.needed, None);
 }
 
 #[test]
-fn should_ignore_a_consumer_that_no_rung_can_place() {
-    // a consumer in a file no rung lists (a `cfg(test)` module the analyzer
-    // never defined) cannot be judged by the ladder; `derive_visibility`
-    // already counts it in the derived need, so it must not wipe the ladder.
+fn should_stay_silent_for_a_consumer_that_no_rung_can_place() {
+    // a consumer in a file no rung lists (a `cfg(test)` module, another crate
+    // target) may need more than any spelling gives, so nothing is advised.
     let mut paths = SIBLING_PATHS.to_vec();
     paths.push("src/stray.rs");
     let rungs = sibling_rungs();
-    let alone = ladder_over_graph(&paths, "src/render/report.rs", &[], &[], &rungs);
-    let stray = ladder_over_graph(
-        &paths,
-        "src/render/report.rs",
-        &["src/stray.rs"],
-        &[(1, 0, EdgeKind::Call)],
-        &rungs,
-    );
-    assert_ne!(alone, []);
-    assert_eq!(stray, alone);
-
-    // a placed consumer still prunes rungs while the stray one is ignored.
-    let both = ladder_over_graph(
-        &paths,
-        "src/render/report.rs",
-        &["src/stray.rs", "src/render.rs"],
-        &[(1, 0, EdgeKind::Call), (2, 0, EdgeKind::Call)],
-        &rungs,
-    );
-    assert_eq!(both, [ScopeLevel::Domain]);
+    let alone = Case::new(&paths, "src/render/report.rs", &rungs, Some(1)).run();
+    let stray = Case::new(&paths, "src/render/report.rs", &rungs, Some(1))
+        .consumed_by(&["src/stray.rs"], &[(1, 0, EdgeKind::Call)])
+        .run();
+    assert_eq!(alone.needed, Some(ScopeLevel::Folder));
+    assert_eq!(stray.needed, None);
 }
 
 #[test]
-fn should_drop_the_private_rung_for_a_same_folder_sibling_consumer() {
-    // `relocation/collision.rs` used by `relocation/solver.rs`, with
-    // `relocation.rs` as the parent definition file.
+fn should_advise_the_sibling_folder_for_a_same_folder_consumer() {
     const PATHS: [&str; 5] = [
         "src/lib.rs",
         "src/other/x.rs",
@@ -655,7 +645,6 @@ fn should_drop_the_private_rung_for_a_same_folder_sibling_consumer() {
         "src/relocation/collision.rs",
         "src/relocation/solver.rs",
     ];
-    let paths = PATHS;
     let rungs: [FixtureRung; 3] = [
         (&["src/relocation/collision.rs"], None),
         (
@@ -668,62 +657,94 @@ fn should_drop_the_private_rung_for_a_same_folder_sibling_consumer() {
         ),
         (&PATHS, None),
     ];
-    let alone = ladder_over_graph(&paths, "src/relocation/collision.rs", &[], &[], &rungs);
-    let consumed = ladder_over_graph(
-        &paths,
-        "src/relocation/collision.rs",
-        &["src/relocation/solver.rs"],
-        &[(1, 0, EdgeKind::Call)],
-        &rungs,
-    );
-    assert_eq!(alone.first(), Some(&ScopeLevel::File));
-    assert_eq!(consumed.first(), alone.get(1));
-    assert!(!consumed.contains(&ScopeLevel::File), "{consumed:?}");
+    let alone = Case::new(&PATHS, "src/relocation/collision.rs", &rungs, Some(2)).run();
+    let consumed = Case::new(&PATHS, "src/relocation/collision.rs", &rungs, Some(2))
+        .consumed_by(&["src/relocation/solver.rs"], &[(1, 0, EdgeKind::Call)])
+        .run();
+    assert_eq!(alone.needed, Some(ScopeLevel::File));
+    assert_eq!(consumed.needed, Some(ScopeLevel::Folder));
 }
 
 #[test]
 fn should_keep_the_private_rung_when_every_consumer_sits_inside_it() {
-    // a consumer inside `report/` is reached by the `report` rung.
     let rungs = sibling_rungs();
-    let consumed = consumed_ladder(
-        &SIBLING_PATHS,
-        "src/render/report.rs",
-        &["src/render/report/fit.rs"],
-        &rungs,
-    );
-    let alone = consumed_ladder(&SIBLING_PATHS, "src/render/report.rs", &[], &rungs);
-    assert_eq!(consumed, alone);
+    let consumed = Case::new(&SIBLING_PATHS, "src/render/report.rs", &rungs, Some(1))
+        .consumed_by(&["src/render/report/fit.rs"], &[(1, 0, EdgeKind::Call)])
+        .run();
+    assert_eq!(consumed.needed, Some(ScopeLevel::Folder));
 }
 
 #[test]
-fn should_drop_a_crate_root_child_rung_that_misses_the_crate_root_consumer() {
-    // crate-root-child case: `parse` in `src/parse.rs` (owning `src/parse/`)
-    // is `pub(super)` and used by `lib.rs`; only the crate rung reaches it.
-    let paths = [
+fn should_not_advise_a_crate_root_child_item_used_by_the_crate_root() {
+    const PATHS: [&str; 4] = [
         "src/lib.rs",
         "src/parse.rs",
         "src/parse/a.rs",
         "src/parse/b.rs",
     ];
+    let paths = PATHS;
     let rungs: [FixtureRung; 2] = [
         (
             &["src/parse.rs", "src/parse/a.rs", "src/parse/b.rs"],
             Some("src/parse.rs"),
         ),
-        (
-            &[
-                "src/lib.rs",
-                "src/parse.rs",
-                "src/parse/a.rs",
-                "src/parse/b.rs",
-            ],
-            None,
-        ),
+        (&PATHS, None),
     ];
-    let consumed = consumed_ladder(&paths, "src/parse.rs", &["src/lib.rs"], &rungs);
-    let alone = consumed_ladder(&paths, "src/parse.rs", &[], &rungs);
-    assert_eq!(alone, [ScopeLevel::Folder, ScopeLevel::Domain]);
-    assert_eq!(consumed, [ScopeLevel::Domain]);
+    let alone = Case::new(&paths, "src/parse.rs", &rungs, Some(1)).run();
+    let consumed = Case::new(&paths, "src/parse.rs", &rungs, Some(1))
+        .consumed_by(&["src/lib.rs"], &[(1, 0, EdgeKind::Call)])
+        .run();
+    assert_eq!(alone.needed, Some(ScopeLevel::Folder));
+    assert_eq!(consumed.needed, None);
+}
+
+#[test]
+fn should_pick_the_last_of_rungs_with_the_same_files() {
+    let rungs: [FixtureRung; 3] = [
+        (&["src/b/c.rs"], None),
+        (&["src/b/c.rs"], None),
+        (&BCD_ALL, None),
+    ];
+    let mut case = Case::new(&BCD_PATHS, "src/b/c.rs", &rungs, Some(2));
+    case.others = &[];
+    // the first rung is a file rung: the identical second rung is its spelling
+    // twin, and the later one wins, so the finding names the wider spelling.
+    let ladder = case.run();
+    assert_eq!(ladder.needed, Some(ScopeLevel::File));
+}
+
+#[test]
+fn should_count_a_wider_exposer_as_a_user_of_the_exposed_item() {
+    let rungs: [FixtureRung; 3] = [
+        (&["src/b/c.rs"], None),
+        (&["src/b/c.rs", "src/b/d.rs"], None),
+        (&BCD_ALL, None),
+    ];
+    let exposures = [Exposure {
+        exposer: NodeId(1),
+        exposed: NodeId(0),
+        reach: true,
+    }];
+    let exposer_rungs: [FixtureRung; 1] = [(&BCD_ALL, None)];
+    let mut case =
+        Case::new(&BCD_PATHS, "src/b/c.rs", &rungs, Some(2)).consumed_by(&["src/b/d.rs"], &[]);
+    case.exposures = &exposures;
+    case.exposer_scope = Some(scope_of(NodeId(1), &exposer_rungs, Some(0)));
+    // the exposer's declared reach spans the crate, so the item is needed there.
+    assert_eq!(case.run().needed, None);
+
+    // an exposer with no scope statement (a trait impl) leaves the reach unknown.
+    case.exposer_scope = None;
+    let ladder = case.run();
+    assert_eq!((ladder.declared, ladder.needed), (None, None));
+
+    // a header self type only needs the exposer's own file.
+    let header = [Exposure {
+        reach: false,
+        ..exposures[0]
+    }];
+    case.exposures = &header;
+    assert_eq!(case.run().needed, Some(ScopeLevel::Folder));
 }
 
 #[test]
@@ -911,4 +932,43 @@ fn should_fail_loud_from_the_canonicalize_guard_when_the_root_does_not_exist() {
         "the failure originates from the canonicalize guard (canonicalize's own \
          io error), not the discovery walker (which wraps the io error)"
     );
+}
+
+#[test]
+fn should_count_an_advisory_use_as_a_user_without_an_edge() {
+    let rungs: [FixtureRung; 3] = [
+        (&["src/b/c.rs"], None),
+        (&["src/b/c.rs", "src/b/d.rs"], None),
+        (&BCD_ALL, None),
+    ];
+    let advisory = [AdvisoryUse {
+        user: NodeId(1),
+        used: NodeId(0),
+    }];
+    let mut case =
+        Case::new(&BCD_PATHS, "src/b/c.rs", &rungs, Some(2)).consumed_by(&["src/b/d.rs"], &[]);
+    assert_eq!(case.run().needed, Some(ScopeLevel::File));
+
+    case.advisory = &advisory;
+    assert_eq!(case.run().needed, Some(ScopeLevel::Folder));
+}
+
+#[test]
+fn should_merge_advisory_uses_without_changing_nodes_edges_or_containers() {
+    let fragment = |advisory_uses: Vec<AdvisoryUse>| IrFragment {
+        nodes: vec![node(0, "used", 1), node(1, "user", 2)],
+        containers: vec![container(1, "src/a.rs"), container(2, "src/b.rs")],
+        advisory_uses,
+        ..IrFragment::default()
+    };
+    let advisory = vec![AdvisoryUse {
+        user: NodeId(1),
+        used: NodeId(0),
+    }];
+    let plain = merge_fragments(vec![fragment(Vec::new())], "pkg", &Layout::default());
+    let with = merge_fragments(vec![fragment(advisory)], "pkg", &Layout::default());
+
+    // the whole graph side of the IR is untouched; advisory uses reach only the
+    // ladder verdicts, which a fragment without scope statements has none of.
+    assert_eq!(plain, with);
 }

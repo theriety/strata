@@ -1,17 +1,14 @@
 # Strata report — rust-cfg-test
 
 1 files · 4 symbols · 2 edges
-Snapshot `c0d230e8822827d72ed971f3d1f835a4aaab2bc943f6f1c1a8397baa6d3ae1cb`
+Snapshot `902b9fa323591b5f0288c22df6f30c6fc3cdec632b7bd53961fe76ac785b9354`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings
 
 ```text
-Shared findings (2)
-  - visibility [violation] at `src/lib.rs`, `double`: `double` in `src/lib.rs` is exported at 
-    Package but needed only at File
-  - visibility [violation] at `src/lib.rs`, `halve`: `halve` in `src/lib.rs` is exported at 
-    Package but needed only at File
+Shared findings (0)
+  None.
 
 anchored profile-specific findings (0)
   None.
