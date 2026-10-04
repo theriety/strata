@@ -96,6 +96,23 @@ pub struct Node {
     /// Added in schema 3; absent means `name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<SmolStr>,
+    /// Whether the source itself declares this node as test code (`#[test]`,
+    /// `cfg(test)`, a file under a test path), recorded before an adapter
+    /// demotes production code that only tests use to
+    /// [`Polarity::TestSupport`]. Final polarity cannot tell the two apart;
+    /// this flag can, so a test-only check never mistakes demoted production
+    /// code for a test.
+    ///
+    /// Added to schema 3; absent means `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub test_source: bool,
+    /// The type node this node is a member of (an inherent method of its
+    /// type), when the adapter knows it. A member that only tests use does not
+    /// make its owner a production user.
+    ///
+    /// Added to schema 3; absent means no owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<NodeId>,
 }
 
 /// Serde predicate that omits the default `false` flag from serialized output.

@@ -1,2 +1,2 @@
-no violations
+testOnly [violation] src/app.ts, run :: Only tests in this repo use `run`. It is public, so code outside this repo may use it too; check before moving or deleting it.
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.

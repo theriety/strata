@@ -1,7 +1,7 @@
 # Strata report — workspace-rust
 
 3 files · 13 symbols · 19 edges
-Snapshot `2f380119100b6d8646c6a8ddbd8c509a19f92e7ca69973cf27e7d062c75d44ca`
+Snapshot `7cce00c1b1708fbdfbd5e46342ff58e030e413144d3f4280208ce0c26a37d7a9`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings

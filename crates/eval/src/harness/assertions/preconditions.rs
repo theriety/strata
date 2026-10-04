@@ -93,6 +93,7 @@ fn class_filters(precondition: &Precondition) -> String {
         Some(ViolationClass::Polarity) => violation_class_name(EngineViolationKind::Polarity),
         Some(ViolationClass::Capacity) => violation_class_name(EngineViolationKind::Capacity),
         Some(ViolationClass::Visibility) => violation_class_name(EngineViolationKind::Visibility),
+        Some(ViolationClass::TestOnly) => violation_class_name(EngineViolationKind::TestOnly),
         None => "any".to_owned(),
     };
     let suffix = precondition
@@ -117,6 +118,7 @@ fn violation_class_name(kind: EngineViolationKind) -> String {
         EngineViolationKind::Polarity => "polarity".to_owned(),
         EngineViolationKind::Capacity => "capacity".to_owned(),
         EngineViolationKind::Visibility => "visibility".to_owned(),
+        EngineViolationKind::TestOnly => "testOnly".to_owned(),
     }
 }
 
@@ -131,6 +133,7 @@ fn class_matches(precondition: &Precondition, violation: &Violation) -> bool {
             | (ViolationClass::Polarity, EngineViolationKind::Polarity)
             | (ViolationClass::Capacity, EngineViolationKind::Capacity)
             | (ViolationClass::Visibility, EngineViolationKind::Visibility)
+            | (ViolationClass::TestOnly, EngineViolationKind::TestOnly)
     )
 }
 

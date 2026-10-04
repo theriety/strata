@@ -46,6 +46,9 @@ pub(super) fn extract(
                         source: specifier(&import.src),
                         names,
                         type_only: import.type_only,
+                        namespace: import.specifiers.iter().any(|specifier| {
+                            matches!(specifier, swc_ecma_ast::ImportSpecifier::Namespace(_))
+                        }),
                     });
                 }
                 ModuleDecl::ExportNamed(named) => {
@@ -105,6 +108,7 @@ pub(super) fn extract(
             referenced: references.referenced,
             called: references.called,
             dynamic_imports: references.dynamic_imports,
+            requires: references.requires,
             signature_companions: Vec::new(),
         });
     }
@@ -188,6 +192,7 @@ fn push_default_decl(
                 referenced: references.referenced,
                 called: references.called,
                 dynamic_imports: references.dynamic_imports,
+                requires: references.requires,
                 signature_companions: class_signature_companions(&name, &class.class),
             });
         }
@@ -206,6 +211,7 @@ fn push_default_decl(
                 referenced: references.referenced,
                 called: references.called,
                 dynamic_imports: references.dynamic_imports,
+                requires: references.requires,
                 signature_companions: function_signature_companions(&name, &function.function),
             });
         }

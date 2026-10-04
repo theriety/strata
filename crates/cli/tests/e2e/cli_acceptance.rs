@@ -2031,9 +2031,9 @@ fn should_reject_a_result_with_an_unsupported_schema_version() {
     let contents = std::fs::read_to_string(&result).unwrap_or_default();
     let result_str = result.to_str().unwrap_or_default();
 
-    for version in ["999", "8", "1"] {
+    for version in ["999", "9", "1"] {
         let stamped = contents.replace(
-            "\"schemaVersion\":9",
+            "\"schemaVersion\":10",
             &format!("\"schemaVersion\":{version}"),
         );
         assert_ne!(contents, stamped, "the version stamp was found and bumped");
@@ -2053,7 +2053,7 @@ fn should_reject_a_result_with_an_unsupported_schema_version() {
         );
         assert!(
             outcome.stderr.contains(&format!(
-                "unsupported result schemaVersion {version}; expected 9"
+                "unsupported result schemaVersion {version}; expected 10"
             )),
             "the refusal names the offending version: {}",
             outcome.stderr

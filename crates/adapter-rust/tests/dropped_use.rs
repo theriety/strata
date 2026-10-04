@@ -188,3 +188,48 @@ fn should_read_an_inner_attribute_inside_a_declaration() -> Result<(), String> {
     assert!(advises(&fragment, "inner_gated", "via_attr_target")?);
     Ok(())
 }
+
+#[test]
+fn should_mark_an_advisory_use_from_a_macro_in_a_cfg_test_module_as_from_test() -> Result<(), String>
+{
+    let fragment = fragment("testmacro", &["src/lib.rs"])?;
+    let id = |name: &str| {
+        fragment
+            .nodes
+            .iter()
+            .find(|node| node.name == name)
+            .map(|node| node.id)
+            .ok_or_else(|| format!("missing node {name}"))
+    };
+    let (user, used) = (id("first")?, id("helper")?);
+    let found: Vec<bool> = fragment
+        .advisory_uses
+        .iter()
+        .filter(|advisory| advisory.user == user && advisory.used == used)
+        .map(|advisory| advisory.from_test)
+        .collect();
+    assert_eq!(found, [true]);
+    Ok(())
+}
+
+#[test]
+fn should_mark_an_advisory_use_from_a_wholly_test_file_as_from_test() -> Result<(), String> {
+    let fragment = fragment("testmacro", &["src/lib.rs", "tests/it.rs"])?;
+    let used = fragment
+        .nodes
+        .iter()
+        .find(|node| node.name == "helper")
+        .map(|node| node.id)
+        .ok_or("missing helper")?;
+    let found: Vec<bool> = fragment
+        .advisory_uses
+        .iter()
+        .filter(|advisory| advisory.used == used)
+        .map(|advisory| advisory.from_test)
+        .collect();
+    assert!(
+        !found.is_empty() && found.iter().all(|flag| *flag),
+        "{found:?}"
+    );
+    Ok(())
+}

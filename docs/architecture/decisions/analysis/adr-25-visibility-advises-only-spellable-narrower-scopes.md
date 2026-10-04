@@ -34,9 +34,21 @@ TypeScript and Python public API (package entry exports) is out of scope here.
 
 **Equal labels.** A verdict whose declared and needed levels carry the same label is skipped, because "exported at Folder but needed only at Folder" would mislead.
 
+## testOnly finding (report schema 10)
+
+Where it lives: `crates/engine/src/analyze/findings/test_only.rs`; the visibility pass skips every node it reports, so an item gets one finding.
+
+Rule: a node earns `testOnly` when the source does not declare it test code (`Node.test_source`, read before adapters demote production code that only tests use), it has at least one non-self-loop user, every user has `test_source`, no advisory use targets it, and it is neither `re_export` nor `advice_exempt` (trait-impl blocks are `advice_exempt`). Unknown users count as non-test. When unsure, silent.
+
+Decision 10/3: **public API does not silence testOnly**, only visibility. Rule 8 ("never narrowed") is about narrowing a scope; "only tests in this repo use it" is a different claim and stays true for a public item. Wording claims only what strata sees: a non-public item says "`X` is used only by tests; move it under test-only code or delete it", a public one says "Only tests in this repo use `X`. It is public, so code outside this repo may use it too; check before moving or deleting it." TypeScript and Python adapters set `public_api` on every exported (TS) or non-underscore/re-exported (Py) item; exact entry-export detection (package.json `exports`/`main`, `__init__` re-exports) is deferred.
+
+Module objects: a Python `import a`, `import a.b as c` and `from pkg import sub` (absolute or relative), a TS `import * as ns`, and a literal TS `require('./a')`, loaded by a non-test file, mark every declaration or export of the target module `advice_exempt`, so none is reported testOnly. This is advice-only in both languages: the dependency graph for these forms is unchanged.
+
+Known limits (no code, may report a false testOnly for): non-literal `import()`, Python `getattr` / `importlib` with computed names, string registries, and names reachable only through `__all__` that start with an underscore.
+
 ## IR additions
 
-`ScopeRung.spelling`, `VisibilityScope.declared_rung`, `IrFragment.exposures`, `IrFragment.advisory_uses`, `Node.public_api`, and a `ScopeLadder` verdict (`declared`, `needed`, `spelling`) replacing the level list. The adapter now emits an entry for every `Restricted`, `Crate` and `Public` declaration; `files` is set only for restricted ones, which keeps the declared-level override. All additions are serde-default and skipped when empty, so the IR schema stays at 3 and the report schema at 9.
+`ScopeRung.spelling`, `VisibilityScope.declared_rung`, `IrFragment.exposures`, `IrFragment.advisory_uses`, `Node.public_api`, `Node.owner` (the type a Rust impl member belongs to, used by testOnly's own-member rule), `AdvisoryUse.from_test` (the use comes from test code; visibility still counts it, testOnly ignores it), and a `ScopeLadder` verdict (`declared`, `needed`, `spelling`) replacing the level list. The adapter now emits an entry for every `Restricted`, `Crate` and `Public` declaration; `files` is set only for restricted ones, which keeps the declared-level override. All additions are serde-default and skipped when empty, so the IR schema stays at 3 and the report schema at 10.
 
 ## 🔀 Alternatives considered
 

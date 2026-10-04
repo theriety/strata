@@ -366,3 +366,23 @@ fn should_surface_a_syntax_error_rather_than_skipping_the_file() {
         "expected a Parse error pointing at the broken file, got {result:?}"
     );
 }
+
+#[test]
+fn should_mark_public_names_as_public_api_and_underscore_names_not() -> Result<(), String> {
+    let adapter = PythonAdapter::new(".");
+    let files = [SourceFile {
+        path: SmolStr::new("pkg/util.py"),
+        contents:
+            "def shown() -> int:\n    return _hidden()\n\n\ndef _hidden() -> int:\n    return 1\n"
+                .to_owned(),
+    }];
+    let trees = adapter.parse(&files).map_err(|error| error.to_string())?;
+    let fragment = adapter.bind(trees).map_err(|error| error.to_string())?;
+    let flags: Vec<(&str, bool)> = fragment
+        .nodes
+        .iter()
+        .map(|node| (node.name.as_str(), node.public_api))
+        .collect();
+    assert_eq!(flags, [("shown", true), ("_hidden", false)]);
+    Ok(())
+}

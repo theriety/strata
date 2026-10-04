@@ -28,6 +28,9 @@ pub enum ViolationClass {
     Capacity,
     /// Declared visibility wider than derived scope.
     Visibility,
+    /// A production item used only by tests.
+    #[serde(rename = "testOnly", alias = "test-only")]
+    TestOnly,
 }
 
 /// The severity a precondition filters on when explicitly opted in.

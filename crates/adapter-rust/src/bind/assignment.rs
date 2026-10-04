@@ -204,7 +204,9 @@ fn node_for(declaration: &Declaration, id: NodeId, container: ContainerId) -> No
     };
     Node {
         public_api: false,
-        advice_exempt: false,
+        // a trait impl is reached through its trait, not by name: nothing can
+        // say it is used only by tests (ADR-25).
+        advice_exempt: declaration.trait_impl,
         id,
         name: declaration.name.clone(),
         kind: match declaration.kind {
@@ -220,6 +222,8 @@ fn node_for(declaration: &Declaration, id: NodeId, container: ContainerId) -> No
             .owner
             .as_ref()
             .map(|owner| SmolStr::new(format!("{owner}::{}", declaration.name))),
+        test_source: false,
+        owner: None,
     }
 }
 
@@ -245,6 +249,8 @@ fn re_export_node(re_export: &ReExport, id: NodeId, container: ContainerId) -> N
         effective_size: 0,
         re_export: true,
         display_name: None,
+        test_source: false,
+        owner: None,
     }
 }
 

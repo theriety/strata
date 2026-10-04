@@ -90,6 +90,30 @@ pub(super) fn classify_polarity(
     polarity
 }
 
+/// Records [`Node::test_source`] for every node declared in a test or support
+/// file, before [`classify_polarity`] demotes production helpers that only
+/// tests use.
+pub(super) fn mark_test_source(
+    modules: &[ParsedModule],
+    nodes: &mut [Node],
+    local: &HashMap<SmolStr, HashMap<SmolStr, NodeId>>,
+) {
+    for module in modules
+        .iter()
+        .filter(|module| is_support_path(&module.path) || is_test_path(&module.path))
+    {
+        for id in local
+            .get(&module.path)
+            .into_iter()
+            .flat_map(HashMap::values)
+        {
+            if let Some(node) = nodes.get_mut(id.0 as usize) {
+                node.test_source = true;
+            }
+        }
+    }
+}
+
 /// Overwrites each node's polarity from the classification vector.
 pub(super) fn apply_polarity(nodes: &mut [Node], polarity: &[Polarity]) {
     for (node, &class) in nodes.iter_mut().zip(polarity) {
@@ -98,7 +122,7 @@ pub(super) fn apply_polarity(nodes: &mut [Node], polarity: &[Polarity]) {
 }
 
 /// Returns `true` if `path` is a test case file by convention.
-fn is_test_path(path: &str) -> bool {
+pub(super) fn is_test_path(path: &str) -> bool {
     let file = path.rsplit('/').next().unwrap_or(path);
     let stem = file.strip_suffix(".py").unwrap_or(file);
     stem.starts_with("test_")
@@ -107,7 +131,7 @@ fn is_test_path(path: &str) -> bool {
 }
 
 /// Returns `true` if `path` is test-support by convention (`conftest.py`).
-fn is_support_path(path: &str) -> bool {
+pub(super) fn is_support_path(path: &str) -> bool {
     path.rsplit('/').next().unwrap_or(path) == "conftest.py"
 }
 

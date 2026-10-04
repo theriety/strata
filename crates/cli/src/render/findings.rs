@@ -146,6 +146,7 @@ fn kind_tag(kind: ViolationKind) -> &'static str {
         ViolationKind::Polarity => "polarity",
         ViolationKind::Capacity => "capacity",
         ViolationKind::Visibility => "visibility",
+        ViolationKind::TestOnly => "testOnly",
     }
 }
 

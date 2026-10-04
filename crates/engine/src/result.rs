@@ -38,7 +38,7 @@ pub use self::profile::{
 ///
 /// Readers of a saved result reject any other version rather than misreading a
 /// future shape.
-pub const RESULT_SCHEMA_VERSION: u32 = 9;
+pub const RESULT_SCHEMA_VERSION: u32 = 10;
 
 /// The top-level analysis result: the snapshot hash, the current tree with its
 /// violations, and the per-profile candidate sets.
