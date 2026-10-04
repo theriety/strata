@@ -1,7 +1,7 @@
 # Strata report — rust
 
 1 files · 5 symbols · 5 edges
-Snapshot `ec4b2195e205110184811070cfb2c645387285c9d37b2691b50be28616cf9dee`
+Snapshot `187ebf98551f6765ee3911a2e9afb9c06570edc2f1fe63d6473e0cae6be542c6`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings

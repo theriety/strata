@@ -7,8 +7,8 @@
 use serde_json::Value;
 use smol_str::SmolStr;
 use strata_engine::ir::{
-    Container, ContainerId, ContainerTree, Edge, EdgeKind, Hardness, IntermediateRepresentation,
-    Node, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
+    Container, ContainerId, ContainerTree, Edge, EdgeKind, FileFact, Hardness,
+    IntermediateRepresentation, Node, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
 };
 use strata_engine::{AnalyzeConfig, ProfileName, analyze};
 
@@ -73,6 +73,22 @@ fn exact_mirror_snapshot_with_names(
     source_name: &str,
     mirror_path: &str,
 ) -> Snapshot {
+    exact_mirror_snapshot_with_facts(
+        include_mirror,
+        fill_test_destination,
+        source_name,
+        mirror_path,
+        Some(&format!("source/module/{source_name}")),
+    )
+}
+
+fn exact_mirror_snapshot_with_facts(
+    include_mirror: bool,
+    fill_test_destination: bool,
+    source_name: &str,
+    mirror_path: &str,
+    fact_source: Option<&str>,
+) -> Snapshot {
     let mirror_folder = mirror_path
         .rsplit_once('/')
         .map_or("spec/module", |(path, _)| path);
@@ -134,11 +150,12 @@ fn exact_mirror_snapshot_with_names(
         }
     }
 
-    let assembled = Snapshot::assemble(IntermediateRepresentation::new(
-        nodes,
-        edges,
-        ContainerTree::new(containers),
-    ));
+    let mut ir = IntermediateRepresentation::new(nodes, edges, ContainerTree::new(containers));
+    if let (true, Some(source)) = (include_mirror, fact_source) {
+        // the language adapter's pair fact; the engine knows no convention
+        ir.file_facts.push(FileFact::test_pair(mirror_path, source));
+    }
+    let assembled = Snapshot::assemble(ir);
     assert!(assembled.is_ok(), "neutral mirror fixture must assemble");
     match assembled {
         Ok(snapshot) => snapshot,
@@ -147,7 +164,7 @@ fn exact_mirror_snapshot_with_names(
 }
 
 #[test]
-fn should_apply_builtin_mirrors_for_all_discovered_typescript_extensions() {
+fn should_apply_adapter_pair_facts_for_all_discovered_typescript_extensions() {
     for extension in ["ts", "tsx", "mts", "cts"] {
         let snapshot = exact_mirror_snapshot_for_extension(true, false, extension);
         let mut config = mirror_config();
@@ -176,7 +193,7 @@ fn should_apply_builtin_mirrors_for_all_discovered_typescript_extensions() {
 }
 
 #[test]
-fn should_apply_the_builtin_python_mirror() {
+fn should_apply_an_adapter_stated_python_pair() {
     let snapshot =
         exact_mirror_snapshot_with_names(true, false, "task.py", "tests/module/test_task.py");
     let mut config = mirror_config();
@@ -427,4 +444,127 @@ fn should_apply_file_pinning_to_only_the_configured_profile() {
         }),
         "anchored pinning must not leak into greenfield: {json}"
     );
+}
+
+fn mirrors_of_task(snapshot: &Snapshot, builtins: bool) -> usize {
+    let mut config = mirror_config();
+    config.profiles.anchored.relocation.test_mirroring.builtins = builtins;
+    config
+        .profiles
+        .anchored
+        .relocation
+        .test_mirroring
+        .rules
+        .clear();
+    let json = serialized_analysis(snapshot, &config);
+    source_move(&json, "workspace/source/module/task.ts")
+        .and_then(|entry| entry.get("mirrors"))
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+#[test]
+fn should_state_no_language_convention_without_an_adapter_fact() {
+    let snapshot =
+        exact_mirror_snapshot_with_facts(true, false, "task.ts", "spec/module/task.spec.ts", None);
+    assert_eq!(mirrors_of_task(&snapshot, true), 0);
+}
+
+#[test]
+fn should_ignore_adapter_pair_facts_when_builtins_are_off() {
+    let snapshot = exact_mirror_snapshot_for_extension(true, false, "ts");
+    assert_eq!(mirrors_of_task(&snapshot, false), 0);
+    assert_eq!(mirrors_of_task(&snapshot, true), 1);
+}
+
+/// Primary sources whose recommendation lists `mirror` as a follower.
+fn mirror_owners(json: &Value, mirror: &str) -> Vec<String> {
+    moves(json)
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .get("mirrors")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|found| found.get("path").and_then(Value::as_str) == Some(mirror))
+        })
+        .flat_map(|entry| {
+            entry
+                .get("files")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|file| file.get("path").and_then(Value::as_str).map(str::to_owned))
+        })
+        .collect()
+}
+
+fn rule(source: &str, test: &str) -> strata_engine::config::TestMirrorRule {
+    strata_engine::config::TestMirrorRule {
+        source: source.to_owned(),
+        tests: vec![test.to_owned()],
+    }
+}
+
+#[test]
+fn should_let_an_adapter_pair_win_over_a_user_rule_naming_another_source() {
+    // the adapter says the module test belongs to the colliding source/other/task.ts
+    // (which stays put); the user rule would link it to the moving source/module/task.ts.
+    let snapshot = exact_mirror_snapshot_with_facts(
+        true,
+        false,
+        "task.ts",
+        "spec/module/task.spec.ts",
+        Some("source/other/task.ts"),
+    );
+    let mut config = mirror_config();
+    config.profiles.anchored.relocation.test_mirroring.builtins = true;
+    let json = serialized_analysis(&snapshot, &config);
+    assert_eq!(
+        mirror_owners(&json, "workspace/spec/module/task.spec.ts"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn should_pair_a_test_with_no_source_when_user_rules_disagree_about_it() {
+    let test = "spec/other/module/task.spec.ts";
+    let snapshot = |config: &AnalyzeConfig| {
+        let snapshot = exact_mirror_snapshot_with_facts(true, false, "task.ts", test, None);
+        serialized_analysis(&snapshot, config)
+    };
+    let mut config = mirror_config();
+    config.profiles.anchored.relocation.test_mirroring.rules = vec![rule(
+        "source/{dir}/{stem}.ts",
+        "spec/other/{dir}/{stem}.spec.ts",
+    )];
+    // one rule alone links the moving source/module/task.ts
+    assert_eq!(
+        mirror_owners(&snapshot(&config), &format!("workspace/{test}")),
+        ["workspace/source/module/task.ts"]
+    );
+    // a second rule names the same test for source/other/task.ts: unsure, so no pair
+    config
+        .profiles
+        .anchored
+        .relocation
+        .test_mirroring
+        .rules
+        .push(rule(
+            "source/{dir}/{stem}.ts",
+            "spec/{dir}/module/{stem}.spec.ts",
+        ));
+    let json = snapshot(&config);
+    assert_eq!(
+        mirror_owners(&json, &format!("workspace/{test}")),
+        Vec::<String>::new()
+    );
+    // no pair at all, so not even a blocked "ambiguous mapping" report
+    let blocked = moves(&json)
+        .into_iter()
+        .filter_map(|entry| entry.get("blockedMirrors").and_then(Value::as_array))
+        .map(Vec::len)
+        .sum::<usize>();
+    assert_eq!(blocked, 0);
 }

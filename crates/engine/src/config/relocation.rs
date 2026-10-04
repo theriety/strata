@@ -47,7 +47,9 @@ impl Default for RelocationConfig {
 pub struct TestMirroringConfig {
     /// Whether accepted source moves attempt immutable mirror followers.
     pub enabled: bool,
-    /// Whether built-in language conventions supplement custom rules.
+    /// Whether the test pairs language adapters state (`file_facts`) are used;
+    /// the engine carries no language conventions of its own. Custom `rules`
+    /// apply either way, after the adapter pairs.
     pub builtins: bool,
     /// Additional exact source-to-test template rules.
     pub rules: Vec<TestMirrorRule>,
@@ -71,43 +73,4 @@ pub struct TestMirrorRule {
     pub source: String,
     /// Test path templates derived from the source captures.
     pub tests: Vec<String>,
-}
-
-pub(crate) fn builtin_test_mirror_rules() -> Vec<TestMirrorRule> {
-    let mut rules = Vec::new();
-    for source_root in ["src", "source"] {
-        for extension in ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"] {
-            rules.push(TestMirrorRule {
-                source: format!("{source_root}/{{dir}}/{{stem}}.{extension}"),
-                tests: ["spec", "test", "tests"]
-                    .into_iter()
-                    .flat_map(|test_root| {
-                        ["spec", "test"].into_iter().map(move |marker| {
-                            format!("{test_root}/{{dir}}/{{stem}}.{marker}.{extension}")
-                        })
-                    })
-                    .chain(["spec", "test"].into_iter().map(|marker| {
-                        format!("{source_root}/{{dir}}/{{stem}}.{marker}.{extension}")
-                    }))
-                    .collect(),
-            });
-        }
-        rules.push(TestMirrorRule {
-            source: format!("{source_root}/{{dir}}/{{stem}}.py"),
-            tests: ["test", "tests"]
-                .into_iter()
-                .flat_map(|test_root| {
-                    [
-                        format!("{test_root}/{{dir}}/test_{{stem}}.py"),
-                        format!("{test_root}/{{dir}}/{{stem}}_test.py"),
-                    ]
-                })
-                .chain([
-                    format!("{source_root}/{{dir}}/test_{{stem}}.py"),
-                    format!("{source_root}/{{dir}}/{{stem}}_test.py"),
-                ])
-                .collect(),
-        });
-    }
-    rules
 }

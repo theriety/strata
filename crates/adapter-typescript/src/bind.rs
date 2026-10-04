@@ -128,6 +128,7 @@ pub(super) fn bind(
         visibility_scopes: Vec::new(),
         exposures: Vec::new(),
         advisory_uses: Vec::new(),
+        file_facts: crate::pairs::file_facts(modules),
     }
 }
 

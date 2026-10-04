@@ -126,6 +126,7 @@ pub(super) fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
         visibility_scopes: Vec::new(),
         exposures: Vec::new(),
         advisory_uses: Vec::new(),
+        file_facts: crate::pairs::file_facts(modules),
     }
 }
 

@@ -15,6 +15,8 @@ use super::globs::{module_paths, resolve_globs};
 use super::metadata::{has_cfg_test, loader_may_drop};
 use super::{Declaration, ParsedFile};
 
+mod pairs;
+
 /// An out-of-line `mod name;` declaration found in a file.
 pub(super) struct ModDecl {
     /// Directory segments contributed by enclosing inline modules.
@@ -118,6 +120,10 @@ pub(super) fn propagate_gates(parsed: &mut [(ParsedFile, Modules)]) {
         if dropped_files.contains(&file.path) {
             mark_all(file, &modules.source);
         }
+    }
+    let sources = pairs::test_sources(&children);
+    for (file, _) in parsed.iter_mut() {
+        file.test_of = sources.get(&file.path).cloned();
     }
     let paths = module_paths(parsed, &children);
     resolve_globs(parsed, &paths);

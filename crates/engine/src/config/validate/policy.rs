@@ -4,9 +4,7 @@ use crate::error::StrataError;
 
 use super::ceilings::{non_negative_finite, unit_interval};
 use crate::config::mirror::{mirror_templates_overlap, validate_mirror_template};
-use crate::config::{
-    AnalyzeConfig, MirrorTemplate, QualificationConfig, RelocationConfig, builtin_test_mirror_rules,
-};
+use crate::config::{AnalyzeConfig, MirrorTemplate, QualificationConfig, RelocationConfig};
 
 impl AnalyzeConfig {
     pub(super) fn validate_qualification(
@@ -87,33 +85,7 @@ impl AnalyzeConfig {
         }
 
         let mirror_prefix = format!("{prefix}.relocation.test-mirroring.rules");
-        let builtins = relocation
-            .test_mirroring
-            .builtins
-            .then(builtin_test_mirror_rules)
-            .unwrap_or_default();
-        let mut parsed_rules: Vec<(MirrorTemplate, Vec<MirrorTemplate>)> = builtins
-            .iter()
-            .map(|rule| {
-                let source = MirrorTemplate::parse(&rule.source).ok_or_else(|| {
-                    StrataError::ConfigInvalid {
-                        key: Some(format!("{prefix}.relocation.test-mirroring.builtins")),
-                        reason: "a built-in source mirror template is invalid".to_owned(),
-                    }
-                })?;
-                let tests = rule
-                    .tests
-                    .iter()
-                    .map(|template| {
-                        MirrorTemplate::parse(template).ok_or_else(|| StrataError::ConfigInvalid {
-                            key: Some(format!("{prefix}.relocation.test-mirroring.builtins")),
-                            reason: "a built-in test mirror template is invalid".to_owned(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok((source, tests))
-            })
-            .collect::<Result<Vec<_>, StrataError>>()?;
+        let mut parsed_rules: Vec<(MirrorTemplate, Vec<MirrorTemplate>)> = Vec::new();
         for (rule_index, rule) in relocation.test_mirroring.rules.iter().enumerate() {
             let source_key = format!("{mirror_prefix}[{rule_index}].source");
             validate_mirror_template(&rule.source, &source_key)?;
