@@ -85,6 +85,8 @@ pub(super) fn assign_re_export_nodes(
                     .map_or(NodeKind::Symbol, |node| node.kind);
                 let id = NodeId(u32::try_from(nodes.len()).unwrap_or(u32::MAX));
                 nodes.push(Node {
+                    public_api: false,
+                    advice_exempt: false,
                     id,
                     name: name.clone(),
                     kind,

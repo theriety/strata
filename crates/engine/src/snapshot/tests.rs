@@ -28,6 +28,8 @@ fn edge(source: u32, target: u32, kind: EdgeKind) -> Edge {
 /// Builds a symbol node owning a container.
 fn node(id: u32, name: &str, container: u32) -> Node {
     Node {
+        public_api: false,
+        advice_exempt: false,
         id: NodeId(id),
         name: SmolStr::new(name),
         kind: NodeKind::Symbol,

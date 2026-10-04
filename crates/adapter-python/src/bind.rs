@@ -65,6 +65,8 @@ pub(super) fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
         for declaration in &module.declarations {
             let id = NodeId(u32::try_from(nodes.len()).unwrap_or(u32::MAX));
             nodes.push(Node {
+                public_api: false,
+                advice_exempt: false,
                 id,
                 name: declaration.name.clone(),
                 kind: if declaration.is_class {

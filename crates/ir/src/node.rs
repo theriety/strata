@@ -73,6 +73,23 @@ pub struct Node {
     /// Added in schema 3; absent from older snapshots, where it reads `false`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub re_export: bool,
+    /// Whether the declaration is part of a library's public API, so users
+    /// outside the analysed tree may depend on it (ADR-25): visibility advice
+    /// never narrows it. An adapter sets it only when it is sure, and also
+    /// when it is unsure, because the flag only ever silences advice.
+    ///
+    /// Added to schema 3; absent means `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub public_api: bool,
+    /// Whether the declaration may be used from code the adapter could not see
+    /// (a dropped `cfg` item, a glob import it could not resolve), so advice
+    /// must not narrow it (ADR-25). Unlike `public_api` this says nothing about
+    /// outside users. Anything that treats "externally reachable" specially
+    /// (such as a test-only check) must look at both flags.
+    ///
+    /// Added to schema 3; absent means `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub advice_exempt: bool,
     /// Human-facing name when it differs from `name` (a method reads
     /// `Type::method`). Display only: matching and lookup key on `name`.
     ///

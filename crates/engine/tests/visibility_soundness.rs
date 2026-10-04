@@ -436,3 +436,436 @@ fn should_leave_scores_and_moves_identical_when_a_cfg_not_test_name_counts_as_a_
     }
     Ok(())
 }
+
+/// Analyzes a throwaway cargo workspace (the files carry every manifest).
+fn workspace_advice(files: &[(&str, &str)]) -> Result<Vec<String>, String> {
+    let root = write_project(files, false)?;
+    let advice = advice_of(&root);
+    let _ = fs::remove_dir_all(&root);
+    advice
+}
+
+#[test]
+fn should_not_flag_an_item_re_exported_by_pub_use() -> Result<(), String> {
+    // group C (E0364): `K` is re-exported by `pub use`; no narrower spelling
+    // may be advised, at the crate root or one module down.
+    let at_root = rust_advice(&[
+        ("src/lib.rs", "mod a;\npub use a::K;\n"),
+        ("src/a.rs", "pub const K: u8 = 1;\n"),
+    ])?;
+    assert!(!mentions(&at_root, "K"), "{at_root:?}");
+
+    let nested = rust_advice(&[
+        ("src/lib.rs", "pub mod outer;\n"),
+        ("src/outer/mod.rs", "mod a;\npub use a::K;\n"),
+        ("src/outer/a.rs", "pub const K: u8 = 1;\n"),
+    ])?;
+    assert!(!mentions(&nested, "K"), "{nested:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_public_fn_used_by_another_workspace_crate() -> Result<(), String> {
+    let advice = workspace_advice(&[
+        (
+            "Cargo.toml",
+            "[workspace]\nresolver = \"2\"\nmembers = [\"lib\", \"app\"]\n",
+        ),
+        (
+            "lib/Cargo.toml",
+            "[package]\nname = \"libx\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        ("lib/src/lib.rs", "pub mod m;\n"),
+        ("lib/src/m.rs", "pub fn f() {}\n"),
+        (
+            "app/Cargo.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nlibx = { path = \"../lib\" }\n",
+        ),
+        ("app/src/main.rs", "fn main() {\n    libx::m::f();\n}\n"),
+    ])?;
+    assert!(!mentions(&advice, "f"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_public_fn_used_only_by_an_integration_test_target() -> Result<(), String> {
+    let advice = rust_advice(&[
+        ("src/lib.rs", "pub fn g() -> u8 {\n    1\n}\n"),
+        (
+            "tests/it.rs",
+            "#[test]\nfn calls_g() {\n    assert_eq!(sound::g(), 1);\n}\n",
+        ),
+    ])?;
+    assert!(!mentions(&advice, "g"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_public_fn_of_a_library_with_no_users() -> Result<(), String> {
+    // the R3 hole: its users live in projects strata cannot see.
+    let advice = rust_advice(&[
+        ("src/lib.rs", "pub mod m;\n"),
+        ("src/m.rs", "pub fn h() {}\n"),
+    ])?;
+    assert!(!mentions(&advice, "h"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_an_item_re_exported_by_a_glob() -> Result<(), String> {
+    let advice = rust_advice(&[
+        ("src/lib.rs", "mod inner;\npub use inner::*;\n"),
+        ("src/inner.rs", "pub fn x() {}\n"),
+    ])?;
+    assert!(!mentions(&advice, "x"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_never_advise_below_the_reach_of_a_pub_crate_re_export() -> Result<(), String> {
+    // E0364: `pub(crate) use` of an item narrower than crate is an error, so
+    // `Y` may not be spelled `pub(super)` although only `outer` files use it.
+    let advice = rust_advice(&[
+        ("src/lib.rs", "mod outer;\n"),
+        ("src/outer/mod.rs", "mod inner;\npub(crate) use inner::Y;\n"),
+        (
+            "src/outer/inner.rs",
+            "pub struct Y;\nfn z() {\n    let _ = Y;\n}\n",
+        ),
+    ])?;
+    assert!(!mentions(&advice, "Y"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_still_flag_a_pub_item_of_a_private_module_and_of_a_binary_crate() -> Result<(), String> {
+    // controls: neither is reachable from outside the crate.
+    let private_module = rust_advice(&[
+        ("src/lib.rs", "mod m;\nfn go() {\n    m::run();\n}\n"),
+        ("src/m.rs", "pub fn run() {\n    p();\n}\npub fn p() {}\n"),
+    ])?;
+    assert!(mentions(&private_module, "p"), "{private_module:?}");
+
+    let binary = rust_advice(&[
+        ("src/main.rs", "mod m;\nfn main() {\n    m::run();\n}\n"),
+        ("src/m.rs", "pub fn run() {\n    q();\n}\npub fn q() {}\n"),
+    ])?;
+    assert!(mentions(&binary, "q"), "{binary:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_public_method_of_a_reachable_type() -> Result<(), String> {
+    let advice = rust_advice(&[
+        ("src/lib.rs", "pub mod s;\n"),
+        (
+            "src/s.rs",
+            "pub struct S;\nimpl S {\n    pub fn m(&self) {}\n}\n",
+        ),
+    ])?;
+    assert!(!mentions(&advice, "S::m"), "{advice:?}");
+    assert!(!mentions(&advice, "S"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_pub_fn_behind_a_feature_or_platform_cfg_in_a_library() -> Result<(), String> {
+    // the loader drops code behind any cfg it cannot prove true, yet a library
+    // user can enable the feature or build for the platform.
+    let advice = rust_advice(&[
+        ("src/lib.rs", "pub mod m;\n"),
+        (
+            "src/m.rs",
+            "#[cfg(feature = \"extra\")]\npub fn extra() {}\n\n#[cfg(windows)]\npub fn win() {}\n\n#[cfg(target_os = \"nonexistent\")]\npub fn nowhere() {}\n",
+        ),
+    ])?;
+    for name in ["extra", "win", "nowhere"] {
+        assert!(!mentions(&advice, name), "{name}: {advice:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn should_count_a_use_inside_any_maybe_dropped_cfg_as_an_advisory_use() -> Result<(), String> {
+    // `H::go` is called from a sibling file only inside platform-gated code that
+    // the loader drops (a receiver call no name fallback can bind); narrowing it
+    // to `a.rs` alone would break that build.
+    let a = "pub(crate) struct H;\nimpl H {\n    pub(crate) fn go(&self) {}\n}\n";
+    let used = rust_advice(&[
+        ("src/lib.rs", "mod outer;\n"),
+        ("src/outer/mod.rs", "mod a;\nmod b;\n"),
+        ("src/outer/a.rs", a),
+        (
+            "src/outer/b.rs",
+            "#[cfg(target_os = \"nonexistent\")]\nfn user(h: &super::a::H) {\n    h.go();\n}\n",
+        ),
+    ])?;
+    let narrowed_to_file = used
+        .iter()
+        .any(|line| line.contains("`H::go`") && line.contains("private"));
+    assert!(!narrowed_to_file, "{used:?}");
+
+    let control = rust_advice(&[
+        ("src/lib.rs", "mod outer;\n"),
+        ("src/outer/mod.rs", "mod a;\nmod b;\n"),
+        ("src/outer/a.rs", a),
+        ("src/outer/b.rs", "fn user() {}\n"),
+    ])?;
+    assert!(mentions(&control, "H::go"), "{control:?}");
+    Ok(())
+}
+
+#[test]
+fn should_split_a_package_with_a_library_and_a_binary_by_target() -> Result<(), String> {
+    let advice = rust_advice(&[
+        ("src/lib.rs", "pub mod m;\n"),
+        ("src/m.rs", "pub fn lib_fn() {}\n"),
+        ("src/main.rs", "mod u;\nfn main() {\n    u::run();\n}\n"),
+        (
+            "src/u.rs",
+            "pub fn run() {\n    bin_only();\n}\npub fn bin_only() {}\n",
+        ),
+    ])?;
+    assert!(!mentions(&advice, "lib_fn"), "{advice:?}");
+    assert!(mentions(&advice, "bin_only"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_renamed_or_nested_re_export() -> Result<(), String> {
+    let renamed = rust_advice(&[
+        ("src/lib.rs", "pub mod outer;\n"),
+        ("src/outer/mod.rs", "mod a;\npub use a::X as Y;\n"),
+        ("src/outer/a.rs", "pub struct X;\n"),
+    ])?;
+    assert!(!mentions(&renamed, "X"), "{renamed:?}");
+
+    let nested = rust_advice(&[
+        ("src/lib.rs", "mod outer;\npub use outer::K;\n"),
+        ("src/outer/mod.rs", "mod a;\npub use a::K;\n"),
+        ("src/outer/a.rs", "pub const K: u8 = 1;\n"),
+    ])?;
+    assert!(!mentions(&nested, "K"), "{nested:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_pub_const_or_type_alias_of_a_public_api() -> Result<(), String> {
+    let advice = rust_advice(&[
+        ("src/lib.rs", "pub mod m;\n"),
+        (
+            "src/m.rs",
+            "pub struct S;\nimpl S {\n    pub const C: u8 = 1;\n}\npub type Alias = u8;\n",
+        ),
+    ])?;
+    assert!(!mentions(&advice, "S::C"), "{advice:?}");
+    assert!(!mentions(&advice, "Alias"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_the_pub_items_of_a_path_attribute_module() -> Result<(), String> {
+    let advice = rust_advice(&[
+        ("src/lib.rs", "#[path = \"other/p.rs\"]\npub mod m;\n"),
+        ("src/other/p.rs", "pub fn pf() {}\n"),
+    ])?;
+    assert!(!mentions(&advice, "pf"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_target_of_a_gated_pub_use_or_pub_crate_use() -> Result<(), String> {
+    // the loader drops a `use` behind a feature or platform cfg, so its
+    // re-export (and the floor it sets) is invisible to the analysis. End-to-end
+    // guard; the fail proof is `strata-adapter-rust::dropped_use`.
+    let feature = rust_advice(&[
+        ("src/lib.rs", "pub mod outer;\n"),
+        (
+            "src/outer/mod.rs",
+            "mod inner;\nmod user;\n#[cfg(feature = \"x\")]\npub(crate) use inner::Fx;\n",
+        ),
+        ("src/outer/inner.rs", "pub(crate) struct Fx;\n"),
+        ("src/outer/user.rs", "fn u(_x: &super::inner::Fx) {}\n"),
+    ])?;
+    assert!(!mentions(&feature, "Fx"), "{feature:?}");
+
+    let platform = rust_advice(&[
+        ("src/lib.rs", "mod outer;\n"),
+        (
+            "src/outer/mod.rs",
+            "mod inner;\nmod user;\nmod real;\n#[cfg(windows)]\npub(crate) use inner::Wx;\n",
+        ),
+        ("src/outer/inner.rs", "pub(crate) struct Wx;\n"),
+        (
+            "src/outer/user.rs",
+            "#[cfg(windows)]\nfn u(_x: super::Wx) {}\n",
+        ),
+        ("src/outer/real.rs", "fn v(_x: &super::inner::Wx) {}\n"),
+    ])?;
+    assert!(!mentions(&platform, "Wx"), "{platform:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_treat_a_test_and_feature_gate_as_certainly_loaded() -> Result<(), String> {
+    // `cfg(all(test, feature = "x"))` is dropped with the feature off, so the
+    // receiver call inside it is an advisory use, not a missing one.
+    let a = "pub(crate) struct H;\nimpl H {\n    pub(crate) fn go(&self) {}\n}\n";
+    let advice = rust_advice(&[
+        ("src/lib.rs", "mod outer;\n"),
+        ("src/outer/mod.rs", "mod a;\nmod b;\n"),
+        ("src/outer/a.rs", a),
+        (
+            "src/outer/b.rs",
+            "#[cfg(all(test, feature = \"x\"))]\nmod t {\n    fn f(h: &super::super::a::H) {\n        h.go();\n    }\n}\n",
+        ),
+    ])?;
+    let narrowed_to_file = advice
+        .iter()
+        .any(|line| line.contains("`H::go`") && line.contains("private"));
+    assert!(!narrowed_to_file, "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_keep_a_file_shared_by_a_library_and_a_binary_a_library_file() -> Result<(), String> {
+    // the library exports `gated` behind a platform cfg; if the shared file
+    // were wrongly treated as binary-only it would be advised narrower.
+    let advice = rust_advice(&[
+        ("src/lib.rs", "pub mod shared;\n"),
+        (
+            "src/main.rs",
+            "#[path = \"shared.rs\"]\nmod shared;\nfn main() {}\n",
+        ),
+        ("src/shared.rs", "#[cfg(windows)]\npub fn gated() {}\n"),
+    ])?;
+    // end-to-end guard only: the fail proof for the shared-file rule is
+    // `strata-adapter-rust::dropped_use` (public_api flag).
+    assert!(!mentions(&advice, "gated"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_target_of_a_gated_glob_pub_use() -> Result<(), String> {
+    // a glob re-export the loader drops still publishes every `pub` item of
+    // the module it names, with the feature on.
+    let advice = rust_advice(&[
+        ("src/lib.rs", "pub mod outer;\n"),
+        (
+            "src/outer/mod.rs",
+            "mod inner;\nmod user;\n#[cfg(feature = \"x\")]\npub use inner::*;\n",
+        ),
+        ("src/outer/inner.rs", "pub struct Gx;\n"),
+        ("src/outer/user.rs", "fn u(_x: &super::inner::Gx) {}\n"),
+    ])?;
+    assert!(!mentions(&advice, "Gx"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_target_of_a_dropped_use_in_a_file_without_declarations() -> Result<(), String>
+{
+    // `b.rs` holds nothing but a gated import, so no node of that file can
+    // stand in as the advisory user; the target must stay as visible as the
+    // import needs, not be narrowed to its own file.
+    let advice = rust_advice(&[
+        ("src/lib.rs", "mod outer;\n"),
+        ("src/outer/mod.rs", "mod a;\nmod b;\n"),
+        ("src/outer/a.rs", "pub(crate) fn lone_helper() {}\n"),
+        (
+            "src/outer/b.rs",
+            "#[cfg(feature = \"x\")]\nuse super::a::lone_helper;\n",
+        ),
+    ])?;
+    assert!(!mentions(&advice, "lone_helper"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_advise_private_for_a_callee_named_in_a_cfg_gated_statement() -> Result<(), String> {
+    // round 4: a statement-level cfg is invisible to the loader, yet with the
+    // feature on `helper` is called from `b`.
+    let advice = rust_advice(&[
+        (
+            "src/lib.rs",
+            "mod a;\nmod b;\nfn run() {\n    b::go();\n    a::own();\n}\n",
+        ),
+        (
+            "src/a.rs",
+            "pub(crate) fn helper() {}\npub(crate) fn own() {\n    helper();\n}\n",
+        ),
+        (
+            "src/b.rs",
+            "pub(crate) fn go() {\n    #[cfg(feature = \"x\")]\n    crate::a::helper();\n}\n",
+        ),
+    ])?;
+    assert!(!mentions(&advice, "helper"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_still_flag_the_callee_when_the_statement_has_no_cfg() -> Result<(), String> {
+    let advice = rust_advice(&[
+        ("src/lib.rs", "mod a;\nfn run() {\n    a::go();\n}\n"),
+        (
+            "src/a.rs",
+            "pub(crate) fn helper() {}\npub(crate) fn go() {\n    helper();\n}\n",
+        ),
+    ])?;
+    assert!(mentions(&advice, "helper"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_narrow_a_type_named_by_a_cfg_gated_field() -> Result<(), String> {
+    let advice = rust_advice(&[
+        (
+            "src/lib.rs",
+            "mod a;\nmod b;\nfn run(_s: b::S) {\n    a::own();\n}\n",
+        ),
+        (
+            "src/a.rs",
+            "pub(crate) struct T;\npub(crate) fn own() {\n    let _ = T;\n}\n",
+        ),
+        (
+            "src/b.rs",
+            "pub(crate) struct S {\n    #[cfg(windows)]\n    field: crate::a::T,\n}\n",
+        ),
+    ])?;
+    assert!(!mentions(&advice, "T"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_still_flag_a_type_named_by_an_ungated_field() -> Result<(), String> {
+    let advice = rust_advice(&[
+        ("src/lib.rs", "mod a;\nfn run(_s: a::S) {}\n"),
+        (
+            "src/a.rs",
+            "pub(crate) struct T;\npub(crate) struct S {\n    field: T,\n}\n",
+        ),
+    ])?;
+    assert!(mentions(&advice, "T"), "{advice:?}");
+    Ok(())
+}
+
+#[test]
+fn should_not_narrow_a_pub_crate_item_behind_a_dropped_glob_with_an_ungated_user()
+-> Result<(), String> {
+    let advice = rust_advice(&[
+        (
+            "src/lib.rs",
+            "mod a;\nmod b;\n#[cfg(feature = \"x\")]\nuse crate::a::*;\nfn run() {\n    b::go();\n}\n",
+        ),
+        (
+            "src/a.rs",
+            "pub(crate) fn lone_helper() {}\npub(crate) fn own() {\n    lone_helper();\n}\n",
+        ),
+        (
+            "src/b.rs",
+            "pub(crate) fn go() {\n    crate::a::own();\n}\n",
+        ),
+    ])?;
+    assert!(!mentions(&advice, "lone_helper"), "{advice:?}");
+    Ok(())
+}
