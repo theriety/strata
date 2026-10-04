@@ -1,5 +1,7 @@
 //! Solver construction: every seed-independent pipeline input, computed once.
 
+use std::collections::BTreeSet;
+
 use smol_str::SmolStr;
 use strata_core::cluster::Partition;
 use strata_core::condense::condense;
@@ -7,8 +9,9 @@ use strata_core::score::Coefficients;
 use strata_ir::{ScopeLevel, Snapshot};
 
 use crate::analyze::layout::{real_dir_partition, relieve_over_capacity, synthesize_roof_rebuild};
-use crate::analyze::relocation::mirror::{adapter_pairs, mirror_rules};
+use crate::analyze::relocation::mirror::{adapter_pairs, exact_links, mirror_rules};
 use crate::analyze::relocation::solver::{build_file_graph, test_zone_marks};
+use crate::analyze::relocation::zone_keys;
 use crate::analyze::relocation::{
     PipelineSolver, RelocationIdentityGuard, TestPolicy, cycle_homes,
     file_facts_repository_relative, file_inventory,
@@ -30,7 +33,20 @@ impl<'a> PipelineSolver<'a> {
         let weights = profile.weights.kind_weights();
         let (files, index_of) = file_inventory(ir);
 
-        let test_zone = test_zone_marks(tests, &files, &ir.nodes);
+        let test_zone = test_zone_marks(tests, &files, &ir.nodes, &ir.file_facts);
+        let adapter_pairs = adapter_pairs(ir, profile);
+        let mirror_rules = mirror_rules(profile);
+        // a paired test follows its source and an entry file never moves: both
+        // are pinned (ADR-26). An unpaired test is an ordinary file, held to
+        // its test root by the zone keys instead.
+        let paired_tests = exact_links(&files, &test_zone, &adapter_pairs, &mirror_rules);
+        let entry_files: BTreeSet<&str> = ir
+            .file_facts
+            .iter()
+            .filter(|fact| fact.entry)
+            .map(|fact| fact.file.as_str())
+            .collect();
+        let zones = zone_keys(&files, &test_zone);
 
         let file_graph = build_file_graph(
             &ir.edges,
@@ -57,8 +73,8 @@ impl<'a> PipelineSolver<'a> {
             .iter()
             .enumerate()
             .map(|(index, file)| {
-                (profile.relocation.pin_detected_test_files
-                    && test_zone.get(index).copied().unwrap_or(false))
+                paired_tests.contains_key(&u32::try_from(index).unwrap_or(u32::MAX))
+                    || entry_files.contains(file.name.as_str())
                     || forbidden_file_patterns.iter().any(|pattern| {
                         pattern.matches_path(std::path::Path::new(file.name.as_str()))
                     })
@@ -140,12 +156,13 @@ impl<'a> PipelineSolver<'a> {
             &mut folder_names,
             &mut folder_synthetic,
         );
-        let relocation_identity = RelocationIdentityGuard::new(
+        let relocation_identity = RelocationIdentityGuard::new_with_zones(
             &relieved_files,
             &condensation,
             &identity_partition,
             &search_partition,
             roof_rebuild.as_ref(),
+            &zones,
         );
         let relocation_identity = if profile.relocation.allow_cross_package_moves {
             relocation_identity.lift_package_wall()
@@ -172,8 +189,8 @@ impl<'a> PipelineSolver<'a> {
             test_zone,
             pinned_scc,
             forbidden_symbol_files,
-            mirror_rules: mirror_rules(profile),
-            adapter_pairs: adapter_pairs(snapshot.ir(), profile),
+            mirror_rules,
+            adapter_pairs,
             mirror_enabled: profile.relocation.test_mirroring.enabled,
             pin_test_symbols: profile.relocation.pin_detected_test_symbols,
             files: relieved_files,

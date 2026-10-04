@@ -1,5 +1,7 @@
 pub mod widget;
 
+pub fn main() {}
+
 #[cfg(test)]
 #[path = "support/check.rs"]
 mod check;

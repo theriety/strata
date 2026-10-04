@@ -4,7 +4,7 @@
 
 Each profile's relocation policy can pin files and symbols in place without removing them from analysis; detected test files and symbols with detected test polarity are pinned, and an accepted source move carries its exact test mirrors as best-effort followers.
 
-- Status: `Accepted`
+- Status: `Accepted` (partly superseded by [ADR-26](adr-26-a-source-and-its-paired-test-move-as-one-unit.md): a blocked follower now drops the whole move and `blockedMirrors` is gone)
 - Date: `2026-09-25`
 
 ## 🎯 Motivation

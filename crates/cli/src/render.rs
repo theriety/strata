@@ -254,8 +254,7 @@ pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<St
             p.tests.builtins
         ),
         format!(
-            "   relocation pin-test-files {} · pin-test-symbols {} · cross-package {} · file patterns {} · symbol patterns {}",
-            p.relocation.pin_detected_test_files,
+            "   relocation pin-test-symbols {} · cross-package {} · file patterns {} · symbol patterns {}",
             p.relocation.pin_detected_test_symbols,
             p.relocation.allow_cross_package_moves,
             p.relocation.forbid_file_moves.len(),
@@ -486,7 +485,6 @@ mod tests {
             to: to.to_owned(),
             reason,
             mirrors: Vec::new(),
-            blocked_mirrors: Vec::new(),
         }
     }
 
@@ -1515,7 +1513,6 @@ mod tests {
                     to: "dataset/src/chosen".to_owned(),
                     reason: MoveReason::Clustering,
                     mirrors: Vec::new(),
-                    blocked_mirrors: Vec::new(),
                 },
             },
             destination: "dataset/src/chosen".to_owned(),
@@ -1780,7 +1777,6 @@ mod tests {
                 to: "new".to_owned(),
                 reason: MoveReason::Clustering,
                 mirrors: Vec::new(),
-                blocked_mirrors: Vec::new(),
             }],
             symbol_moves: Vec::new(),
             capacity_remainder: None,

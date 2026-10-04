@@ -10,7 +10,6 @@ use strata_ir::{Container, Node, Polarity, ScopeLevel};
 use crate::config::{AnalyzeConfig, TestMirrorRule};
 #[cfg(test)]
 use crate::narrate::physical_file_folders;
-use crate::result::BlockedMirrorReason;
 
 use super::*;
 use crate::analyze::relocation::*;
@@ -364,9 +363,7 @@ fn should_detect_a_mirror_collision_beneath_a_repeated_repository_root() {
     assert_eq!(evidence.outcomes.len(), 1);
     assert_eq!(
         outcome.map(|outcome| outcome.disposition),
-        Some(MirrorDisposition::Blocked(
-            BlockedMirrorReason::PathCollision
-        ))
+        Some(MirrorDisposition::Blocked(MirrorBlock::PathCollision))
     );
 }
 
@@ -462,7 +459,7 @@ fn move_spec_tree_into_its_own_package(containers: &mut Vec<Container>) {
     }
 }
 
-fn actual_mirror_evidence(fixture: MirrorBlockFixture) -> PolishEvidence {
+fn actual_mirror_run(fixture: MirrorBlockFixture) -> (PolishEvidence, Partition, Partition) {
     let mut containers = vec![
         container(0, "workspace", ScopeLevel::PackageGroup, None),
         container(1, "source/a", ScopeLevel::Folder, Some(0)),
@@ -552,17 +549,30 @@ fn actual_mirror_evidence(fixture: MirrorBlockFixture) -> PolishEvidence {
     let target = target.unwrap_or(ClusterId(0));
     assert!(parts.move_node(scc(6), target));
 
-    solver.shadow_tests(&mut parts, Vec::new())
+    let evidence = solver.shadow_tests(&mut parts, Vec::new());
+    (evidence, parts, solver.pass_start_partition.clone())
 }
 
-fn assert_actual_mirror_block(fixture: MirrorBlockFixture, expected: BlockedMirrorReason) {
-    let evidence = actual_mirror_evidence(fixture);
+fn actual_mirror_evidence(fixture: MirrorBlockFixture) -> PolishEvidence {
+    actual_mirror_run(fixture).0
+}
+
+fn assert_actual_mirror_block(fixture: MirrorBlockFixture, expected: MirrorBlock) {
+    let (evidence, parts, pass_start) = actual_mirror_run(fixture);
 
     assert_eq!(evidence.outcomes.len(), 1, "one follower was attempted");
     assert_eq!(
         evidence.outcomes.first().map(|outcome| outcome.disposition),
         Some(MirrorDisposition::Blocked(expected))
     );
+    // ADR-26: the refused test drops the whole move, so the source that had
+    // moved is back in its pass-start cluster and the test never left.
+    assert_eq!(
+        parts.assignment(),
+        pass_start.assignment(),
+        "a source whose paired test cannot follow must not move"
+    );
+    assert!(evidence.dropped_a_move());
 }
 
 #[test]
@@ -576,31 +586,25 @@ fn should_leave_a_test_unpaired_when_two_rules_name_different_sources_for_it() {
 
 #[test]
 fn should_report_actual_package_mirror_attempt() {
-    assert_actual_mirror_block(
-        MirrorBlockFixture::Package,
-        BlockedMirrorReason::PackageBoundary,
-    );
+    assert_actual_mirror_block(MirrorBlockFixture::Package, MirrorBlock::PackageBoundary);
 }
 
 #[test]
 fn should_report_actual_namespace_mirror_attempt() {
     assert_actual_mirror_block(
         MirrorBlockFixture::Namespace,
-        BlockedMirrorReason::NamespaceBoundary,
+        MirrorBlock::NamespaceBoundary,
     );
 }
 
 #[test]
 fn should_report_actual_capacity_mirror_attempt() {
-    assert_actual_mirror_block(MirrorBlockFixture::Capacity, BlockedMirrorReason::Capacity);
+    assert_actual_mirror_block(MirrorBlockFixture::Capacity, MirrorBlock::Capacity);
 }
 
 #[test]
 fn should_report_actual_path_collision_mirror_attempt() {
-    assert_actual_mirror_block(
-        MirrorBlockFixture::Collision,
-        BlockedMirrorReason::PathCollision,
-    );
+    assert_actual_mirror_block(MirrorBlockFixture::Collision, MirrorBlock::PathCollision);
 }
 
 #[test]
@@ -624,7 +628,6 @@ fn should_not_shadow_by_basename_when_exact_mirroring_is_disabled() {
     );
     let mut config = AnalyzeConfig::default();
     config.profiles.anchored.relocation.test_mirroring.enabled = false;
-    config.profiles.anchored.relocation.pin_detected_test_files = false;
     let tests = TestPolicy::defaults();
     let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
     let scc_of = |file: u32| {
@@ -669,7 +672,6 @@ fn should_not_duplicate_an_unfollowed_namespace_during_assembly() {
     );
     let mut config = AnalyzeConfig::default();
     config.profiles.anchored.relocation.test_mirroring.enabled = false;
-    config.profiles.anchored.relocation.pin_detected_test_files = false;
     let tests = TestPolicy::defaults();
     let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
     let scc_of = |file: u32| {

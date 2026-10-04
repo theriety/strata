@@ -110,7 +110,6 @@ fn file_advice(path: &str, from: &str, to: &str) -> AdviceProposal {
                 to: to.to_owned(),
                 reason: crate::MoveReason::Clustering,
                 mirrors: Vec::new(),
-                blocked_mirrors: Vec::new(),
             },
         },
         subject: format!("file:{path}"),

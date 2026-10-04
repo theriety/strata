@@ -39,7 +39,6 @@ fn should_default_to_pinning_detected_tests_without_custom_exclusions() {
     let config = AnalyzeConfig::default();
 
     for profile in [&config.profiles.anchored, &config.profiles.greenfield] {
-        assert!(profile.relocation.pin_detected_test_files);
         assert!(profile.relocation.pin_detected_test_symbols);
         assert_eq!(profile.relocation.forbid_file_moves, Vec::<String>::new());
         assert_eq!(profile.relocation.forbid_symbol_moves, Vec::<String>::new());
@@ -54,7 +53,6 @@ fn should_keep_relocation_policies_independent_between_profiles() {
     let loaded = load_toml(
         r#"
 [profiles.anchored.relocation]
-pin-detected-test-files = false
 pin-detected-test-symbols = true
 forbid-file-moves = ["generated/**"]
 forbid-symbol-moves = ["support/**"]
@@ -64,7 +62,6 @@ enabled = false
 builtins = false
 
 [profiles.greenfield.relocation]
-pin-detected-test-files = true
 pin-detected-test-symbols = false
 forbid-file-moves = ["vendor/**"]
 forbid-symbol-moves = ["fixtures/**"]
@@ -82,16 +79,14 @@ tests = ["checks/{dir}/{stem}.spec.ts", "custom-tests/{dir}/{stem}.test.ts"]
 
     assert_eq!(
         config.map(|value| (
-            value.profiles.anchored.relocation.pin_detected_test_files,
             value.profiles.anchored.relocation.pin_detected_test_symbols,
             value.profiles.anchored.relocation.test_mirroring.enabled,
             value.profiles.anchored.relocation.test_mirroring.builtins,
         )),
-        Some((false, true, false, false))
+        Some((true, false, false))
     );
     assert_eq!(
         config.map(|value| (
-            value.profiles.greenfield.relocation.pin_detected_test_files,
             value
                 .profiles
                 .greenfield
@@ -100,7 +95,7 @@ tests = ["checks/{dir}/{stem}.spec.ts", "custom-tests/{dir}/{stem}.test.ts"]
             value.profiles.greenfield.relocation.test_mirroring.enabled,
             value.profiles.greenfield.relocation.test_mirroring.builtins,
         )),
-        Some((true, false, true, true))
+        Some((false, true, true))
     );
     assert_eq!(
         config.map(|value| value

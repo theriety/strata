@@ -13,7 +13,10 @@ use crate::config::CapacityConfig;
 use crate::result::{CapacityRemainder, ContainerNode, Level, Severity};
 
 impl PipelineSolver<'_> {
-    fn physical_entry_counts(&self, parts: &Partition) -> BTreeMap<Vec<String>, u32> {
+    pub(in crate::analyze::relocation) fn physical_entry_counts(
+        &self,
+        parts: &Partition,
+    ) -> BTreeMap<Vec<String>, u32> {
         let assembled = self.assemble(parts);
         physical_folder_entries_repository_relative(
             &assembled.tree,
@@ -21,7 +24,7 @@ impl PipelineSolver<'_> {
         )
     }
 
-    fn physical_entry_counts_with_polish_evidence(
+    pub(in crate::analyze::relocation) fn physical_entry_counts_with_polish_evidence(
         &self,
         parts: &Partition,
         evidence: &PolishEvidence,

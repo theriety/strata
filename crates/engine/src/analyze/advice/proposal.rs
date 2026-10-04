@@ -43,8 +43,6 @@ pub(super) fn atomize_candidate(candidate: &Candidate) -> Vec<AdviceProposal> {
             atom.files = vec![file.clone()];
             atom.mirrors
                 .retain(|mirror| same_report_identity(&mirror.source_path, &file.path));
-            atom.blocked_mirrors
-                .retain(|mirror| same_report_identity(&mirror.source_path, &file.path));
             proposals.push(AdviceProposal {
                 proposal: RelocationProposal::File { relocation: atom },
                 subject: format!("file:{}", file.path),

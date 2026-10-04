@@ -46,7 +46,8 @@ pub(in crate::analyze) struct Withdrawals {
 impl PipelineSolver<'_> {
     /// Settles the restart's path collisions: withdraws every colliding file
     /// move, places the test followers, and repeats both until a round
-    /// withdraws nothing, so a follower that changes a display-level election
+    /// withdraws nothing (a source move dropped for a test that cannot follow
+    /// counts), so a follower that changes a display-level election
     /// cannot carry another file onto an occupied path. Returns the evidence of
     /// the last follower pass, carrying every fold so far.
     ///
@@ -71,11 +72,17 @@ impl PipelineSolver<'_> {
         for round in 0..=self.files.len() {
             let withdrew = !self.is_faithful(parts)
                 && self.fold_path_collisions(parts, &evidence, folds, withdrawals);
-            if round > 0 && !withdrew {
+            // a test that cannot follow drops its source's whole move (ADR-26):
+            // that is a withdrawal too, so the layout settles again.
+            if round > 0 && !withdrew && !evidence.dropped_a_move() {
                 break;
             }
             evidence = self.shadow_tests(parts, folds.clone());
         }
+        // the round cap must never leave a split pair behind (ADR-26)
+        // evidence is read by the layout projection, so a reverted pair's
+        // outcomes go with it: no output may state a move that did not happen.
+        self.revert_split_pairs(parts, &mut evidence);
         if self.is_faithful(parts) {
             folds.clear();
             evidence.folds.clear();
@@ -221,7 +228,11 @@ impl PipelineSolver<'_> {
     /// Pairs each colliding mover (file-graph vertex) with the file that keeps
     /// the path: the file already there when one stays put, otherwise the mover
     /// with the smallest path.
-    fn path_collisions(&self, parts: &Partition, evidence: &PolishEvidence) -> Vec<(usize, usize)> {
+    pub(super) fn path_collisions(
+        &self,
+        parts: &Partition,
+        evidence: &PolishEvidence,
+    ) -> Vec<(usize, usize)> {
         let assembled = self.assemble_with_polish_evidence(parts, evidence);
         let (current, proposed) =
             physical_relocation_folders(&self.snapshot.ir().containers, &assembled.tree);

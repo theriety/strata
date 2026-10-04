@@ -33,4 +33,7 @@ pub(super) struct RelocationPolicy {
     pub(super) pin_test_polarity: bool,
     /// Allow a symbol to land in a file of another package.
     pub(super) allow_cross_package: bool,
+    /// Nodes an adapter marked as a program's start symbol: never relocated
+    /// out of their file, whatever else the file's policy allows (ADR-26).
+    pub(super) start_symbols: BTreeSet<u32>,
 }

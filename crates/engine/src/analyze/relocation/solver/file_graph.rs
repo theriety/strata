@@ -1,10 +1,10 @@
 //! File-grain inputs to the solver: test-zone marks and the priced file graph.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use strata_core::graph::csr::Csr;
 use strata_core::score::KindWeights;
-use strata_ir::{Edge, Node, Polarity};
+use strata_ir::{Edge, FileFact, Node, Polarity};
 
 use crate::analyze::relocation::FileInfo;
 use crate::config::TestsConfig;
@@ -21,6 +21,7 @@ pub(in crate::analyze) fn test_zone_marks(
     tests: &TestPolicy,
     files: &[FileInfo],
     nodes: &[Node],
+    facts: &[FileFact],
 ) -> Vec<bool> {
     let mut marks: Vec<bool> = files
         .iter()
@@ -29,6 +30,20 @@ pub(in crate::analyze) fn test_zone_marks(
                 || (tests.builtins && TestPolicy::matches_builtin_path(&file.name))
         })
         .collect();
+    // a file an adapter states to be the test of a source is a test, whatever
+    // its declarations' polarity says.
+    let paired: BTreeSet<&str> = facts
+        .iter()
+        .filter(|fact| fact.test_of.is_some())
+        .map(|fact| fact.file.as_str())
+        .collect();
+    for (index, file) in files.iter().enumerate() {
+        if paired.contains(file.name.as_str())
+            && let Some(mark) = marks.get_mut(index)
+        {
+            *mark = true;
+        }
+    }
     if tests.builtins {
         let mut case_only: BTreeMap<u32, bool> = BTreeMap::new();
         for node in nodes {
