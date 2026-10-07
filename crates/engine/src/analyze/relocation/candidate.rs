@@ -4,15 +4,12 @@ use std::collections::BTreeMap;
 
 use strata_core::cluster::Partition;
 use strata_core::diversify::SolvedCandidate;
-use strata_core::score::score;
 use strata_ir::{ContainerId, ContainerTree, Node};
 
 use crate::analyze::relocation::mirror::PolishEvidence;
 use crate::analyze::relocation::{CandidateTree, PipelineSolver, symbol};
 use crate::analyze::rendering::render_tree;
-use crate::analyze::scoring::{
-    move_distance, score_candidate, score_current_with_affinity, score_current_with_overlay,
-};
+use crate::analyze::scoring::{score_current_with_affinity, score_current_with_overlay};
 use crate::error::StrataError;
 use crate::narrate::narrate_repository_relative;
 use crate::result::{Candidate, ConditionalSplit, ScoreBreakdown};
@@ -201,19 +198,8 @@ impl PipelineSolver<'_> {
                 .copied()
                 .or_else(|| assembled.placement.get(&id).copied())
         };
-        let distance = move_distance(self.snapshot, &assembled.tree, &merged);
-        let breakdown = score(
-            &score_candidate(
-                self.snapshot,
-                &merged,
-                &assembled.pass_start_file_by_candidate,
-                &assembled.tree,
-                &assembled.namespace_by_file,
-                distance,
-                &self.capacity,
-                self.same_file_symbol,
-                self.same_file_type,
-            ),
+        let breakdown = self.scoring_context(&assembled).score_placement(
+            &merged,
             &self.coefficients,
             &self.weights,
         );

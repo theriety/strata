@@ -16,7 +16,7 @@ use crate::analyze::relocation::{
     PipelineSolver, RelocationIdentityGuard, TestPolicy, cycle_homes,
     file_facts_repository_relative, file_inventory,
 };
-use crate::analyze::scoring::{ProfileSource, level_caps};
+use crate::analyze::scoring::{ProfileSource, SnapshotScoring, level_caps};
 
 impl<'a> PipelineSolver<'a> {
     /// Builds the solver, computing every seed-independent pipeline input once.
@@ -204,6 +204,11 @@ impl<'a> PipelineSolver<'a> {
             weights,
             same_file_symbol: profile.weights.same_file_symbol,
             same_file_type: profile.weights.same_file_type,
+            scoring: SnapshotScoring::new(
+                snapshot,
+                profile.weights.same_file_symbol,
+                profile.weights.same_file_type,
+            ),
             identity,
             pass_start_partition: identity_partition,
             cycle_home_by_vertex,

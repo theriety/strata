@@ -1,4 +1,7 @@
 //! Counts of declarations and companions that leave their pass-start file.
+//!
+//! Test oracle: production scores through `ScoringContext`; this builder is kept
+//! so the tests can check the hoisted path against the straightforward one.
 
 use std::collections::{BTreeMap, BTreeSet};
 
