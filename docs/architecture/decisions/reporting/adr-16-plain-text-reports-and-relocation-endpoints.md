@@ -4,7 +4,7 @@
 
 `analyze` defaults to the same plain-text report for every output sink, terminal and Markdown reports carry identical content at each verbosity level, and before/after trees name each moved symbol's source and destination.
 
-- Status: `Accepted`
+- Status: `Accepted` (partly superseded by [ADR-27](adr-27-human-reports-cap-lists-at-five.md): the default human report caps each list at five; `--full` shows everything)
 - Date: `2026-09-08`
 
 ## 🎯 Motivation
@@ -25,7 +25,7 @@ Structural findings contain shared and profile-specific evidence, locations, lim
 
 Advice retains the **Recommended** and **Review candidate** groups defined in [ADR-14](../advice/adr-14-profile-consensus.md). Wrapped action lists identify their grain and retain supporting, qualifying, absent, and conflicting profiles, conflicting destinations, and plain-language review reasons. Terms are defined at first use; agreement between profiles is not independent confirmation.
 
-The default report includes all actions, essential warnings, and conditional prerequisites. `--verbose` on `analyze` and `report` adds score-component deltas under each candidate, complete numerical evidence and thresholds under each advice entry, and effective configuration at the end. JSON content and schema are unaffected by verbosity.
+The default report includes all actions, essential warnings, and conditional prerequisites (superseded by [ADR-27](adr-27-human-reports-cap-lists-at-five.md): the default now caps each list at five and `--full` restores this behavior). `--verbose` on `analyze` and `report` adds score-component deltas under each candidate, complete numerical evidence and thresholds under each advice entry, and effective configuration at the end. JSON content and schema are unaffected by verbosity.
 
 ### Before and after trees
 

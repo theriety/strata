@@ -3,5 +3,5 @@ visibility [violation] crates/core/src/alpha/parse.rs, parse_max :: `parse_max` 
 visibility [violation] crates/core/src/alpha/score.rs, score :: `score` in `crates/core/src/alpha/score.rs` is exported at Package but needed only at File; narrowest spelling: private (no `pub`)
 visibility [violation] crates/core/src/alpha/score.rs, score_pair :: `score_pair` in `crates/core/src/alpha/score.rs` is exported at Package but needed only at File; narrowest spelling: private (no `pub`)
 visibility [violation] crates/core/src/beta/report.rs, render :: `render` in `crates/core/src/beta/report.rs` is exported at Package but needed only at File; narrowest spelling: private (no `pub`)
-visibility [violation] crates/core/src/beta/report.rs, render_all :: `render_all` in `crates/core/src/beta/report.rs` is exported at Package but needed only at File; narrowest spelling: private (no `pub`)
+… 1 more — rerun with --full to see all
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.

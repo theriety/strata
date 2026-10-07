@@ -38,11 +38,13 @@ impl Report {
             format!("Snapshot `{}`", result.snapshot_hash),
             super::ADVICE_DISCLAIMER.to_owned(),
         ];
-        let mut findings = findings_lines("Shared findings", &result.current.shared_findings);
+        let mut findings =
+            findings_lines("Shared findings", &result.current.shared_findings, options);
         for (name, profile) in present_modes(result) {
             findings.extend(findings_lines(
                 &format!("{name} profile-specific findings"),
                 &profile.current.unique_findings,
+                options,
             ));
         }
         let mut candidates = wrap(

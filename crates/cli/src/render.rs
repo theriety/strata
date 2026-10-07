@@ -12,6 +12,7 @@ mod advice;
 mod changes;
 mod diff;
 mod findings;
+mod limit;
 mod report;
 mod tree;
 
@@ -63,28 +64,20 @@ impl Format {
     }
 }
 
-/// Renders the analysis `result` in `format` to `out`.
-///
-/// The JSON face is the parity-pinned serialization of the library result; the
-/// summary face presents findings, candidate layouts, and qualified advice.
-/// `project` names the saved analyzed repository and banners the report.
-pub fn render(
-    result: &AnalyzeResult,
-    format: Format,
-    project: &str,
-    out: &mut impl Write,
-) -> io::Result<()> {
-    render_with_options(result, format, project, RenderOptions::default(), out)
-}
-
 /// Human-readable report detail. JSON serialization ignores these options.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RenderOptions {
     /// Includes numerical evidence, score components, and effective parameters.
     pub verbose: bool,
+    /// Shows every list item instead of the first few of each list.
+    pub full: bool,
 }
 
-/// Renders an analysis with explicit human-readable detail options.
+/// Renders the analysis `result` in `format` to `out` with explicit detail options.
+///
+/// The JSON face is the parity-pinned serialization of the library result; the
+/// summary face presents findings, candidate layouts, and qualified advice.
+/// `project` names the saved analyzed repository and banners the report.
 ///
 /// # Errors
 /// Returns the output sink's I/O error.
@@ -412,7 +405,13 @@ mod tests {
         super::combined_package_moves::configure(&mut result)?;
         let mut buffer = Vec::new();
 
-        render(&result, Format::Summary, "workspace", &mut buffer)?;
+        render_with_options(
+            &result,
+            Format::Summary,
+            "workspace",
+            RenderOptions::default(),
+            &mut buffer,
+        )?;
 
         super::combined_package_moves::assert_paths(&String::from_utf8(buffer)?)?;
         Ok(())
@@ -528,7 +527,7 @@ mod tests {
     fn should_report_no_violations_when_the_list_is_empty() {
         let mut buffer = Vec::new();
 
-        write_violation_table(&[], &mut buffer).unwrap_or_default();
+        write_violation_table(&[], RenderOptions::default(), &mut buffer).unwrap_or_default();
 
         assert_eq!(
             buffer,
@@ -540,7 +539,8 @@ mod tests {
     fn should_tabulate_a_violation_with_its_kind_and_severity() {
         let mut buffer = Vec::new();
 
-        write_violation_table(&[cycle()], &mut buffer).unwrap_or_default();
+        write_violation_table(&[cycle()], RenderOptions::default(), &mut buffer)
+            .unwrap_or_default();
 
         let text = String::from_utf8(buffer).unwrap_or_default();
         assert_eq!(
@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn should_end_every_text_surface_with_the_one_advice_disclaimer() {
         let mut table = Vec::new();
-        assert!(write_violation_table(&[], &mut table).is_ok());
+        assert!(write_violation_table(&[], RenderOptions::default(), &mut table).is_ok());
         let table = String::from_utf8_lossy(&table);
         assert_eq!(table.matches(ADVICE_DISCLAIMER).count(), 1, "{table}");
         assert!(table.trim_end().ends_with(ADVICE_DISCLAIMER));
@@ -760,7 +760,10 @@ mod tests {
             &result,
             Format::Summary,
             "fixture",
-            RenderOptions { verbose: true },
+            RenderOptions {
+                verbose: true,
+                ..RenderOptions::default()
+            },
             &mut output,
         )
         .is_ok();
@@ -1024,9 +1027,16 @@ mod tests {
             .greenfield
             .clone_from(&result.profiles.anchored);
 
-        let text = report::Report::build(&result, "fixture", RenderOptions { verbose: true })
-            .lines()
-            .join("\n");
+        let text = report::Report::build(
+            &result,
+            "fixture",
+            RenderOptions {
+                verbose: true,
+                ..RenderOptions::default()
+            },
+        )
+        .lines()
+        .join("\n");
         assert!(text.contains("-0.5000"));
         assert!(text.contains("-0.0001"));
         assert!(text.contains("Partial plans are not"));
@@ -1150,9 +1160,16 @@ mod tests {
     fn should_show_score_components_and_definitions_only_with_verbose() {
         let result = result_with_candidate();
         let quiet = report_lines(&result, "fixture").join("\n");
-        let verbose = report::Report::build(&result, "fixture", RenderOptions { verbose: true })
-            .lines()
-            .join("\n");
+        let verbose = report::Report::build(
+            &result,
+            "fixture",
+            RenderOptions {
+                verbose: true,
+                ..RenderOptions::default()
+            },
+        )
+        .lines()
+        .join("\n");
         assert!(!quiet.contains("Score components"));
         assert!(verbose.contains("Score components"));
         assert!(verbose.contains("capacity penalizes"));
@@ -1193,10 +1210,11 @@ mod tests {
         }];
         let mut terminal = Vec::new();
 
-        render(
+        render_with_options(
             &result,
             Format::Summary,
             &result.current.tree.name,
+            RenderOptions::default(),
             &mut terminal,
         )?;
         let terminal = String::from_utf8(terminal)?;
@@ -1293,10 +1311,11 @@ mod tests {
         }];
         let mut terminal = Vec::new();
 
-        render(
+        render_with_options(
             &result,
             Format::Summary,
             &result.current.tree.name,
+            RenderOptions::default(),
             &mut terminal,
         )?;
         let terminal = String::from_utf8(terminal)?;
@@ -1444,9 +1463,16 @@ mod tests {
         };
         result.advice.recommended = vec![item.clone()];
         result.advice.review_candidates = vec![item];
-        let text = report::Report::build(&result, "fixture", RenderOptions { verbose: true })
-            .lines()
-            .join("\n");
+        let text = report::Report::build(
+            &result,
+            "fixture",
+            RenderOptions {
+                verbose: true,
+                ..RenderOptions::default()
+            },
+        )
+        .lines()
+        .join("\n");
         let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
 
         assert!(text.contains("Recommended"), "{text}");
@@ -1545,9 +1571,16 @@ mod tests {
             review_reasons: vec![strata_engine::ReviewReason::PartialProfileSupport],
         }];
 
-        let text = report::Report::build(&result, "dataset", RenderOptions { verbose: true })
-            .lines()
-            .join("\n");
+        let text = report::Report::build(
+            &result,
+            "dataset",
+            RenderOptions {
+                verbose: true,
+                ..RenderOptions::default()
+            },
+        )
+        .lines()
+        .join("\n");
 
         assert!(text.contains("file `dataset/src/origin/unit.ts` → `dataset/src/chosen`"));
         assert!(text.contains("best alternative `dataset/src/alternative`"));
@@ -1788,6 +1821,273 @@ mod tests {
         let text = String::from_utf8(buffer).unwrap_or_default();
         assert!(text.contains("  1. a.ts [one → new]\n"), "{text}");
         assert!(text.contains("  2. b.ts [two → new]\n"), "{text}");
+    }
+
+    /// Builds `count` capacity findings named `c0`, `c1`, ... at `severity`.
+    fn findings_at(count: usize, severity: Severity) -> Vec<Violation> {
+        (0..count)
+            .map(|index| Violation {
+                severity,
+                ..capacity_violation(&format!("c{index}"))
+            })
+            .collect()
+    }
+
+    /// Counts the `… N more` lines in `text`.
+    fn more_lines(text: &str) -> Vec<&str> {
+        text.lines()
+            .filter(|line| line.contains("more — rerun with --full to see all"))
+            .collect()
+    }
+
+    fn summary(result: &AnalyzeResult, options: RenderOptions) -> String {
+        let mut buffer = Vec::new();
+        render_with_options(result, Format::Summary, "fixture", options, &mut buffer)
+            .unwrap_or_default();
+        String::from_utf8(buffer).unwrap_or_default()
+    }
+
+    fn full() -> RenderOptions {
+        RenderOptions {
+            full: true,
+            ..RenderOptions::default()
+        }
+    }
+
+    #[test]
+    fn should_cap_findings_at_five_with_the_true_total_and_a_more_line() {
+        let result = result_with(findings_at(8, Severity::Violation));
+
+        let text = summary(&result, RenderOptions::default());
+
+        assert!(
+            text.contains("anchored profile-specific findings (8)"),
+            "{text}"
+        );
+        assert_eq!(text.matches("- capacity [violation]").count(), 5, "{text}");
+        assert_eq!(
+            more_lines(&text),
+            vec!["  … 3 more — rerun with --full to see all"]
+        );
+    }
+
+    #[test]
+    fn should_not_add_a_more_line_for_exactly_five_findings() {
+        let result = result_with(findings_at(5, Severity::Violation));
+
+        let text = summary(&result, RenderOptions::default());
+
+        assert_eq!(text.matches("- capacity [violation]").count(), 5, "{text}");
+        assert_eq!(more_lines(&text).len(), 0, "{text}");
+    }
+
+    #[test]
+    fn should_show_every_finding_with_full() {
+        let result = result_with(findings_at(8, Severity::Violation));
+
+        let text = summary(&result, full());
+
+        assert_eq!(text.matches("- capacity [violation]").count(), 8, "{text}");
+        assert_eq!(more_lines(&text).len(), 0, "{text}");
+    }
+
+    #[test]
+    fn should_show_hard_violations_before_borderline_findings_when_capped() {
+        let mut findings = findings_at(6, Severity::Borderline);
+        findings.extend(findings_at(2, Severity::Violation));
+        let result = result_with(findings);
+
+        let text = summary(&result, RenderOptions::default());
+
+        assert_eq!(text.matches("[violation]").count(), 2, "{text}");
+        assert_eq!(text.matches("[borderline]").count(), 3, "{text}");
+    }
+
+    #[test]
+    fn should_cap_each_advice_list_on_its_own() {
+        let mut result = result_with_candidate();
+        let item = |index: usize| {
+            let relocation = SymbolMove {
+                display: None,
+                symbol: format!("Thing{index}"),
+                kind: SymbolKind::Type,
+                from_path: "origin/options.ts".to_owned(),
+                to_path: "shared/owner.ts".to_owned(),
+                delta: -0.1,
+                broken_imports: 1,
+            };
+            strata_engine::RelocationAdvice {
+                proposal: strata_engine::RelocationProposal::Symbol { relocation },
+                destination: "shared/owner.ts".to_owned(),
+                supporting_profiles: vec![strata_engine::ProfileName::Anchored],
+                qualified_profiles: Vec::new(),
+                absent_profiles: Vec::new(),
+                conflicting_destinations: Vec::new(),
+                assessments: Vec::new(),
+                review_reasons: Vec::new(),
+            }
+        };
+        result.advice.recommended = (0..7).map(item).collect();
+        result.advice.review_candidates = (0..5).map(item).collect();
+
+        let capped = summary(&result, RenderOptions::default());
+        let everything = summary(&result, full());
+
+        assert!(capped.contains(" Recommended (7):"), "{capped}");
+        assert!(capped.contains(" Review candidate (5):"), "{capped}");
+        assert_eq!(
+            more_lines(&capped),
+            vec!["   … 2 more — rerun with --full to see all"]
+        );
+        assert_eq!(more_lines(&everything).len(), 0);
+        assert_eq!(
+            everything.matches("- type `Thing").count() - capped.matches("- type `Thing").count(),
+            2
+        );
+    }
+
+    #[test]
+    fn should_cap_proposed_moves_per_candidate() {
+        let mut result = result_with_candidate();
+        if let Some(candidate) = result
+            .profiles
+            .anchored
+            .as_mut()
+            .and_then(|profile| profile.candidates.first_mut())
+        {
+            candidate.delta_narration.clear();
+            candidate.symbol_moves = (0..7)
+                .map(|index| SymbolMove {
+                    display: None,
+                    symbol: format!("Thing{index}"),
+                    kind: SymbolKind::Type,
+                    from_path: "origin/options.ts".to_owned(),
+                    to_path: "shared/owner.ts".to_owned(),
+                    delta: -0.1,
+                    broken_imports: 1,
+                })
+                .collect();
+        }
+
+        let capped = summary(&result, RenderOptions::default());
+        let everything = summary(&result, full());
+
+        assert_eq!(capped.matches("- Move type").count(), 5, "{capped}");
+        assert_eq!(
+            more_lines(&capped),
+            vec!["    … 2 more — rerun with --full to see all"]
+        );
+        assert_eq!(everything.matches("- Move type").count(), 7);
+    }
+
+    #[test]
+    fn should_cap_the_violation_table_and_keep_the_disclaimer() {
+        let findings = findings_at(7, Severity::Violation);
+        let mut capped = Vec::new();
+        let mut everything = Vec::new();
+
+        write_violation_table(&findings, RenderOptions::default(), &mut capped).unwrap_or_default();
+        write_violation_table(&findings, full(), &mut everything).unwrap_or_default();
+
+        let capped = String::from_utf8(capped).unwrap_or_default();
+        let everything = String::from_utf8(everything).unwrap_or_default();
+        assert_eq!(
+            capped.matches("capacity [violation]").count(),
+            5,
+            "{capped}"
+        );
+        assert_eq!(
+            more_lines(&capped),
+            vec!["… 2 more — rerun with --full to see all"]
+        );
+        assert!(capped.ends_with(&format!("{ADVICE_DISCLAIMER}\n")));
+        assert_eq!(everything.matches("capacity [violation]").count(), 7);
+        assert_eq!(more_lines(&everything).len(), 0);
+    }
+
+    /// A result whose one candidate narrates a single group of `count` files.
+    fn result_with_one_move_group(count: usize) -> AnalyzeResult {
+        let mut result = result_with_candidate();
+        let paths: Vec<String> = (0..count).map(|index| format!("f{index}.ts")).collect();
+        let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+        if let Some(candidate) = result
+            .profiles
+            .anchored
+            .as_mut()
+            .and_then(|mode| mode.candidates.first_mut())
+        {
+            candidate.delta_narration = vec![move_of(
+                MoveKind::Merge,
+                &paths,
+                "src/old",
+                "src/new",
+                MoveReason::Clustering,
+            )];
+        }
+        result
+    }
+
+    #[test]
+    fn should_cap_proposed_moves_by_line_not_by_group() {
+        let result = result_with_one_move_group(8);
+
+        let text = summary(&result, RenderOptions::default());
+
+        let lines: Vec<&str> = text.lines().collect();
+        let first = lines.iter().position(|line| line.contains("- Move file"));
+        assert_eq!(text.matches("- Move file").count(), 5, "{text}");
+        let first = first.unwrap_or_default();
+        assert!(
+            lines
+                .get(first + 5)
+                .is_some_and(|line| line.trim_start().starts_with("Why:")),
+            "{text}"
+        );
+        assert_eq!(text.matches("Why:").count(), 1, "{text}");
+        assert_eq!(
+            lines.get(first + 6),
+            Some(&"    … 3 more — rerun with --full to see all"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn should_print_a_move_groups_reason_once_after_its_last_line_with_full() {
+        let result = result_with_one_move_group(8);
+
+        let text = summary(&result, full());
+
+        assert_eq!(text.matches("- Move file").count(), 8, "{text}");
+        assert_eq!(text.matches("Why:").count(), 1, "{text}");
+        assert_eq!(more_lines(&text).len(), 0, "{text}");
+    }
+
+    #[test]
+    fn should_show_no_more_line_for_exactly_five_move_lines() {
+        let result = result_with_one_move_group(5);
+
+        let text = summary(&result, RenderOptions::default());
+
+        assert_eq!(text.matches("- Move file").count(), 5, "{text}");
+        assert_eq!(more_lines(&text).len(), 0, "{text}");
+    }
+
+    #[test]
+    fn should_never_cap_json() {
+        let result = result_with(findings_at(8, Severity::Violation));
+        let mut json = Vec::new();
+
+        render_with_options(
+            &result,
+            Format::Json,
+            "fixture",
+            RenderOptions::default(),
+            &mut json,
+        )
+        .unwrap_or_default();
+
+        let json = String::from_utf8(json).unwrap_or_default();
+        assert_eq!(json.matches("\"kind\":\"capacity\"").count(), 8);
     }
 }
 
