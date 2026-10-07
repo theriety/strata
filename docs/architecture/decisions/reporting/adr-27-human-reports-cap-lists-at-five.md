@@ -39,3 +39,9 @@ This partly supersedes [ADR-16](adr-16-plain-text-reports-and-relocation-endpoin
 
 - The default report may omit actions a reader would have taken; the "more" line says so and names the flag.
 - Scripts that parse the human text for every item must pass `--full` or read JSON.
+
+## Amendment 2026-10-08: tidy text
+
+- Wrapping stays lossless in meaning but no rendered line ends in whitespace; a break consumes the whitespace it falls on, so joining wrapped lines with one space restores the text (refines ADR-16's "lossless wrapping").
+- A section with nothing to show takes one line: profiles that all produced zero candidates print one `name — 0 candidates (baseline ...; ...)` line each and skip the explanatory paragraph, and empty Advice prints `  None.` without its explanation. JSON is unchanged.
+- **Cycle cuts lead with file-crossing edges.** `EdgeBreak.same_file` (skipped when false; result schema stays 10) marks a cut whose endpoints share a file. Breaks list file-crossing edges first, keeping solver order within each group. A same-file cut is still required but does not separate files, so reports label it "Also cut (same file)". Solver weights and the break set are unchanged; only the JSON `break_suggestions` order may differ.

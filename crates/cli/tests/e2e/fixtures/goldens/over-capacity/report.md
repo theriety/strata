@@ -16,36 +16,17 @@ anchored profile-specific findings (0)
 
 greenfield profile-specific findings (0)
   None.
-
 ```
 
 ## Candidate layouts
 
 ```text
-Lower scores are better. Compare scores only within one parameter profile of one project. A 
-candidate is a proposed layout; inclusion does not make a move Recommended. Partial plans are not 
-rescored.
-
-anchored — 0 candidate(s)
-Baseline score: 1.4095
-Fewer than the requested candidates survived; the solution space converged.
-Current layout violates 2 capacity cap(s).
-No candidates were produced.
-
-greenfield — 0 candidate(s)
-Baseline score: 1.6095
-Fewer than the requested candidates survived; the solution space converged.
-Current layout violates 2 capacity cap(s).
-No candidates were produced.
+anchored — 0 candidates (baseline 1.4095; search converged; current layout breaks 2 cap(s))
+greenfield — 0 candidates (baseline 1.6095; search converged; current layout breaks 2 cap(s))
 ```
 
 ## Advice
 
 ```text
-Supporting profiles selected the destination; qualified profiles also passed the evidence 
-thresholds; absent profiles did not select the move; conflicts name alternative destinations. 
-Advice consolidates the best candidate from each executed profile.
- Recommended (0):
- Review candidate (0):
-
+  None.
 ```

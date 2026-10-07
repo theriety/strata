@@ -13,7 +13,7 @@ mod fit;
 mod profile;
 
 use fit::fit_lines;
-use profile::profile_lines;
+use profile::{empty_profile_line, profile_lines};
 
 /// A heading and its already-wrapped, format-independent body.
 struct Section {
@@ -41,29 +41,48 @@ impl Report {
         let mut findings =
             findings_lines("Shared findings", &result.current.shared_findings, options);
         for (name, profile) in present_modes(result) {
+            findings.push(String::new());
             findings.extend(findings_lines(
                 &format!("{name} profile-specific findings"),
                 &profile.current.unique_findings,
                 options,
             ));
         }
-        let mut candidates = wrap(
-            "Lower scores are better. Compare scores only within one parameter profile of one project. A candidate is a proposed layout; inclusion does not make a move Recommended. Partial plans are not rescored.",
-            0,
-            0,
-        );
-        if present_modes(result).is_empty() {
-            candidates.push("No candidates were produced.".to_owned());
-        }
-        for (name, profile) in present_modes(result) {
-            candidates.extend(profile_lines(result, name, profile, options));
-        }
-        let mut advice = wrap(
-            "Supporting profiles selected the destination; qualified profiles also passed the evidence thresholds; absent profiles did not select the move; conflicts name alternative destinations. Advice consolidates the best candidate from each executed profile.",
-            0,
-            0,
-        );
-        advice.extend(advice_with_options(result, options));
+        let modes = present_modes(result);
+        let candidates = if modes.is_empty() {
+            vec!["No candidates were produced.".to_owned()]
+        } else if modes
+            .iter()
+            .all(|(_, profile)| profile.candidates.is_empty())
+        {
+            modes
+                .iter()
+                .map(|(name, profile)| empty_profile_line(name, profile))
+                .collect()
+        } else {
+            let mut lines = wrap(
+                "Lower scores are better. Compare scores only within one parameter profile of one project. A candidate is a proposed layout; inclusion does not make a move Recommended. Partial plans are not rescored.",
+                0,
+                0,
+            );
+            for (name, profile) in modes {
+                lines.extend(profile_lines(result, name, profile, options));
+            }
+            lines
+        };
+        let advice = if result.advice.recommended.is_empty()
+            && result.advice.review_candidates.is_empty()
+        {
+            vec!["  None.".to_owned()]
+        } else {
+            let mut lines = wrap(
+                "Supporting profiles selected the destination; qualified profiles also passed the evidence thresholds; absent profiles did not select the move; conflicts name alternative destinations. Advice consolidates the best candidate from each executed profile.",
+                0,
+                0,
+            );
+            lines.extend(advice_with_options(result, options));
+            lines
+        };
         let mut sections = vec![
             Section {
                 title: "Structural findings".to_owned(),

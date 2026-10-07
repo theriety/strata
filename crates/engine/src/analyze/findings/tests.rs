@@ -1227,3 +1227,56 @@ fn should_not_report_a_type_whose_member_has_a_production_caller() -> Result<(),
     assert_eq!(found, Vec::<u32>::new());
     Ok(())
 }
+
+#[test]
+fn should_order_file_crossing_cuts_before_same_file_cuts_and_flag_the_latter() {
+    use crate::analyze::search::SccSolution;
+    use strata_core::shatter::{BreakSet, EdgeRef};
+
+    // locals 0 and 1 share file 0; local 2 lives in file 1.
+    let nodes = [
+        node(0, "a", 0, Polarity::Production),
+        node(1, "b", 0, Polarity::Production),
+        node(2, "c", 1, Polarity::Production),
+    ];
+    let by_id: BTreeMap<u32, &strata_ir::Node> =
+        nodes.iter().map(|node| (node.id.0, node)).collect();
+    let names: BTreeMap<u32, String> = [(0, "a"), (1, "b"), (2, "c")]
+        .into_iter()
+        .map(|(id, name)| (id, name.to_owned()))
+        .collect();
+    let solution = SccSolution {
+        members: vec![NodeId(0), NodeId(1), NodeId(2)],
+        pair_weights: BTreeMap::new(),
+        // index order puts the same-file edge a -> b first.
+        break_set: BreakSet {
+            edges: vec![
+                EdgeRef {
+                    source: 0,
+                    target: 1,
+                },
+                EdgeRef {
+                    source: 1,
+                    target: 2,
+                },
+                EdgeRef {
+                    source: 2,
+                    target: 0,
+                },
+            ],
+            exact: true,
+        },
+        production_sloc: 0,
+    };
+
+    let breaks = cycles::edge_breaks(&solution, &names, &by_id);
+
+    let order: Vec<(&str, &str, bool)> = breaks
+        .iter()
+        .map(|edge| (edge.source.as_str(), edge.target.as_str(), edge.same_file))
+        .collect();
+    assert_eq!(
+        order,
+        [("b", "c", false), ("c", "a", false), ("a", "b", true)]
+    );
+}

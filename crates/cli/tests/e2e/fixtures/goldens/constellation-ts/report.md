@@ -15,14 +15,13 @@ anchored profile-specific findings (0)
 
 greenfield profile-specific findings (0)
   None.
-
 ```
 
 ## Candidate layouts
 
 ```text
-Lower scores are better. Compare scores only within one parameter profile of one project. A 
-candidate is a proposed layout; inclusion does not make a move Recommended. Partial plans are not 
+Lower scores are better. Compare scores only within one parameter profile of one project. A
+candidate is a proposed layout; inclusion does not make a move Recommended. Partial plans are not
 rescored.
 
 anchored — 0 candidate(s)
@@ -60,15 +59,15 @@ greenfield — candidate 1
 ## Advice
 
 ```text
-Supporting profiles selected the destination; qualified profiles also passed the evidence 
-thresholds; absent profiles did not select the move; conflicts name alternative destinations. 
+Supporting profiles selected the destination; qualified profiles also passed the evidence
+thresholds; absent profiles did not select the move; conflicts name alternative destinations.
 Advice consolidates the best candidate from each executed profile.
  Profiles share analysis-start evidence but apply their own weights and thresholds.
  Recommended (0):
  Review candidate (1):
-   - file `src/util/hash.ts` → `src/model` · supporting [greenfield] · qualified [greenfield] · 
+   - file `src/util/hash.ts` → `src/model` · supporting [greenfield] · qualified [greenfield] ·
    absent [anchored] · conflicts []
-     review reasons: selected by only some executed profiles, no strict majority of executed 
+     review reasons: selected by only some executed profiles, no strict majority of executed
      profiles provides qualifying support for this destination
 
 ```
