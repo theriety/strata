@@ -5,76 +5,92 @@ use std::io::{self, Write};
 
 use strata_engine::{Severity, Violation, ViolationKind};
 
-use super::{nq, wrap};
+use super::limit::{more_line, take_worst};
+use super::{RenderOptions, nq, wrap};
 
-pub(super) fn findings_lines(label: &str, violations: &[Violation]) -> Vec<String> {
+pub(super) fn findings_lines(
+    label: &str,
+    violations: &[Violation],
+    options: RenderOptions,
+) -> Vec<String> {
     let mut lines = vec![format!("{label} ({})", violations.len())];
     if violations.is_empty() {
         lines.push("  None.".to_owned());
     }
-    for violation in violations {
-        let location = violation
-            .location
-            .iter()
-            .map(|path| nq(path))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let detail = if violation.kind == ViolationKind::Cycle {
-            cycle_finding_text(violation)
-        } else if violation
-            .capacity
+    let (shown, hidden) = take_worst(violations, options, |violation| {
+        severity_rank(violation.severity)
+    });
+    for violation in shown {
+        lines.extend(finding_lines(violation));
+    }
+    lines.extend(more_line(hidden, 2));
+    lines.push(String::new());
+    lines
+}
+
+/// Formats one finding with its capacity measurement and suggested cuts.
+fn finding_lines(violation: &Violation) -> Vec<String> {
+    let mut lines = Vec::new();
+    let location = violation
+        .location
+        .iter()
+        .map(|path| nq(path))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let detail = if violation.kind == ViolationKind::Cycle {
+        cycle_finding_text(violation)
+    } else if violation
+        .capacity
+        .as_ref()
+        .is_some_and(|capacity| capacity.path.is_some())
+    {
+        violation.detail.clone()
+    } else if violation.capacity.is_some() {
+        format!("at container ancestry {location}: {}", violation.detail)
+    } else {
+        format!("at {location}: {}", violation.detail)
+    };
+    lines.extend(wrap(
+        &format!(
+            "- {} [{}] {detail}",
+            kind_tag(violation.kind),
+            severity_tag(violation.severity)
+        ),
+        2,
+        4,
+    ));
+    if let Some(capacity) = &violation.capacity
+        && !violation.detail.contains(&format!(
+            "holds {} against a cap of {}",
+            capacity.measured, capacity.cap
+        ))
+    {
+        let capacity_location = capacity
+            .path
             .as_ref()
-            .is_some_and(|capacity| capacity.path.is_some())
-        {
-            violation.detail.clone()
-        } else if violation.capacity.is_some() {
-            format!("at container ancestry {location}: {}", violation.detail)
-        } else {
-            format!("at {location}: {}", violation.detail)
-        };
+            .map_or(String::new(), |path| format!(" at `{path}`"));
         lines.extend(wrap(
             &format!(
-                "- {} [{}] {detail}",
-                kind_tag(violation.kind),
-                severity_tag(violation.severity)
+                "Measured {} against cap {}{capacity_location}.",
+                capacity.measured, capacity.cap
             ),
-            2,
+            4,
             4,
         ));
-        if let Some(capacity) = &violation.capacity
-            && !violation.detail.contains(&format!(
-                "holds {} against a cap of {}",
-                capacity.measured, capacity.cap
-            ))
-        {
-            let capacity_location = capacity
-                .path
-                .as_ref()
-                .map_or(String::new(), |path| format!(" at `{path}`"));
-            lines.extend(wrap(
-                &format!(
-                    "Measured {} against cap {}{capacity_location}.",
-                    capacity.measured, capacity.cap
-                ),
-                4,
-                4,
-            ));
-        }
-        for edge in violation.break_suggestions.iter().flatten().skip(1) {
-            lines.extend(wrap(
-                &format!(
-                    "Suggested cut: `{}` → `{}` (weight {:.4}, {})",
-                    edge.source,
-                    edge.target,
-                    edge.weight,
-                    if edge.exact { "exact" } else { "heuristic" }
-                ),
-                4,
-                4,
-            ));
-        }
     }
-    lines.push(String::new());
+    for edge in violation.break_suggestions.iter().flatten().skip(1) {
+        lines.extend(wrap(
+            &format!(
+                "Suggested cut: `{}` → `{}` (weight {:.4}, {})",
+                edge.source,
+                edge.target,
+                edge.weight,
+                if edge.exact { "exact" } else { "heuristic" }
+            ),
+            4,
+            4,
+        ));
+    }
     lines
 }
 
@@ -116,17 +132,25 @@ pub(super) fn cycle_finding_text(violation: &Violation) -> String {
     text
 }
 
-/// Writes a violation listing for `violations` to `out`.
+/// Writes a violation listing for `violations` to `out`, worst findings first
+/// and capped unless `options.full`.
 ///
 /// # Errors
 ///
 /// Returns an [`io::Error`] if writing fails.
-pub fn write_violation_table(violations: &[Violation], out: &mut impl Write) -> io::Result<()> {
+pub fn write_violation_table(
+    violations: &[Violation],
+    options: RenderOptions,
+    out: &mut impl Write,
+) -> io::Result<()> {
     if violations.is_empty() {
         writeln!(out, "no violations")?;
         return writeln!(out, "{}", super::ADVICE_DISCLAIMER);
     }
-    for violation in violations {
+    let (shown, hidden) = take_worst(violations, options, |violation| {
+        severity_rank(violation.severity)
+    });
+    for violation in shown {
         writeln!(
             out,
             "{} [{}] {} :: {}",
@@ -136,7 +160,22 @@ pub fn write_violation_table(violations: &[Violation], out: &mut impl Write) -> 
             violation.detail
         )?;
     }
+    if let Some(line) = more_line(hidden, 0) {
+        writeln!(out, "{line}")?;
+    }
     writeln!(out, "{}", super::ADVICE_DISCLAIMER)
+}
+
+/// Ranks a severity so hard violations are shown before borderline findings.
+///
+/// The engine already orders each findings list by severity, so this ordering is
+/// defensive for those lists. It matters for the combined `violations` table,
+/// which merges shared and profile-specific findings.
+fn severity_rank(severity: Severity) -> u8 {
+    match severity {
+        Severity::Violation => 0,
+        Severity::Borderline => 1,
+    }
 }
 
 /// Returns the lowercase tag of a violation kind.

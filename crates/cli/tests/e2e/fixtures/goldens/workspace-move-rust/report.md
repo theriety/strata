@@ -23,9 +23,7 @@ Shared findings (6)
   - visibility [violation] at `crates/core/src/beta/report.rs`, `render`: `render` in 
     `crates/core/src/beta/report.rs` is exported at Package but needed only at File; narrowest 
     spelling: private (no `pub`)
-  - visibility [violation] at `crates/core/src/beta/report.rs`, `render_all`: `render_all` in 
-    `crates/core/src/beta/report.rs` is exported at Package but needed only at File; narrowest 
-    spelling: private (no `pub`)
+  … 1 more — rerun with --full to see all
 
 anchored profile-specific findings (0)
   None.

@@ -21,20 +21,13 @@ pub struct ReportArgs {
     pub output: Option<PathBuf>,
 }
 
-/// Runs `report`, writing the Markdown to `output` (if set) or to `out`.
+/// Runs `report` with explicit report detail, writing the Markdown to `output`
+/// (if set) or to `out`.
 ///
 /// # Errors
 ///
 /// Returns [`StrataError::InputUnreadable`] when the input cannot be read or the
 /// output cannot be written.
-pub fn run(args: &ReportArgs, out: &mut impl Write) -> Result<(), StrataError> {
-    run_with_options(args, RenderOptions::default(), out)
-}
-
-/// Renders a saved analysis with explicit report detail.
-///
-/// # Errors
-/// Returns input or output errors.
 pub fn run_with_options(
     args: &ReportArgs,
     options: RenderOptions,
@@ -74,7 +67,13 @@ mod tests {
     };
 
     fn render_markdown(result: &AnalyzeResult) -> String {
-        render::markdown(result, RenderOptions { verbose: true })
+        render::markdown(
+            result,
+            RenderOptions {
+                verbose: true,
+                ..RenderOptions::default()
+            },
+        )
     }
 
     /// Builds a result with one anchored candidate and a cycle violation.
@@ -247,7 +246,7 @@ mod tests {
         };
         let mut sink: Vec<u8> = Vec::new();
 
-        let outcome = run(&args, &mut sink);
+        let outcome = run_with_options(&args, RenderOptions::default(), &mut sink);
 
         let written = std::fs::read_to_string(&output).unwrap_or_default();
         let _ = std::fs::remove_file(&input);

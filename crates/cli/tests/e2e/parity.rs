@@ -862,6 +862,27 @@ fn should_match_the_goldens_for_the_relief_nest_py_fixture() {
     assert_goldens("relief-nest-py");
 }
 
+/// `--full` keeps the complete, uncapped summary: every advice item, in plan order.
+#[test]
+fn should_match_the_full_summary_golden_for_the_relief_nest_py_fixture() {
+    let name = "relief-nest-py";
+    let root = fixture(name);
+    let (code, out) = run_strata(&[
+        "analyze",
+        "--root",
+        root.to_str().unwrap_or_default(),
+        "--config",
+        PURE_DEFAULTS,
+        "--mode",
+        "both",
+        "--format",
+        "summary",
+        "--full",
+    ]);
+    assert_eq!(code, 0, "analyze --full exits 0 for {name}");
+    assert_golden(name, "summary-full.txt", &out);
+}
+
 #[test]
 fn should_exit_zero_for_violations_without_fail_on() {
     for name in FIXTURES {

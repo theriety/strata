@@ -86,25 +86,19 @@ fn run_analyze(
         format,
     };
 
+    let options = RenderOptions {
+        verbose: cli.verbose,
+        full: cli.full,
+    };
     if let Some(path) = cli.output {
         let mut buffer = Vec::new();
-        if cli.verbose {
-            commands::analyze::run_with_options(
-                &args,
-                RenderOptions { verbose: true },
-                &mut buffer,
-            )?;
-        } else {
-            commands::analyze::run(&args, &mut buffer)?;
-        }
+        commands::analyze::run_with_options(&args, options, &mut buffer)?;
         std::fs::write(&path, &buffer).map_err(|error| StrataError::InputUnreadable {
             path,
             reason: error.to_string(),
         })?;
-    } else if cli.verbose {
-        commands::analyze::run_with_options(&args, RenderOptions { verbose: true }, out)?;
     } else {
-        commands::analyze::run(&args, out)?;
+        commands::analyze::run_with_options(&args, options, out)?;
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -150,6 +144,7 @@ fn run_violations(
         config,
         jobs: cli.jobs,
         fail_on,
+        full: cli.full,
         format: match cli.format {
             ViolationFormatChoice::Table => ViolationFormat::Table,
             ViolationFormatChoice::Json => ViolationFormat::Json,
@@ -167,11 +162,11 @@ fn run_report(cli: ReportCli, out: &mut impl Write) -> Result<ExitCode, StrataEr
         input: cli.input,
         output: cli.output,
     };
-    if cli.verbose {
-        commands::report::run_with_options(&args, RenderOptions { verbose: true }, out)?;
-    } else {
-        commands::report::run(&args, out)?;
-    }
+    let options = RenderOptions {
+        verbose: cli.verbose,
+        full: cli.full,
+    };
+    commands::report::run_with_options(&args, options, out)?;
     Ok(ExitCode::SUCCESS)
 }
 

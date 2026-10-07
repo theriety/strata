@@ -1,8 +1,13 @@
 //! Advice, evidence, and move-reason presentation.
 
-use strata_engine::{AnalyzeResult, MoveReason, RelocationProposal, ReviewReason, SymbolKind};
+use std::cmp::Reverse;
+
+use strata_engine::{
+    AnalyzeResult, MoveReason, RelocationAdvice, RelocationProposal, ReviewReason, SymbolKind,
+};
 
 use super::changes::Changes;
+use super::limit::{more_line, take_worst};
 use super::{RenderOptions, nq, weight, wrap};
 
 /// Builds a suggestion caption from the move's dominant reason.
@@ -87,61 +92,81 @@ pub(super) fn advice_with_options(result: &AnalyzeResult, options: RenderOptions
         ),
     ] {
         lines.push(format!(" {heading} ({}):", items.len()));
-        for item in items {
-            lines.extend(wrap(
-                &format!(
-                    "- {} → `{}` · supporting [{}] · qualified [{}] · absent [{}] · conflicts [{}]",
-                    advice_subject(&item.proposal, &paths),
-                    advice_path(&item.proposal, &item.destination, &paths),
-                    profile_names(&item.supporting_profiles),
-                    profile_names(&item.qualified_profiles),
-                    profile_names(&item.absent_profiles),
-                    item.conflicting_destinations
-                        .iter()
-                        .map(|conflict| format!(
-                            "{}→{}",
-                            profile_name(conflict.profile),
-                            nq(&advice_path(&item.proposal, &conflict.destination, &paths))
-                        ))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                ),
-                3,
-                3,
-            ));
-            for assessment in item.assessments.iter().filter(|_| options.verbose) {
-                let evidence = assessment.evidence;
-                let best_alternative = assessment.best_alternative.as_deref().map_or_else(
-                    || "none".to_owned(),
-                    |path| nq(&advice_path(&item.proposal, path, &paths)),
-                );
-                lines.extend(wrap(&format!(
-                    "{}: owner {:.2} · role {:.2} · source {:.2} · destination {:.2} · producer {:.2} · reach {:.2} · margin {:.2}; weighted {:.2}/{:.2} · structural {:.2}/{:.2} · margin threshold {:.2} · qualified {} · best alternative {}",
-                    profile_name(assessment.profile), evidence.unique_owner, evidence.role_affinity,
-                    evidence.source_cohesion, evidence.destination_cohesion, evidence.producer_evidence,
-                    evidence.architectural_reach, assessment.ambiguity_margin, assessment.weighted_score,
-                    assessment.thresholds.minimum_evidence, assessment.structural_score,
-                    assessment.thresholds.minimum_structural, assessment.thresholds.minimum_ambiguity_margin,
-                    assessment.qualified, best_alternative
-                ), 5, 5));
-            }
-            if !item.review_reasons.is_empty() {
-                lines.extend(wrap(
-                    &format!(
-                        "review reasons: {}",
-                        item.review_reasons
-                            .iter()
-                            .map(|reason| review_reason_text(*reason))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                    5,
-                    5,
-                ));
-            }
+        let (shown, hidden) = take_worst(items, options, |item| {
+            (
+                Reverse(item.supporting_profiles.len()),
+                Reverse(item.qualified_profiles.len()),
+                item.conflicting_destinations.len(),
+            )
+        });
+        for item in shown {
+            lines.extend(advice_item_lines(item, &paths, options));
         }
+        lines.extend(more_line(hidden, 3));
     }
     lines.push(String::new());
+    lines
+}
+
+/// Formats one advice item with its optional evidence and review reasons.
+fn advice_item_lines(
+    item: &RelocationAdvice,
+    paths: &Changes,
+    options: RenderOptions,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.extend(wrap(
+        &format!(
+            "- {} → `{}` · supporting [{}] · qualified [{}] · absent [{}] · conflicts [{}]",
+            advice_subject(&item.proposal, paths),
+            advice_path(&item.proposal, &item.destination, paths),
+            profile_names(&item.supporting_profiles),
+            profile_names(&item.qualified_profiles),
+            profile_names(&item.absent_profiles),
+            item.conflicting_destinations
+                .iter()
+                .map(|conflict| format!(
+                    "{}→{}",
+                    profile_name(conflict.profile),
+                    nq(&advice_path(&item.proposal, &conflict.destination, paths))
+                ))
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        3,
+        3,
+    ));
+    for assessment in item.assessments.iter().filter(|_| options.verbose) {
+        let evidence = assessment.evidence;
+        let best_alternative = assessment.best_alternative.as_deref().map_or_else(
+            || "none".to_owned(),
+            |path| nq(&advice_path(&item.proposal, path, paths)),
+        );
+        lines.extend(wrap(&format!(
+            "{}: owner {:.2} · role {:.2} · source {:.2} · destination {:.2} · producer {:.2} · reach {:.2} · margin {:.2}; weighted {:.2}/{:.2} · structural {:.2}/{:.2} · margin threshold {:.2} · qualified {} · best alternative {}",
+            profile_name(assessment.profile), evidence.unique_owner, evidence.role_affinity,
+            evidence.source_cohesion, evidence.destination_cohesion, evidence.producer_evidence,
+            evidence.architectural_reach, assessment.ambiguity_margin, assessment.weighted_score,
+            assessment.thresholds.minimum_evidence, assessment.structural_score,
+            assessment.thresholds.minimum_structural, assessment.thresholds.minimum_ambiguity_margin,
+            assessment.qualified, best_alternative
+        ), 5, 5));
+    }
+    if !item.review_reasons.is_empty() {
+        lines.extend(wrap(
+            &format!(
+                "review reasons: {}",
+                item.review_reasons
+                    .iter()
+                    .map(|reason| review_reason_text(*reason))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            5,
+            5,
+        ));
+    }
+
     lines
 }
 
