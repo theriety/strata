@@ -3,11 +3,10 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_core::score::{Coefficients, KindWeights, ScoreBreakdown as CoreBreakdown, score};
+use strata_core::score::{Coefficients, KindWeights, ScoreBreakdown as CoreBreakdown};
 use strata_ir::{ContainerId, ScopeLevel, Snapshot};
 
-use super::candidate::score_candidate;
-use super::distance::move_distance;
+use super::context::{ScoringContext, SnapshotScoring};
 use crate::analyze::relocation::file_inventory;
 use crate::config::CapacityConfig;
 
@@ -71,6 +70,21 @@ pub(in crate::analyze) fn score_current_with_overlay(
         .iter()
         .map(|file| (ContainerId(file.container), file.namespace.clone()))
         .collect();
+    let pass_start_file_by_candidate: BTreeMap<ContainerId, ContainerId> = ir
+        .containers
+        .containers()
+        .iter()
+        .filter(|container| container.level == ScopeLevel::File)
+        .map(|container| (container.id, container.id))
+        .collect();
+    let lookups = SnapshotScoring::new(snapshot, same_file_symbol, same_file_type);
+    let context = ScoringContext::new(
+        &lookups,
+        &ir.containers,
+        &namespaces,
+        &pass_start_file_by_candidate,
+        capacity,
+    );
     let container_of: BTreeMap<u32, ContainerId> = ir
         .nodes
         .iter()
@@ -80,28 +94,11 @@ pub(in crate::analyze) fn score_current_with_overlay(
         })
         .collect();
     let placement = |id: u32| container_of.get(&id).copied();
-    let pass_start_file_by_candidate: BTreeMap<ContainerId, ContainerId> = ir
-        .containers
-        .containers()
-        .iter()
-        .filter(|container| container.level == ScopeLevel::File)
-        .map(|container| (container.id, container.id))
-        .collect();
+    let placed = lookups.place(&placement);
     let distance = if overlay.is_empty() {
         0.0
     } else {
-        move_distance(snapshot, &ir.containers, &placement)
+        context.move_distance(&placed)
     };
-    let candidate = score_candidate(
-        snapshot,
-        &placement,
-        &pass_start_file_by_candidate,
-        &ir.containers,
-        &namespaces,
-        distance,
-        capacity,
-        same_file_symbol,
-        same_file_type,
-    );
-    score(&candidate, coefficients, weights)
+    context.score(&placed, distance, coefficients, weights)
 }

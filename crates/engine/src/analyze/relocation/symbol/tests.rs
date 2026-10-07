@@ -790,6 +790,7 @@ fn pass_inputs<'a>(
         same_file_symbol: solver.same_file_symbol,
         same_file_type: solver.same_file_type,
         capacity: solver.capacity,
+        scoring: &solver.scoring,
         assembled,
         nodes: &ir.nodes,
         edges: &ir.edges,

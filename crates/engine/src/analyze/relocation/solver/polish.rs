@@ -3,12 +3,11 @@
 use std::collections::BTreeMap;
 
 use strata_core::cluster::{ClusterId, Partition};
-use strata_core::score::score;
 
 #[cfg(test)]
 use crate::analyze::relocation::mirror::PolishEvidence;
 use crate::analyze::relocation::{CandidateTree, POLISH_SWEEPS, POLISH_TARGETS, PipelineSolver};
-use crate::analyze::scoring::{CycleCounts, move_distance, score_candidate};
+use crate::analyze::scoring::{CycleCounts, ScoringContext};
 
 impl PipelineSolver<'_> {
     /// Scores the five-level layout `parts` induces under this mode's
@@ -28,23 +27,28 @@ impl PipelineSolver<'_> {
         self.evaluate_assembled(&assembled)
     }
 
+    /// The scoring context of one assembled tree: its tree-dependent facts
+    /// resolved once, so any number of placements can be priced against it.
+    pub(in crate::analyze::relocation) fn scoring_context<'s>(
+        &'s self,
+        assembled: &CandidateTree,
+    ) -> ScoringContext<'s> {
+        ScoringContext::new(
+            &self.scoring,
+            &assembled.tree,
+            &assembled.namespace_by_file,
+            &assembled.pass_start_file_by_candidate,
+            &self.capacity,
+        )
+    }
+
     fn evaluate_assembled(&self, assembled: &CandidateTree) -> f64 {
         let placement = |id: u32| assembled.placement.get(&id).copied();
         // the assembly's placement maps every node to its current file's
-        // candidate id, so this distance is pure file-grain movement.
-        let distance = move_distance(self.snapshot, &assembled.tree, &placement);
-        let candidate = score_candidate(
-            self.snapshot,
-            &placement,
-            &assembled.pass_start_file_by_candidate,
-            &assembled.tree,
-            &assembled.namespace_by_file,
-            distance,
-            &self.capacity,
-            self.same_file_symbol,
-            self.same_file_type,
-        );
-        score(&candidate, &self.coefficients, &self.weights).total
+        // candidate id, so its move distance is pure file-grain movement.
+        self.scoring_context(assembled)
+            .score_placement(&placement, &self.coefficients, &self.weights)
+            .total
     }
 
     /// The J(T)-polish pass: sweeps every file SCC in deterministic order and

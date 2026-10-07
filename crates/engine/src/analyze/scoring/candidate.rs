@@ -1,4 +1,7 @@
 //! Builds the scorer's candidate view from a node placement over a candidate tree.
+//!
+//! Test oracle: production scores through `ScoringContext`; this builder is kept
+//! so the tests can check the hoisted path against the straightforward one.
 
 use std::collections::BTreeMap;
 

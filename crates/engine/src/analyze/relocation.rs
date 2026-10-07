@@ -11,6 +11,7 @@ use strata_core::score::{Coefficients, KindWeights};
 use strata_ir::{ContainerId, ContainerTree, Snapshot};
 
 use crate::analyze::layout::LaminarHome;
+use crate::analyze::scoring::SnapshotScoring;
 use crate::config::{CapacityConfig, TestMirrorRule};
 use crate::narrate::FileFacts;
 
@@ -157,6 +158,9 @@ pub(in crate::analyze) struct PipelineSolver<'a> {
     same_file_symbol: f64,
     /// Pass-start same-file multiplier for edges touching a type.
     same_file_type: f64,
+    /// The placement-independent scoring facts of the snapshot, resolved once
+    /// for every tree this solver prices.
+    scoring: SnapshotScoring,
     /// The identity partition (anchored mode on a cap-clean tree), else `None`.
     /// Cloned before relief, so it always mirrors the current tree exactly.
     pub(in crate::analyze) identity: Option<Partition>,
