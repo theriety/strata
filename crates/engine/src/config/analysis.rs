@@ -14,20 +14,6 @@ pub enum Mode {
     Both,
 }
 
-impl Mode {
-    /// Returns whether this mode produces an anchored result.
-    #[must_use]
-    pub fn includes_anchored(self) -> bool {
-        matches!(self, Self::Anchored | Self::Both)
-    }
-
-    /// Returns whether this mode produces a greenfield result.
-    #[must_use]
-    pub fn includes_greenfield(self) -> bool {
-        matches!(self, Self::Greenfield | Self::Both)
-    }
-}
-
 /// A named parameter profile available to an analysis run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

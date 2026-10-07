@@ -18,7 +18,7 @@ Two optional tools make the inner loop faster:
 | Crate | Role | Test surface |
 |-------|------|--------------|
 | `crates/ir` | The typed-graph IR contract every other crate depends on. | Inline unit tests in `src`. |
-| `crates/core` | Solver core: Tarjan, layering, MFAS, clustering, packing, scoring. | Inline unit tests across `src` (the bulk of the algorithmic coverage). |
+| `crates/core` | Solver core: Tarjan, layering, MFAS, clustering, scoring. | Inline unit tests across `src` (the bulk of the algorithmic coverage). |
 | `crates/engine` | Orchestration engine and public library surface (`analyze`, `snapshot_from_root`). | Inline unit tests in `src`. |
 | `crates/cli` | The `strata` binary — a thin shell over `strata-engine`. | Inline unit tests plus the e2e suite under `tests/e2e`. |
 | `crates/adapter-typescript` | TypeScript / TSX language adapter. | `tests/fixtures.rs` over `tests/fixtures`. |

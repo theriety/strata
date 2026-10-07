@@ -163,7 +163,7 @@ fn mode_config(profile: &ProfileConfig) -> ModeConfig {
 /// One file container of the current tree: the movable atom of the search.
 ///
 /// Clustering, capacity, narration, and move distance all treat the file as
-/// indivisible in this slice (symbol-level packing is the one unglued phase), so
+/// indivisible in this slice (symbol-level packing is not built), so
 /// the search graph's vertices are files rather than symbols. Folder capacity is
 /// measured separately from the rendered physical tree as direct files plus
 /// distinct direct child directories.

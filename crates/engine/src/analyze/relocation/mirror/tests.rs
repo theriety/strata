@@ -4,10 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
 use strata_core::cluster::{ClusterId, Partition};
-use strata_core::score::Coefficients;
 use strata_ir::{Container, Node, Polarity, ScopeLevel};
 
-use crate::config::{AnalyzeConfig, TestMirrorRule};
+use crate::config::{AnalyzeConfig, ObjectiveConfig, TestMirrorRule};
 #[cfg(test)]
 use crate::narrate::physical_file_folders;
 
@@ -42,7 +41,13 @@ fn should_price_one_exact_mirror_before_finish_and_replay_idempotently() {
         tests: vec!["spec/{dir}/{stem}.spec.ts".to_owned()],
     }];
     let tests = TestPolicy::defaults();
-    let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+    let solver = PipelineSolver::new(
+        &snap,
+        &config,
+        ObjectiveConfig::default().coefficients(),
+        true,
+        &tests,
+    );
     let scc_of = |file: u32| {
         solver
             .index_of
@@ -189,7 +194,13 @@ fn should_attempt_mirrors_for_every_physical_source_move() {
         tests: vec!["spec/{dir}/{stem}.spec.ts".to_owned()],
     }];
     let tests = TestPolicy::defaults();
-    let mut solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+    let mut solver = PipelineSolver::new(
+        &snap,
+        &config,
+        ObjectiveConfig::default().coefficients(),
+        true,
+        &tests,
+    );
     let scc_of = |file: u32| {
         solver
             .index_of
@@ -258,7 +269,13 @@ fn should_attempt_a_mirror_when_the_source_moves_to_its_namespace_root() {
         tests: vec!["spec/{dir}/{stem}.spec.ts".to_owned()],
     }];
     let tests = TestPolicy::defaults();
-    let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+    let solver = PipelineSolver::new(
+        &snap,
+        &config,
+        ObjectiveConfig::default().coefficients(),
+        true,
+        &tests,
+    );
     let scc_of = |file: u32| {
         solver
             .index_of
@@ -325,7 +342,13 @@ fn repeated_root_mirror_evidence(with_collision: bool) -> PolishEvidence {
         tests: vec!["app/spec/{dir}/{stem}.spec.ts".to_owned()],
     }];
     let tests = TestPolicy::defaults();
-    let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+    let solver = PipelineSolver::new(
+        &snap,
+        &config,
+        ObjectiveConfig::default().coefficients(),
+        true,
+        &tests,
+    );
     let scc = |file: u32| {
         solver
             .index_of
@@ -392,7 +415,13 @@ fn should_assemble_a_root_mirror_at_the_repository_root_exactly_once() {
         tests: vec!["{dir}/{stem}.spec.ts".to_owned()],
     }];
     let tests = TestPolicy::defaults();
-    let mut solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+    let mut solver = PipelineSolver::new(
+        &snap,
+        &config,
+        ObjectiveConfig::default().coefficients(),
+        true,
+        &tests,
+    );
     let scc = |file: u32| {
         solver
             .index_of
@@ -535,7 +564,13 @@ fn actual_mirror_run(fixture: MirrorBlockFixture) -> (PolishEvidence, Partition,
         config.profiles.anchored.capacity.folder = 1;
     }
     let tests = TestPolicy::defaults();
-    let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+    let solver = PipelineSolver::new(
+        &snap,
+        &config,
+        ObjectiveConfig::default().coefficients(),
+        true,
+        &tests,
+    );
     let scc = |file: u32| {
         solver
             .index_of
@@ -629,7 +664,13 @@ fn should_not_shadow_by_basename_when_exact_mirroring_is_disabled() {
     let mut config = AnalyzeConfig::default();
     config.profiles.anchored.relocation.test_mirroring.enabled = false;
     let tests = TestPolicy::defaults();
-    let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+    let solver = PipelineSolver::new(
+        &snap,
+        &config,
+        ObjectiveConfig::default().coefficients(),
+        true,
+        &tests,
+    );
     let scc_of = |file: u32| {
         solver
             .index_of
@@ -673,7 +714,13 @@ fn should_not_duplicate_an_unfollowed_namespace_during_assembly() {
     let mut config = AnalyzeConfig::default();
     config.profiles.anchored.relocation.test_mirroring.enabled = false;
     let tests = TestPolicy::defaults();
-    let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+    let solver = PipelineSolver::new(
+        &snap,
+        &config,
+        ObjectiveConfig::default().coefficients(),
+        true,
+        &tests,
+    );
     let scc_of = |file: u32| {
         solver
             .index_of
@@ -729,7 +776,7 @@ fn should_keep_an_ambiguously_twinned_spec_where_it_is() {
     let solver = PipelineSolver::new(
         &snap,
         &AnalyzeConfig::default(),
-        Coefficients::anchored(),
+        ObjectiveConfig::default().coefficients(),
         true,
         &tests,
     );
@@ -783,7 +830,13 @@ fn should_veto_a_shadow_move_that_would_overflow_the_folder_cap() {
     let snap = snapshot(nodes, edges, containers);
 
     let tests = TestPolicy::defaults();
-    let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), true, &tests);
+    let solver = PipelineSolver::new(
+        &snap,
+        &config,
+        ObjectiveConfig::default().coefficients(),
+        true,
+        &tests,
+    );
 
     let scc_of = |file_container: u32| -> u32 {
         let vertex = solver
@@ -835,7 +888,13 @@ fn should_allow_a_childs_only_file_to_replace_its_folder_entry_at_the_parent_cap
         ],
     );
     let tests = TestPolicy::defaults();
-    let solver = PipelineSolver::new(&snap, &config, Coefficients::anchored(), false, &tests);
+    let solver = PipelineSolver::new(
+        &snap,
+        &config,
+        ObjectiveConfig::default().coefficients(),
+        false,
+        &tests,
+    );
     let unit_vertex = solver.index_of.get(&4).copied().unwrap_or(u32::MAX);
     let unit = solver
         .condensation

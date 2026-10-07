@@ -68,7 +68,7 @@ pub(crate) struct FileFacts {
 /// trailing different subjects into one folder narrate separately; groups (and
 /// the files inside them) come out in deterministic lexicographic order.
 /// Each `FileMove` carries a moved *file path* and its source folder — symbol
-/// granularity arrives with the pack phase.
+/// moves are not reported, only file moves.
 #[cfg(test)]
 pub(crate) fn narrate(
     current: &ContainerTree,
