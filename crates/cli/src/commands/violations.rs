@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use strata_engine::{Severity, StrataError, Violation, ViolationKind, analyze, snapshot_from_root};
 
 use crate::commands::{ConfigOverrides, findings, resolve_config};
-use crate::render::{write_json, write_violation_table};
+use crate::render::{RenderOptions, write_json, write_violation_table};
 
 /// The output format of the violations face.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +53,9 @@ pub struct ViolationsArgs {
     pub fail_on: Vec<FailOn>,
     /// The output format.
     pub format: ViolationFormat,
+    /// Shows every finding in the table instead of the first few; the gate
+    /// always weighs all findings.
+    pub full: bool,
 }
 
 /// The gating outcome of a `violations` run.
@@ -145,7 +148,15 @@ pub fn run(args: &ViolationsArgs, out: &mut impl Write) -> Result<Outcome, Strat
 
     match args.format {
         ViolationFormat::Table => {
-            write_violation_table(&findings, out).map_err(|error| write_error(&error))?;
+            write_violation_table(
+                &findings,
+                RenderOptions {
+                    full: args.full,
+                    ..RenderOptions::default()
+                },
+                out,
+            )
+            .map_err(|error| write_error(&error))?;
         }
         ViolationFormat::Json => write_json(&result, out).map_err(|error| write_error(&error))?,
     }
@@ -337,5 +348,28 @@ mod tests {
         }];
 
         assert_eq!(gate(&[hard], &fail_on), Outcome::Clean);
+    }
+
+    #[test]
+    fn should_gate_on_a_hard_violation_among_borderline_findings() {
+        let cap = |severity| Violation {
+            kind: ViolationKind::Capacity,
+            severity,
+            location: vec!["c".to_owned()],
+            detail: "over".to_owned(),
+            break_suggestions: None,
+            capacity: None,
+        };
+        let mut findings = vec![cap(Severity::Borderline); 6];
+        findings.push(Violation {
+            kind: ViolationKind::Cycle,
+            ..cap(Severity::Violation)
+        });
+        let fail_on = [FailOn {
+            kind: ViolationKind::Cycle,
+            severity: None,
+        }];
+
+        assert_eq!(gate(&findings, &fail_on), Outcome::Gated);
     }
 }

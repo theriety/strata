@@ -2,7 +2,7 @@
 
 use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use assert_cmd::Command;
@@ -668,5 +668,163 @@ fn should_follow_combined_multi_package_moves_in_markdown() -> TestResult {
     combined_package_moves::configure(&mut result)?;
 
     combined_package_moves::assert_paths(&saved_report(&result, false)?)?;
+    Ok(())
+}
+
+/// Saves `result` and renders it with `report`, passing `extra` flags.
+fn saved_report_with(result: &AnalyzeResult, extra: &[&str]) -> TestResult<String> {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "strata-display-limit-{}-{}.json",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&path, serde_json::to_vec(result)?)?;
+    let mut args = vec!["report", "--input", path.to_str().ok_or("non-UTF8 input")?];
+    args.extend_from_slice(extra);
+    let outcome = execute(&args);
+    fs::remove_file(path)?;
+    outcome
+}
+
+/// A saved analysis whose shared findings number `count`.
+fn result_with_shared_findings(count: usize) -> TestResult<AnalyzeResult> {
+    let mut result: AnalyzeResult = serde_json::from_str(&analyze("json", false)?)?;
+    result.current.shared_findings = (0..count)
+        .map(|index| {
+            serde_json::from_value(serde_json::json!({
+                "kind": "capacity",
+                "severity": "violation",
+                "location": [format!("dir{index}")],
+                "detail": "over cap",
+            }))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(result)
+}
+
+#[test]
+fn should_cap_report_lists_at_five_unless_full() -> TestResult {
+    let result = result_with_shared_findings(8)?;
+
+    let capped = saved_report_with(&result, &[])?;
+    let full = saved_report_with(&result, &["--full"])?;
+
+    assert!(capped.contains("Shared findings (8)"), "{capped}");
+    assert_eq!(capped.matches("- capacity [violation]").count(), 5);
+    assert!(capped.contains("  … 3 more — rerun with --full to see all"));
+    assert_eq!(full.matches("- capacity [violation]").count(), 8);
+    assert!(!full.contains("more — rerun with --full"));
+    Ok(())
+}
+
+#[test]
+fn should_not_print_a_more_line_for_exactly_five_findings() -> TestResult {
+    let result = result_with_shared_findings(5)?;
+
+    let capped = saved_report_with(&result, &[])?;
+
+    assert_eq!(capped.matches("- capacity [violation]").count(), 5);
+    assert!(!capped.contains("more — rerun with --full"));
+    Ok(())
+}
+
+#[test]
+fn should_leave_json_uncapped_whatever_the_full_flag() -> TestResult {
+    let root =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/fixtures/constellation-ts");
+    let root = root.to_str().ok_or("non-UTF8 root")?;
+    let base = [
+        "--root",
+        root,
+        "--config",
+        "/nonexistent/report-presentation.toml",
+        "--format",
+        "json",
+    ];
+
+    let plain = execute(&[&["analyze"], &base[..]].concat())?;
+    let full = execute(&[&["analyze", "--full"], &base[..]].concat())?;
+    let violations_plain = execute(&[&["violations"], &base[..]].concat())?;
+    let violations_full = execute(&[&["violations", "--full"], &base[..]].concat())?;
+
+    assert_eq!(plain, full);
+    assert_eq!(violations_plain, violations_full);
+    Ok(())
+}
+
+/// Writes a project with `cycles` two-file cycles and one over-capacity folder.
+///
+/// The cycles sort ahead of the capacity finding in the violations table, so with
+/// six of them the only `capacity` finding is hidden by the display limit.
+fn project_with_hidden_capacity_finding() -> TestResult<PathBuf> {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "strata-fail-on-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    for index in 0..6 {
+        let dir = root.join(format!("c{index}"));
+        fs::create_dir_all(&dir)?;
+        fs::write(
+            dir.join("a.py"),
+            format!("from c{index}.b import f_b\n\n\ndef f_a():\n    return f_b()\n"),
+        )?;
+        fs::write(
+            dir.join("b.py"),
+            format!("from c{index}.a import f_a\n\n\ndef f_b():\n    return f_a()\n"),
+        )?;
+    }
+    let big = root.join("big");
+    fs::create_dir_all(&big)?;
+    for index in 0..9 {
+        fs::write(
+            big.join(format!("m{index}.py")),
+            format!("def g{index}():\n    return {index}\n"),
+        )?;
+    }
+    fs::write(
+        root.join("strata.toml"),
+        "[profiles.anchored.capacity]\nfolder = 8\n[profiles.greenfield.capacity]\nfolder = 8\n",
+    )?;
+    Ok(root)
+}
+
+fn violations_run(root: &Path, extra: &[&str]) -> TestResult<(Option<i32>, String)> {
+    let config = root.join("strata.toml");
+    let mut args = vec![
+        "violations",
+        "--root",
+        root.to_str().ok_or("non-UTF8 root")?,
+        "--config",
+        config.to_str().ok_or("non-UTF8 config")?,
+        "--fail-on",
+        "capacity",
+    ];
+    args.extend_from_slice(extra);
+    let output = Command::cargo_bin("strata")?.args(&args).output()?;
+    Ok((output.status.code(), String::from_utf8(output.stdout)?))
+}
+
+#[test]
+fn should_gate_on_a_finding_the_capped_violations_table_hides() -> TestResult {
+    let root = project_with_hidden_capacity_finding()?;
+
+    let (capped_code, capped) = violations_run(&root, &[])?;
+    let (full_code, full) = violations_run(&root, &["--full"])?;
+
+    fs::remove_dir_all(&root)?;
+    assert_eq!(capped_code, Some(2), "{capped}");
+    assert_eq!(full_code, Some(2), "{full}");
+    assert!(
+        !capped.contains("capacity ["),
+        "capacity is hidden: {capped}"
+    );
+    assert_eq!(capped.matches("cycle [violation]").count(), 5, "{capped}");
+    assert!(capped.contains("more — rerun with --full to see all"));
+    assert_eq!(full.matches("cycle [violation]").count(), 6, "{full}");
+    assert!(full.contains("capacity [violation]"), "{full}");
+    assert!(!full.contains("more — rerun with --full"));
     Ok(())
 }

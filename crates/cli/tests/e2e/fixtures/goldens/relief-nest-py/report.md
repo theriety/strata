@@ -40,14 +40,8 @@ anchored — candidate 1
     - Move file `hub/ingest_02.py` → `hub/ingest/ingest_02.py`
     - Move file `hub/ingest_03.py` → `hub/ingest/ingest_03.py`
     - Move file `hub/ingest_04.py` → `hub/ingest/ingest_04.py`
-    - Move file `hub/ingest_05.py` → `hub/ingest/ingest_05.py`
-    - Move file `hub/ingest_06.py` → `hub/ingest/ingest_06.py`
-    - Move file `hub/ingest_07.py` → `hub/ingest/ingest_07.py`
-    - Move file `hub/ingest_08.py` → `hub/ingest/ingest_08.py`
-    - Move file `hub/ingest_09.py` → `hub/ingest/ingest_09.py`
-    - Move file `hub/ingest_10.py` → `hub/ingest/ingest_10.py`
-    - Move file `hub/ingest_11.py` → `hub/ingest/ingest_11.py`
       Why: relieves `hub`, which holds 24 against a cap of 20.
+    … 7 more — rerun with --full to see all
   Folder impacts
     `hub`: 12 file(s) leaving · 0 entering
     `hub/ingest`: 0 file(s) leaving · 12 entering
@@ -99,14 +93,8 @@ greenfield — candidate 1
     - Move file `hub/ingest_02.py` → `hub/ingest/ingest_02.py`
     - Move file `hub/ingest_03.py` → `hub/ingest/ingest_03.py`
     - Move file `hub/ingest_04.py` → `hub/ingest/ingest_04.py`
-    - Move file `hub/ingest_05.py` → `hub/ingest/ingest_05.py`
-    - Move file `hub/ingest_06.py` → `hub/ingest/ingest_06.py`
-    - Move file `hub/ingest_07.py` → `hub/ingest/ingest_07.py`
-    - Move file `hub/ingest_08.py` → `hub/ingest/ingest_08.py`
-    - Move file `hub/ingest_09.py` → `hub/ingest/ingest_09.py`
-    - Move file `hub/ingest_10.py` → `hub/ingest/ingest_10.py`
-    - Move file `hub/ingest_11.py` → `hub/ingest/ingest_11.py`
       Why: relieves `hub`, which holds 24 against a cap of 20.
+    … 7 more — rerun with --full to see all
   Folder impacts
     `hub`: 12 file(s) leaving · 0 entering
     `hub/ingest`: 0 file(s) leaving · 12 entering
@@ -179,40 +167,6 @@ Advice consolidates the best candidate from each executed profile.
      review reasons: destination evidence is below the configured minimum, structural evidence is 
      insufficient, the destination is not sufficiently stronger than the best alternative, no 
      strict majority of executed profiles provides qualifying support for this destination
-   - file `hub/ingest_05.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] · 
-   absent [] · conflicts []
-     review reasons: destination evidence is below the configured minimum, structural evidence is 
-     insufficient, the destination is not sufficiently stronger than the best alternative, no 
-     strict majority of executed profiles provides qualifying support for this destination
-   - file `hub/ingest_06.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] · 
-   absent [] · conflicts []
-     review reasons: destination evidence is below the configured minimum, structural evidence is 
-     insufficient, the destination is not sufficiently stronger than the best alternative, no 
-     strict majority of executed profiles provides qualifying support for this destination
-   - file `hub/ingest_07.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] · 
-   absent [] · conflicts []
-     review reasons: destination evidence is below the configured minimum, structural evidence is 
-     insufficient, the destination is not sufficiently stronger than the best alternative, no 
-     strict majority of executed profiles provides qualifying support for this destination
-   - file `hub/ingest_08.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] · 
-   absent [] · conflicts []
-     review reasons: destination evidence is below the configured minimum, structural evidence is 
-     insufficient, the destination is not sufficiently stronger than the best alternative, no 
-     strict majority of executed profiles provides qualifying support for this destination
-   - file `hub/ingest_09.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] · 
-   absent [] · conflicts []
-     review reasons: destination evidence is below the configured minimum, structural evidence is 
-     insufficient, the destination is not sufficiently stronger than the best alternative, no 
-     strict majority of executed profiles provides qualifying support for this destination
-   - file `hub/ingest_10.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] · 
-   absent [] · conflicts []
-     review reasons: destination evidence is below the configured minimum, structural evidence is 
-     insufficient, the destination is not sufficiently stronger than the best alternative, no 
-     strict majority of executed profiles provides qualifying support for this destination
-   - file `hub/ingest_11.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] · 
-   absent [] · conflicts []
-     review reasons: destination evidence is below the configured minimum, structural evidence is 
-     insufficient, the destination is not sufficiently stronger than the best alternative, no 
-     strict majority of executed profiles provides qualifying support for this destination
+   … 7 more — rerun with --full to see all
 
 ```

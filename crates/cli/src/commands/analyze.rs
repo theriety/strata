@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use strata_engine::{StrataError, analyze, snapshot_from_root};
 
 use crate::commands::{ConfigOverrides, resolve_config};
-use crate::render::{Format, RenderOptions, render, render_with_options};
+use crate::render::{Format, RenderOptions, render_with_options};
 
 /// The parsed inputs of an `analyze` run.
 ///
@@ -29,7 +29,8 @@ pub struct AnalyzeArgs {
     pub format: Format,
 }
 
-/// Runs `analyze`, writing the rendered or serialized result to `out`.
+/// Runs `analyze` with explicit report detail, writing the rendered or
+/// serialized result to `out`; JSON remains unchanged.
 ///
 /// The printed report names its project from the saved current layout so that
 /// saved-result replay uses the same project identity.
@@ -39,14 +40,6 @@ pub struct AnalyzeArgs {
 /// Returns any [`StrataError`] from config loading, snapshotting, or analysis;
 /// an I/O failure writing the result surfaces as [`StrataError::InputUnreadable`]
 /// keyed at the root.
-pub fn run(args: &AnalyzeArgs, out: &mut impl Write) -> Result<(), StrataError> {
-    run_with_options(args, RenderOptions::default(), out)
-}
-
-/// Runs analysis with explicit report detail; JSON remains unchanged.
-///
-/// # Errors
-/// Returns config, snapshot, analysis, or output errors.
 pub fn run_with_options(
     args: &AnalyzeArgs,
     options: RenderOptions,
@@ -55,17 +48,13 @@ pub fn run_with_options(
     let config = resolve_config(&args.config, args.overrides)?;
     let snapshot = snapshot_from_root(&args.root, &config)?;
     let result = analyze(&snapshot, &config)?;
-    let output = if options.verbose {
-        render_with_options(
-            &result,
-            args.format,
-            &result.current.tree.name,
-            options,
-            out,
-        )
-    } else {
-        render(&result, args.format, &result.current.tree.name, out)
-    };
+    let output = render_with_options(
+        &result,
+        args.format,
+        &result.current.tree.name,
+        options,
+        out,
+    );
     output.map_err(|error| StrataError::InputUnreadable {
         path: args.root.clone(),
         reason: error.to_string(),
@@ -110,7 +99,7 @@ mod tests {
         };
         let mut buffer = Vec::new();
 
-        let outcome = run(&args, &mut buffer);
+        let outcome = run_with_options(&args, RenderOptions::default(), &mut buffer);
 
         let _ = fs::remove_dir_all(&root);
         assert!(outcome.is_ok());
