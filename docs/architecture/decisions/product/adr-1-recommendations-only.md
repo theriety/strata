@@ -35,5 +35,5 @@ This holds regardless of how complete the computed move data becomes; if a futur
 
 - The read-only guarantee in the README and the engine's source-free design are product promises, not incidental limitations; renderer and CLI work must not grow write paths.
 - Candidate comparison stays a presentation problem. Investment goes into making the static report legible enough to choose among candidates, not into interactive tooling.
-- `pack` (splitting oversized files) remains a future capability of the same recommendation-only shape: it would propose splits, not perform them.
+- File packing (splitting oversized files) is not built (see [ADR-28](adr-28-no-file-packing-until-designed.md)); a future design would keep the same recommendation-only shape: it would propose splits, not perform them.
 - Automated consumers that want to act on proposals build their own executor on top of strata's JSON output, outside this repository.

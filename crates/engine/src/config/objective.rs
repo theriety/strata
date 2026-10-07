@@ -57,18 +57,6 @@ impl ObjectiveConfig {
             companion_separation: self.companion_separation,
         }
     }
-
-    /// Compatibility alias for callers that previously selected coefficients by mode.
-    #[must_use]
-    pub const fn anchored(&self) -> Coefficients {
-        self.coefficients()
-    }
-
-    /// Compatibility alias that now honors explicit greenfield path and anchor values.
-    #[must_use]
-    pub const fn greenfield(&self) -> Coefficients {
-        self.coefficients()
-    }
 }
 
 /// The per-kind edge weights used when cutting dependencies.

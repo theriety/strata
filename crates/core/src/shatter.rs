@@ -11,9 +11,9 @@
 //! local improvement.
 //!
 //! Every [`BreakSet`] carries an `exact` flag so a heuristic answer can never be
-//! mistaken for a proof (AD-7). Per-SCC work runs in parallel via rayon, and the
-//! results are reduced in SCC-index order so the output is byte-identical across
-//! runs and thread counts.
+//! mistaken for a proof (AD-7). The parallel reduction (rayon, results in
+//! SCC-index order) is the test-only `shatter_all`; production solves SCCs one
+//! by one in the engine, so its output is deterministic by construction.
 
 mod cycle;
 mod heuristic;
@@ -22,6 +22,7 @@ mod ilp;
 use std::collections::HashMap;
 use std::time::Duration;
 
+#[cfg(test)]
 use rayon::prelude::*;
 
 use self::heuristic::solve_heuristic;
@@ -134,6 +135,10 @@ impl Default for SolverLimits {
 /// Work is distributed across SCCs by rayon; because each SCC is solved
 /// independently and the results are collected back in index order, the output
 /// does not depend on the thread schedule.
+///
+/// Test-only: production solves SCCs one at a time because each SCC gets its
+/// own dense local numbering (see the engine's `search` module).
+#[cfg(test)]
 #[must_use]
 pub fn shatter_all(
     sccs: &[SccView],

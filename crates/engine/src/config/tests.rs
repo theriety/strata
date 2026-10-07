@@ -840,15 +840,6 @@ fn should_validate_the_default_config() {
 }
 
 #[test]
-fn should_report_modes_that_a_mode_includes() {
-    assert!(Mode::Anchored.includes_anchored());
-    assert!(!Mode::Anchored.includes_greenfield());
-    assert!(Mode::Both.includes_anchored());
-    assert!(Mode::Both.includes_greenfield());
-    assert!(Mode::Greenfield.includes_greenfield());
-}
-
-#[test]
 fn should_convert_solver_config_into_limits() {
     let limits = SolverConfig::default().limits();
 
@@ -857,7 +848,7 @@ fn should_convert_solver_config_into_limits() {
 }
 
 #[test]
-fn should_map_objective_config_onto_anchored_coefficients() {
+fn should_map_objective_config_onto_coefficients() {
     let objective = ObjectiveConfig {
         imbalance: 0.4,
         naming: 0.5,
@@ -868,7 +859,7 @@ fn should_map_objective_config_onto_anchored_coefficients() {
         companion_separation: 0.9,
     };
 
-    let coefficients = objective.anchored();
+    let coefficients = objective.coefficients();
 
     assert!((coefficients.lambda - 0.4).abs() < f64::EPSILON);
     assert!((coefficients.alpha - 0.5).abs() < f64::EPSILON);
@@ -876,27 +867,6 @@ fn should_map_objective_config_onto_anchored_coefficients() {
     assert!((coefficients.mu - 0.7).abs() < f64::EPSILON);
     assert!((coefficients.dependency_only - 0.8).abs() < f64::EPSILON);
     assert!((coefficients.companion_separation - 0.9).abs() < f64::EPSILON);
-}
-
-#[test]
-fn should_honor_explicit_path_and_anchor_in_greenfield_coefficients() {
-    let objective = ObjectiveConfig {
-        imbalance: 0.4,
-        naming: 0.5,
-        path: 0.6,
-        anchor: 0.7,
-        capacity: 4.0,
-        dependency_only: 0.8,
-        companion_separation: 0.9,
-    };
-
-    let coefficients = objective.greenfield();
-
-    assert!((coefficients.lambda - 0.4).abs() < f64::EPSILON);
-    assert!((coefficients.alpha - 0.5).abs() < f64::EPSILON);
-    assert!((coefficients.beta - 0.6).abs() < f64::EPSILON);
-    assert!((coefficients.mu - 0.7).abs() < f64::EPSILON);
-    assert!((coefficients.dependency_only - 0.8).abs() < f64::EPSILON);
 }
 
 #[test]

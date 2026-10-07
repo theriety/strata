@@ -64,7 +64,7 @@ other acceptances kept, and report `J(without_i) − J(final)`.
 Thread per-edge crossing heights and per-container imbalance shares through
 `score_candidate` into the result, letting narration cite specific edges.
 
-- Cost: large — touches core's scorer surface consumed by ranking, pack, and
+- Cost: large — touches core's scorer surface consumed by ranking and
   diversify; risks coupling the DTO to scorer internals (D-37's boundary).
 - Fidelity: highest, but the numbers are exactly the ones normalization makes
   treacherous (consequence 2 above). High risk of over-explaining noise.
