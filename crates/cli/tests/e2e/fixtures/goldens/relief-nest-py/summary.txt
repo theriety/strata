@@ -5,7 +5,7 @@ All findings and moves are suggestions. Applying them may break the build; use y
 
 Structural findings
 Shared findings (1)
-  - capacity [violation] at container ancestry `relief-nest-py`, `hub`: folder 
+  - capacity [violation] at container ancestry `relief-nest-py`, `hub`: folder
     `relief-nest-py/hub` holds 24 against a cap of 20
 
 anchored profile-specific findings (0)
@@ -14,10 +14,9 @@ anchored profile-specific findings (0)
 greenfield profile-specific findings (0)
   None.
 
-
 Candidate layouts
-Lower scores are better. Compare scores only within one parameter profile of one project. A 
-candidate is a proposed layout; inclusion does not make a move Recommended. Partial plans are not 
+Lower scores are better. Compare scores only within one parameter profile of one project. A
+candidate is a proposed layout; inclusion does not make a move Recommended. Partial plans are not
 rescored.
 
 anchored — 1 candidate(s)
@@ -127,36 +126,36 @@ greenfield — candidate 1
   Unchanged branches and symbols omitted; excluded files are not shown.
 
 Advice
-Supporting profiles selected the destination; qualified profiles also passed the evidence 
-thresholds; absent profiles did not select the move; conflicts name alternative destinations. 
+Supporting profiles selected the destination; qualified profiles also passed the evidence
+thresholds; absent profiles did not select the move; conflicts name alternative destinations.
 Advice consolidates the best candidate from each executed profile.
  Profiles share analysis-start evidence but apply their own weights and thresholds.
  Recommended (0):
  Review candidate (12):
-   - file `hub/ingest_00.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] · 
+   - file `hub/ingest_00.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] ·
    absent [] · conflicts []
-     review reasons: destination evidence is below the configured minimum, structural evidence is 
-     insufficient, the destination is not sufficiently stronger than the best alternative, no 
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
      strict majority of executed profiles provides qualifying support for this destination
-   - file `hub/ingest_01.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] · 
+   - file `hub/ingest_01.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] ·
    absent [] · conflicts []
-     review reasons: destination evidence is below the configured minimum, structural evidence is 
-     insufficient, the destination is not sufficiently stronger than the best alternative, no 
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
      strict majority of executed profiles provides qualifying support for this destination
-   - file `hub/ingest_02.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] · 
+   - file `hub/ingest_02.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] ·
    absent [] · conflicts []
-     review reasons: destination evidence is below the configured minimum, structural evidence is 
-     insufficient, the destination is not sufficiently stronger than the best alternative, no 
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
      strict majority of executed profiles provides qualifying support for this destination
-   - file `hub/ingest_03.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] · 
+   - file `hub/ingest_03.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] ·
    absent [] · conflicts []
-     review reasons: destination evidence is below the configured minimum, structural evidence is 
-     insufficient, the destination is not sufficiently stronger than the best alternative, no 
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
      strict majority of executed profiles provides qualifying support for this destination
-   - file `hub/ingest_04.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] · 
+   - file `hub/ingest_04.py` → `hub/ingest` · supporting [anchored, greenfield] · qualified [] ·
    absent [] · conflicts []
-     review reasons: destination evidence is below the configured minimum, structural evidence is 
-     insufficient, the destination is not sufficiently stronger than the best alternative, no 
+     review reasons: destination evidence is below the configured minimum, structural evidence is
+     insufficient, the destination is not sufficiently stronger than the best alternative, no
      strict majority of executed profiles provides qualifying support for this destination
    … 7 more — rerun with --full to see all
 

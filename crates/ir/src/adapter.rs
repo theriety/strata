@@ -124,6 +124,10 @@ pub struct IrFragment {
     /// Test pairs and entry files this adapter states for its language.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_facts: Vec<crate::FileFact>,
+    /// Repo-relative `/`-separated directories of crates that only support
+    /// tests (test harnesses); items under them are not production code.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub test_support_roots: Vec<smol_str::SmolStr>,
 }
 
 /// Failures raised while parsing or binding source with an adapter.

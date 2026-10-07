@@ -48,7 +48,7 @@ Known limits (no code, may report a false testOnly for): non-literal `import()`,
 
 ## IR additions
 
-`ScopeRung.spelling`, `VisibilityScope.declared_rung`, `IrFragment.exposures`, `IrFragment.advisory_uses`, `Node.public_api`, `Node.owner` (the type a Rust impl member belongs to, used by testOnly's own-member rule), `AdvisoryUse.from_test` (the use comes from test code; visibility still counts it, testOnly ignores it), and a `ScopeLadder` verdict (`declared`, `needed`, `spelling`) replacing the level list. The adapter now emits an entry for every `Restricted`, `Crate` and `Public` declaration; `files` is set only for restricted ones, which keeps the declared-level override. All additions are serde-default and skipped when empty, so the IR schema stays at 3 and the report schema at 10.
+`ScopeRung.spelling`, `VisibilityScope.declared_rung`, `IrFragment.exposures`, `IrFragment.advisory_uses`, `IrFragment.test_support_roots`, `Node.public_api`, `Node.owner` (the type a Rust impl member belongs to, used by testOnly's own-member rule), `AdvisoryUse.from_test` (the use comes from test code; visibility still counts it, testOnly ignores it), and a `ScopeLadder` verdict (`declared`, `needed`, `spelling`) replacing the level list. The adapter now emits an entry for every `Restricted`, `Crate` and `Public` declaration; `files` is set only for restricted ones, which keeps the declared-level override. All additions are serde-default and skipped when empty, so the IR schema stays at 3 and the report schema at 10.
 
 ## 🔀 Alternatives considered
 
@@ -57,3 +57,8 @@ Known limits (no code, may report a false testOnly for): non-literal `import()`,
 ## ⚖️ Consequences
 
 Fewer findings, none known false. The cost is over-suppression: a type exposed by a trait impl block is never flagged, and an unplaced or cross-crate user silences the item. Rust-only facts (rungs, spellings, exposure) stay in the adapter; the engine compares file sets.
+
+## Amendment 2026-10-08: test-support crates
+
+- **testOnly skips test-support crates.** The IR gains an additive, serde-default `test_support_roots` (repo-relative directories; IR schema stays 3). The Rust adapter states a workspace member as test support when it is `publish = false` (also inherited through `publish.workspace = true` from `[workspace.package]`), has a library and no binary target, no other member uses it through `[dependencies]` or `[build-dependencies]` (dev-dependencies do not count), and the workspace has at least two members. The engine skips items under those roots and knows nothing of Cargo. Severity is unchanged.
+- **Limit.** Binary crates and a lone crate are excluded so an application never loses its findings. When every member would qualify (for example two independent unpublished libraries), none is flagged: nothing is left to be supported, so the rule fires only while at least one member stays a non-harness.

@@ -245,7 +245,7 @@ fn should_distinguish_no_candidate_from_candidate_with_no_moves() -> TestResult 
 
     assert!(unchanged.contains("No moves versus the current layout."));
     assert!(!empty.contains("candidate 1"));
-    assert!(empty.to_lowercase().contains("no candidates"));
+    assert!(empty.contains(" — 0 candidates ("));
     Ok(())
 }
 

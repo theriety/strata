@@ -42,7 +42,7 @@ pub(super) fn cycle_violations(snapshot: &Snapshot, cycles: &[SccSolution]) -> V
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect();
-            let breaks = edge_breaks(solution, &names);
+            let breaks = edge_breaks(solution, &names, &nodes);
             Violation {
                 kind: ViolationKind::Cycle,
                 severity: Severity::Violation,
@@ -73,9 +73,14 @@ fn is_same_file_cycle(
     member_files.all(|file| file == Some(first_file))
 }
 
-/// Maps one SCC's MFAS break set onto named [`EdgeBreak`]s, in the break set's
-/// ascending `(source, target)` order.
-fn edge_breaks(solution: &SccSolution, names: &BTreeMap<u32, String>) -> Vec<EdgeBreak> {
+/// Maps one SCC's MFAS break set onto named [`EdgeBreak`]s. File-crossing
+/// edges come first and same-file edges last, each group keeping the break
+/// set's ascending `(source, target)` order.
+pub(super) fn edge_breaks(
+    solution: &SccSolution,
+    names: &BTreeMap<u32, String>,
+    nodes: &BTreeMap<u32, &Node>,
+) -> Vec<EdgeBreak> {
     let name_of = |local: u32| {
         solution
             .members
@@ -84,7 +89,14 @@ fn edge_breaks(solution: &SccSolution, names: &BTreeMap<u32, String>) -> Vec<Edg
             .cloned()
             .unwrap_or_default()
     };
-    solution
+    let container_of = |local: u32| {
+        solution
+            .members
+            .get(local as usize)
+            .and_then(|node| nodes.get(&node.0))
+            .map(|node| node.container)
+    };
+    let mut breaks: Vec<EdgeBreak> = solution
         .break_set
         .edges
         .iter()
@@ -97,19 +109,24 @@ fn edge_breaks(solution: &SccSolution, names: &BTreeMap<u32, String>) -> Vec<Edg
                 .copied()
                 .unwrap_or(0.0),
             exact: solution.break_set.exact,
+            same_file: container_of(edge.source).is_some()
+                && container_of(edge.source) == container_of(edge.target),
         })
-        .collect()
+        .collect();
+    breaks.sort_by_key(|edge| edge.same_file);
+    breaks
 }
 
-/// Renders a cycle violation's detail line, leading with the cheapest break.
+/// Renders a cycle violation's detail line, leading with the first file-crossing break.
 fn cycle_detail(size: usize, breaks: &[EdgeBreak]) -> String {
     const CONSEQUENCE: &str = "strata keeps a dependency cycle in one file";
     let Some(first) = breaks.first() else {
         return format!("{size}-symbol cycle; {CONSEQUENCE}");
     };
     let method = if first.exact { "exact" } else { "heuristic" };
+    let scope = if first.same_file { ", same file" } else { "" };
     let mut detail = format!(
-        "{size}-symbol cycle; {CONSEQUENCE}; to split it, break {} -> {} (w={:.1}, {method})",
+        "{size}-symbol cycle; {CONSEQUENCE}; to split it, break {} -> {} (w={:.1}, {method}{scope})",
         first.source, first.target, first.weight
     );
     if breaks.len() > 1 {
@@ -127,6 +144,12 @@ pub(in crate::analyze) fn conditional_splits(
     file_cap: u32,
 ) -> Vec<ConditionalSplit> {
     let names = node_names(snapshot);
+    let nodes: BTreeMap<u32, &Node> = snapshot
+        .ir()
+        .nodes
+        .iter()
+        .map(|node| (node.id.0, node))
+        .collect();
     let cap = u64::from(file_cap.max(1));
     cycles
         .iter()
@@ -137,7 +160,7 @@ pub(in crate::analyze) fn conditional_splits(
                 .iter()
                 .filter_map(|node| names.get(&node.0).cloned())
                 .collect(),
-            preconditions: edge_breaks(solution, &names),
+            preconditions: edge_breaks(solution, &names, &nodes),
             resulting_files: u32::try_from(solution.production_sloc.div_ceil(cap))
                 .unwrap_or(u32::MAX),
         })
