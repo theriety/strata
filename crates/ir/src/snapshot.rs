@@ -51,6 +51,11 @@ pub struct IntermediateRepresentation {
     /// entry file never moves. Added to schema 3; empty when absent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_facts: Vec<crate::FileFact>,
+    /// Repo-relative directories of test-support crates (harnesses no other
+    /// crate ships), merged from every fragment. The testOnly finding skips
+    /// items under them. Added to schema 3; empty when absent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub test_support_roots: Vec<smol_str::SmolStr>,
 }
 
 /// What the language's scope ladder says about one declaration (ADR-25).
@@ -88,6 +93,7 @@ impl IntermediateRepresentation {
             scope_ladders: Vec::new(),
             advisory_uses: Vec::new(),
             file_facts: Vec::new(),
+            test_support_roots: Vec::new(),
         }
     }
 }
@@ -236,6 +242,8 @@ impl Snapshot {
         ir.affinities.dedup();
         ir.file_facts.sort();
         ir.file_facts.dedup();
+        ir.test_support_roots.sort();
+        ir.test_support_roots.dedup();
         ir.containers.sort_by_id();
 
         let bytes = serde_json::to_vec(&ir).map_err(|error| SnapshotError::Serialization {

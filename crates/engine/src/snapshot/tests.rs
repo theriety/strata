@@ -232,6 +232,7 @@ fn should_reintern_ids_across_fragments_into_one_namespace() {
         exposures: Vec::new(),
         advisory_uses: Vec::new(),
         file_facts: Vec::new(),
+        test_support_roots: Vec::new(),
     };
     let second = IrFragment {
         nodes: vec![node(0, "b", 0)],
@@ -246,6 +247,7 @@ fn should_reintern_ids_across_fragments_into_one_namespace() {
         exposures: Vec::new(),
         advisory_uses: Vec::new(),
         file_facts: Vec::new(),
+        test_support_roots: Vec::new(),
     };
 
     let merged = merge_fragments(vec![first, second], "pkg", &Layout::default());
@@ -282,6 +284,7 @@ fn should_rehome_a_file_and_its_test_into_one_package() {
         exposures: Vec::new(),
         advisory_uses: Vec::new(),
         file_facts: Vec::new(),
+        test_support_roots: Vec::new(),
     };
     let test = IrFragment {
         nodes: vec![node(0, "widget_test", 0)],
@@ -292,6 +295,7 @@ fn should_rehome_a_file_and_its_test_into_one_package() {
         exposures: Vec::new(),
         advisory_uses: Vec::new(),
         file_facts: Vec::new(),
+        test_support_roots: Vec::new(),
     };
     let layout = Layout {
         package_roots: Vec::new(),

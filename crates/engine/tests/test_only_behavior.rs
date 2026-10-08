@@ -432,3 +432,57 @@ fn should_flag_a_private_helper_without_the_gated_production_user() -> Result<()
     assert!(names(&found.test_only, "helper"), "{:?}", found.test_only);
     Ok(())
 }
+
+/// A workspace of a shipped crate and an unpublished harness, each with one
+/// public item that only its own integration test uses.
+fn workspace(harness_manifest_extras: &str) -> Vec<(&'static str, String)> {
+    let manifest = |name: &str, extras: &str| {
+        format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n{extras}\n")
+    };
+    let test = |name: &str, item: &str| format!("#[test]\nfn it() {{\n    {name}::{item}();\n}}\n");
+    vec![
+        (
+            "Cargo.toml",
+            "[workspace]\nresolver = \"2\"\nmembers = [\"shipped\", \"harness\"]\n".to_owned(),
+        ),
+        ("shipped/Cargo.toml", manifest("shipped", "")),
+        ("shipped/src/lib.rs", "pub fn normal_item() {}\n".to_owned()),
+        ("shipped/tests/it.rs", test("shipped", "normal_item")),
+        (
+            "harness/Cargo.toml",
+            manifest("harness", harness_manifest_extras),
+        ),
+        (
+            "harness/src/lib.rs",
+            "pub fn harness_item() {}\n".to_owned(),
+        ),
+        ("harness/tests/it.rs", test("harness", "harness_item")),
+    ]
+}
+
+#[test]
+fn should_skip_items_of_a_test_support_crate_but_still_flag_a_normal_crate() -> Result<(), String> {
+    let found = advice_owned(&workspace("publish = false"))?;
+    assert!(
+        names(&found.test_only, "normal_item"),
+        "{:?}",
+        found.test_only
+    );
+    assert!(
+        !names(&found.test_only, "harness_item"),
+        "{:?}",
+        found.test_only
+    );
+    Ok(())
+}
+
+#[test]
+fn should_flag_a_published_crates_items_even_when_it_looks_like_a_harness() -> Result<(), String> {
+    let found = advice_owned(&workspace(""))?;
+    assert!(
+        names(&found.test_only, "harness_item"),
+        "{:?}",
+        found.test_only
+    );
+    Ok(())
+}

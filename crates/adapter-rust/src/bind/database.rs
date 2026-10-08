@@ -36,6 +36,9 @@ pub(super) struct Database {
     /// Root files of the targets that start a program (every target but a
     /// library); `fn main` at such a root is the start symbol.
     start_roots: Option<BTreeSet<PathBuf>>,
+    /// Directories of the workspace crates that only support tests, or `None`
+    /// when the project is not a cargo workspace.
+    harness_dirs: Option<BTreeSet<PathBuf>>,
 }
 
 /// The root source files of the cargo targets, by role.
@@ -43,7 +46,97 @@ type TargetRoots = (
     Option<BTreeSet<PathBuf>>,
     Option<BTreeSet<PathBuf>>,
     Option<BTreeSet<PathBuf>>,
+    Option<BTreeSet<PathBuf>>,
 );
+
+/// Whether the manifest at `path` declares `publish = false` (or an empty
+/// registry list) in its `[package]` table. `publish.workspace = true`
+/// resolves against `[workspace.package]` in the workspace root manifest.
+fn manifest_is_unpublished(path: &Path, workspace_manifest: &Path) -> bool {
+    let read = |file: &Path| {
+        std::fs::read_to_string(file)
+            .ok()
+            .and_then(|text| text.parse::<toml::Table>().ok())
+    };
+    let Some(manifest) = read(path) else {
+        return false;
+    };
+    let declared = manifest
+        .get("package")
+        .and_then(|package| package.get("publish"));
+    let inherited = match declared {
+        Some(toml::Value::Table(table))
+            if table.get("workspace").and_then(toml::Value::as_bool) == Some(true) =>
+        {
+            read(workspace_manifest).and_then(|root| {
+                root.get("workspace")?
+                    .get("package")?
+                    .get("publish")
+                    .cloned()
+            })
+        }
+        other => other.cloned(),
+    };
+    match inherited {
+        Some(toml::Value::Boolean(flag)) => !flag,
+        Some(toml::Value::Array(registries)) => registries.is_empty(),
+        _ => false,
+    }
+}
+
+/// Directories of the test-support crates of `cargo`: workspace members that
+/// are unpublished, have a library and no binary target, and that no other
+/// member uses through `[dependencies]` or `[build-dependencies]`. A lone
+/// crate has nothing to support, so a workspace of one has none; and when
+/// every member would qualify, none is a harness for the others, so the set is
+/// empty.
+fn harness_crate_dirs(cargo: &ra_ap_project_model::CargoWorkspace) -> BTreeSet<PathBuf> {
+    let members: Vec<_> = cargo
+        .packages()
+        .filter(|package| cargo[*package].is_member)
+        .collect();
+    if members.len() < 2 {
+        return BTreeSet::new();
+    }
+    let used: BTreeSet<_> = members
+        .iter()
+        .flat_map(|package| cargo[*package].dependencies.iter())
+        // the loader's dependency kind enum is not exported, so it cannot be
+        // matched by variant; its `Debug` spelling names the kind.
+        .filter(|dependency| format!("{:?}", dependency.kind) != "Dev")
+        .map(|dependency| dependency.pkg)
+        .collect();
+    let workspace_manifest = cargo.workspace_root().join("Cargo.toml");
+    let harnesses: Vec<_> = members
+        .iter()
+        .copied()
+        .filter(|package| !used.contains(package))
+        .filter(|package| {
+            let data = &cargo[*package];
+            let has_lib = data
+                .targets
+                .iter()
+                .any(|target| matches!(cargo[*target].kind, TargetKind::Lib { .. }));
+            let has_bin = data
+                .targets
+                .iter()
+                .any(|target| matches!(cargo[*target].kind, TargetKind::Bin));
+            has_lib
+                && !has_bin
+                && manifest_is_unpublished(data.manifest.as_ref(), workspace_manifest.as_ref())
+        })
+        .collect();
+    if harnesses.len() == members.len() {
+        return BTreeSet::new();
+    }
+    harnesses
+        .into_iter()
+        .filter_map(|package| {
+            let manifest: &Path = cargo[package].manifest.as_ref();
+            manifest.parent().map(canonical)
+        })
+        .collect()
+}
 
 /// Discovers and loads the project at `manifest`, and reads the root file of
 /// each of its library targets. The error is the loader's message.
@@ -72,9 +165,10 @@ fn load_project(
                 Some(roots(|kind| {
                     !matches!(kind, TargetKind::Lib { .. } | TargetKind::Other)
                 })),
+                Some(harness_crate_dirs(cargo)),
             )
         }
-        _ => (None, None, None),
+        _ => (None, None, None, None),
     };
     Ok((workspace, targets))
 }
@@ -128,7 +222,7 @@ impl Database {
         };
         // the same two steps `load_workspace_at` takes, split so the cargo
         // targets are read before the workspace is consumed by the loader.
-        let (workspace, (lib_roots, entry_roots, start_roots)) =
+        let (workspace, (lib_roots, entry_roots, start_roots, harness_dirs)) =
             load_project(manifest, &cargo_config)
                 .map_err(|reason| BindOutcome::LoadFailed { reason })?;
         let (db, vfs, _proc_macro) =
@@ -143,6 +237,7 @@ impl Database {
             lib_roots,
             entry_roots,
             start_roots,
+            harness_dirs,
         })
     }
 
@@ -172,6 +267,15 @@ impl Database {
     /// (everything but libraries); empty when the targets are unknown.
     pub(super) fn start_paths(&self, root: &Path) -> BTreeSet<SmolStr> {
         relative_paths(self.start_roots.as_ref(), root)
+    }
+
+    /// Repo-relative `/`-separated directories of the test-support crates;
+    /// empty when the workspace is unknown or has none.
+    pub(super) fn test_support_roots(&self, root: &Path) -> Vec<SmolStr> {
+        relative_paths(self.harness_dirs.as_ref(), root)
+            .into_iter()
+            .filter(|dir| !dir.is_empty())
+            .collect()
     }
 
     /// Resolves the reference at `(relative_path, offset)` to the definition's

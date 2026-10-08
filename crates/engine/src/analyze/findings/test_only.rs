@@ -17,7 +17,8 @@ use crate::result::{Severity, Violation, ViolationKind};
 /// production code that only tests use to test support, so polarity cannot
 /// tell a real test from a demoted item. An advisory use is a production user
 /// the loader cannot see, so it silences the finding. When unsure the node is
-/// left out.
+/// left out. Items in a test-support crate (`test_support_roots`, stated by the
+/// adapter) are test infrastructure and are skipped.
 pub(super) fn test_only_nodes(snapshot: &Snapshot) -> BTreeSet<u32> {
     // a type is also "used" by its own members (`Type::new` names `Type`):
     // such a member speaks for the type only when it is test-only itself.
@@ -55,6 +56,23 @@ fn qualifying(snapshot: &Snapshot, settled: &BTreeSet<u32>) -> BTreeSet<u32> {
         *entry &= source_is_test || own_settled_member;
     }
 
+    // items of a test-support crate are test infrastructure, never advice.
+    let harness_files: BTreeSet<u32> = ir
+        .containers
+        .containers()
+        .iter()
+        .filter(|container| container.level == ScopeLevel::File)
+        .filter(|container| {
+            ir.test_support_roots.iter().any(|root| {
+                container
+                    .name
+                    .strip_prefix(root.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+            })
+        })
+        .map(|container| container.id.0)
+        .collect();
+
     all_tests
         .into_iter()
         .filter(|&(id, tests_only)| {
@@ -65,6 +83,7 @@ fn qualifying(snapshot: &Snapshot, settled: &BTreeSet<u32>) -> BTreeSet<u32> {
                         && !node.re_export
                         && !node.advice_exempt
                         && node.kind != NodeKind::FileBody
+                        && !harness_files.contains(&node.container.0)
                 })
         })
         .map(|(id, _)| id)

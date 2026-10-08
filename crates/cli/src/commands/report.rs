@@ -135,6 +135,7 @@ mod tests {
                     target: "y".to_owned(),
                     weight: 1.0,
                     exact: true,
+                    same_file: false,
                 }],
                 resulting_files: 2,
             }],
