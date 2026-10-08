@@ -3,13 +3,81 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_ir::{Container, ContainerId, ContainerTree, Polarity, ScopeLevel, Snapshot};
+use strata_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
+#[cfg(test)]
+use strata_ir::{Polarity, Snapshot};
 
 use crate::analyze::findings::physical_folder_entries_repository_relative;
 use crate::config::CapacityConfig;
 
+/// The capacity pressure of one tree, apart from file sizes: everything the
+/// physical folder entries and the structural levels contribute is fixed by the
+/// tree, so only the per-file term varies with the placement.
+pub(super) struct TreePressure {
+    file_cap: u32,
+    /// Overage of the physical folder entries.
+    folder: f64,
+    /// Non-zero overage of each structural container, in tree order.
+    structural: Vec<f64>,
+}
+
+impl TreePressure {
+    /// Prices the tree-dependent terms of `tree` once.
+    pub(super) fn new(
+        tree: &ContainerTree,
+        namespaces: &BTreeMap<ContainerId, SmolStr>,
+        capacity: &CapacityConfig,
+    ) -> Self {
+        let folder = physical_folder_entries_repository_relative(tree, Some(namespaces))
+            .values()
+            .map(|&measure| normalized_overage(measure, capacity.folder))
+            .sum::<f64>();
+        let children = children_by_container(tree);
+        let mut structural = Vec::new();
+        for container in tree.containers() {
+            let (member_level, cap) = match container.level {
+                ScopeLevel::Domain => (ScopeLevel::Folder, capacity.domain),
+                ScopeLevel::Package => (ScopeLevel::Domain, capacity.package),
+                ScopeLevel::PackageGroup => (ScopeLevel::Package, capacity.package_group),
+                ScopeLevel::Folder | ScopeLevel::File => continue,
+            };
+            let measure =
+                count_bound_structural_members(tree, &children, container.id, member_level);
+            let overage = normalized_overage(measure, cap);
+            // a zero overage leaves the running sum untouched.
+            if overage != 0.0 {
+                structural.push(overage);
+            }
+        }
+        Self {
+            file_cap: capacity.file,
+            folder,
+            structural,
+        }
+    }
+
+    /// Prices the tree under a placement whose files hold `file_sloc`
+    /// production SLOC, indexed by container id.
+    pub(super) fn total(&self, file_sloc: &[u32]) -> f64 {
+        let mut pressure = 0.0;
+        pressure += file_sloc
+            .iter()
+            .filter(|&&measure| measure > self.file_cap)
+            .map(|&measure| normalized_overage(measure, self.file_cap))
+            .sum::<f64>();
+        pressure += self.folder;
+        for overage in &self.structural {
+            pressure += overage;
+        }
+        pressure
+    }
+}
+
 /// Prices every configured capacity level with the same measures used by
 /// capacity findings.
+///
+/// Test oracle for `TreePressure`, which production scores through.
+#[cfg(test)]
 pub(super) fn capacity_pressure(
     snapshot: &Snapshot,
     placement: &dyn Fn(u32) -> Option<ContainerId>,

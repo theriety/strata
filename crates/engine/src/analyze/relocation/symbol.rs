@@ -55,7 +55,7 @@ pub(in crate::analyze) struct SymbolPass<'a> {
     /// The structural veto family.
     admission: Admission<'a>,
     /// The working visibility copy and its baseline.
-    visibility: VisibilityTracker<'a>,
+    visibility: VisibilityTracker,
     /// Cycle baseline: relocation may raise neither cyclic dimension.
     cyclic_base: CycleCounts,
 }
@@ -91,7 +91,9 @@ impl<'a> SymbolPass<'a> {
         pass.ledger.best = pass.pricing.score_with(&pass.ledger.overlay);
         let crossing = pass.pricing.crossing_csr(&pass.ledger);
         pass.cyclic_base = CycleCounts::from_graph(&crossing);
-        pass.visibility.vis_base = pass.visibility.refresh_visibility(&pass.ledger.overlay);
+        pass.visibility.vis_base = pass
+            .visibility
+            .refresh_visibility(nodes, &pass.ledger.overlay);
         pass
     }
 

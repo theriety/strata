@@ -1,12 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use strata_core::cluster::Partition;
-use strata_core::score::score;
 use strata_ir::{ContainerId, NodeKind, Polarity, ScopeLevel};
 
 use crate::analyze::relocation::mirror::PolishEvidence;
 use crate::analyze::relocation::{CandidateTree, PipelineSolver};
-use crate::analyze::scoring::{move_distance, score_candidate};
 
 use super::SymbolPass;
 use super::inputs::{PassInputs, RelocationPolicy};
@@ -40,6 +38,7 @@ impl PipelineSolver<'_> {
                 same_file_symbol: self.same_file_symbol,
                 same_file_type: self.same_file_type,
                 capacity: self.capacity,
+                scoring: &self.scoring,
                 assembled: &assembled,
                 nodes: &ir.nodes,
                 edges: &ir.edges,
@@ -69,23 +68,10 @@ impl PipelineSolver<'_> {
                 .copied()
                 .or_else(|| assembled.placement.get(&id).copied())
         };
-        let distance = move_distance(self.snapshot, &assembled.tree, &placement);
-        let total = score(
-            &score_candidate(
-                self.snapshot,
-                &placement,
-                &assembled.pass_start_file_by_candidate,
-                &assembled.tree,
-                &assembled.namespace_by_file,
-                distance,
-                &self.capacity,
-                self.same_file_symbol,
-                self.same_file_type,
-            ),
-            &self.coefficients,
-            &self.weights,
-        )
-        .total;
+        let total = self
+            .scoring_context(&assembled)
+            .score_placement(&placement, &self.coefficients, &self.weights)
+            .total;
         SymbolOutcome {
             overlay,
             relocations,
