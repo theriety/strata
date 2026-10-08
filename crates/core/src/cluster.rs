@@ -124,6 +124,9 @@ impl Partition {
 
     /// Returns the live member count of cluster `cluster`, or `0` when out of
     /// range.
+    ///
+    /// Test-only: production updates sizes in place and never queries them.
+    #[cfg(test)]
     #[must_use]
     pub fn size_of(&self, cluster: ClusterId) -> u32 {
         self.sizes.get(cluster.0 as usize).copied().unwrap_or(0)

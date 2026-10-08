@@ -7,13 +7,12 @@ use strata_core::cluster::{ClusterId, Partition};
 use strata_core::condense::Condensation;
 use strata_core::condense::SccId;
 use strata_core::graph::csr::Csr;
-use strata_core::score::Coefficients;
 use strata_ir::{
     Container, ContainerId, ContainerTree, Layout, Node, NodeId, NodeKind, Polarity, ScopeLevel,
     Snapshot, build_laminar_tree,
 };
 
-use crate::config::AnalyzeConfig;
+use crate::config::{AnalyzeConfig, ObjectiveConfig};
 use crate::result::{ContainerNode, Level, Profiles};
 
 use super::*;
@@ -2960,7 +2959,7 @@ fn should_never_nominate_a_folder_connected_only_by_zero_priced_edges() {
     let solver = PipelineSolver::new(
         &snapshot,
         &AnalyzeConfig::default(),
-        Coefficients::anchored(),
+        ObjectiveConfig::default().coefficients(),
         false,
         &tests,
     );

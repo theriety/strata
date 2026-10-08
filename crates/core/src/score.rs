@@ -50,10 +50,10 @@ use strata_ir::{EdgeKind, ScopeLevel};
 /// `lambda`, `alpha`, and `beta` weight the imbalance, naming, and path terms;
 /// `mu` weights the anchoring (move-distance) term; `gamma` weights the scoped
 /// over-capacity binding term (FIX03); `dependency_only` weights declarations
-/// relocated toward their dependencies but away from every consumer. A
-/// greenfield preset sets `mu` and `beta` to zero; an anchored preset keeps
-/// them positive. Capacity and dependency-only relocation pricing apply in
-/// both profiles.
+/// relocated toward their dependencies but away from every consumer. The
+/// engine builds them from its objective configuration; a zero `mu` and `beta`
+/// removes anchoring and path similarity. Capacity and dependency-only
+/// relocation pricing apply regardless.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Coefficients {
     /// Weight of the sibling size-imbalance penalty.
@@ -70,41 +70,6 @@ pub struct Coefficients {
     pub dependency_only: f64,
     /// Fixed charge for each companion type separated from its owner file.
     pub companion_separation: f64,
-}
-
-impl Coefficients {
-    /// The anchored preset: every term active, so candidates stay close to the
-    /// current tree (`mu > 0`) and reward keeping today's directory groupings
-    /// (`beta > 0`).
-    #[must_use]
-    pub const fn anchored() -> Self {
-        Self {
-            lambda: 1.0,
-            alpha: 1.0,
-            beta: 1.0,
-            mu: 1.0,
-            gamma: 4.0,
-            dependency_only: 0.05,
-            companion_separation: 0.05,
-        }
-    }
-
-    /// The greenfield preset: an unbiased ideal. `mu = 0` and `beta = 0` so the
-    /// current layout cannot leak back in through anchoring or path similarity;
-    /// symbol-token cohesion (`alpha`), imbalance (`lambda`), and capacity
-    /// (`gamma`) remain.
-    #[must_use]
-    pub const fn greenfield() -> Self {
-        Self {
-            lambda: 1.0,
-            alpha: 1.0,
-            beta: 0.0,
-            mu: 0.0,
-            gamma: 4.0,
-            dependency_only: 0.05,
-            companion_separation: 0.05,
-        }
-    }
 }
 
 /// Per-kind base edge weights `w(e)` — the `[weights]` config surface.
@@ -211,10 +176,8 @@ pub struct CohesionGroup {
 /// Every field is a pre-extracted projection of the full tree: the scored edges
 /// with their crossing levels, the per-container child sizes for imbalance, the
 /// file/folder symbol groups for naming, the path-cohesion ratio for anchored
-/// mode, and the move distance from the current tree. Mirroring [`pack::FolderView`],
-/// scoring owns only the data it consumes, never the whole tree.
-///
-/// [`pack::FolderView`]: crate::pack::FolderView
+/// mode, and the move distance from the current tree. Scoring owns only the
+/// data it consumes, never the whole tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     /// The dependency edges, each with its crossing level in this tree.
@@ -462,6 +425,21 @@ fn jaccard(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64 {
 mod tests {
     use super::*;
 
+    /// The production coefficients, mirroring the engine's
+    /// `ObjectiveConfig::default()` -> `coefficients()` (core cannot depend on
+    /// the engine, so the numbers are repeated here).
+    const fn production_coefficients() -> Coefficients {
+        Coefficients {
+            lambda: 0.1,
+            alpha: 0.3,
+            beta: 0.2,
+            mu: 1.0,
+            gamma: 4.0,
+            dependency_only: 0.05,
+            companion_separation: 0.05,
+        }
+    }
+
     /// Builds a token set from string slices.
     fn tokens(values: &[&str]) -> BTreeSet<String> {
         values.iter().map(|&token| token.to_owned()).collect()
@@ -490,7 +468,7 @@ mod tests {
     fn should_price_each_companion_separation_exactly_once() {
         let current = score(
             &empty_candidate(),
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         );
         let candidate = Candidate {
@@ -499,7 +477,7 @@ mod tests {
         };
         let separated = score(
             &candidate,
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         );
 
@@ -516,7 +494,7 @@ mod tests {
         };
         let coefficients = Coefficients {
             companion_separation: 0.0,
-            ..Coefficients::greenfield()
+            ..production_coefficients()
         };
 
         let breakdown = score(&candidate, &coefficients, &KindWeights::default());
@@ -529,7 +507,7 @@ mod tests {
     fn should_price_each_dependency_only_relocation_exactly_once() {
         let current = score(
             &empty_candidate(),
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         );
         let candidate = Candidate {
@@ -538,7 +516,7 @@ mod tests {
         };
         let moved = score(
             &candidate,
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         );
 
@@ -555,7 +533,7 @@ mod tests {
         };
         let coefficients = Coefficients {
             dependency_only: 0.0,
-            ..Coefficients::greenfield()
+            ..production_coefficients()
         };
 
         let breakdown = score(&candidate, &coefficients, &KindWeights::default());
@@ -579,7 +557,7 @@ mod tests {
 
         let breakdown = score(
             &candidate,
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         );
 
@@ -613,12 +591,8 @@ mod tests {
             });
         }
 
-        let small = score(
-            &single,
-            &Coefficients::greenfield(),
-            &KindWeights::default(),
-        );
-        let large = score(&grown, &Coefficients::greenfield(), &KindWeights::default());
+        let small = score(&single, &production_coefficients(), &KindWeights::default());
+        let large = score(&grown, &production_coefficients(), &KindWeights::default());
 
         assert!(
             close(small.cut, large.cut),
@@ -659,13 +633,13 @@ mod tests {
 
         let ordinary_cut = score(
             &ordinary,
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         )
         .cut;
         let affinity_cut = score(
             &type_affinity,
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         )
         .cut;
@@ -691,7 +665,7 @@ mod tests {
 
         let breakdown = score(
             &candidate,
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         );
 
@@ -721,13 +695,13 @@ mod tests {
 
         let cheap = score(
             &in_file,
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         )
         .cut;
         let dear = score(
             &across_packages,
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         )
         .cut;
@@ -747,7 +721,7 @@ mod tests {
 
         let breakdown = score(
             &candidate,
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         );
 
@@ -770,7 +744,7 @@ mod tests {
 
         let breakdown = score(
             &candidate,
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         );
 
@@ -790,7 +764,10 @@ mod tests {
 
         let breakdown = score(
             &candidate,
-            &Coefficients::greenfield(),
+            &Coefficients {
+                alpha: 1.0,
+                ..production_coefficients()
+            },
             &KindWeights::default(),
         );
 
@@ -817,7 +794,10 @@ mod tests {
 
         let breakdown = score(
             &candidate,
-            &Coefficients::greenfield(),
+            &Coefficients {
+                alpha: 1.0,
+                ..production_coefficients()
+            },
             &KindWeights::default(),
         );
 
@@ -833,12 +813,18 @@ mod tests {
 
         let greenfield = score(
             &candidate,
-            &Coefficients::greenfield(),
+            &Coefficients {
+                beta: 0.0,
+                ..production_coefficients()
+            },
             &KindWeights::default(),
         );
         let anchored = score(
             &candidate,
-            &Coefficients::anchored(),
+            &Coefficients {
+                beta: 1.0,
+                ..production_coefficients()
+            },
             &KindWeights::default(),
         );
 
@@ -856,12 +842,18 @@ mod tests {
 
         let greenfield = score(
             &candidate,
-            &Coefficients::greenfield(),
+            &Coefficients {
+                mu: 0.0,
+                ..production_coefficients()
+            },
             &KindWeights::default(),
         );
         let anchored = score(
             &candidate,
-            &Coefficients::anchored(),
+            &Coefficients {
+                mu: 1.0,
+                ..production_coefficients()
+            },
             &KindWeights::default(),
         );
 
@@ -870,28 +862,22 @@ mod tests {
     }
 
     #[test]
-    fn should_price_capacity_binding_in_both_modes() {
+    fn should_price_capacity_binding_by_gamma() {
         // FIX03: a container binding twice the folder budget pays one full
-        // pressure unit; `gamma` prices it identically in either mode.
+        // pressure unit, priced by `gamma`.
         let candidate = Candidate {
             capacity_pressure: 1.0,
             ..empty_candidate()
         };
 
-        let greenfield = score(
+        let breakdown = score(
             &candidate,
-            &Coefficients::greenfield(),
-            &KindWeights::default(),
-        );
-        let anchored = score(
-            &candidate,
-            &Coefficients::anchored(),
+            &production_coefficients(),
             &KindWeights::default(),
         );
 
-        assert!(close(greenfield.capacity, 4.0));
-        assert!(close(anchored.capacity, 4.0));
-        assert!(close(greenfield.total, 4.0));
+        assert!(close(breakdown.capacity, 4.0));
+        assert!(close(breakdown.total, 4.0));
     }
 
     #[test]
@@ -903,7 +889,7 @@ mod tests {
 
         let breakdown = score(
             &candidate,
-            &Coefficients::greenfield(),
+            &production_coefficients(),
             &KindWeights::default(),
         );
 
@@ -934,7 +920,7 @@ mod tests {
         };
         let breakdown = score(
             &candidate,
-            &Coefficients::anchored(),
+            &production_coefficients(),
             &KindWeights::default(),
         );
 
@@ -953,7 +939,7 @@ mod tests {
     fn should_score_an_empty_candidate_to_zero() {
         let breakdown = score(
             &empty_candidate(),
-            &Coefficients::anchored(),
+            &production_coefficients(),
             &KindWeights::default(),
         );
 

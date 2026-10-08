@@ -55,6 +55,7 @@
 - **Reason**: standard-violation
 - **Impact on spec**: surface-change
 - **Severity**: minor
+- **Update (2026-10-07)**: RESOLVED by removal. `Interner` and the `graph::intern` module were never used outside their own tests, so they were deleted; there is no `resolve` left to deviate.
 
 ### D-8: CSR edge weights use baked-in default kind weights
 - **When**: Commit 2 (feat(core): CSR graph, Tarjan condensation, longest-path layering)
@@ -151,6 +152,7 @@
 - **Reason**: wrong-integration
 - **Impact on spec**: surface-change
 - **Severity**: minor
+- **Update (2026-10-07)**: the `pack.rs` module this entry cites as precedent was removed (see ADR-28); `FolderView` no longer exists.
 
 ### D-20: Scoring consumes a pre-extracted candidate view rather than a whole tree
 - **When**: Commit 7 (feat(core): objective scoring and VI diversification)
@@ -159,6 +161,7 @@
 - **Reason**: wrong-integration
 - **Impact on spec**: surface-change
 - **Severity**: minor
+- **Update (2026-10-07)**: the `Coefficients::anchored()`/`greenfield()` presets were deleted because only tests used them. Production builds `Coefficients` from `ObjectiveConfig::coefficients()`; core tests use a test-only helper with the `ObjectiveConfig::default()` numbers. `pack.rs` was also removed (ADR-28); `visibility.rs` remains the example of owning only the consumed view.
 
 ### D-21: Diversification takes a `Solver` abstraction instead of a `Snapshot`
 - **When**: Commit 7
@@ -167,6 +170,7 @@
 - **Reason**: wrong-integration
 - **Impact on spec**: surface-change
 - **Severity**: minor
+- **Update (2026-10-07)**: `pack` was removed (ADR-28); the solver the engine plugs in runs cluster only.
 
 ### D-22: Rust binder takes (manifest, root) and the trait wraps it, like the TS adapter
 - **When**: Commit 10 (feat(adapter-rust): syn parse and ra_ap bind to IR fragments)
@@ -215,6 +219,7 @@
 - **Reason**: arch-conflict
 - **Impact on spec**: behavior-change
 - **Severity**: major
+- **Update (2026-10-07)**: `pack` was removed (ADR-28); there is no file-packing phase to wire.
 
 ### D-28: analyze now runs the diversifying restructure search (supersedes D-27)
 - **When**: Commit 12 (feat(engine): orchestration, config, and public library surface)
@@ -225,6 +230,7 @@
 - **Severity**: minor
 - **Update (2026-07-06, REVISED)**: the search now runs the full multilevel path — weighted SCC-condensation quotient (symbol SCCs, not the spec's file graph; files are reparented afterwards by their symbols' cluster) → heavy-edge coarsening under the folder capacity cap → topological seeding → FM refinement with uncoarsening projection at every chain level → per-level hierarchy (folders → domains → packages → package groups via weighted quotient graphs) → J(T) polish sweep under the full objective. `conditional_splits` is now populated: any SCC whose production SLOC exceeds the file cap carries a split estimated by ceil-packing (`production_sloc.div_ceil(cap)` resulting files), shared verbatim across every candidate in both modes. `pack` itself (real SLOC-cap file splitting) remains the one unglued phase. The `pkg/pkg/pkg` duplicated-segment chains are gone: elected container names are canonicalized (`extend_under` — a child key that fails to path-extend its parent contributes only its final segment) and the tree face renders incremental names
 - **Correction (2026-08-22)**: as of `d1916fc` the search quotient condenses the FILE graph (`build_file_graph` in `crates/engine/src/analyze/relocation/solver.rs`, invoked from the pipeline solver's constructor; partition coverage asserts "every file scc"); the symbol-graph Tarjan survives for MFAS findings only. The 2026-07-06 wording above predates that switch.
+- **Update (2026-10-07)**: `pack` was removed (ADR-28), so it is no longer an unglued phase: file packing does not exist and no code claims it does. `conditional_splits` still uses the ceil-packing estimate described above.
 
 ### D-29: narrate_delta groups by destination-container id, on changed parent path
 - **When**: Commit 12
@@ -259,6 +265,7 @@
 - **Impact on spec**: behavior-change
 - **Severity**: major
 - **Update (2026-07-06, RESOLVED)**: MFAS is wired. `solve_cycles` runs core's `shatter` once per multi-member SCC (sequentially, in input order — `shatter_all`'s single weight table collides on per-SCC local edge numbering) under the configured `[solver]` limits; cycle violations carry real `breakSuggestions` (symbol names via SCC members, summed pair weights, `exact` fanned from the per-set ILP flag) and the detail reads `{n}-symbol cycle; break {src} -> {tgt} (w=…, exact|heuristic)`. The ILP model pins `threads = 1` for determinism. Caveat: an ILP timeout degrades that SCC to the heuristic break set (accepted — real SCCs solve in milliseconds against the 60s config default). The `should_keep_break_suggestions_and_conditional_splits_empty_per_d28` guard test is retired
+- **Update (2026-10-07)**: `shatter_all` is now `#[cfg(test)]`; production never called it, for the weight-table reason above.
 
 ### D-33: Several documented config keys parse and validate but drive nothing
 - **When**: Commit 12 (feat(engine): orchestration, config, and public library surface)
@@ -268,6 +275,7 @@
 - **Impact on spec**: behavior-change
 - **Severity**: major
 - **Update (2026-07-06, NARROWED)**: `[objective]`, `[weights]`, `[solver]`, `[diversity].seeds-per-candidate`, and `[analysis].jobs` are all live — score coefficients feed every `score()` call plus the polish pass and GainFn α/β; `[weights]` builds a `KindWeights` consumed by build_csr, the cut term, MFAS edge weights, and narration pull weights; `[solver]` bounds shatter; seeds-per-candidate replaces the hardcoded k×10 oversample; jobs installs a scoped rayon pool. The only remaining inert key is `[tests].helper-cap`: test-polarity nodes carry zero production SLOC, so the helper fan-in cap has nothing to measure until per-test SLOC attribution exists
+- **Update (2026-10-07)**: the `Coefficients::anchored()`/`greenfield()` presets named above were deleted; this entry's account of the old hardcoded presets is historical.
 
 ### D-34: Delta narration's reason and followsSubject are constants (extends D-29)
 - **When**: Commit 12 (feat(engine): orchestration, config, and public library surface)
@@ -277,6 +285,7 @@
 - **Impact on spec**: behavior-change
 - **Severity**: minor
 - **Update (2026-07-06, RESOLVED)**: kinds, reasons, and `followsSubject` are computed in the new narration. MoveKind is folder-granular (a destination receiving from 2+ source folders → Merge; one source scattering to 2+ destinations → Split; else Move); reasons attribute in precedence order (`follows {subject}`, over-cap folder relief, `pulled by {partner} (w …)` from summed both-direction edge weight to destination residents, naming cohesion ≥ 0.5 mean pairwise Jaccard, `regrouped by clustering` fallback); a moved all-test file whose dominant production subject lands in the same candidate folder gets `followsSubject` and the diff face prints the indented `follows` line. Granularity stays folder-level until `pack` lands
+- **Update (2026-10-07)**: `pack` was removed (ADR-28); granularity stays folder-level and file or symbol packing is not planned.
 
 ### D-35: Candidate-vs-candidate diff renders stored narration, not a computed diff
 - **When**: Commit 13 (feat(cli): commands, rendering, e2e fixtures, and parity test)
@@ -285,6 +294,7 @@
 - **Reason**: arch-conflict
 - **Impact on spec**: behavior-change
 - **Severity**: minor
+- **Update (2026-10-07)**: `pack` was removed (ADR-28); granularity stays folder-level and file or symbol packing is not planned.
 
 ### D-36: Candidate trees copy the current tree's visibility findings
 - **When**: Commit 12 (feat(engine): orchestration, config, and public library surface)

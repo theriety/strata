@@ -115,8 +115,7 @@ flowchart LR
     condense --> shatter[Shatter]
     shatter --> layer[Layer]
     layer --> cluster[Cluster]
-    cluster --> pack[Pack]
-    pack --> visibility[Derive Visibility]
+    cluster --> visibility[Derive Visibility]
     visibility --> project[Project Tests]
     project --> score[Score]
     score --> diversify[Diversify]
@@ -131,13 +130,13 @@ flowchart LR
 | 4 | Shatter | Minimum feedback arc set per SCC — exact ILP or heuristic fallback | `crates/core/src/shatter.rs` |
 | 5 | Layer | Longest-path layering over the condensation DAG | `crates/core/src/layer.rs` |
 | 6 | Cluster | Multilevel acyclic clustering (coarsen → seed → refine) | `crates/core/src/cluster.rs` |
-| 7 | Pack | Capacitated packing of atoms into files within the SLOC cap | `crates/core/src/pack.rs` |
+| 7 | Pack | Not built: capacitated file packing was removed unwired; see [ADR-28](decisions/product/adr-28-no-file-packing-until-designed.md) | — |
 | 8 | Derive Visibility | Set each symbol's export scope to the LCA of its consumers | `crates/core/src/visibility.rs` |
 | 9 | Project Tests | Removed from `strata-core`; specs following their subjects is now handled by the engine's relocation test mirror | `crates/engine/src/analyze/relocation/mirror/` |
 | 10 | Score | Evaluate the objective J(T) with a per-term breakdown | `crates/core/src/score.rs` |
 | 11 | Diversify & Report | Multi-start variation-of-information selection, then render | `crates/core/src/diversify.rs`, `crates/cli/src/render.rs` |
 
-The candidate-generation hot loop in `analyze` runs the restructuring subset — Condense → Layer → Cluster → Score → Diversify — once per profile seed. Shatter, Pack, and Derive Visibility live in `strata-core` and feed cycle-break suggestions, conditional file splits, and the structural violations surfaced by the `violations`, `tree`, and `diff` commands.
+The candidate-generation hot loop in `analyze` runs the restructuring subset — Condense → Layer → Cluster → Score → Diversify — once per profile seed. Shatter and Derive Visibility live in `strata-core` and feed cycle-break suggestions and the structural violations surfaced by the `violations`, `tree`, and `diff` commands.
 
 The pipeline honors a fixed constraint priority — **acyclicity > test polarity > capacity > cohesion > anchoring**. The first three are hard vetoes during clustering and refinement, never penalty terms; only cohesion and anchoring are scored. Cycle-breaking uses an exact ILP via the bundled [HiGHS](https://highs.dev/) solver for small strongly-connected components (configurable `ilp-threshold`, default 300 nodes) with lazy cycle constraints, falling back to the Eades–Lin–Smyth heuristic above the threshold or on timeout; every break set records whether it was solved exactly.
 
@@ -221,6 +220,6 @@ Cycle findings report only components spanning distinct source-file identities; 
 - **`snapshot_from_root`** (`crates/engine/src/snapshot.rs`): source discovery, adapter dispatch by file extension, fragment merging, and re-export normalization.
 - **`AnalyzeConfig` / `load_config`** (`crates/engine/src/config.rs`): the `strata.toml` schema and validation, mapping config sections to objective weights, capacities, and solver budgets.
 - **`StrataError`** (`crates/engine/src/error.rs`): the typed error surface with stable remedy codes that the CLI maps to exit code `1`.
-- **Decomposition algorithms** (`crates/core/src`): `condense`, `shatter`, `layer`, `cluster`, `pack`, `visibility`, `project`, `score`, and `diversify` — each a pure phase over the IR.
+- **Decomposition algorithms** (`crates/core/src`): `condense`, `shatter`, `layer`, `cluster`, `visibility`, `project`, `score`, and `diversify` — each a pure phase over the IR.
 - **CLI dispatch and rendering** (`crates/cli/src/main.rs`, `crates/cli/src/render.rs`): clap-derived flag parsing, subcommand dispatch, the plain-text default with explicit JSON selection, and the fixed exit-code mapping (`0`/`1`/`2`). Terminal and Markdown reports consume one private report representation assembled from the saved result. Candidate change trees compare saved file identities and recorded moves to show physical before/after paths; virtual grouping labels are not treated as directories. Wrapped change-tree labels retain branch ancestry and literal path characters, preferring word or path boundaries within 100 display columns. Presentation options control numerical detail without changing the analysis payload.
 - **Language adapters** (`crates/adapter-typescript`, `crates/adapter-rust`, `crates/adapter-python`): swc-, syn+rust-analyzer-, and rustpython-based front ends, each pairing a `parse` module with a `bind` reference resolver and an `sloc` size counter.

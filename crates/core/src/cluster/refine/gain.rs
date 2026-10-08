@@ -31,6 +31,9 @@ impl GainFn {
     /// Builds a gain model from interned per-node token sets and the mixing
     /// coefficients. Token vectors are sorted and deduplicated defensively so
     /// the Jaccard computation can assume set semantics.
+    ///
+    /// Test-only: production builds the cut-only model via `cut_only`.
+    #[cfg(test)]
     #[must_use]
     pub fn new(
         naming_tokens: Vec<Vec<u32>>,

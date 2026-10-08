@@ -5,14 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use smol_str::SmolStr;
 use strata_core::cluster::{ClusterId, Partition};
 use strata_core::graph::csr::Csr;
-use strata_core::score::Coefficients;
 use strata_ir::{
     Affinity, AffinityKind, Container, ContainerId, ContainerTree, Edge, EdgeKind, Hardness,
     IntermediateRepresentation, Layout, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
     build_laminar_tree,
 };
 
-use crate::config::{AnalyzeConfig, ProfileConfig, TestsConfig};
+use crate::config::{AnalyzeConfig, ObjectiveConfig, ProfileConfig, TestsConfig};
 use crate::result::{ContainerNode, CurrentStanding, Level, SymbolKind, SymbolMove};
 
 use super::*;
@@ -1061,7 +1060,7 @@ fn should_give_a_spec_no_priced_pull_toward_its_subject() {
     let solver = PipelineSolver::new(
         &snap,
         &AnalyzeConfig::default(),
-        Coefficients::anchored(),
+        ObjectiveConfig::default().coefficients(),
         true,
         &tests,
     );
@@ -3206,7 +3205,7 @@ fn should_pin_a_spec_when_its_subject_did_not_move() {
     let solver = PipelineSolver::new(
         &snap,
         &AnalyzeConfig::default(),
-        Coefficients::anchored(),
+        ObjectiveConfig::default().coefficients(),
         true,
         &tests,
     );
