@@ -345,8 +345,8 @@ mod tests {
             packing.files.first().map(|file| file.members.clone()),
             Some(vec![NodeId(0), NodeId(1)])
         );
-        assert!(packing.conditional_splits.is_empty());
-        assert!(packing.exemptions.is_empty());
+        assert_eq!(packing.conditional_splits, []);
+        assert_eq!(packing.exemptions, []);
     }
 
     #[test]
@@ -474,9 +474,9 @@ mod tests {
 
         let packing = pack(&folder, 250, &[]);
 
-        assert!(packing.files.is_empty());
-        assert!(packing.conditional_splits.is_empty());
-        assert!(packing.exemptions.is_empty());
+        assert_eq!(packing.files, []);
+        assert_eq!(packing.conditional_splits, []);
+        assert_eq!(packing.exemptions, []);
     }
 
     #[test]

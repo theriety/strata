@@ -25,7 +25,7 @@ fn should_be_deterministic_in_its_hash() {
         .unwrap_or_default();
 
     assert_eq!(first, second);
-    assert!(!first.is_empty());
+    assert_ne!(first, "");
 }
 
 #[test]

@@ -443,7 +443,7 @@ fn should_drop_the_whole_ladder_when_any_rung_cannot_project() {
         ],
     }];
     let ladders = apply_visibility_scopes(&mut nodes, &built.tree, &built.files, &[], &scopes);
-    assert!(ladders.is_empty());
+    assert_eq!(ladders, []);
     // the declared scope still projects; only the ladder is dropped
     assert_eq!(
         nodes.first().map(|node| node.visibility),
@@ -629,7 +629,7 @@ fn should_ignore_a_consumer_that_no_rung_can_place() {
         &[(1, 0, EdgeKind::Call)],
         &rungs,
     );
-    assert!(!alone.is_empty());
+    assert_ne!(alone, []);
     assert_eq!(stray, alone);
 
     // a placed consumer still prunes rungs while the stray one is ignored.

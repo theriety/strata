@@ -709,7 +709,7 @@ mod tests {
     fn should_not_record_a_private_use_as_a_re_export() {
         let re_exports = parse_re_exports("use other::Thing;\n");
 
-        assert!(re_exports.is_empty());
+        assert_eq!(re_exports, []);
     }
 
     #[test]

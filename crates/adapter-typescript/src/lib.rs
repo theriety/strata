@@ -257,7 +257,7 @@ mod tests {
              export function buildArtifact(input: ArchiveArtifactParams): string { return input.label }",
         );
 
-        assert!(companion_pairs(&fragment).is_empty());
+        assert_eq!(companion_pairs(&fragment), []);
     }
 
     #[test]
@@ -267,7 +267,7 @@ mod tests {
              export function request(input: RequestOptions): number { return input.retries }",
         );
 
-        assert!(companion_pairs(&fragment).is_empty());
+        assert_eq!(companion_pairs(&fragment), []);
     }
 
     #[test]
@@ -280,7 +280,7 @@ mod tests {
              }",
         );
 
-        assert!(companion_pairs(&fragment).is_empty());
+        assert_eq!(companion_pairs(&fragment), []);
     }
 
     #[test]
@@ -291,7 +291,7 @@ mod tests {
              export function artifactBuild(input: BuildArtifactParams): string { return input.label }",
         );
 
-        assert!(companion_pairs(&fragment).is_empty());
+        assert_eq!(companion_pairs(&fragment), []);
     }
 
     #[test]
@@ -304,7 +304,7 @@ mod tests {
              }",
         );
 
-        assert!(companion_pairs(&fragment).is_empty());
+        assert_eq!(companion_pairs(&fragment), []);
     }
 
     #[test]
@@ -369,7 +369,7 @@ mod tests {
              ): string { return input.label }",
         );
 
-        assert!(companion_pairs(&fragment).is_empty());
+        assert_eq!(companion_pairs(&fragment), []);
     }
 
     #[test]
@@ -493,7 +493,7 @@ mod tests {
             ),
         ]);
 
-        assert!(companion_pairs(&fragment).is_empty());
+        assert_eq!(companion_pairs(&fragment), []);
     }
 
     #[test]
@@ -936,6 +936,6 @@ mod tests {
                 .iter()
                 .any(|node| node.name == "BuildArtifactParams" && node.kind == NodeKind::Symbol)
         );
-        assert!(companion_pairs(&fragment).is_empty());
+        assert_eq!(companion_pairs(&fragment), []);
     }
 }
