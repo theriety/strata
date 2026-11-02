@@ -206,6 +206,11 @@ fn should_extract_cross_crate_declarations_as_nodes() -> Result<(), String> {
     assert!(has("crates/util/src/lib.rs", "Measure", KindView::Type));
     assert!(has("crates/util/src/lib.rs", "Summarize", KindView::Type));
     assert!(has("crates/core/src/lib.rs", "Report", KindView::Type));
+    assert!(has(
+        "crates/core/src/lib.rs",
+        "impl Summarize for Report",
+        KindView::Type
+    ));
     assert!(has("crates/app/src/lib.rs", "describe", KindView::Symbol));
     assert!(has(
         "crates/app/src/lib.rs",
@@ -220,16 +225,17 @@ fn should_resolve_a_cross_crate_trait_impl_as_inheritance() -> Result<(), String
     let (_nodes, edges, _ir) = build_views()?;
 
     // `impl Summarize for Report` in `core` resolves to the `Summarize` trait
-    // declared in `util`: a hard inheritance edge from `Report` to `Summarize`.
+    // declared in `util`: a hard inheritance edge from the block, named by its
+    // header, to `Summarize`.
     let inheritance = edges.iter().any(|edge| {
         edge.kind == EdgeKindView::Inheritance
-            && edge.source == "Report"
+            && edge.source == "impl Summarize for Report"
             && edge.target == "Summarize"
             && edge.hard
     });
     assert!(
         inheritance,
-        "expected a hard Report -> Summarize inheritance edge, got {edges:#?}"
+        "expected a hard `impl Summarize for Report` -> Summarize inheritance edge, got {edges:#?}"
     );
     Ok(())
 }
@@ -246,6 +252,28 @@ fn should_resolve_a_cross_crate_method_call_as_a_call_edge() -> Result<(), Strin
     assert!(
         call,
         "expected a hard call edge out of describe, got {edges:#?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn should_resolve_a_trait_method_call_to_the_whole_impl_block() -> Result<(), String> {
+    let (nodes, edges, _ir) = build_views()?;
+
+    // a trait impl cannot be split across files, so `summarize` is not its own
+    // node: `report.summarize()` lands on the `impl Summarize for Report` block.
+    assert!(
+        !nodes.iter().any(|node| node.name == "summarize"),
+        "a trait impl method is not a standalone node, got {nodes:#?}"
+    );
+    let call = edges.iter().any(|edge| {
+        edge.kind == EdgeKindView::Call
+            && edge.source == "describe"
+            && edge.target == "impl Summarize for Report"
+    });
+    assert!(
+        call,
+        "expected describe -> `impl Summarize for Report` call edge, got {edges:#?}"
     );
     Ok(())
 }

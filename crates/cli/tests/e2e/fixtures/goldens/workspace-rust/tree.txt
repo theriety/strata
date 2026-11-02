@@ -5,12 +5,11 @@ workspace-rust [packageGroup]
       - combined_total (package)
       - ReMeasure (package)
   crates/core [package]
-    crates/core/src/lib.rs [file] 16 sloc
+    crates/core/src/lib.rs [file] 18 sloc
       - Report (package)
       - new (package)
       - doubled (package)
-      - Report (file)
-      - summarize (file)
+      - impl Summarize for Report (file)
       - sample_report (file)
       - report_doubles_its_measure (file)
   crates/util [package]
