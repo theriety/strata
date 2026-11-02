@@ -87,4 +87,8 @@ pub struct EdgeBreak {
     pub weight: f64,
     /// `true` when the break is ILP-proven minimal, `false` for a heuristic.
     pub exact: bool,
+    /// `true` when both endpoints live in one file: the cut is needed to
+    /// resolve the cycle but does not by itself separate files.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub same_file: bool,
 }

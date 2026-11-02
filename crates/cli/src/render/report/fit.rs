@@ -1,10 +1,14 @@
-//! Width fitting that splits overflowing report lines losslessly.
+//! Width fitting that splits overflowing report lines losslessly and trims line-end whitespace.
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Splits overflowing tokens losslessly; continuation indentation is presentation only.
 pub(super) fn fit_lines(lines: Vec<String>) -> Vec<String> {
-    lines.into_iter().flat_map(|line| fit_line(&line)).collect()
+    lines
+        .into_iter()
+        .flat_map(|line| fit_line(&line))
+        .map(|line| line.trim_end().to_owned())
+        .collect()
 }
 
 fn fit_line(line: &str) -> Vec<String> {

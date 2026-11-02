@@ -111,6 +111,7 @@ pub(super) fn bind(
     classify_polarity(files, &mut nodes, &edges);
     let advisory_uses = advisory::settle(advisory, &nodes);
     let file_facts = file_facts::file_facts(files, &database, root);
+    let test_support_roots = database.test_support_roots(root);
 
     Ok(IrFragment {
         nodes,
@@ -121,6 +122,7 @@ pub(super) fn bind(
         exposures,
         advisory_uses,
         file_facts,
+        test_support_roots,
     })
 }
 

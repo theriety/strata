@@ -157,8 +157,8 @@ fn nq(name: &str) -> String {
 ///
 /// `first_pad` indents the first line, `cont_pad` every continuation; both are
 /// counted against the budget, mirroring the approved artifact's geometry.
-/// Original separator whitespace is retained at line ends, including whitespace
-/// inside source names containing literal backticks.
+/// Whitespace is trimmed at every line end, so joining the lines with one
+/// space restores the text and no rendered line carries trailing whitespace.
 fn wrap(text: &str, first_pad: usize, cont_pad: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -166,7 +166,7 @@ fn wrap(text: &str, first_pad: usize, cont_pad: usize) -> Vec<String> {
     for word in text.split_inclusive(char::is_whitespace) {
         let grown = cur.chars().count() + word.chars().count();
         if !cur.is_empty() && indent.chars().count() + grown > 99 {
-            lines.push(format!("{indent}{cur}"));
+            lines.push(format!("{indent}{}", cur.trim_end()));
             word.clone_into(&mut cur);
             indent = " ".repeat(cont_pad);
         } else {
@@ -174,7 +174,7 @@ fn wrap(text: &str, first_pad: usize, cont_pad: usize) -> Vec<String> {
         }
     }
     if !cur.is_empty() {
-        lines.push(format!("{indent}{cur}"));
+        lines.push(format!("{indent}{}", cur.trim_end()));
     }
     lines
 }
@@ -667,12 +667,14 @@ mod tests {
                     target: "alpha".to_owned(),
                     weight: 1.0,
                     exact: true,
+                    same_file: false,
                 },
                 EdgeBreak {
                     source: "alpha".to_owned(),
                     target: "beta".to_owned(),
                     weight: 2.0,
                     exact: false,
+                    same_file: false,
                 },
             ]),
             capacity: None,
@@ -709,6 +711,7 @@ mod tests {
                 target: "left".to_owned(),
                 weight: 1.0,
                 exact: true,
+                same_file: false,
             }]),
             capacity: None,
         };
@@ -734,6 +737,7 @@ mod tests {
                 target: "left".to_owned(),
                 weight: 1.0,
                 exact: true,
+                same_file: false,
             }]),
             capacity: None,
         };
@@ -888,7 +892,88 @@ mod tests {
         let text = report_lines(&result, "fixture").join("\n");
 
         assert!(!text.contains("these two gains"), "{text}");
-        assert!(text.contains("No candidates were produced."), "{text}");
+        assert!(text.contains("anchored — 0 candidates"), "{text}");
+        assert!(text.contains("greenfield — 0 candidates"), "{text}");
+    }
+
+    #[test]
+    fn should_print_one_line_per_profile_and_none_when_there_is_nothing_to_show() {
+        let mut result = result_with_candidate();
+        if let Some(anchored) = result.profiles.anchored.as_mut() {
+            anchored.candidates.clear();
+        }
+        result.profiles.greenfield = None;
+        result.advice.recommended.clear();
+        result.advice.review_candidates.clear();
+
+        let lines = report_lines(&result, "fixture");
+        let text = lines.join("\n");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("anchored — 0 candidates (baseline ")),
+            "{text}"
+        );
+        assert!(!text.contains("Lower scores are better"), "{text}");
+        assert!(!text.contains("Supporting profiles selected"), "{text}");
+        let advice = lines.iter().position(|line| line == "Advice");
+        assert_eq!(
+            advice
+                .and_then(|index| lines.get(index + 1))
+                .map(String::as_str),
+            Some("  None."),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn should_leave_no_rendered_line_ending_in_whitespace() {
+        let result = result_with_candidate();
+        let mut lines = report_lines(&result, "fixture");
+        lines.extend(wrap(&"word ".repeat(60), 4, 4));
+
+        for line in &lines {
+            assert_eq!(line, line.trim_end(), "trailing whitespace: {line:?}");
+        }
+        let joined = wrap("alpha beta gamma ".repeat(20).trim_end(), 0, 0).join(" ");
+        assert_eq!(joined, "alpha beta gamma ".repeat(20).trim_end());
+    }
+
+    #[test]
+    fn should_label_a_same_file_cut_honestly() {
+        let violation = Violation {
+            kind: ViolationKind::Cycle,
+            severity: Severity::Violation,
+            location: vec!["a.rs".to_owned(), "b.rs".to_owned()],
+            detail: "2-symbol cycle".to_owned(),
+            break_suggestions: Some(vec![
+                EdgeBreak {
+                    source: "x".to_owned(),
+                    target: "y".to_owned(),
+                    weight: 1.0,
+                    exact: true,
+                    same_file: false,
+                },
+                EdgeBreak {
+                    source: "p".to_owned(),
+                    target: "q".to_owned(),
+                    weight: 1.0,
+                    exact: true,
+                    same_file: true,
+                },
+            ]),
+            capacity: None,
+        };
+
+        let text =
+            findings::findings_lines("Shared", &[violation], RenderOptions::default()).join("\n");
+
+        assert!(
+            text.contains("Also cut: `p` -> `q` (w=1.0, exact, same file)"),
+            "{text}"
+        );
+        assert!(!text.contains("Suggested cut: `p`"), "{text}");
     }
 
     #[test]
@@ -1262,9 +1347,12 @@ mod tests {
         let first = lines
             .find_map(|line| line.strip_prefix(first_prefix))
             .ok_or_else(|| format!("missing branch {first_prefix:?}: {tree}"))?;
+        // a break consumes the whitespace it falls on, so lines carry no
+        // trailing space; the text is compared without whitespace.
+        let squash = |text: &str| -> String { text.split_whitespace().collect() };
         let mut restored = first.to_owned();
         let mut segments = 1;
-        while restored.len() < expected.len() {
+        while squash(&restored).len() < squash(expected).len() {
             let next = lines.next().ok_or("missing wrapped continuation")?;
             let content = next
                 .strip_prefix(continuation)
@@ -1277,8 +1365,9 @@ mod tests {
             "fixture must exercise intermediate continuations"
         );
         assert_eq!(
-            restored, expected,
-            "literal spaces, names, paths, and stars must survive"
+            squash(&restored),
+            squash(expected),
+            "names, paths, and stars must survive"
         );
         Ok(())
     }
@@ -1370,10 +1459,11 @@ mod tests {
         expected: &str,
         continuation: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let squash = |text: &str| -> String { text.split_whitespace().collect() };
         let mut restored = lines.next().ok_or("missing tree line")?.to_owned();
-        while restored.len() < expected.len() {
+        while squash(&restored).len() < squash(expected).len() {
             assert!(
-                expected.starts_with(&restored),
+                squash(expected).starts_with(&squash(&restored)),
                 "unexpected tree payload {restored:?}"
             );
             let next = lines.next().ok_or("missing deep continuation")?;
@@ -1387,7 +1477,11 @@ mod tests {
             assert!(!payload.is_empty(), "continuation must make progress");
             restored.push_str(payload);
         }
-        assert_eq!(restored, expected, "deep tree payload must survive exactly");
+        assert_eq!(
+            squash(&restored),
+            squash(expected),
+            "deep tree payload must survive"
+        );
         Ok(())
     }
 

@@ -5,6 +5,24 @@ use strata_engine::{AnalyzeResult, Candidate, CurrentStanding, ModeResult};
 use super::candidate::candidate_lines;
 use crate::render::{RenderOptions, TERMS, f4, sf, wrap};
 
+/// One line for a profile that produced no candidates, keeping the baseline,
+/// convergence, and standing facts the full block would have printed.
+pub(super) fn empty_profile_line(name: &str, profile: &ModeResult) -> String {
+    let mut facts = vec![format!("baseline {}", f4(profile.current.score))];
+    if profile.solution_space_converged {
+        facts.push("search converged".to_owned());
+    }
+    match profile.current.standing {
+        CurrentStanding::Optimal => facts.push("current layout already optimal".to_owned()),
+        CurrentStanding::Infeasible => facts.push(format!(
+            "current layout breaks {} cap(s)",
+            profile.current.capacity_breaks
+        )),
+        CurrentStanding::Outscored => {}
+    }
+    format!("{name} — 0 candidates ({})", facts.join("; "))
+}
+
 pub(super) fn profile_lines(
     result: &AnalyzeResult,
     name: &str,

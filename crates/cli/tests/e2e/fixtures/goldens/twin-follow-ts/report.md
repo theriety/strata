@@ -8,8 +8,8 @@ All findings and moves are suggestions. Applying them may break the build; use y
 
 ```text
 Shared findings (1)
-  - testOnly [violation] at `src/api/openai.ts`, `complete`: Only tests in this repo use 
-    `complete`. It is public, so code outside this repo may use it too; check before moving or 
+  - testOnly [violation] at `src/api/openai.ts`, `complete`: Only tests in this repo use
+    `complete`. It is public, so code outside this repo may use it too; check before moving or
     deleting it.
 
 anchored profile-specific findings (0)
@@ -17,36 +17,17 @@ anchored profile-specific findings (0)
 
 greenfield profile-specific findings (0)
   None.
-
 ```
 
 ## Candidate layouts
 
 ```text
-Lower scores are better. Compare scores only within one parameter profile of one project. A 
-candidate is a proposed layout; inclusion does not make a move Recommended. Partial plans are not 
-rescored.
-
-anchored — 0 candidate(s)
-Baseline score: 0.4000
-Fewer than the requested candidates survived; the solution space converged.
-Current layout is already optimal under this profile's search.
-No candidates were produced.
-
-greenfield — 0 candidate(s)
-Baseline score: 0.6000
-Fewer than the requested candidates survived; the solution space converged.
-Current layout is already optimal under this profile's search.
-No candidates were produced.
+anchored — 0 candidates (baseline 0.4000; search converged; current layout already optimal)
+greenfield — 0 candidates (baseline 0.6000; search converged; current layout already optimal)
 ```
 
 ## Advice
 
 ```text
-Supporting profiles selected the destination; qualified profiles also passed the evidence 
-thresholds; absent profiles did not select the move; conflicts name alternative destinations. 
-Advice consolidates the best candidate from each executed profile.
- Recommended (0):
- Review candidate (0):
-
+  None.
 ```

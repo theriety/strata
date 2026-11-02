@@ -32,6 +32,7 @@ pub(super) fn merge_fragments(
     let mut exposures = Vec::new();
     let mut advisory_uses = Vec::new();
     let mut file_facts = Vec::new();
+    let mut test_support_roots = Vec::new();
     // the file path each merged node belongs to, parallel to `nodes`.
     let mut node_paths: Vec<SmolStr> = Vec::new();
     let mut all_paths: Vec<SmolStr> = Vec::new();
@@ -87,6 +88,7 @@ pub(super) fn merge_fragments(
             advisory_uses.push(advisory);
         }
         file_facts.extend(fragment.file_facts);
+        test_support_roots.extend(fragment.test_support_roots);
         node_offset += node_span;
     }
 
@@ -109,6 +111,7 @@ pub(super) fn merge_fragments(
     ir.scope_ladders = ladders;
     ir.advisory_uses = advisory_uses;
     ir.file_facts = file_facts;
+    ir.test_support_roots = test_support_roots;
     ir
 }
 

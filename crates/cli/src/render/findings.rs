@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 use std::io::{self, Write};
 
-use strata_engine::{Severity, Violation, ViolationKind};
+use strata_engine::{EdgeBreak, Severity, Violation, ViolationKind};
 
 use super::limit::{more_line, take_worst};
 use super::{RenderOptions, nq, wrap};
@@ -24,7 +24,6 @@ pub(super) fn findings_lines(
         lines.extend(finding_lines(violation));
     }
     lines.extend(more_line(hidden, 2));
-    lines.push(String::new());
     lines
 }
 
@@ -79,19 +78,21 @@ fn finding_lines(violation: &Violation) -> Vec<String> {
         ));
     }
     for edge in violation.break_suggestions.iter().flatten().skip(1) {
-        lines.extend(wrap(
-            &format!(
-                "Suggested cut: `{}` → `{}` (weight {:.4}, {})",
-                edge.source,
-                edge.target,
-                edge.weight,
-                if edge.exact { "exact" } else { "heuristic" }
-            ),
-            4,
-            4,
-        ));
+        lines.extend(wrap(&format!("Also cut: {}", cut_text(edge)), 4, 4));
     }
     lines
+}
+
+/// Formats one cut as `src -> dst (w=.., method[, same file])`.
+fn cut_text(edge: &EdgeBreak) -> String {
+    let method = if edge.exact { "exact" } else { "heuristic" };
+    let scope = if edge.same_file { ", same file" } else { "" };
+    format!(
+        "{} -> {} (w={:.1}, {method}{scope})",
+        nq(&edge.source),
+        nq(&edge.target),
+        edge.weight
+    )
 }
 
 /// Rebuilds one cycle finding's text from its structured fields, quoting every
@@ -119,12 +120,9 @@ pub(super) fn cycle_finding_text(violation: &Violation) -> String {
     if let Some(index) = detail.find("; to split it, break ") {
         detail.truncate(index);
     }
-    let method = if first.exact { "exact" } else { "heuristic" };
     let mut text = format!(
-        "{members} — {detail}; to split it, break {} -> {} (w={:.1}, {method})",
-        nq(&first.source),
-        nq(&first.target),
-        first.weight
+        "{members} — {detail}; to split it, break {}",
+        cut_text(first)
     );
     if breaks.len() > 1 {
         let _ = write!(text, ", +{} more", breaks.len() - 1);
