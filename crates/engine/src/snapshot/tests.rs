@@ -3,8 +3,8 @@
 use smol_str::SmolStr;
 use strata_ir::{
     AdvisoryUse, Affinity, AffinityKind, Container, ContainerId, Edge, EdgeKind, Exposure,
-    Hardness, IntermediateRepresentation, IrFragment, Layout, Node, NodeId, NodeKind, Polarity,
-    ScopeLadder, ScopeLevel, VisibilityScope, build_laminar_tree,
+    FileFact, Hardness, IntermediateRepresentation, IrFragment, Layout, Node, NodeId, NodeKind,
+    Polarity, ScopeLadder, ScopeLevel, VisibilityScope, build_laminar_tree,
 };
 
 use super::discovery::{discover_sources, manifest_dir};
@@ -231,6 +231,7 @@ fn should_reintern_ids_across_fragments_into_one_namespace() {
         visibility_scopes: Vec::new(),
         exposures: Vec::new(),
         advisory_uses: Vec::new(),
+        file_facts: Vec::new(),
     };
     let second = IrFragment {
         nodes: vec![node(0, "b", 0)],
@@ -244,6 +245,7 @@ fn should_reintern_ids_across_fragments_into_one_namespace() {
         visibility_scopes: Vec::new(),
         exposures: Vec::new(),
         advisory_uses: Vec::new(),
+        file_facts: Vec::new(),
     };
 
     let merged = merge_fragments(vec![first, second], "pkg", &Layout::default());
@@ -279,6 +281,7 @@ fn should_rehome_a_file_and_its_test_into_one_package() {
         visibility_scopes: Vec::new(),
         exposures: Vec::new(),
         advisory_uses: Vec::new(),
+        file_facts: Vec::new(),
     };
     let test = IrFragment {
         nodes: vec![node(0, "widget_test", 0)],
@@ -288,6 +291,7 @@ fn should_rehome_a_file_and_its_test_into_one_package() {
         visibility_scopes: Vec::new(),
         exposures: Vec::new(),
         advisory_uses: Vec::new(),
+        file_facts: Vec::new(),
     };
     let layout = Layout {
         package_roots: Vec::new(),
@@ -980,4 +984,48 @@ fn should_merge_advisory_uses_without_changing_nodes_edges_or_containers() {
     // the whole graph side of the IR is untouched; advisory uses reach only the
     // ladder verdicts and the advisory list, never nodes, edges or containers.
     assert_eq!(plain, with);
+}
+
+#[test]
+fn should_merge_file_facts_from_every_fragment_without_touching_the_graph() {
+    let fact = |file: &str, test_of: Option<&str>, entry: bool| FileFact {
+        file: SmolStr::new(file),
+        test_of: test_of.map(SmolStr::new),
+        entry,
+    };
+    let fragment = |path: &str, facts: Vec<FileFact>| IrFragment {
+        nodes: vec![node(0, "a", 0)],
+        containers: vec![container(0, path)],
+        file_facts: facts,
+        ..IrFragment::default()
+    };
+    let merged = merge_fragments(
+        vec![
+            fragment("src/a.ts", vec![fact("src/a.ts", None, true)]),
+            fragment(
+                "src/b.ts",
+                vec![fact("test/b.test.ts", Some("src/b.ts"), false)],
+            ),
+        ],
+        "pkg",
+        &Layout::default(),
+    );
+    assert_eq!(
+        merged.file_facts,
+        vec![
+            fact("src/a.ts", None, true),
+            fact("test/b.test.ts", Some("src/b.ts"), false),
+        ]
+    );
+    let plain = merge_fragments(
+        vec![
+            fragment("src/a.ts", Vec::new()),
+            fragment("src/b.ts", Vec::new()),
+        ],
+        "pkg",
+        &Layout::default(),
+    );
+    assert_eq!(plain.file_facts, Vec::<FileFact>::new());
+    assert_eq!(plain.nodes, merged.nodes);
+    assert_eq!(plain.containers, merged.containers);
 }

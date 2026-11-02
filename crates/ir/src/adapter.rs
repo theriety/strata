@@ -121,6 +121,9 @@ pub struct IrFragment {
     /// Name-matched uses that count for visibility advice only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub advisory_uses: Vec<AdvisoryUse>,
+    /// Test pairs and entry files this adapter states for its language.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_facts: Vec<crate::FileFact>,
 }
 
 /// Failures raised while parsing or binding source with an adapter.

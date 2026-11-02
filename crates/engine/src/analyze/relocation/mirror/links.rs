@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use strata_core::cluster::Partition;
 
 use crate::analyze::relocation::PipelineSolver;
+use crate::analyze::relocation::mirror::pairs::derive_link;
 use crate::analyze::relocation::mirror::{
     ExactMirrorLink, PolishEvidence, ProjectedFolder, fill_mirror_template, match_source_template,
 };
@@ -25,6 +26,44 @@ impl PipelineSolver<'_> {
                 )
             })
             .collect();
+        let by_name: BTreeMap<&str, u32> = self
+            .files
+            .iter()
+            .enumerate()
+            .map(|(vertex, file)| {
+                (
+                    file.name.as_str(),
+                    u32::try_from(vertex).unwrap_or(u32::MAX),
+                )
+            })
+            .collect();
+        // adapter-stated pairs first; the production side must be outside the
+        // test zone and the test side inside it, exactly as for user rules.
+        for (test, source) in &self.adapter_pairs {
+            let (Some(&mirror_vertex), Some(&source_vertex)) =
+                (by_path.get(test.as_str()), by_name.get(source.as_str()))
+            else {
+                continue;
+            };
+            if self
+                .test_zone
+                .get(source_vertex as usize)
+                .copied()
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            if let Some(link) = derive_link(source_vertex, source, test) {
+                links
+                    .entry(mirror_vertex)
+                    .or_default()
+                    .entry(source_vertex)
+                    .or_insert(link);
+            }
+        }
+        // a test has at most one source: an adapter pair wins outright, and
+        // user rules that disagree about a test's source leave it unpaired.
+        let mut from_rules: BTreeMap<u32, BTreeMap<u32, ExactMirrorLink>> = BTreeMap::new();
         for (source_vertex, source) in self.files.iter().enumerate() {
             if self.test_zone.get(source_vertex).copied().unwrap_or(true) {
                 continue;
@@ -45,7 +84,10 @@ impl PipelineSolver<'_> {
                     let Some(&mirror_vertex) = by_path.get(&expected) else {
                         continue;
                     };
-                    links
+                    if links.contains_key(&mirror_vertex) {
+                        continue;
+                    }
+                    from_rules
                         .entry(mirror_vertex)
                         .or_default()
                         .entry(u32::try_from(source_vertex).unwrap_or(u32::MAX))
@@ -58,6 +100,11 @@ impl PipelineSolver<'_> {
                 }
             }
         }
+        links.extend(
+            from_rules
+                .into_iter()
+                .filter(|(_, claims)| claims.len() == 1),
+        );
         links
     }
 

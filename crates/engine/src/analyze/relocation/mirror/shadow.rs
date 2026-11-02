@@ -81,7 +81,7 @@ impl PipelineSolver<'_> {
             folds,
             ..PolishEvidence::default()
         };
-        if !self.mirror_enabled || self.mirror_rules.is_empty() {
+        if !self.mirror_enabled || (self.mirror_rules.is_empty() && self.adapter_pairs.is_empty()) {
             return evidence;
         }
         let assembled = self.assemble_with_polish_evidence(parts, &evidence);

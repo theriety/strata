@@ -17,6 +17,7 @@
 //! never needs to understand Python to merge fragments.
 
 mod bind;
+mod pairs;
 mod parse;
 mod scope;
 mod sloc;

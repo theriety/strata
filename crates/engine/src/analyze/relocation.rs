@@ -127,6 +127,8 @@ pub(in crate::analyze) struct PipelineSolver<'a> {
     forbidden_symbol_files: Vec<glob::Pattern>,
     /// Immutable exact source/test templates compiled for this profile.
     mirror_rules: Vec<TestMirrorRule>,
+    /// Adapter-stated `(test, source)` pairs, read before the user rules.
+    adapter_pairs: Vec<(SmolStr, SmolStr)>,
     /// Whether accepted source moves attempt their test followers.
     mirror_enabled: bool,
     /// Whether declarations in detected test files are independently pinned.

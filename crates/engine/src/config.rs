@@ -35,7 +35,6 @@ pub(crate) use mirror::{MirrorCaptures, MirrorTemplate};
 pub use objective::{ObjectiveConfig, WeightsConfig};
 pub use profile::{ProfileConfig, ProfilesConfig};
 pub use qualification::{QualificationConfig, QualificationWeightsConfig};
-pub(crate) use relocation::builtin_test_mirror_rules;
 pub use relocation::{RelocationConfig, TestMirrorRule, TestMirroringConfig};
 pub use search::{CapacityConfig, DiversityConfig, SolverConfig, TestsConfig};
 

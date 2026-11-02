@@ -1,7 +1,7 @@
 # Strata report — constellation-ts
 
 28 files · 28 symbols · 48 edges
-Snapshot `f9e0fe73a16d422f1193b1390f5ef1c8d88fd99e341a4cf9492669ddc16fdd24`
+Snapshot `fa1857f179b6de4dd845fc6f880b6eb7384bb19122c3a88deea9e0fdec44813a`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings
