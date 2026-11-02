@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use strata_engine::{AnalyzeConfig, analyze, snapshot_from_root};
+use strata_engine::{analyze, load_config, snapshot_from_root};
 
 /// Every structurally clean fixture the parity and golden suites drive as a
 /// group.
@@ -50,8 +50,23 @@ const FIXTURES: [&str; 11] = [
 /// A non-existent config path, forcing the binary onto its built-in defaults so
 /// every analysis is identical no matter which directory the harness runs from —
 /// a configured `strata.toml` in a parent directory must never leak into a run.
-/// The library side pairs it with `AnalyzeConfig::default()`.
+/// The library side loads the same path, which falls back to the defaults.
 const PURE_DEFAULTS: &str = "/nonexistent/strata-parity.toml";
+
+/// A config pinning the file cap at 250 SLOC, so the over-cap fixtures
+/// keep the capacity findings they exist to show under the 600 default.
+const PINNED_CAP_250: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/e2e/cap-250.toml");
+
+/// Returns the config path a fixture is analyzed under: pure defaults, except
+/// the over-cap fixture, which pins the 250 cap. The CLI and library sides both
+/// use it so parity holds.
+fn config_for(name: &str) -> &'static str {
+    if matches!(name, "over-capacity" | "cyclic-oversized") {
+        PINNED_CAP_250
+    } else {
+        PURE_DEFAULTS
+    }
+}
 
 /// Returns the absolute path to a named language fixture under this crate.
 fn fixture(name: &str) -> PathBuf {
@@ -91,8 +106,8 @@ fn run_strata(args: &[&str]) -> (i32, Vec<u8>) {
 ///
 /// A snapshot or analysis failure returns empty bytes so the parity assertion
 /// fails on the mismatch rather than panicking.
-fn library_json(root: &Path) -> Vec<u8> {
-    let config = AnalyzeConfig::default();
+fn library_json(root: &Path, config_path: &str) -> Vec<u8> {
+    let config = load_config(config_path).unwrap_or_default();
     let result = snapshot_from_root(root, &config)
         .and_then(|snapshot| analyze(&snapshot, &config))
         .ok();
@@ -111,7 +126,7 @@ fn assert_parity(name: &str) {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        config_for(name),
         "--format",
         "json",
     ]);
@@ -119,7 +134,7 @@ fn assert_parity(name: &str) {
     // the CLI appends one trailing newline the library serialization omits.
     assert_eq!(stdout.pop(), Some(b'\n'), "trailing newline for {name}");
 
-    let library = library_json(&root);
+    let library = library_json(&root, config_for(name));
     assert_eq!(
         stdout, library,
         "cli json must be byte-identical to the library result for {name}"
@@ -147,7 +162,7 @@ fn analyze_to_file_with(name: &str, extra: &[&str]) -> PathBuf {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        config_for(name),
         "--format",
         "json",
         "--output",
@@ -389,7 +404,7 @@ fn analyze_json(name: &str, extra: &[&str]) -> serde_json::Value {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        config_for(name),
         "--format",
         "json",
     ];
@@ -436,7 +451,7 @@ fn assert_goldens(name: &str) {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        config_for(name),
         "--format",
         "table",
     ]);
@@ -451,7 +466,7 @@ fn assert_goldens(name: &str) {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        config_for(name),
         "--mode",
         "both",
         "--format",

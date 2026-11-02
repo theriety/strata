@@ -28,7 +28,7 @@ pub struct CapacityConfig {
 impl Default for CapacityConfig {
     fn default() -> Self {
         Self {
-            file: 250,
+            file: 600,
             folder: 20,
             domain: 16,
             package: 15,
@@ -120,7 +120,7 @@ pub struct TestsConfig {
 impl Default for TestsConfig {
     fn default() -> Self {
         Self {
-            helper_cap: 250,
+            helper_cap: 600,
             patterns: Vec::new(),
             builtins: true,
         }
