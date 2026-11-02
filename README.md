@@ -61,7 +61,9 @@ strata analyze --root path/to/repo --format summary --verbose
 strata report --input analysis.json --verbose --output report.md
 ```
 
-Verbosity does not change JSON output or analysis results. Default reports retain all candidate moves, structural findings, profile agreement, review reasons, and conditional prerequisites.
+Verbosity does not change JSON output or analysis results. Default reports retain profile agreement, review reasons, and conditional prerequisites.
+
+To keep large repositories readable, human text output shows at most 5 items per list (structural findings, each candidate's proposed moves, Recommended and Review candidate advice, and the `violations` table). Findings, advice and the `violations` table show the worst first; proposed moves keep the plan order. Headers keep the true total and a final `… N more — rerun with --full to see all` line marks what is hidden. Add `--full` on `analyze`, `report`, or `violations` to show everything. JSON output is never capped, and `violations --fail-on` always weighs every finding.
 
 ### Reading relocation advice
 
@@ -100,6 +102,7 @@ The ambiguity comparison deliberately over-approximates alternatives from pass-s
 | `--format <summary\|json>` | Choose the output format (defaults to summary for every output destination). |
 | `--output <path>` | Write the result to a file instead of stdout. |
 | `--verbose` | Include numerical evidence, score-component deltas, and effective configuration in human-readable output. Also available on `report`; JSON is unchanged. |
+| `--full` | Show every item of each list in human-readable output instead of the first 5. Also available on `report` and `violations`; JSON is never capped. |
 
 ## Commands
 
@@ -156,6 +159,7 @@ Selector classes are `cycle`, `polarity`, `capacity`, and `visibility`, each opt
 | `--config <path>` | Config file (default `<root>/strata.toml`; built-in defaults apply when absent). |
 | `--jobs <n>` | Parallelism for parsing (`0` = all cores). |
 | `--fail-on <selectors>` | Comma-separated `kind[:severity]` selectors that trigger exit code `2`. |
+| `--full` | Show every finding in the table instead of the worst five. The `--fail-on` gate always counts every finding. |
 | `--format <table\|json>` | Output face (default `table`). |
 
 ### Exit codes

@@ -65,6 +65,10 @@ pub(super) struct AnalyzeCli {
     /// Include numerical evidence, score components, and effective parameters.
     #[arg(long)]
     pub(super) verbose: bool,
+    /// Show every item of each list in the text output instead of the first 5
+    /// (JSON output is never capped).
+    #[arg(long)]
+    pub(super) full: bool,
     /// Repository root to analyze.
     #[arg(long, default_value = ".")]
     pub(super) root: PathBuf,
@@ -150,6 +154,10 @@ pub(super) struct ViolationsCli {
     /// Output format.
     #[arg(long, default_value = "table")]
     pub(super) format: ViolationFormatChoice,
+    /// Show every item of each list in the table output instead of the first 5
+    /// (JSON output is never capped).
+    #[arg(long)]
+    pub(super) full: bool,
 }
 
 /// The violations output-format choice.
@@ -167,6 +175,10 @@ pub(super) struct ReportCli {
     /// Include numerical evidence, score components, and effective parameters.
     #[arg(long)]
     pub(super) verbose: bool,
+    /// Show every item of each list in the text output instead of the first 5
+    /// (JSON output is never capped).
+    #[arg(long)]
+    pub(super) full: bool,
     /// `AnalyzeResult` JSON from a previous `analyze`.
     #[arg(long)]
     pub(super) input: PathBuf,
