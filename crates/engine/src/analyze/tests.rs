@@ -29,7 +29,7 @@ fn should_be_deterministic_in_its_hash() {
 }
 
 #[test]
-fn should_serialize_profile_results_as_schema_version_eight_without_modes() {
+fn should_serialize_profile_results_as_schema_version_nine_without_modes() {
     let snapshot = snapshot(
         vec![node(0, "item", 0, Polarity::Production)],
         vec![],
@@ -45,7 +45,14 @@ fn should_serialize_profile_results_as_schema_version_eight_without_modes() {
         serialized
             .get("schemaVersion")
             .and_then(serde_json::Value::as_u64),
-        Some(8)
+        Some(9)
+    );
+    // version 9 carries the per-profile package-wall parameter (ADR-0017).
+    assert_eq!(
+        serialized
+            .pointer("/profiles/anchored/parameters/relocation/allow-cross-package-moves")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
     );
     assert!(serialized.pointer("/current/tree").is_some());
     assert!(serialized.pointer("/current/sharedFindings").is_some());

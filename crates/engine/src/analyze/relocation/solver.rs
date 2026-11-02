@@ -291,6 +291,11 @@ impl<'a> PipelineSolver<'a> {
             &search_partition,
             roof_rebuild.as_ref(),
         );
+        let relocation_identity = if profile.relocation.allow_cross_package_moves {
+            relocation_identity.lift_package_wall()
+        } else {
+            relocation_identity
+        };
         let root_name = ir
             .containers
             .containers()
