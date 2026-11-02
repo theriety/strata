@@ -17,9 +17,11 @@ mod advisory;
 mod assignment;
 mod containers;
 mod database;
+mod dropped_use;
 mod edges;
 mod fallback;
 mod polarity;
+mod public_api;
 mod visibility;
 
 use std::path::Path;
@@ -31,6 +33,7 @@ use self::containers::assignment_containers;
 use self::database::Database;
 use self::edges::{dedup_edges, resolve_edges, resolve_re_exports};
 use self::polarity::classify_polarity;
+use self::public_api::public_api_nodes;
 use self::visibility::resolve_visibility_scopes;
 use crate::parse::ParsedFile;
 
@@ -76,12 +79,33 @@ pub(super) fn bind(
     let database = Database::load(manifest)?;
 
     let assignment = NodeAssignment::build(files, root);
-    let (mut edges, exposures) = resolve_edges(files, &assignment, &database, workspace_root);
-    resolve_re_exports(&assignment, &database, workspace_root, &mut edges);
+    let (mut edges, mut exposures) = resolve_edges(files, &assignment, &database, workspace_root);
+    // a re-export reaches as far as it is declared, so its target must too.
+    exposures.extend(resolve_re_exports(
+        &assignment,
+        &database,
+        workspace_root,
+        &mut edges,
+    ));
     let visibility_scopes = resolve_visibility_scopes(files, &assignment, &database, root);
+    let (public_api, loaded) = public_api_nodes(files, &assignment, &database, root);
+    // a file the loader never reached is one maybe-dropped body (ADR-25 rule 7).
+    let unloaded: std::collections::HashSet<_> = files
+        .iter()
+        .filter(|file| !loaded.contains(file.path.as_str()))
+        .map(|file| file.path.clone())
+        .collect();
     let edges = dedup_edges(edges);
-    let advisory = advisory::candidates(files, &assignment);
+    let advisory = advisory::candidates(files, &assignment, &unloaded);
+    let exempt: std::collections::HashSet<_> =
+        dropped_use::exempt_nodes(files, &assignment, &unloaded)
+            .into_iter()
+            .collect();
     let mut nodes = assignment.into_nodes();
+    for node in &mut nodes {
+        node.public_api = public_api.contains(&node.id);
+        node.advice_exempt = exempt.contains(&node.id);
+    }
     classify_polarity(files, &mut nodes, &edges);
     let advisory_uses = advisory::settle(advisory, &nodes);
 
@@ -134,6 +158,12 @@ mod tests {
             path: SmolStr::new(path),
             declarations,
             re_exports: Vec::new(),
+            names: Vec::new(),
+            dropped_uses: Vec::new(),
+            dropped_re_exports: Vec::new(),
+            dropped_globs: Vec::new(),
+            dropped_glob_files: Vec::new(),
+            pub_use: false,
         }
     }
 
@@ -286,6 +316,8 @@ mod tests {
     #[test]
     fn should_classify_a_private_helper_used_only_by_tests_as_test_support() {
         let helper = Node {
+            public_api: false,
+            advice_exempt: false,
             id: NodeId(0),
             name: SmolStr::new("helper"),
             kind: NodeKind::Symbol,
@@ -297,6 +329,8 @@ mod tests {
             display_name: None,
         };
         let test_case = Node {
+            public_api: false,
+            advice_exempt: false,
             id: NodeId(1),
             name: SmolStr::new("a_test"),
             kind: NodeKind::Symbol,
@@ -329,6 +363,8 @@ mod tests {
     #[test]
     fn should_keep_a_helper_used_by_production_as_production() {
         let helper = Node {
+            public_api: false,
+            advice_exempt: false,
             id: NodeId(0),
             name: SmolStr::new("helper"),
             kind: NodeKind::Symbol,
@@ -340,6 +376,8 @@ mod tests {
             display_name: None,
         };
         let producer = Node {
+            public_api: false,
+            advice_exempt: false,
             id: NodeId(1),
             name: SmolStr::new("run"),
             kind: NodeKind::Symbol,
@@ -351,6 +389,8 @@ mod tests {
             display_name: None,
         };
         let test_case = Node {
+            public_api: false,
+            advice_exempt: false,
             id: NodeId(2),
             name: SmolStr::new("a_test"),
             kind: NodeKind::Symbol,
@@ -421,6 +461,12 @@ mod tests {
                 offset: 0,
                 cfg_test: false,
             }],
+            names: Vec::new(),
+            dropped_uses: Vec::new(),
+            dropped_re_exports: Vec::new(),
+            dropped_globs: Vec::new(),
+            dropped_glob_files: Vec::new(),
+            pub_use: false,
         };
         let assignment = NodeAssignment::build(&[file], Path::new("repo"));
 

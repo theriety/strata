@@ -8,6 +8,7 @@ mod rung;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use smol_str::SmolStr;
+use strata_core::visibility::exempt_from_advice;
 use strata_ir::{
     AdvisoryUse, ContainerId, ContainerTree, Edge, EdgeKind, Exposure, Node, NodeId, ScopeLadder,
     ScopeLevel, VisibilityScope,
@@ -122,6 +123,12 @@ pub(super) fn apply_visibility_scopes(
                 continue;
             };
             node.visibility = level;
+        }
+        // the finding path exempts these too; a stated, silent verdict keeps
+        // the two from ever disagreeing about a public-API declaration.
+        if exempt_from_advice(node) {
+            ladders.push(silent(node.id));
+            continue;
         }
         ladders.push(verdict(&facts, node, scope));
     }

@@ -749,6 +749,8 @@ fn should_build_candidates_with_real_names_and_five_levels() {
     // two files under a real directory path, each holding a multi-line
     // production symbol, plus a hard edge so clustering has a pair to group.
     let sized = |id: u32, name: &str, container: u32, size: u32| Node {
+        public_api: false,
+        advice_exempt: false,
         id: NodeId(id),
         name: SmolStr::new(name),
         kind: NodeKind::Symbol,
@@ -829,6 +831,8 @@ fn should_build_candidates_with_real_names_and_five_levels() {
 /// A production symbol node with an explicit size, for the clustering tests.
 fn homed(id: u32, name: &str, container: u32, size: u32) -> Node {
     Node {
+        public_api: false,
+        advice_exempt: false,
         id: NodeId(id),
         name: SmolStr::new(name),
         kind: NodeKind::Symbol,
@@ -1805,6 +1809,8 @@ fn should_name_the_package_from_the_manifest_root_not_the_source_root() {
     // package to the manifest root `ai`; candidate naming must reuse that,
     // so `ai` names the package and `src` never surfaces as a container.
     let sized = |id: u32, name: &str, container: u32, size: u32| Node {
+        public_api: false,
+        advice_exempt: false,
         id: NodeId(id),
         name: SmolStr::new(name),
         kind: NodeKind::Symbol,

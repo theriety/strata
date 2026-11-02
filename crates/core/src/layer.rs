@@ -55,6 +55,8 @@ mod tests {
 
     fn node(id: u32) -> Node {
         Node {
+            public_api: false,
+            advice_exempt: false,
             id: NodeId(id),
             name: SmolStr::new(format!("n{id}")),
             kind: NodeKind::Symbol,
