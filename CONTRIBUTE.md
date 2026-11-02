@@ -1,6 +1,6 @@
-# Contributing to strata
+# Contributing to unlace
 
-This guide covers how to build the workspace, run the full test suite, regenerate the committed goldens, and pass the formatting and lint gates. It assumes you have read [README.md](README.md) for what `strata` does and [docs/architecture/overview.md](docs/architecture/overview.md) for how the crates fit together.
+This guide covers how to build the workspace, run the full test suite, regenerate the committed goldens, and pass the formatting and lint gates. It assumes you have read [README.md](README.md) for what `unlace` does and [docs/architecture/overview.md](docs/architecture/overview.md) for how the crates fit together.
 
 ## Toolchain
 
@@ -13,14 +13,14 @@ Two optional tools make the inner loop faster:
 
 ## Workspace layout
 
-`strata` is a seven-crate Cargo workspace ([`Cargo.toml`](Cargo.toml)). Source lives under `crates/<name>/src`, and tests live in three places per crate — inline `#[cfg(test)]` unit modules, crate-level `tests/` integration files, and fixture trees the integration tests drive.
+`unlace` is a seven-crate Cargo workspace ([`Cargo.toml`](Cargo.toml)). Source lives under `crates/<name>/src`, and tests live in three places per crate — inline `#[cfg(test)]` unit modules, crate-level `tests/` integration files, and fixture trees the integration tests drive.
 
 | Crate | Role | Test surface |
 |-------|------|--------------|
 | `crates/ir` | The typed-graph IR contract every other crate depends on. | Inline unit tests in `src`. |
 | `crates/core` | Solver core: Tarjan, layering, MFAS, clustering, scoring. | Inline unit tests across `src` (the bulk of the algorithmic coverage). |
 | `crates/engine` | Orchestration engine and public library surface (`analyze`, `snapshot_from_root`). | Inline unit tests in `src`. |
-| `crates/cli` | The `strata` binary — a thin shell over `strata-engine`. | Inline unit tests plus the e2e suite under `tests/e2e`. |
+| `crates/cli` | The `unlace` binary — a thin shell over `unlace-engine`. | Inline unit tests plus the e2e suite under `tests/e2e`. |
 | `crates/adapter-typescript` | TypeScript / TSX language adapter. | `tests/fixtures.rs` over `tests/fixtures`. |
 | `crates/adapter-rust` | Rust language adapter. | `tests/fixtures.rs` over `tests/fixtures`. |
 | `crates/adapter-python` | Python language adapter. | `tests/fixtures.rs` over `tests/fixtures`. |
@@ -39,15 +39,15 @@ This covers three tiers, from cheapest to most integrated:
 
 1. **Unit tests** — inline `#[cfg(test)] mod tests` modules inside each crate's `src`. They pin individual algorithms and data structures (most live in `crates/core`).
 2. **Adapter fixture tests** — `crates/adapter-{typescript,rust,python}/tests/fixtures.rs`. Each parses and binds a small fixture repo under its `tests/fixtures` directory, then asserts the emitted nodes, edges, and containers in a canonical, deterministic order — catching any drift in extraction, resolution, polarity, or SLOC.
-3. **CLI end-to-end tests** — the two files under `crates/cli/tests/e2e`, described below. They drive the compiled `strata` binary the way CI would.
+3. **CLI end-to-end tests** — the two files under `crates/cli/tests/e2e`, described below. They drive the compiled `unlace` binary the way CI would.
 
 To run a single tier, scope by crate or by test target:
 
 ```sh
-cargo test -p strata-core                         # one crate's unit tests
-cargo test -p strata-adapter-rust                 # one adapter's fixtures
-cargo test -p strata-cli --test parity            # the e2e parity + golden file
-cargo test -p strata-cli --test cli_acceptance    # the e2e acceptance file
+cargo test -p unlace-core                         # one crate's unit tests
+cargo test -p unlace-adapter-rust                 # one adapter's fixtures
+cargo test -p unlace-cli --test parity            # the e2e parity + golden file
+cargo test -p unlace-cli --test cli_acceptance    # the e2e acceptance file
 ```
 
 ## The e2e suite
@@ -64,7 +64,7 @@ Determinism is engineered, not hoped for: every analysis runs with an explicit n
 
 Two responsibilities:
 
-- **Parity (AD-5).** For each fixture it runs the real binary with `analyze --format json` and, in the same process, calls `snapshot_from_root` + `analyze` from `strata-engine`. The two must agree **byte-for-byte**: the CLI's JSON (minus its trailing newline) must equal `serde_json::to_vec` of the library result. Because `analyze` is pure and deterministic, the comparison is stable.
+- **Parity (AD-5).** For each fixture it runs the real binary with `analyze --format json` and, in the same process, calls `snapshot_from_root` + `analyze` from `unlace-engine`. The two must agree **byte-for-byte**: the CLI's JSON (minus its trailing newline) must equal `serde_json::to_vec` of the library result. Because `analyze` is pure and deterministic, the comparison is stable.
 - **Goldens.** It then renders the downstream faces — `tree`, `diff`, `violations`, `report`, and `analyze --format summary` — against a saved result and asserts each is byte-identical to a committed golden file.
 
 ### Oracle layering
@@ -110,15 +110,15 @@ crates/cli/tests/e2e/fixtures/goldens/ts
 
 ## The golden bless workflow
 
-When a renderer change is intentional, the golden files must be regenerated. Set `STRATA_BLESS=1` and run the parity suite — each golden assertion then writes the current binary's output to disk instead of comparing against it:
+When a renderer change is intentional, the golden files must be regenerated. Set `UNLACE_BLESS=1` and run the parity suite — each golden assertion then writes the current binary's output to disk instead of comparing against it:
 
 ```sh
-STRATA_BLESS=1 cargo test -p strata-cli --test parity
+UNLACE_BLESS=1 cargo test -p unlace-cli --test parity
 ```
 
-A missing golden fails with `missing golden …; run with STRATA_BLESS=1 to generate it`, so a freshly added fixture is blessed the same way.
+A missing golden fails with `missing golden …; run with UNLACE_BLESS=1 to generate it`, so a freshly added fixture is blessed the same way.
 
-After blessing, **review the diff before committing**: `git diff crates/cli/tests/e2e/fixtures/goldens` should show only the changes your work was meant to produce. A golden change that you cannot explain is a regression, not a refresh. Never set `STRATA_BLESS=1` in CI — there the goldens are the oracle, not the output.
+After blessing, **review the diff before committing**: `git diff crates/cli/tests/e2e/fixtures/goldens` should show only the changes your work was meant to produce. A golden change that you cannot explain is a regression, not a refresh. Never set `UNLACE_BLESS=1` in CI — there the goldens are the oracle, not the output.
 
 ## Formatting and lint gates
 

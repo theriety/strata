@@ -27,7 +27,7 @@ mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_ir::ContainerTree;
+use unlace_ir::ContainerTree;
 
 use self::namespaces::preserve_pass_start_namespaces;
 use self::placements::{FilePlacements, folder_entry_counts, index_files};

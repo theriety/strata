@@ -7,14 +7,14 @@
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use strata_engine::{AnalyzeConfig, StrataError, load_config};
+use unlace_engine::{AnalyzeConfig, UnlaceError, load_config};
 
 static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
 
-fn load_toml(document: &str) -> Result<AnalyzeConfig, StrataError> {
+fn load_toml(document: &str) -> Result<AnalyzeConfig, UnlaceError> {
     let sequence = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
-        "strata-relocation-policy-{}-{sequence}.toml",
+        "unlace-relocation-policy-{}-{sequence}.toml",
         std::process::id()
     ));
     let written = fs::write(&path, document);
@@ -29,7 +29,7 @@ fn load_toml(document: &str) -> Result<AnalyzeConfig, StrataError> {
 
 fn invalid_key(document: &str) -> Option<String> {
     match load_toml(document) {
-        Err(StrataError::ConfigInvalid { key, .. }) => key,
+        Err(UnlaceError::ConfigInvalid { key, .. }) => key,
         _ => None,
     }
 }

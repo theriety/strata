@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_ir::{Node, NodeId, NodeKind, ScopeLevel, Snapshot};
+use unlace_ir::{Node, NodeId, NodeKind, ScopeLevel, Snapshot};
 
 use crate::analyze::search::node_names;
 use crate::result::{Severity, Violation, ViolationKind};

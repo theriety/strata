@@ -27,7 +27,7 @@ mod visibility;
 
 use std::path::Path;
 
-use strata_ir::IrFragment;
+use unlace_ir::IrFragment;
 
 use self::assignment::NodeAssignment;
 use self::containers::assignment_containers;
@@ -128,10 +128,10 @@ pub(super) fn bind(
 
 /// Points each inherent member (`Type::member`) at the type node of the same
 /// file; an ambiguous or missing owner leaves the member without one.
-fn link_owners(nodes: &mut [strata_ir::Node]) {
-    let types: Vec<(smol_str::SmolStr, strata_ir::ContainerId, strata_ir::NodeId)> = nodes
+fn link_owners(nodes: &mut [unlace_ir::Node]) {
+    let types: Vec<(smol_str::SmolStr, unlace_ir::ContainerId, unlace_ir::NodeId)> = nodes
         .iter()
-        .filter(|node| node.kind == strata_ir::NodeKind::Type && !node.re_export)
+        .filter(|node| node.kind == unlace_ir::NodeKind::Type && !node.re_export)
         .map(|node| (node.name.clone(), node.container, node.id))
         .collect();
     for node in nodes.iter_mut() {
@@ -154,7 +154,7 @@ fn link_owners(nodes: &mut [strata_ir::Node]) {
 #[cfg(test)]
 mod tests {
     use smol_str::SmolStr;
-    use strata_ir::{
+    use unlace_ir::{
         ContainerId, ContainerTree, Edge, EdgeKind, Hardness, Node, NodeId, NodeKind, Polarity,
         ScopeLevel,
     };

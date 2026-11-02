@@ -3,7 +3,7 @@
 mod ceilings;
 mod policy;
 
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 
 use super::{AnalyzeConfig, ProfileConfig};
 
@@ -18,7 +18,7 @@ impl AnalyzeConfig {
     ///
     /// Caps must be positive (a zero cap admits nothing), and the folder, domain,
     /// and package caps must not exceed the built-in `CAP_CEILING` (256) — beyond
-    /// it a cap never fires, so an untrusted `strata.toml` could silently disable
+    /// it a cap never fires, so an untrusted `unlace.toml` could silently disable
     /// capacity enforcement while inflating cap-driven working sets.
     ///
     /// The knobs that size the search carry ceilings for the same reason: the
@@ -26,22 +26,22 @@ impl AnalyzeConfig {
     /// multiplier, candidate count, and their product bound the restart pool,
     /// which has no fallback path once it is running. The solver's exact-ILP
     /// cutover is bounded because its worst case is exponential. Together these
-    /// keep a `strata.toml` committed by an untrusted contributor from turning a
+    /// keep a `unlace.toml` committed by an untrusted contributor from turning a
     /// routine analysis into a denial of service against the machine running it.
     /// Coefficients, weights, tolerances, and distances must be finite and
     /// non-negative. The first violation found is returned.
     ///
     /// # Errors
     ///
-    /// Returns [`StrataError::ConfigInvalid`] naming the offending key and its
+    /// Returns [`UnlaceError::ConfigInvalid`] naming the offending key and its
     /// expected range.
-    pub fn validate(&self) -> Result<(), StrataError> {
+    pub fn validate(&self) -> Result<(), UnlaceError> {
         // `jobs` takes no floor: zero is the documented "use every logical core"
         // sentinel. It still takes a ceiling, because the value is handed
         // straight to the thread-pool builder.
         at_most("analysis.jobs", self.analysis.jobs, JOBS_CEILING)?;
         if self.analysis.profiles.is_empty() {
-            return Err(StrataError::ConfigInvalid {
+            return Err(UnlaceError::ConfigInvalid {
                 key: Some("analysis.profiles".to_owned()),
                 reason: "at least one parameter profile must be selected".to_owned(),
             });
@@ -50,7 +50,7 @@ impl AnalyzeConfig {
         selected.sort_unstable();
         selected.dedup();
         if selected.len() != self.analysis.profiles.len() {
-            return Err(StrataError::ConfigInvalid {
+            return Err(UnlaceError::ConfigInvalid {
                 key: Some("analysis.profiles".to_owned()),
                 reason: "parameter profile names must be unique".to_owned(),
             });
@@ -60,14 +60,14 @@ impl AnalyzeConfig {
         Self::validate_profile("profiles.greenfield", &self.profiles.greenfield)?;
 
         if self.adapters.languages.is_empty() {
-            return Err(StrataError::ConfigInvalid {
+            return Err(UnlaceError::ConfigInvalid {
                 key: Some("adapters.languages".to_owned()),
                 reason: "at least one language must be enabled".to_owned(),
             });
         }
         for language in &self.adapters.languages {
             if !matches!(language.as_str(), "typescript" | "rust" | "python") {
-                return Err(StrataError::ConfigInvalid {
+                return Err(UnlaceError::ConfigInvalid {
                     key: Some("adapters.languages".to_owned()),
                     reason: format!(
                         "unknown language `{language}`; expected typescript, rust, or python"
@@ -79,7 +79,7 @@ impl AnalyzeConfig {
         Ok(())
     }
 
-    fn validate_profile(prefix: &str, profile: &ProfileConfig) -> Result<(), StrataError> {
+    fn validate_profile(prefix: &str, profile: &ProfileConfig) -> Result<(), UnlaceError> {
         let key = |suffix: &str| format!("{prefix}.{suffix}");
         positive(&key("capacity.file"), profile.capacity.file)?;
         positive(&key("capacity.folder"), profile.capacity.folder)?;
@@ -95,12 +95,12 @@ impl AnalyzeConfig {
         positive(&key("tests.helper-cap"), profile.tests.helper_cap)?;
         for (index, pattern) in profile.tests.patterns.iter().enumerate() {
             if pattern.is_empty() {
-                return Err(StrataError::ConfigInvalid {
+                return Err(UnlaceError::ConfigInvalid {
                     key: Some(format!("{prefix}.tests.patterns[{index}]")),
                     reason: "a pattern must not be empty".to_owned(),
                 });
             }
-            glob::Pattern::new(pattern).map_err(|error| StrataError::ConfigInvalid {
+            glob::Pattern::new(pattern).map_err(|error| UnlaceError::ConfigInvalid {
                 key: Some(format!("{prefix}.tests.patterns[{index}]")),
                 reason: error.to_string(),
             })?;

@@ -4,8 +4,8 @@ use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
 
-use strata_adapter_rust::RustAdapter;
-use strata_ir::{Adapter, EdgeKind, Hardness, IrFragment, NodeId, SourceFile};
+use unlace_adapter_rust::RustAdapter;
+use unlace_ir::{Adapter, EdgeKind, Hardness, IrFragment, NodeId, SourceFile};
 
 fn bind_fixture(paths: &[&str]) -> Result<IrFragment, String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resolution/app");
@@ -178,7 +178,7 @@ fn should_count_an_associated_call_as_a_reference_to_its_type() -> Result<(), St
     let built = fragment
         .nodes
         .iter()
-        .find(|node| node.name == "Built" && node.kind == strata_ir::NodeKind::Type)
+        .find(|node| node.name == "Built" && node.kind == unlace_ir::NodeKind::Type)
         .map(|node| node.id)
         .ok_or("missing Built type")?;
 
@@ -237,7 +237,7 @@ fn type_id(fragment: &IrFragment, name: &str) -> Result<NodeId, String> {
     fragment
         .nodes
         .iter()
-        .find(|node| node.name == name && node.kind == strata_ir::NodeKind::Type)
+        .find(|node| node.name == name && node.kind == unlace_ir::NodeKind::Type)
         .map(|node| node.id)
         .ok_or_else(|| format!("missing type {name}: {:?}", fragment.nodes))
 }

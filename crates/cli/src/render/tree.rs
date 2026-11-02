@@ -2,7 +2,7 @@
 
 use std::io::{self, Write};
 
-use strata_engine::{ContainerNode, Level};
+use unlace_engine::{ContainerNode, Level};
 
 /// Renders one container `node` as an indented tree to `out`.
 ///

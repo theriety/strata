@@ -1,4 +1,4 @@
-# Strata report — ts
+# Unlace report — ts
 
 2 files · 4 symbols · 4 edges
 Snapshot `68973ce3abca82fbcfc337494a3b099f54005be2220a4b732aad8f969e8247fd`

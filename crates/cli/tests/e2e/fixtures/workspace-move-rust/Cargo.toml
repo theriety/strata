@@ -4,7 +4,7 @@
 # see-through `src/` source root (ADR-18).
 #
 # This is itself a `[workspace]`, so cargo never treats it as a member of the
-# outer strata workspace.
+# outer unlace workspace.
 [workspace]
 resolver = "2"
 members = ["crates/util", "crates/core"]

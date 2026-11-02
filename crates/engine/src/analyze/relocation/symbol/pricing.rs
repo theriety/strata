@@ -1,14 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_core::graph::csr::Csr;
-use strata_core::score::{Coefficients, KindWeights};
-use strata_ir::{ContainerId, Node, NodeKind};
+use unlace_core::graph::csr::Csr;
+use unlace_core::score::{Coefficients, KindWeights};
+use unlace_ir::{ContainerId, Node, NodeKind};
 
 use crate::analyze::relocation::SYMBOL_TARGETS;
 use crate::analyze::relocation::symbol::inputs::PassInputs;
 use crate::analyze::relocation::symbol::ledger::Ledger;
 use crate::analyze::scoring::{Placed, ScoringContext};
-use strata_ir::ScopeLevel;
+use unlace_ir::ScopeLevel;
 
 /// Sentinel vertex for a node whose effective file is not a crossing-graph
 /// vertex.

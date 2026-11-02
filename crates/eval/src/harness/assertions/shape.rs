@@ -1,7 +1,7 @@
 //! Assertions over container shape: size bands, synthetic buckets, and name
 //! alignment.
 
-use strata_engine::result::{ContainerNode, Level};
+use unlace_engine::result::{ContainerNode, Level};
 
 use crate::harness::Verdict;
 use crate::harness::inputs::EvalInputs;
@@ -182,7 +182,7 @@ pub(super) fn evaluate_name_alignment(
 
 #[cfg(test)]
 mod tests {
-    use strata_engine::result::Level;
+    use unlace_engine::result::Level;
 
     use crate::harness::assertions::fixtures::{file, inputs_with, laminar_candidate, node};
     use crate::target::{BucketName, FaceMode, SizeBand};

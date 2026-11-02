@@ -3,10 +3,10 @@
 use std::collections::BTreeSet;
 
 use smol_str::SmolStr;
-use strata_core::cluster::Partition;
-use strata_core::condense::condense;
-use strata_core::score::Coefficients;
-use strata_ir::{ScopeLevel, Snapshot};
+use unlace_core::cluster::Partition;
+use unlace_core::condense::condense;
+use unlace_core::score::Coefficients;
+use unlace_ir::{ScopeLevel, Snapshot};
 
 use crate::analyze::layout::{real_dir_partition, relieve_over_capacity, synthesize_roof_rebuild};
 use crate::analyze::relocation::mirror::{adapter_pairs, exact_links, mirror_rules};

@@ -1,10 +1,10 @@
 //! Turning a placement into the objective.
 
-use strata_core::score::{
+use unlace_core::score::{
     Candidate, Coefficients, KindWeights, ScoreBreakdown, ScoredEdge, score_with_naming,
     weighted_naming,
 };
-use strata_ir::ContainerId;
+use unlace_ir::ContainerId;
 
 use super::ScoringContext;
 use super::placed::Placed;

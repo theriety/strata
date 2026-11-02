@@ -1,7 +1,7 @@
 //! Cycle mass of a dependency graph, used as a component-wise admission budget.
 
-use strata_core::condense::condense;
-use strata_core::graph::csr::Csr;
+use unlace_core::condense::condense;
+use unlace_core::graph::csr::Csr;
 
 /// cycle mass used as a component-wise admission budget
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

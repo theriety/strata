@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_engine::result::{AnalyzeResult, Candidate};
+use unlace_engine::result::{AnalyzeResult, Candidate};
 
 use crate::harness::ModeObservation;
 use crate::harness::inputs::{FaceInputs, mode_result_of};

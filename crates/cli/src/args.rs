@@ -1,20 +1,20 @@
-//! Clap argument types for the `strata` subcommands.
+//! Clap argument types for the `unlace` subcommands.
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use strata_engine::Mode;
+use unlace_engine::Mode;
 
-/// The `strata` read-only module-decomposition tool.
+/// The `unlace` read-only module-decomposition tool.
 #[derive(Debug, Parser)]
-#[command(name = "strata", version, about, long_about = None)]
+#[command(name = "unlace", version, about, long_about = None)]
 pub(super) struct Cli {
     /// The subcommand to run.
     #[command(subcommand)]
     pub(super) command: Command,
 }
 
-/// The five `strata` subcommands.
+/// The five `unlace` subcommands.
 #[derive(Debug, Subcommand)]
 pub(super) enum Command {
     /// Run the full decomposition pipeline and emit violations plus candidates.
@@ -59,7 +59,7 @@ impl From<ModeChoice> for Mode {
     }
 }
 
-/// `strata analyze` flags.
+/// `unlace analyze` flags.
 #[derive(Debug, clap::Args)]
 pub(super) struct AnalyzeCli {
     /// Include numerical evidence, score components, and effective parameters.
@@ -72,7 +72,7 @@ pub(super) struct AnalyzeCli {
     /// Repository root to analyze.
     #[arg(long, default_value = ".")]
     pub(super) root: PathBuf,
-    /// Configuration file (defaults to `<root>/strata.toml`; built-in defaults
+    /// Configuration file (defaults to `<root>/unlace.toml`; built-in defaults
     /// apply when absent).
     #[arg(long)]
     pub(super) config: Option<PathBuf>,
@@ -100,7 +100,7 @@ pub(super) struct AnalyzeCli {
     pub(super) allow_cross_package_moves: bool,
 }
 
-/// `strata tree` flags.
+/// `unlace tree` flags.
 #[derive(Debug, clap::Args)]
 pub(super) struct TreeCli {
     /// `AnalyzeResult` JSON from a previous `analyze`.
@@ -123,7 +123,7 @@ pub(super) struct TreeCli {
     pub(super) depth: Option<u32>,
 }
 
-/// `strata diff` flags.
+/// `unlace diff` flags.
 #[derive(Debug, clap::Args)]
 pub(super) struct DiffCli {
     /// `AnalyzeResult` JSON from a previous `analyze`.
@@ -135,13 +135,13 @@ pub(super) struct DiffCli {
     pub(super) right: String,
 }
 
-/// `strata violations` flags.
+/// `unlace violations` flags.
 #[derive(Debug, clap::Args)]
 pub(super) struct ViolationsCli {
     /// Repository root.
     #[arg(long, default_value = ".")]
     pub(super) root: PathBuf,
-    /// Configuration file (defaults to `<root>/strata.toml`; built-in defaults
+    /// Configuration file (defaults to `<root>/unlace.toml`; built-in defaults
     /// apply when absent).
     #[arg(long)]
     pub(super) config: Option<PathBuf>,
@@ -169,7 +169,7 @@ pub(super) enum ViolationFormatChoice {
     Json,
 }
 
-/// `strata report` flags.
+/// `unlace report` flags.
 #[derive(Debug, clap::Args)]
 pub(super) struct ReportCli {
     /// Include numerical evidence, score components, and effective parameters.

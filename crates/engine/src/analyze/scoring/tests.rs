@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_core::score::{
+use unlace_core::score::{
     Candidate as ScoreCandidate, Coefficients, KindWeights, ScoreBreakdown, group_cohesion,
     score_with_naming, weighted_naming,
 };
-use strata_ir::{
+use unlace_ir::{
     Affinity, AffinityKind, Container, ContainerId, ContainerTree, Layout, Node, NodeId, NodeKind,
     Polarity, ScopeLevel, Snapshot, build_laminar_tree,
 };

@@ -18,9 +18,9 @@ mod tree;
 
 use std::io::{self, Write};
 
-use strata_engine::{AnalyzeResult, ModeResult, ProfileConfig, ScoreBreakdown};
+use unlace_engine::{AnalyzeResult, ModeResult, ProfileConfig, ScoreBreakdown};
 
-/// The one honesty line every human-readable output carries: strata proposes,
+/// The one honesty line every human-readable output carries: unlace proposes,
 /// it does not guarantee. JSON output is a data contract and omits it.
 pub const ADVICE_DISCLAIMER: &str = "All findings and moves are suggestions. Applying them may break the build; use your own judgement.";
 
@@ -305,7 +305,7 @@ fn report_lines(result: &AnalyzeResult, project: &str) -> Vec<String> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use strata_engine::{
+    use unlace_engine::{
         Candidate, CapacityRemainder, ContainerNode, CurrentStanding, CurrentTree, EdgeBreak,
         FileMove, Level, Modes, Move, MoveKind, MoveReason, ProfileConfig, ProfileCurrent,
         ScoreBreakdown, Severity, Summary, SymbolKind, SymbolMove, SymbolPlacement, Violation,
@@ -339,7 +339,7 @@ mod tests {
                 tree: file_node("lib", 2),
                 shared_findings: Vec::new(),
             },
-            advice: strata_engine::Advice::default(),
+            advice: unlace_engine::Advice::default(),
             profiles: Modes {
                 anchored: Some(ModeResult {
                     parameters: ProfileConfig::default(),
@@ -705,7 +705,7 @@ mod tests {
             kind: ViolationKind::Cycle,
             severity: Severity::Violation,
             location: vec!["src/core/left.ts".to_owned(), "src/core/right.ts".to_owned()],
-            detail: "2-symbol cycle; strata keeps a dependency cycle in one file; to split it, break right -> left (w=1.0, exact)".to_owned(),
+            detail: "2-symbol cycle; unlace keeps a dependency cycle in one file; to split it, break right -> left (w=1.0, exact)".to_owned(),
             break_suggestions: Some(vec![EdgeBreak {
                 source: "right".to_owned(),
                 target: "left".to_owned(),
@@ -720,7 +720,7 @@ mod tests {
 
         assert!(rendered.contains("src/core/left.ts"));
         assert!(rendered.contains("src/core/right.ts"));
-        assert!(rendered.contains("strata keeps a dependency cycle in one file"));
+        assert!(rendered.contains("unlace keeps a dependency cycle in one file"));
         assert!(!rendered.contains("must remain"));
         assert!(rendered.contains("to split it, break `right` -> `left` (w=1.0, exact)"));
     }
@@ -731,7 +731,7 @@ mod tests {
             kind: ViolationKind::Cycle,
             severity: Severity::Violation,
             location: vec!["left.ts".to_owned(), "right.ts".to_owned()],
-            detail: "2-symbol cycle; strata keeps a dependency cycle in one file; to split it, break right -> left (w=1.0, exact)".to_owned(),
+            detail: "2-symbol cycle; unlace keeps a dependency cycle in one file; to split it, break right -> left (w=1.0, exact)".to_owned(),
             break_suggestions: Some(vec![EdgeBreak {
                 source: "right".to_owned(),
                 target: "left".to_owned(),
@@ -1502,10 +1502,10 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn should_present_only_recommended_and_review_candidate_advice_groups() {
         let mut result = result_with_candidate();
-        let assessment = strata_engine::ProfileAssessment {
-            profile: strata_engine::ProfileName::Anchored,
+        let assessment = unlace_engine::ProfileAssessment {
+            profile: unlace_engine::ProfileName::Anchored,
             destination: "shared/owner.ts".to_owned(),
-            evidence: strata_engine::EvidenceSignals {
+            evidence: unlace_engine::EvidenceSignals {
                 unique_owner: 1.0,
                 role_affinity: 0.8,
                 source_cohesion: 0.7,
@@ -1517,7 +1517,7 @@ mod tests {
             structural_score: 0.65,
             ambiguity_margin: 0.2,
             best_alternative: Some("shared/alternative.ts".to_owned()),
-            thresholds: strata_engine::QualificationThresholds {
+            thresholds: unlace_engine::QualificationThresholds {
                 minimum_evidence: 0.6,
                 minimum_structural: 0.5,
                 minimum_ambiguity_margin: 0.15,
@@ -1542,18 +1542,18 @@ mod tests {
         if let Some(candidate) = candidate {
             candidate.symbol_moves = vec![relocation.clone()];
         }
-        let item = strata_engine::RelocationAdvice {
-            proposal: strata_engine::RelocationProposal::Symbol { relocation },
+        let item = unlace_engine::RelocationAdvice {
+            proposal: unlace_engine::RelocationProposal::Symbol { relocation },
             destination: "shared/owner.ts".to_owned(),
-            supporting_profiles: vec![strata_engine::ProfileName::Anchored],
-            qualified_profiles: vec![strata_engine::ProfileName::Anchored],
-            absent_profiles: vec![strata_engine::ProfileName::Greenfield],
-            conflicting_destinations: vec![strata_engine::ProfileConflict {
-                profile: strata_engine::ProfileName::Greenfield,
+            supporting_profiles: vec![unlace_engine::ProfileName::Anchored],
+            qualified_profiles: vec![unlace_engine::ProfileName::Anchored],
+            absent_profiles: vec![unlace_engine::ProfileName::Greenfield],
+            conflicting_destinations: vec![unlace_engine::ProfileConflict {
+                profile: unlace_engine::ProfileName::Greenfield,
                 destination: "shared/alternative.ts".to_owned(),
             }],
             assessments: vec![assessment],
-            review_reasons: vec![strata_engine::ReviewReason::PartialProfileSupport],
+            review_reasons: vec![unlace_engine::ReviewReason::PartialProfileSupport],
         };
         result.advice.recommended = vec![item.clone()];
         result.advice.review_candidates = vec![item];
@@ -1622,8 +1622,8 @@ mod tests {
     #[test]
     fn should_render_file_advice_alternatives_with_their_physical_source_root() {
         let mut result = result_with_candidate();
-        result.advice.review_candidates = vec![strata_engine::RelocationAdvice {
-            proposal: strata_engine::RelocationProposal::File {
+        result.advice.review_candidates = vec![unlace_engine::RelocationAdvice {
+            proposal: unlace_engine::RelocationProposal::File {
                 relocation: Move {
                     kind: MoveKind::Move,
                     files: vec![FileMove {
@@ -1636,14 +1636,14 @@ mod tests {
                 },
             },
             destination: "dataset/src/chosen".to_owned(),
-            supporting_profiles: vec![strata_engine::ProfileName::Anchored],
+            supporting_profiles: vec![unlace_engine::ProfileName::Anchored],
             qualified_profiles: Vec::new(),
-            absent_profiles: vec![strata_engine::ProfileName::Greenfield],
+            absent_profiles: vec![unlace_engine::ProfileName::Greenfield],
             conflicting_destinations: Vec::new(),
-            assessments: vec![strata_engine::ProfileAssessment {
-                profile: strata_engine::ProfileName::Anchored,
+            assessments: vec![unlace_engine::ProfileAssessment {
+                profile: unlace_engine::ProfileName::Anchored,
                 destination: "dataset/src/chosen".to_owned(),
-                evidence: strata_engine::EvidenceSignals {
+                evidence: unlace_engine::EvidenceSignals {
                     unique_owner: 0.0,
                     role_affinity: 0.0,
                     source_cohesion: 0.0,
@@ -1655,14 +1655,14 @@ mod tests {
                 structural_score: 0.0,
                 ambiguity_margin: 0.0,
                 best_alternative: Some("dataset/src/alternative".to_owned()),
-                thresholds: strata_engine::QualificationThresholds {
+                thresholds: unlace_engine::QualificationThresholds {
                     minimum_evidence: 0.6,
                     minimum_structural: 0.5,
                     minimum_ambiguity_margin: 0.15,
                 },
                 qualified: false,
             }],
-            review_reasons: vec![strata_engine::ReviewReason::PartialProfileSupport],
+            review_reasons: vec![unlace_engine::ReviewReason::PartialProfileSupport],
         }];
 
         let text = report::Report::build(
@@ -1725,7 +1725,7 @@ mod tests {
     #[test]
     fn should_banner_the_project_with_compact_saved_metadata() {
         let text = report_lines(&result_with_candidate(), "acme").join("\n");
-        assert!(text.starts_with("Strata report — acme\n4 files · 2 symbols · 1 edges"));
+        assert!(text.starts_with("Unlace report — acme\n4 files · 2 symbols · 1 edges"));
         assert!(text.contains("Snapshot `deadbeef`"));
         assert!(text.contains("Structural findings"));
         assert!(!text.contains("future capability"));
@@ -2010,10 +2010,10 @@ mod tests {
                 delta: -0.1,
                 broken_imports: 1,
             };
-            strata_engine::RelocationAdvice {
-                proposal: strata_engine::RelocationProposal::Symbol { relocation },
+            unlace_engine::RelocationAdvice {
+                proposal: unlace_engine::RelocationProposal::Symbol { relocation },
                 destination: "shared/owner.ts".to_owned(),
-                supporting_profiles: vec![strata_engine::ProfileName::Anchored],
+                supporting_profiles: vec![unlace_engine::ProfileName::Anchored],
                 qualified_profiles: Vec::new(),
                 absent_profiles: Vec::new(),
                 conflicting_destinations: Vec::new(),
@@ -2040,9 +2040,9 @@ mod tests {
         );
     }
 
-    fn advice_symbol(name: &str, kind: SymbolKind, from: &str) -> strata_engine::RelocationAdvice {
-        strata_engine::RelocationAdvice {
-            proposal: strata_engine::RelocationProposal::Symbol {
+    fn advice_symbol(name: &str, kind: SymbolKind, from: &str) -> unlace_engine::RelocationAdvice {
+        unlace_engine::RelocationAdvice {
+            proposal: unlace_engine::RelocationProposal::Symbol {
                 relocation: SymbolMove {
                     display: None,
                     symbol: name.to_owned(),
@@ -2054,16 +2054,16 @@ mod tests {
                 },
             },
             destination: "src/a.ts".to_owned(),
-            supporting_profiles: vec![strata_engine::ProfileName::Anchored],
+            supporting_profiles: vec![unlace_engine::ProfileName::Anchored],
             qualified_profiles: Vec::new(),
             absent_profiles: Vec::new(),
             conflicting_destinations: Vec::new(),
             assessments: Vec::new(),
-            review_reasons: vec![strata_engine::ReviewReason::WeakEvidence],
+            review_reasons: vec![unlace_engine::ReviewReason::WeakEvidence],
         }
     }
 
-    fn advice_text(items: Vec<strata_engine::RelocationAdvice>, options: RenderOptions) -> String {
+    fn advice_text(items: Vec<unlace_engine::RelocationAdvice>, options: RenderOptions) -> String {
         let mut result = result_with_candidate();
         result.advice.review_candidates = items;
         summary(&result, options)
@@ -2073,11 +2073,11 @@ mod tests {
         text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    fn assessment_for(margin: f64) -> strata_engine::ProfileAssessment {
-        strata_engine::ProfileAssessment {
-            profile: strata_engine::ProfileName::Anchored,
+    fn assessment_for(margin: f64) -> unlace_engine::ProfileAssessment {
+        unlace_engine::ProfileAssessment {
+            profile: unlace_engine::ProfileName::Anchored,
             destination: "src/a.ts".to_owned(),
-            evidence: strata_engine::EvidenceSignals {
+            evidence: unlace_engine::EvidenceSignals {
                 unique_owner: 0.5,
                 role_affinity: 0.5,
                 source_cohesion: 0.5,
@@ -2089,7 +2089,7 @@ mod tests {
             structural_score: 0.5,
             ambiguity_margin: margin,
             best_alternative: None,
-            thresholds: strata_engine::QualificationThresholds {
+            thresholds: unlace_engine::QualificationThresholds {
                 minimum_evidence: 0.5,
                 minimum_structural: 0.5,
                 minimum_ambiguity_margin: 0.1,
@@ -2118,7 +2118,7 @@ mod tests {
     #[test]
     fn should_not_merge_symbols_whose_review_reasons_differ() {
         let mut other = advice_symbol("emitThinking", SymbolKind::Symbol, "src/a/helpers.ts");
-        other.review_reasons = vec![strata_engine::ReviewReason::WeakStructuralEvidence];
+        other.review_reasons = vec![unlace_engine::ReviewReason::WeakStructuralEvidence];
         let items = vec![
             advice_symbol("emitError", SymbolKind::Symbol, "src/a/helpers.ts"),
             other,
@@ -2254,8 +2254,8 @@ mod tests {
     fn should_rank_groups_with_the_item_ranking() {
         let mut strong = advice_symbol("strong", SymbolKind::Symbol, "src/a/strong.ts");
         strong.supporting_profiles = vec![
-            strata_engine::ProfileName::Anchored,
-            strata_engine::ProfileName::Greenfield,
+            unlace_engine::ProfileName::Anchored,
+            unlace_engine::ProfileName::Greenfield,
         ];
         // `strong` comes last, so only the ranking can lift it into the shown five.
         let mut items: Vec<_> = (0..5)

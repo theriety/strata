@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_ir::{
+use unlace_ir::{
     ContainerId, ContainerTree, IntermediateRepresentation, Layout, NodeId, Polarity, ScopeLadder,
     ScopeLevel, Snapshot, build_laminar_tree,
 };
@@ -97,7 +97,7 @@ fn should_emit_identical_findings_once_as_shared() {
     assert!(cycle.is_some_and(|finding| {
         finding
             .detail
-            .contains("strata keeps a dependency cycle in one file")
+            .contains("unlace keeps a dependency cycle in one file")
             && finding.detail.contains("to split it, break")
             && !finding.detail.contains("must remain")
     }));
@@ -534,11 +534,11 @@ fn should_order_nested_package_and_transparent_roots_once_for_capacity() {
 #[test]
 fn should_compose_capacity_paths_below_a_nested_package_not_above_it() {
     // ADR-18: a namespace is package-relative, so a file in `crates/core/src`
-    // counts toward `strata/crates/core/src`, never `strata/src/crates/core`.
+    // counts toward `unlace/crates/core/src`, never `unlace/src/crates/core`.
     let tree = ContainerTree::new(vec![
-        container(0, "strata", ScopeLevel::PackageGroup, None),
+        container(0, "unlace", ScopeLevel::PackageGroup, None),
         container(1, "crates/core", ScopeLevel::Package, Some(0)),
-        strata_ir::Container {
+        unlace_ir::Container {
             synthetic: true,
             ..container(2, "crates/core/workspace", ScopeLevel::Folder, Some(1))
         },
@@ -565,20 +565,20 @@ fn should_compose_capacity_paths_below_a_nested_package_not_above_it() {
     };
 
     assert_eq!(
-        entries.get(&path(&["strata", "crates", "core", "src"])),
+        entries.get(&path(&["unlace", "crates", "core", "src"])),
         Some(&2),
         "`src` holds `lib.rs` and the `cluster` directory: {entries:?}"
     );
     assert_eq!(
-        entries.get(&path(&["strata", "crates", "core", "src", "cluster"])),
+        entries.get(&path(&["unlace", "crates", "core", "src", "cluster"])),
         Some(&1),
         "{entries:?}"
     );
     assert!(
         entries
             .keys()
-            .all(|key| !key.join("/").starts_with("strata/src")),
-        "no invented `strata/src/...` directory: {entries:?}"
+            .all(|key| !key.join("/").starts_with("unlace/src")),
+        "no invented `unlace/src/...` directory: {entries:?}"
     );
 }
 
@@ -1052,7 +1052,7 @@ fn should_flag_a_nested_item_when_the_ladder_names_a_narrower_folder() -> Result
 /// only by a test node (id 1, `test_source`), after `adjust` edits the item and
 /// the users.
 fn test_only_fixture(
-    adjust: impl FnOnce(&mut strata_ir::Node, &mut strata_ir::Node),
+    adjust: impl FnOnce(&mut unlace_ir::Node, &mut unlace_ir::Node),
 ) -> Result<Snapshot, String> {
     let mut item = node(0, "item", 0, Polarity::Production);
     item.visibility = ScopeLevel::Package;
@@ -1097,7 +1097,7 @@ fn should_report_an_item_used_only_by_test_sources_once_and_not_as_visibility() 
 
 #[test]
 fn should_never_report_test_only_for_a_node_advice_must_not_touch() -> Result<(), String> {
-    type Flag = fn(&mut strata_ir::Node);
+    type Flag = fn(&mut unlace_ir::Node);
     let flags: [(&str, Flag); 2] = [
         ("re_export", |node| node.re_export = true),
         ("advice_exempt", |node| node.advice_exempt = true),
@@ -1155,7 +1155,7 @@ fn should_not_report_test_only_for_a_self_loop_alone_or_an_advisory_use() -> Res
         user
     });
     ir.edges = vec![edge(1, 0)];
-    ir.advisory_uses = vec![strata_ir::AdvisoryUse {
+    ir.advisory_uses = vec![unlace_ir::AdvisoryUse {
         user: NodeId(0),
         used: NodeId(0),
         from_test: false,
@@ -1176,7 +1176,7 @@ fn should_not_let_an_advisory_use_from_test_code_silence_test_only() -> Result<(
         vec![edge(1, 0)],
         ContainerTree::new(vec![container(0, "src/a.rs", ScopeLevel::File, None)]),
     );
-    ir.advisory_uses = vec![strata_ir::AdvisoryUse {
+    ir.advisory_uses = vec![unlace_ir::AdvisoryUse {
         user: NodeId(1),
         used: NodeId(0),
         from_test: true,
@@ -1231,7 +1231,7 @@ fn should_not_report_a_type_whose_member_has_a_production_caller() -> Result<(),
 #[test]
 fn should_order_file_crossing_cuts_before_same_file_cuts_and_flag_the_latter() {
     use crate::analyze::search::SccSolution;
-    use strata_core::shatter::{BreakSet, EdgeRef};
+    use unlace_core::shatter::{BreakSet, EdgeRef};
 
     // locals 0 and 1 share file 0; local 2 lives in file 1.
     let nodes = [
@@ -1239,7 +1239,7 @@ fn should_order_file_crossing_cuts_before_same_file_cuts_and_flag_the_latter() {
         node(1, "b", 0, Polarity::Production),
         node(2, "c", 1, Polarity::Production),
     ];
-    let by_id: BTreeMap<u32, &strata_ir::Node> =
+    let by_id: BTreeMap<u32, &unlace_ir::Node> =
         nodes.iter().map(|node| (node.id.0, node)).collect();
     let names: BTreeMap<u32, String> = [(0, "a"), (1, "b"), (2, "c")]
         .into_iter()

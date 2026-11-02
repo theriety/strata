@@ -18,7 +18,7 @@ question = "Does a synthetic workspace bucket swallow real directories?"
 mode = "both"        # the swallow was observed on greenfield; anchored must hold too
 candidates = 3       # engine default k
 seed = 42            # engine default seed
-config = "defaults"  # pure built-in defaults; no fixture strata.toml
+config = "defaults"  # pure built-in defaults; no fixture unlace.toml
 
 [[precondition]]
 kind = "file_count"

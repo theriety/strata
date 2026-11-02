@@ -129,7 +129,7 @@ impl RunMode {
 pub enum ConfigSource {
     /// Built-in defaults via a missing config path.
     Defaults,
-    /// The fixture's own `strata.toml`.
+    /// The fixture's own `unlace.toml`.
     Fixture,
 }
 

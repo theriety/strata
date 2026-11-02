@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use strata_ir::{AffinityKind, ContainerId, NodeId, Polarity};
+use unlace_ir::{AffinityKind, ContainerId, NodeId, Polarity};
 
 use crate::analyze::advice::evidence::measure::{
     dependency_weight, jaccard_tokens, usize_as_f64, usize_ratio,

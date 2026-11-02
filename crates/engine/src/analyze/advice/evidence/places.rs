@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use strata_ir::{ContainerId, Node};
+use unlace_ir::{ContainerId, Node};
 
 use crate::analyze::advice::evidence::{EvidenceIndex, EvidencePlace};
 use crate::analyze::advice::proposal::AdviceProposal;

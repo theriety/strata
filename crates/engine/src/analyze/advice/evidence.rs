@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_ir::{
+use unlace_ir::{
     Container, ContainerId, IntermediateRepresentation, Node, NodeId, ScopeLevel, Snapshot,
 };
 

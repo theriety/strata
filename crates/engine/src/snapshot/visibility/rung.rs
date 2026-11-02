@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use smol_str::SmolStr;
-use strata_ir::ScopeRung;
+use unlace_ir::ScopeRung;
 
 /// Returns the index of the narrowest rung that holds every `footprint` file.
 ///

@@ -3,11 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_core::cluster::{ClusterId, Partition};
-use strata_core::condense::Condensation;
-use strata_core::condense::SccId;
-use strata_core::graph::csr::Csr;
-use strata_ir::{
+use unlace_core::cluster::{ClusterId, Partition};
+use unlace_core::condense::Condensation;
+use unlace_core::condense::SccId;
+use unlace_core::graph::csr::Csr;
+use unlace_ir::{
     Container, ContainerId, ContainerTree, Layout, Node, NodeId, NodeKind, Polarity, ScopeLevel,
     Snapshot, build_laminar_tree,
 };
@@ -766,7 +766,7 @@ fn should_build_candidates_with_real_names_and_five_levels() {
         vec![sized(0, "alpha", 4, 10), sized(1, "beta", 5, 7)],
         vec![edge(0, 1)],
         vec![
-            container(0, "strata", ScopeLevel::PackageGroup, None),
+            container(0, "unlace", ScopeLevel::PackageGroup, None),
             container(1, "crates", ScopeLevel::Package, Some(0)),
             container(2, "crates/engine", ScopeLevel::Domain, Some(1)),
             container(3, "crates/engine/src", ScopeLevel::Folder, Some(2)),

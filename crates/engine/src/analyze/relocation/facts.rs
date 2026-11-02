@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_core::score::KindWeights;
-use strata_ir::{Container, Polarity, ScopeLevel, Snapshot};
+use unlace_core::score::KindWeights;
+use unlace_ir::{Container, Polarity, ScopeLevel, Snapshot};
 
 use crate::analyze::relocation::FileInfo;
 use crate::narrate::{FileFacts, project_package_rooted_path, project_physical_path};

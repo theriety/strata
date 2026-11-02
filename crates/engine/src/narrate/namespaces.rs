@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_ir::ContainerTree;
+use unlace_ir::ContainerTree;
 
 use super::paths::physical_directory;
 use super::placements::{FilePlacements, index_files};

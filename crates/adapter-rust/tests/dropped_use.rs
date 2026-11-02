@@ -4,8 +4,8 @@
 use std::fs;
 use std::path::Path;
 
-use strata_adapter_rust::RustAdapter;
-use strata_ir::{Adapter, IrFragment, SourceFile};
+use unlace_adapter_rust::RustAdapter;
+use unlace_ir::{Adapter, IrFragment, SourceFile};
 
 fn fragment(fixture: &str, paths: &[&str]) -> Result<IrFragment, String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))

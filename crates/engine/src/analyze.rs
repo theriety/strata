@@ -11,10 +11,10 @@
 
 use std::collections::BTreeMap;
 
-use strata_ir::Snapshot;
+use unlace_ir::Snapshot;
 
 use crate::config::{AnalyzeConfig, ProfileName};
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 use crate::result::{AnalyzeResult, CurrentTree, Profiles, RESULT_SCHEMA_VERSION};
 
 /// The capacity borderline band: a finding within ±10% of a cap is borderline
@@ -49,9 +49,9 @@ mod tests;
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::SnapshotInvalid`] if the snapshot's container tree
+/// Returns [`UnlaceError::SnapshotInvalid`] if the snapshot's container tree
 /// cannot be rendered (it is otherwise pre-validated at assembly).
-pub fn analyze(snapshot: &Snapshot, config: &AnalyzeConfig) -> Result<AnalyzeResult, StrataError> {
+pub fn analyze(snapshot: &Snapshot, config: &AnalyzeConfig) -> Result<AnalyzeResult, UnlaceError> {
     // `[analysis].jobs` caps the search's parallelism through a scoped pool so
     // the library behaves exactly like the CLI (AD-5); results are
     // thread-count invariant (NFR-1), so `0` (use the global pool) and any
@@ -72,7 +72,7 @@ pub fn analyze(snapshot: &Snapshot, config: &AnalyzeConfig) -> Result<AnalyzeRes
 fn analyze_inner(
     snapshot: &Snapshot,
     config: &AnalyzeConfig,
-) -> Result<AnalyzeResult, StrataError> {
+) -> Result<AnalyzeResult, UnlaceError> {
     let ir = snapshot.ir();
     let tree = &ir.containers;
 

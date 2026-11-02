@@ -3,8 +3,8 @@
 
 use std::fs;
 
-use strata_adapter_rust::RustAdapter;
-use strata_ir::{Adapter, EdgeKind, IrFragment, SourceFile};
+use unlace_adapter_rust::RustAdapter;
+use unlace_ir::{Adapter, EdgeKind, IrFragment, SourceFile};
 
 const SOURCE: &str = "pub trait Bound {}\n\
 pub struct Held;\n\
@@ -17,7 +17,7 @@ fn private_signature(_held: Held) {}\n";
 
 /// Binds `SOURCE` as a one-file crate.
 fn bind() -> Result<IrFragment, String> {
-    let root = std::env::temp_dir().join(format!("strata-signature-edges-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("unlace-signature-edges-{}", std::process::id()));
     fs::create_dir_all(root.join("src")).map_err(|error| error.to_string())?;
     let manifest = "[package]\nname = \"sig\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
     fs::write(root.join("Cargo.toml"), manifest).map_err(|error| error.to_string())?;
@@ -33,7 +33,7 @@ fn bind() -> Result<IrFragment, String> {
     fragment
 }
 
-fn id(fragment: &IrFragment, name: &str) -> Result<strata_ir::NodeId, String> {
+fn id(fragment: &IrFragment, name: &str) -> Result<unlace_ir::NodeId, String> {
     fragment
         .nodes
         .iter()

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use smol_str::SmolStr;
-use strata_ir::{ContainerId, Node, NodeId, NodeKind, Polarity, ScopeLevel};
+use unlace_ir::{ContainerId, Node, NodeId, NodeKind, Polarity, ScopeLevel};
 
 use super::containers::ContainerBuilder;
 use crate::parse::{DeclKind, Declaration, ParsedFile, ReExport, VisibilityKind};

@@ -6,7 +6,7 @@
 //! two paths alone, how the test's folder follows its source's folder.
 
 use smol_str::SmolStr;
-use strata_ir::IntermediateRepresentation;
+use unlace_ir::IntermediateRepresentation;
 
 use crate::analyze::relocation::mirror::ExactMirrorLink;
 use crate::config::{MirrorCaptures, MirrorTemplate, ProfileConfig};

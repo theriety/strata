@@ -18,7 +18,7 @@ question = "Does anchored ever propose more change than greenfield on an optimal
 mode = "both"        # non_inversion needs both faces of one run
 candidates = 3       # engine default k
 seed = 42            # engine default seed
-config = "defaults"  # pure built-in defaults; no fixture strata.toml
+config = "defaults"  # pure built-in defaults; no fixture unlace.toml
 
 [[precondition]]
 kind = "file_count"

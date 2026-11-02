@@ -1,13 +1,13 @@
 //! Search-size ceilings and the numeric range predicates shared by config validation.
 
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 
 /// The inclusive ceiling for the folder, domain, and package member-count caps.
 ///
 /// The shipped defaults (20/16/15) sit an order of magnitude below this bound, so
 /// every legitimate configuration fits comfortably; a cap beyond it can never fire
 /// on a sanely sized container, which would turn capacity enforcement into a no-op
-/// and hand an untrusted `strata.toml` a lever over cap-driven working sets.
+/// and hand an untrusted `unlace.toml` a lever over cap-driven working sets.
 const CAP_CEILING: u32 = 256;
 
 /// The inclusive ceiling for `analysis.jobs`, the Rayon pool size.
@@ -15,7 +15,7 @@ const CAP_CEILING: u32 = 256;
 /// `jobs` flows into `ThreadPoolBuilder::num_threads`, which tries to spawn that
 /// many OS threads before it can fail. At roughly 8 MiB of stack apiece an
 /// unbounded value exhausts memory long before the graceful fallback is reached,
-/// so the ceiling keeps a hostile `strata.toml` from turning one `analyze` run
+/// so the ceiling keeps a hostile `unlace.toml` from turning one `analyze` run
 /// into a fork bomb. It sits far above any real machine's core count, so no
 /// legitimate parallelism hint is refused.
 pub(super) const JOBS_CEILING: u32 = 1_024;
@@ -43,11 +43,11 @@ pub(super) const ILP_THRESHOLD_CEILING: u32 = 4_096;
 
 /// Returns `Ok` when `value` is at most `ceiling`, else a `ConfigInvalid` naming
 /// `key`, the ceiling, and the offending value.
-pub(super) fn at_most(key: &str, value: u32, ceiling: u32) -> Result<(), StrataError> {
+pub(super) fn at_most(key: &str, value: u32, ceiling: u32) -> Result<(), UnlaceError> {
     if value <= ceiling {
         Ok(())
     } else {
-        Err(StrataError::ConfigInvalid {
+        Err(UnlaceError::ConfigInvalid {
             key: Some(key.to_owned()),
             reason: format!("must be at most {ceiling}, got {value}"),
         })
@@ -56,16 +56,16 @@ pub(super) fn at_most(key: &str, value: u32, ceiling: u32) -> Result<(), StrataE
 
 /// Returns `Ok` when `value` is at most [`CAP_CEILING`], else a `ConfigInvalid`
 /// naming `key`, the ceiling, and the offending value.
-pub(super) fn within_ceiling(key: &str, value: u32) -> Result<(), StrataError> {
+pub(super) fn within_ceiling(key: &str, value: u32) -> Result<(), UnlaceError> {
     at_most(key, value, CAP_CEILING)
 }
 
 /// Returns `Ok` when `value` is at least one, else a `ConfigInvalid` naming `key`.
-pub(super) fn positive(key: &str, value: u32) -> Result<(), StrataError> {
+pub(super) fn positive(key: &str, value: u32) -> Result<(), UnlaceError> {
     if value >= 1 {
         Ok(())
     } else {
-        Err(StrataError::ConfigInvalid {
+        Err(UnlaceError::ConfigInvalid {
             key: Some(key.to_owned()),
             reason: "must be at least 1".to_owned(),
         })
@@ -74,22 +74,22 @@ pub(super) fn positive(key: &str, value: u32) -> Result<(), StrataError> {
 
 /// Returns `Ok` when `value` is finite and non-negative, else a `ConfigInvalid`
 /// naming `key`.
-pub(super) fn non_negative_finite(key: &str, value: f64) -> Result<(), StrataError> {
+pub(super) fn non_negative_finite(key: &str, value: f64) -> Result<(), UnlaceError> {
     if value.is_finite() && value >= 0.0 {
         Ok(())
     } else {
-        Err(StrataError::ConfigInvalid {
+        Err(UnlaceError::ConfigInvalid {
             key: Some(key.to_owned()),
             reason: "must be a finite, non-negative number".to_owned(),
         })
     }
 }
 
-pub(super) fn unit_interval(key: &str, value: f64) -> Result<(), StrataError> {
+pub(super) fn unit_interval(key: &str, value: f64) -> Result<(), UnlaceError> {
     if value.is_finite() && (0.0..=1.0).contains(&value) {
         Ok(())
     } else {
-        Err(StrataError::ConfigInvalid {
+        Err(UnlaceError::ConfigInvalid {
             key: Some(key.to_owned()),
             reason: "must be a finite number between 0 and 1".to_owned(),
         })
@@ -97,11 +97,11 @@ pub(super) fn unit_interval(key: &str, value: f64) -> Result<(), StrataError> {
 }
 
 /// Returns `Ok` when `value` is finite and at least one.
-pub(super) fn at_least_one_finite(key: &str, value: f64) -> Result<(), StrataError> {
+pub(super) fn at_least_one_finite(key: &str, value: f64) -> Result<(), UnlaceError> {
     if value.is_finite() && value >= 1.0 {
         Ok(())
     } else {
-        Err(StrataError::ConfigInvalid {
+        Err(UnlaceError::ConfigInvalid {
             key: Some(key.to_owned()),
             reason: "must be a finite number at least 1".to_owned(),
         })
@@ -127,7 +127,7 @@ mod tests {
 
         assert!(matches!(
             config.validate(),
-            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "analysis.jobs"
+            Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "analysis.jobs"
         ));
     }
 
@@ -146,7 +146,7 @@ mod tests {
 
         assert!(matches!(
             config.validate(),
-            Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.candidates"
+            Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.candidates"
         ));
     }
 
@@ -168,7 +168,7 @@ mod tests {
 
         assert!(matches!(
             config.validate(),
-            Err(StrataError::ConfigInvalid { key: Some(key), .. })
+            Err(UnlaceError::ConfigInvalid { key: Some(key), .. })
                 if key == "profiles.anchored.diversity.seeds-per-candidate"
         ));
     }
@@ -191,7 +191,7 @@ mod tests {
 
         assert!(matches!(
             config.validate(),
-            Err(StrataError::ConfigInvalid { key: Some(key), .. })
+            Err(UnlaceError::ConfigInvalid { key: Some(key), .. })
                 if key == "profiles.anchored.solver.ilp-threshold"
         ));
     }

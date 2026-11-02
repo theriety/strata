@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use smol_str::SmolStr;
-use strata_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
+use unlace_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
 
 use crate::parse::ParsedModule;
 

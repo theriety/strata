@@ -8,9 +8,9 @@
 //! touched. cycle-span, once the standing red of deviation D-50, now passes
 //! and guards import-cycle tearing like the rest.
 
-use strata_engine::config::AnalyzeConfig;
-use strata_engine::{analyze, snapshot_from_root};
-use strata_eval::{EvalError, e2e_fixture_root, eval_fixture_root, harness, load_target};
+use unlace_engine::config::AnalyzeConfig;
+use unlace_engine::{analyze, snapshot_from_root};
+use unlace_eval::{EvalError, e2e_fixture_root, eval_fixture_root, harness, load_target};
 
 /// The compile-time-checked case table: every committed target paired with the
 /// designed defect its distance is measured against.

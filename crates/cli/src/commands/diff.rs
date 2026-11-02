@@ -1,4 +1,4 @@
-//! `strata diff`: a narrated move list between two structures.
+//! `unlace diff`: a narrated move list between two structures.
 //!
 //! Each reference is `current` or `mode/index` (e.g. `anchored/1`). A diff
 //! against `current` is the candidate's stored delta narration — the grouped
@@ -9,7 +9,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use strata_engine::{AnalyzeResult, StrataError};
+use unlace_engine::{AnalyzeResult, UnlaceError};
 
 use crate::commands::{candidate_at, mode_result, read_result};
 use crate::render::{ADVICE_DISCLAIMER, render_diff, render_moves};
@@ -43,8 +43,8 @@ enum Reference {
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::CandidateNotFound`] when the reference is malformed.
-fn parse_reference(text: &str) -> Result<Reference, StrataError> {
+/// Returns [`UnlaceError::CandidateNotFound`] when the reference is malformed.
+fn parse_reference(text: &str) -> Result<Reference, UnlaceError> {
     if text == "current" {
         return Ok(Reference::Current);
     }
@@ -60,8 +60,8 @@ fn parse_reference(text: &str) -> Result<Reference, StrataError> {
 }
 
 /// Builds a `CandidateNotFound` for a malformed reference.
-fn not_found(text: &str, index: usize) -> StrataError {
-    StrataError::CandidateNotFound {
+fn not_found(text: &str, index: usize) -> UnlaceError {
+    UnlaceError::CandidateNotFound {
         mode: text.to_owned(),
         index,
     }
@@ -71,9 +71,9 @@ fn not_found(text: &str, index: usize) -> StrataError {
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::InputUnreadable`] when the input cannot be read and
-/// [`StrataError::CandidateNotFound`] when a reference does not resolve.
-pub fn run(args: &DiffArgs, out: &mut impl Write) -> Result<(), StrataError> {
+/// Returns [`UnlaceError::InputUnreadable`] when the input cannot be read and
+/// [`UnlaceError::CandidateNotFound`] when a reference does not resolve.
+pub fn run(args: &DiffArgs, out: &mut impl Write) -> Result<(), UnlaceError> {
     let result = read_result(&args.input)?;
     let left = parse_reference(&args.left)?;
     let right = parse_reference(&args.right)?;
@@ -120,7 +120,7 @@ fn write_distance(
     left_index: usize,
     right_index: usize,
     out: &mut impl Write,
-) -> Result<(), StrataError> {
+) -> Result<(), UnlaceError> {
     let mode_result = mode_result(result, mode)?;
     let distance = mode_result
         .pairwise_distance
@@ -133,9 +133,9 @@ fn write_distance(
     Ok(())
 }
 
-/// Wraps a rendering I/O failure into a [`StrataError`].
-fn write_error(error: &std::io::Error) -> StrataError {
-    StrataError::InputUnreadable {
+/// Wraps a rendering I/O failure into a [`UnlaceError`].
+fn write_error(error: &std::io::Error) -> UnlaceError {
+    UnlaceError::InputUnreadable {
         path: PathBuf::from("<stdout>"),
         reason: error.to_string(),
     }
@@ -145,7 +145,7 @@ fn write_error(error: &std::io::Error) -> StrataError {
 mod tests {
     use std::collections::BTreeMap;
 
-    use strata_engine::{
+    use unlace_engine::{
         Candidate, ContainerNode, CurrentStanding, CurrentTree, FileMove, Level, ModeResult, Modes,
         Move, MoveKind, MoveReason, ProfileConfig, ProfileCurrent, ScoreBreakdown, Summary,
         SymbolPlacement,
@@ -156,7 +156,7 @@ mod tests {
     /// Builds a result with two anchored candidates.
     fn sample() -> AnalyzeResult {
         AnalyzeResult {
-            schema_version: strata_engine::RESULT_SCHEMA_VERSION,
+            schema_version: unlace_engine::RESULT_SCHEMA_VERSION,
             snapshot_hash: "h".to_owned(),
             summary: Summary {
                 symbols: 1,
@@ -168,7 +168,7 @@ mod tests {
                 tree: file("lib"),
                 shared_findings: Vec::new(),
             },
-            advice: strata_engine::Advice::default(),
+            advice: unlace_engine::Advice::default(),
             profiles: Modes {
                 anchored: Some(ModeResult {
                     parameters: ProfileConfig::default(),
@@ -243,7 +243,7 @@ mod tests {
 
     /// Writes `result` to a temp file and returns the path.
     fn saved(result: &AnalyzeResult) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("strata-diff-{}.json", nanos()));
+        let path = std::env::temp_dir().join(format!("unlace-diff-{}.json", nanos()));
         let _ = std::fs::write(&path, serde_json::to_vec(result).unwrap_or_default());
         path
     }
@@ -276,7 +276,7 @@ mod tests {
     fn should_reject_an_unknown_mode_reference() {
         assert!(matches!(
             parse_reference("bogus/1"),
-            Err(StrataError::CandidateNotFound { .. })
+            Err(UnlaceError::CandidateNotFound { .. })
         ));
     }
 

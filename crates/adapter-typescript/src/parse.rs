@@ -7,9 +7,9 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Deserializer, Serialize};
 use smol_str::SmolStr;
-use strata_ir::{AdapterError, SourceFile};
 use swc_common::{FileName, SourceMap, Spanned, sync::Lrc};
 use swc_ecma_parser::{Parser, StringInput, Syntax, TsSyntax, lexer::Lexer};
+use unlace_ir::{AdapterError, SourceFile};
 
 mod declarations;
 mod references;
@@ -141,7 +141,7 @@ impl<'de> Deserialize<'de> for ReExportBinding {
 
 /// A serializable, language-agnostic summary of one parsed module.
 ///
-/// This is the payload the adapter threads through [`strata_ir::ParseTree`]:
+/// This is the payload the adapter threads through [`unlace_ir::ParseTree`]:
 /// [`parse`] produces it, [`crate::bind::bind`] consumes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedModule {

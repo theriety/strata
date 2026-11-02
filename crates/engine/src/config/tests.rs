@@ -1,11 +1,11 @@
-//! Unit tests for the `strata.toml` schema, defaults, loading, and validation.
+//! Unit tests for the `unlace.toml` schema, defaults, loading, and validation.
 
 #![allow(clippy::assertions_on_constants)]
 
 use std::time::Duration;
 
 use super::*;
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 
 #[test]
 fn should_default_to_the_config_less_baseline() {
@@ -80,7 +80,7 @@ fn should_reject_invalid_companion_separation_objectives_with_their_key_path() {
         assert!(
             matches!(
                 result,
-                Err(StrataError::ConfigInvalid { key: Some(key), .. })
+                Err(UnlaceError::ConfigInvalid { key: Some(key), .. })
                     if key == "profiles.anchored.objective.companion-separation"
             ),
             "negative and non-finite companion pricing is invalid"
@@ -130,7 +130,7 @@ fn should_reject_invalid_dependency_only_objectives_with_their_key_path() {
 
         assert!(matches!(
             config.validate(),
-            Err(StrataError::ConfigInvalid { key: Some(key), .. })
+            Err(UnlaceError::ConfigInvalid { key: Some(key), .. })
                 if key == "profiles.anchored.objective.dependency-only"
         ));
     }
@@ -602,7 +602,7 @@ fn should_name_every_removed_legacy_key_in_its_diagnostic() {
         ("[tests]\nhelper-cap = 250\n", "tests", "tests"),
     ];
     let path = std::env::temp_dir().join(format!(
-        "strata-legacy-profile-config-{}.toml",
+        "unlace-legacy-profile-config-{}.toml",
         std::process::id()
     ));
 
@@ -615,7 +615,7 @@ fn should_name_every_removed_legacy_key_in_its_diagnostic() {
         assert!(
             matches!(
                 diagnostic,
-                Err(StrataError::ConfigInvalid { key: Some(ref key), ref reason })
+                Err(UnlaceError::ConfigInvalid { key: Some(ref key), ref reason })
                     if key == expected_key
                         && reason == &format!("unknown field `{legacy_field}`")
             ),
@@ -644,7 +644,7 @@ fn should_reject_a_zero_cap_with_its_key_path() {
 
     assert!(matches!(
         config.validate(),
-        Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.capacity.file"
+        Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.capacity.file"
     ));
 }
 
@@ -681,7 +681,7 @@ fn should_reject_an_empty_tests_pattern_with_its_index() {
 
     assert!(matches!(
         config.validate(),
-        Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.tests.patterns[1]"
+        Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.tests.patterns[1]"
     ));
 }
 
@@ -703,7 +703,7 @@ fn should_reject_an_invalid_tests_glob_with_its_index() {
 
     assert!(matches!(
         config.validate(),
-        Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.tests.patterns[0]"
+        Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.tests.patterns[0]"
     ));
 }
 
@@ -725,7 +725,7 @@ fn should_reject_a_folder_cap_above_the_ceiling() {
 
     assert!(matches!(
         config.validate(),
-        Err(StrataError::ConfigInvalid { key: Some(key), reason })
+        Err(UnlaceError::ConfigInvalid { key: Some(key), reason })
             if key == "profiles.anchored.capacity.folder" && reason.contains("256") && reason.contains("257")
     ));
 }
@@ -748,7 +748,7 @@ fn should_reject_a_domain_cap_above_the_ceiling() {
 
     assert!(matches!(
         config.validate(),
-        Err(StrataError::ConfigInvalid { key: Some(key), reason })
+        Err(UnlaceError::ConfigInvalid { key: Some(key), reason })
             if key == "profiles.anchored.capacity.domain" && reason.contains("256") && reason.contains("300")
     ));
 }
@@ -772,7 +772,7 @@ fn should_reject_a_package_cap_above_the_ceiling() {
 
     assert!(matches!(
         config.validate(),
-        Err(StrataError::ConfigInvalid { key: Some(key), reason })
+        Err(UnlaceError::ConfigInvalid { key: Some(key), reason })
             if key == "profiles.anchored.capacity.package" && reason.contains("256") && reason.contains("4294967295")
     ));
 }
@@ -817,7 +817,7 @@ fn should_reject_a_negative_coefficient() {
 
     assert!(matches!(
         config.validate(),
-        Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.objective.naming"
+        Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.objective.naming"
     ));
 }
 
@@ -833,7 +833,7 @@ fn should_reject_an_unknown_language() {
 
     assert!(matches!(
         config.validate(),
-        Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "adapters.languages"
+        Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "adapters.languages"
     ));
 }
 
@@ -921,7 +921,7 @@ fn should_reject_a_zero_candidate_count() {
 
     assert!(matches!(
         config.validate(),
-        Err(StrataError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.candidates"
+        Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.candidates"
     ));
 }
 
@@ -945,7 +945,7 @@ fn should_reject_a_restart_pool_whose_factors_are_each_legal() {
 
     assert!(matches!(
         config.validate(),
-        Err(StrataError::ConfigInvalid { key: Some(key), .. })
+        Err(UnlaceError::ConfigInvalid { key: Some(key), .. })
             if key == "profiles.anchored.candidates * profiles.anchored.diversity.seeds-per-candidate"
     ));
 }
@@ -984,7 +984,7 @@ fn should_reject_same_file_weights_below_one() {
 
     assert!(matches!(
         config.validate(),
-        Err(StrataError::ConfigInvalid { key: Some(key), .. })
+        Err(UnlaceError::ConfigInvalid { key: Some(key), .. })
             if key == "profiles.greenfield.weights.same-file-type"
     ));
 }

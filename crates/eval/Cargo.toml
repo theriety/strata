@@ -1,5 +1,5 @@
 [package]
-name = "strata-eval"
+name = "unlace-eval"
 version = "0.1.0"
 edition = "2024"
 rust-version.workspace = true
@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-strata-engine = { path = "../engine" }
+unlace-engine = { path = "../engine" }
 thiserror = { workspace = true }
 toml = "1"
 

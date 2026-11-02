@@ -1,9 +1,9 @@
-//! The Python language adapter for Strata.
+//! The Python language adapter for Unlace.
 //!
-//! It implements the two-phase [`strata_ir::Adapter`] contract: `parse`
+//! It implements the two-phase [`unlace_ir::Adapter`] contract: `parse`
 //! turns `.py` sources into syntax summaries (via rustpython-parser, in
 //! parallel), and `bind` runs a custom scope resolver over the module graph,
-//! emitting a language-agnostic [`strata_ir::IrFragment`] — typed edges,
+//! emitting a language-agnostic [`unlace_ir::IrFragment`] — typed edges,
 //! three-valued test polarity, and per-symbol production SLOC.
 //!
 //! No off-the-shelf semantic database exists for Python in Rust, so the binder
@@ -13,7 +13,7 @@
 //! constructs (`getattr`, `importlib`, star imports via `__all__`).
 //!
 //! The trait threads the intermediate `parse::ParsedModule` summary through
-//! the opaque [`strata_ir::ParseTree`] payload as canonical JSON, so the engine
+//! the opaque [`unlace_ir::ParseTree`] payload as canonical JSON, so the engine
 //! never needs to understand Python to merge fragments.
 
 mod bind;
@@ -24,7 +24,7 @@ mod sloc;
 
 use std::path::PathBuf;
 
-use strata_ir::{Adapter, AdapterError, IrFragment, ParseTree, SourceFile};
+use unlace_ir::{Adapter, AdapterError, IrFragment, ParseTree, SourceFile};
 
 use crate::parse::ParsedModule;
 

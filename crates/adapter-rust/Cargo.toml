@@ -1,16 +1,16 @@
 [package]
-name = "strata-adapter-rust"
+name = "unlace-adapter-rust"
 version = "0.1.0"
 edition = "2024"
 rust-version.workspace = true
 publish = false
 
 [lib]
-name = "strata_adapter_rust"
+name = "unlace_adapter_rust"
 path = "src/lib.rs"
 
 [dependencies]
-strata-ir = { path = "../ir" }
+unlace-ir = { path = "../ir" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol_str = { workspace = true }

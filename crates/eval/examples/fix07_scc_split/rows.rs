@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_engine::ir::{Polarity, ScopeLevel, Snapshot};
-use strata_engine::result::{ContainerNode, Level};
+use unlace_engine::ir::{Polarity, ScopeLevel, Snapshot};
+use unlace_engine::result::{ContainerNode, Level};
 
 /// One file of the analyzed snapshot, indexed in the engine's dense file order.
 pub(super) struct FileRow {

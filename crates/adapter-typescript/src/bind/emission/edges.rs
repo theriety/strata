@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use smol_str::SmolStr;
-use strata_ir::{Edge, EdgeKind, Hardness, NodeId};
+use unlace_ir::{Edge, EdgeKind, Hardness, NodeId};
 
 use crate::parse::{DeclarationKind, ParsedModule};
 

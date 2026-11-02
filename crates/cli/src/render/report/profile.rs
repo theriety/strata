@@ -1,6 +1,6 @@
 //! Per-profile report lines: baseline standing, candidate scores, and score tables.
 
-use strata_engine::{AnalyzeResult, Candidate, CurrentStanding, ModeResult};
+use unlace_engine::{AnalyzeResult, Candidate, CurrentStanding, ModeResult};
 
 use super::candidate::candidate_lines;
 use crate::render::{RenderOptions, TERMS, f4, sf, wrap};

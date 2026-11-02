@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use strata_engine::result::ContainerNode;
+use unlace_engine::result::ContainerNode;
 
 use crate::harness::Verdict;
 use crate::harness::inputs::{EvalInputs, find_package_node, packages_holding};

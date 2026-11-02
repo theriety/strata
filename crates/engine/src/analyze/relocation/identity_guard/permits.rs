@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use smol_str::SmolStr;
-use strata_core::cluster::{ClusterId, Partition};
+use unlace_core::cluster::{ClusterId, Partition};
 
 use crate::analyze::relocation::identity_guard::{
     IdentitySubgroup, RelocationIdentityGuard, RenderIdentity,

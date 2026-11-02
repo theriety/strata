@@ -1,6 +1,6 @@
-//! `strata tree`: print a candidate's (or the current) file tree.
+//! `unlace tree`: print a candidate's (or the current) file tree.
 //!
-//! The command reads a saved [`AnalyzeResult`](strata_engine::AnalyzeResult),
+//! The command reads a saved [`AnalyzeResult`](unlace_engine::AnalyzeResult),
 //! selects the requested view — the
 //! current layout, a named candidate, or the list of available candidates — and
 //! renders it with optional per-file symbol listings and a depth cut.
@@ -8,7 +8,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use strata_engine::StrataError;
+use unlace_engine::UnlaceError;
 
 use crate::commands::{candidate_at, mode_result, read_result};
 use crate::render::render_tree;
@@ -34,9 +34,9 @@ pub struct TreeArgs {
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::InputUnreadable`] when the input cannot be read and
-/// [`StrataError::CandidateNotFound`] when the named mode or index is absent.
-pub fn run(args: &TreeArgs, out: &mut impl Write) -> Result<(), StrataError> {
+/// Returns [`UnlaceError::InputUnreadable`] when the input cannot be read and
+/// [`UnlaceError::CandidateNotFound`] when the named mode or index is absent.
+pub fn run(args: &TreeArgs, out: &mut impl Write) -> Result<(), UnlaceError> {
     let result = read_result(&args.input)?;
 
     if args.current {
@@ -55,10 +55,10 @@ pub fn run(args: &TreeArgs, out: &mut impl Write) -> Result<(), StrataError> {
 
 /// Writes the available candidate indices and scores for `mode` to `out`.
 fn list_candidates(
-    result: &strata_engine::AnalyzeResult,
+    result: &unlace_engine::AnalyzeResult,
     mode: &str,
     out: &mut impl Write,
-) -> Result<(), StrataError> {
+) -> Result<(), UnlaceError> {
     let mode_result = mode_result(result, mode)?;
     writeln!(out, "available candidates for {mode}:").map_err(|error| write_error(&error))?;
     for candidate in &mode_result.candidates {
@@ -68,9 +68,9 @@ fn list_candidates(
     Ok(())
 }
 
-/// Wraps a rendering I/O failure into a [`StrataError`].
-fn write_error(error: &std::io::Error) -> StrataError {
-    StrataError::InputUnreadable {
+/// Wraps a rendering I/O failure into a [`UnlaceError`].
+fn write_error(error: &std::io::Error) -> UnlaceError {
+    UnlaceError::InputUnreadable {
         path: PathBuf::from("<stdout>"),
         reason: error.to_string(),
     }
@@ -80,7 +80,7 @@ fn write_error(error: &std::io::Error) -> StrataError {
 mod tests {
     use std::collections::BTreeMap;
 
-    use strata_engine::{
+    use unlace_engine::{
         AnalyzeResult, Candidate, ContainerNode, CurrentStanding, CurrentTree, Level, ModeResult,
         Modes, ProfileConfig, ProfileCurrent, ScoreBreakdown, Summary, SymbolPlacement,
     };
@@ -90,7 +90,7 @@ mod tests {
     /// Builds a result with one anchored candidate over a two-file tree.
     fn sample() -> AnalyzeResult {
         AnalyzeResult {
-            schema_version: strata_engine::RESULT_SCHEMA_VERSION,
+            schema_version: unlace_engine::RESULT_SCHEMA_VERSION,
             snapshot_hash: "h".to_owned(),
             summary: Summary {
                 symbols: 1,
@@ -102,7 +102,7 @@ mod tests {
                 tree: file("current_lib"),
                 shared_findings: Vec::new(),
             },
-            advice: strata_engine::Advice::default(),
+            advice: unlace_engine::Advice::default(),
             profiles: Modes {
                 anchored: Some(ModeResult {
                     parameters: ProfileConfig::default(),
@@ -163,7 +163,7 @@ mod tests {
 
     /// Writes `result` to a temp file and returns the path.
     fn saved(result: &AnalyzeResult) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("strata-tree-{}.json", nanos()));
+        let path = std::env::temp_dir().join(format!("unlace-tree-{}.json", nanos()));
         let _ = std::fs::write(&path, serde_json::to_vec(result).unwrap_or_default());
         path
     }
@@ -254,7 +254,7 @@ mod tests {
         let _ = std::fs::remove_file(&input);
         assert!(matches!(
             outcome,
-            Err(StrataError::CandidateNotFound { .. })
+            Err(UnlaceError::CandidateNotFound { .. })
         ));
     }
 }

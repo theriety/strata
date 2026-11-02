@@ -4,8 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use strata_adapter_rust::RustAdapter;
-use strata_ir::{Adapter, SourceFile};
+use unlace_adapter_rust::RustAdapter;
+use unlace_ir::{Adapter, SourceFile};
 
 /// Writes a workspace of `crates` (name, manifest extras, has a binary) and
 /// returns the roots the adapter states for it.
@@ -17,7 +17,7 @@ fn roots(crates: &[(&str, &str, bool)]) -> Result<Vec<String>, String> {
 fn roots_in(workspace_extras: &str, crates: &[(&str, &str, bool)]) -> Result<Vec<String>, String> {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let root = std::env::temp_dir().join(format!(
-        "strata-support-{}-{}",
+        "unlace-support-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));

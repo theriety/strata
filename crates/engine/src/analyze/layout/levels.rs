@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_core::cluster::coarsen::{CoarseGraph, coarsen_chain, tight_layers};
-use strata_core::cluster::refine::{GainFn, refine};
-use strata_core::cluster::seed::{SeedLevel, seed};
-use strata_core::cluster::{LevelCaps, Partition};
-use strata_core::graph::csr::Csr;
+use unlace_core::cluster::coarsen::{CoarseGraph, coarsen_chain, tight_layers};
+use unlace_core::cluster::refine::{GainFn, refine};
+use unlace_core::cluster::seed::{SeedLevel, seed};
+use unlace_core::cluster::{LevelCaps, Partition};
+use unlace_core::graph::csr::Csr;
 
 /// Bound on polish sweeps: two passes catch the follow-up moves the first pass
 /// unlocks without ballooning the wall clock.

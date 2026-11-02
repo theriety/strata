@@ -2,7 +2,7 @@
 
 📌
 
-Strata keeps semantic clustering separate from physical repository structure: move narration, namespace boundaries, relocation depth, and folder capacity all use pass-start physical paths, while normalized paths serve only clustering.
+Unlace keeps semantic clustering separate from physical repository structure: move narration, namespace boundaries, relocation depth, and folder capacity all use pass-start physical paths, while normalized paths serve only clustering.
 
 - Status: `Accepted`
 - Date: `2026-08-29`
@@ -15,11 +15,11 @@ Symbol relocation also needs a directional structural boundary. Moving a declara
 
 ## 🧭 Context
 
-Strata maintains a normalized laminar tree—a hierarchy of nested semantic containers—for clustering related code. That structure may omit transparent path segments and may place files from distinct physical directories in the same semantic container. It is useful for finding related code, but it is not a faithful representation of repository paths or of the entries that occupy a physical folder.
+Unlace maintains a normalized laminar tree—a hierarchy of nested semantic containers—for clustering related code. That structure may omit transparent path segments and may place files from distinct physical directories in the same semantic container. It is useful for finding related code, but it is not a faithful representation of repository paths or of the entries that occupy a physical folder.
 
 ## ✅ Decision
 
-Strata keeps semantic clustering and physical repository structure as separate private projections. Normalized paths remain available for clustering. Every operation concerned with presentation, relocation depth, or folder occupancy uses the pass-start physical paths instead.
+Unlace keeps semantic clustering and physical repository structure as separate private projections. Normalized paths remain available for clustering. Every operation concerned with presentation, relocation depth, or folder occupancy uses the pass-start physical paths instead.
 
 File-move narration identifies both endpoints with dataset-qualified physical paths. The moved leaf includes its complete repository-relative path, and the destination includes the dataset followed by its complete physical directory. Transparent path segments remain visible. A move between `src/core/item.ts` and `src/shared`, for example, is presented as a move of `dataset/src/core/item.ts` into `dataset/src/shared`.
 

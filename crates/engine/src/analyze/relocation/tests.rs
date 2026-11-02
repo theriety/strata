@@ -1,6 +1,6 @@
 #![allow(clippy::assertions_on_constants)]
 
-use strata_core::score::KindWeights;
+use unlace_core::score::KindWeights;
 
 #[cfg(test)]
 use crate::narrate::narrate;

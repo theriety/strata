@@ -8,7 +8,7 @@
 //! CSR rows — makes the condensation byte-identical across runs and thread
 //! counts.
 
-use strata_ir::NodeId;
+use unlace_ir::NodeId;
 
 use crate::graph::csr::Csr;
 
@@ -243,7 +243,7 @@ fn build_quotient(csr: &Csr, scc_of: &[u32], scc_count: usize) -> Csr {
 mod tests {
     use proptest::prelude::*;
     use smol_str::SmolStr;
-    use strata_ir::{
+    use unlace_ir::{
         Container, ContainerId, ContainerTree, Edge, EdgeKind, Hardness,
         IntermediateRepresentation, Node, NodeKind, Polarity, ScopeLevel, Snapshot,
     };

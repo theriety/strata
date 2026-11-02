@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use strata_core::cluster::Partition;
-use strata_core::cluster::seed::SeedLevel;
+use unlace_core::cluster::Partition;
+use unlace_core::cluster::seed::SeedLevel;
 
 use crate::analyze::layout::{NameTally, cluster_level, home_affinity, vote};
 use crate::analyze::relocation::mirror::PolishEvidence;

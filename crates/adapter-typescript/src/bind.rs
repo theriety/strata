@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use smol_str::SmolStr;
-use strata_ir::{IrFragment, Node, NodeId, NodeKind, Polarity, ScopeLevel};
+use unlace_ir::{IrFragment, Node, NodeId, NodeKind, Polarity, ScopeLevel};
 
 use crate::parse::{DeclarationKind, ParsedModule};
 
@@ -135,7 +135,7 @@ pub(super) fn bind(
 
 #[cfg(test)]
 mod tests {
-    use strata_ir::{Edge, EdgeKind, Hardness};
+    use unlace_ir::{Edge, EdgeKind, Hardness};
 
     use super::containers::prefix_key;
     use super::emission::CONFIDENCE_STATIC;

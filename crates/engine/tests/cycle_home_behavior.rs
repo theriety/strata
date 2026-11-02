@@ -1,11 +1,11 @@
 //! Public analysis regressions for physical homes inside a condensed file cycle.
 
-use strata_engine::ir::{
+use unlace_engine::ir::{
     Container, ContainerId, ContainerTree, Edge, EdgeKind, Hardness, IntermediateRepresentation,
     Node, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
 };
-use strata_engine::ir::{Layout, build_laminar_tree};
-use strata_engine::{AnalyzeConfig, ContainerNode, Level, analyze};
+use unlace_engine::ir::{Layout, build_laminar_tree};
+use unlace_engine::{AnalyzeConfig, ContainerNode, Level, analyze};
 
 fn container(id: u32, name: &str, level: ScopeLevel, parent: Option<u32>) -> Container {
     Container {

@@ -2,7 +2,7 @@
 
 📌
 
-A visibility finding is emitted only when the language can write a scope strictly narrower than the declared one that still holds the home file and every user, signature exposure included. Otherwise strata stays silent. Rungs are compared by file set, not by level label.
+A visibility finding is emitted only when the language can write a scope strictly narrower than the declared one that still holds the home file and every user, signature exposure included. Otherwise unlace stays silent. Rungs are compared by file set, not by level label.
 
 - Status: `Accepted`
 - Date: `2026-10-02`
@@ -30,7 +30,7 @@ Suggestions are advice but must never be technically wrong. After ADR-24 the fin
 
 TypeScript and Python public API (package entry exports) is out of scope here.
 
-**Inline modules.** An inline `mod m { .. }` shares its file with its parent, so file sets cannot tell the two scopes apart. The adapter drops inline modules from the ladder (their spelling keeps its place in the chain) and states no declared rung for an item that sits inside one, so strata stays silent.
+**Inline modules.** An inline `mod m { .. }` shares its file with its parent, so file sets cannot tell the two scopes apart. The adapter drops inline modules from the ladder (their spelling keeps its place in the chain) and states no declared rung for an item that sits inside one, so unlace stays silent.
 
 **Equal labels.** A verdict whose declared and needed levels carry the same label is skipped, because "exported at Folder but needed only at Folder" would mislead.
 
@@ -40,7 +40,7 @@ Where it lives: `crates/engine/src/analyze/findings/test_only.rs`; the visibilit
 
 Rule: a node earns `testOnly` when the source does not declare it test code (`Node.test_source`, read before adapters demote production code that only tests use), it has at least one non-self-loop user, every user has `test_source`, no advisory use targets it, and it is neither `re_export` nor `advice_exempt` (trait-impl blocks are `advice_exempt`). Unknown users count as non-test. When unsure, silent.
 
-Decision 10/3: **public API does not silence testOnly**, only visibility. Rule 8 ("never narrowed") is about narrowing a scope; "only tests in this repo use it" is a different claim and stays true for a public item. Wording claims only what strata sees: a non-public item says "`X` is used only by tests; move it under test-only code or delete it", a public one says "Only tests in this repo use `X`. It is public, so code outside this repo may use it too; check before moving or deleting it." TypeScript and Python adapters set `public_api` on every exported (TS) or non-underscore/re-exported (Py) item; exact entry-export detection (package.json `exports`/`main`, `__init__` re-exports) is deferred.
+Decision 10/3: **public API does not silence testOnly**, only visibility. Rule 8 ("never narrowed") is about narrowing a scope; "only tests in this repo use it" is a different claim and stays true for a public item. Wording claims only what unlace sees: a non-public item says "`X` is used only by tests; move it under test-only code or delete it", a public one says "Only tests in this repo use `X`. It is public, so code outside this repo may use it too; check before moving or deleting it." TypeScript and Python adapters set `public_api` on every exported (TS) or non-underscore/re-exported (Py) item; exact entry-export detection (package.json `exports`/`main`, `__init__` re-exports) is deferred.
 
 Module objects: a Python `import a`, `import a.b as c` and `from pkg import sub` (absolute or relative), a TS `import * as ns`, and a literal TS `require('./a')`, loaded by a non-test file, mark every declaration or export of the target module `advice_exempt`, so none is reported testOnly. This is advice-only in both languages: the dependency graph for these forms is unchanged.
 

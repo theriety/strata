@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_ir::{ContainerId, ScopeLevel};
+use unlace_ir::{ContainerId, ScopeLevel};
 
 use crate::analyze::layout::{
     ContainerArena, NameTally, anchor_min, elect, qualify_elected, record_undecorated_key,

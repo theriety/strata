@@ -6,8 +6,8 @@
 use std::fs;
 use std::path::Path;
 
-use strata_adapter_rust::RustAdapter;
-use strata_ir::{Adapter, IrFragment, Node, Polarity, SourceFile};
+use unlace_adapter_rust::RustAdapter;
+use unlace_ir::{Adapter, IrFragment, Node, Polarity, SourceFile};
 
 const FILES: [&str; 4] = [
     "src/lib.rs",

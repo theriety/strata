@@ -2,7 +2,7 @@
 
 use std::io::{self, Write};
 
-use strata_engine::{Candidate, Move, MoveKind, SymbolKind, SymbolMove};
+use unlace_engine::{Candidate, Move, MoveKind, SymbolKind, SymbolMove};
 
 use super::{improvement_summary, nq};
 

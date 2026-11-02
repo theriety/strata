@@ -1,7 +1,7 @@
 //! Structural polish vetoes: bridge absorption, comparable-anchor stranding and
 //! flight into the synthetic bucket.
 
-use strata_core::cluster::{ClusterId, Partition};
+use unlace_core::cluster::{ClusterId, Partition};
 
 use crate::analyze::relocation::PipelineSolver;
 

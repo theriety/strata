@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_core::score::KindWeights;
-use strata_ir::{ContainerId, Edge, ScopeLevel};
+use unlace_core::score::KindWeights;
+use unlace_ir::{ContainerId, Edge, ScopeLevel};
 
 use crate::analyze::relocation::CandidateTree;
 

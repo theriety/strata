@@ -37,4 +37,4 @@ Adapters already state which files are tests (`Node.test_source`, `FileFact.test
 - Symbol moves out of entry files are not pinned by this decision.
 
 - **Final pair check.** After the settle loop ends, whatever the exit, any pair whose source and test did not end together (one moved, or both moved apart) is reverted to its pass-start place, so the round cap cannot leave a split pair.
-- **Mirroring off.** With mirroring off, a source may move without its paired test; strata then does not enforce pairs.
+- **Mirroring off.** With mirroring off, a source may move without its paired test; unlace then does not enforce pairs.

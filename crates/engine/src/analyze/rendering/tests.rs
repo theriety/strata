@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_ir::{ContainerTree, Polarity, ScopeLevel};
+use unlace_ir::{ContainerTree, Polarity, ScopeLevel};
 
 use crate::config::AnalyzeConfig;
 use crate::result::{ContainerNode, Level};

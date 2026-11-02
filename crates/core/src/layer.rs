@@ -4,7 +4,7 @@
 //! points strictly downward: `layer(v) = 1 + max(layer(dep))` over `v`'s hard
 //! dependencies, with dependency-free nodes (sources) at layer `1`. The pass is
 //! linear — a single sweep in topological order — and exposes the natural
-//! strata of the codebase.
+//! unlace of the codebase.
 
 use crate::condense::Condensation;
 
@@ -44,7 +44,7 @@ pub fn layer(cond: &Condensation) -> Vec<u32> {
 mod tests {
     use proptest::prelude::*;
     use smol_str::SmolStr;
-    use strata_ir::{
+    use unlace_ir::{
         Container, ContainerId, ContainerTree, Edge, EdgeKind, Hardness,
         IntermediateRepresentation, Node, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
     };

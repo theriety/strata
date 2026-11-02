@@ -1,7 +1,7 @@
 //! Candidate restructures: scoring breakdown and the rendered container tree.
 
 use serde::{Deserialize, Serialize};
-use strata_ir::ScopeLevel;
+use unlace_ir::ScopeLevel;
 
 use super::{CapacityRemainder, ConditionalSplit, Move, SymbolMove};
 
@@ -58,8 +58,8 @@ pub struct ScoreBreakdown {
     pub companion_separation: f64,
 }
 
-impl From<strata_core::score::ScoreBreakdown> for ScoreBreakdown {
-    fn from(value: strata_core::score::ScoreBreakdown) -> Self {
+impl From<unlace_core::score::ScoreBreakdown> for ScoreBreakdown {
+    fn from(value: unlace_core::score::ScoreBreakdown) -> Self {
         Self {
             cut: value.cut,
             imbalance: value.imbalance,

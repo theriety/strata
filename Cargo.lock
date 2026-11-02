@@ -3167,118 +3167,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
-name = "strata-adapter-python"
-version = "0.1.0"
-dependencies = [
- "rayon",
- "rustpython-parser",
- "serde",
- "serde_json",
- "smol_str",
- "strata-ir",
-]
-
-[[package]]
-name = "strata-adapter-rust"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "ra_ap_hir",
- "ra_ap_ide",
- "ra_ap_load-cargo",
- "ra_ap_project_model",
- "ra_ap_syntax",
- "ra_ap_vfs",
- "rayon",
- "serde",
- "serde_json",
- "smol_str",
- "strata-ir",
- "syn",
- "toml",
-]
-
-[[package]]
-name = "strata-adapter-typescript"
-version = "0.1.0"
-dependencies = [
- "rayon",
- "serde",
- "serde_json",
- "smol_str",
- "strata-ir",
- "swc_common",
- "swc_ecma_ast",
- "swc_ecma_parser",
- "swc_ecma_visit",
-]
-
-[[package]]
-name = "strata-cli"
-version = "0.1.0"
-dependencies = [
- "assert_cmd",
- "clap",
- "serde_json",
- "strata-engine",
- "unicode-width",
-]
-
-[[package]]
-name = "strata-core"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "highs",
- "proptest",
- "rayon",
- "smol_str",
- "strata-ir",
-]
-
-[[package]]
-name = "strata-engine"
-version = "0.1.0"
-dependencies = [
- "glob",
- "ignore",
- "rayon",
- "serde",
- "serde_json",
- "smol_str",
- "strata-adapter-python",
- "strata-adapter-rust",
- "strata-adapter-typescript",
- "strata-core",
- "strata-ir",
- "thiserror",
- "toml",
-]
-
-[[package]]
-name = "strata-eval"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "strata-engine",
- "thiserror",
- "toml",
-]
-
-[[package]]
-name = "strata-ir"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "serde",
- "serde_json",
- "smol_str",
- "thiserror",
-]
-
-[[package]]
 name = "string_enum"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3810,6 +3698,118 @@ dependencies = [
  "log",
  "phf_codegen",
  "rand 0.8.6",
+]
+
+[[package]]
+name = "unlace-adapter-python"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "rustpython-parser",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "unlace-ir",
+]
+
+[[package]]
+name = "unlace-adapter-rust"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "ra_ap_hir",
+ "ra_ap_ide",
+ "ra_ap_load-cargo",
+ "ra_ap_project_model",
+ "ra_ap_syntax",
+ "ra_ap_vfs",
+ "rayon",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "syn",
+ "toml",
+ "unlace-ir",
+]
+
+[[package]]
+name = "unlace-adapter-typescript"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "swc_common",
+ "swc_ecma_ast",
+ "swc_ecma_parser",
+ "swc_ecma_visit",
+ "unlace-ir",
+]
+
+[[package]]
+name = "unlace-cli"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "clap",
+ "serde_json",
+ "unicode-width",
+ "unlace-engine",
+]
+
+[[package]]
+name = "unlace-core"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "highs",
+ "proptest",
+ "rayon",
+ "smol_str",
+ "unlace-ir",
+]
+
+[[package]]
+name = "unlace-engine"
+version = "0.1.0"
+dependencies = [
+ "glob",
+ "ignore",
+ "rayon",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "thiserror",
+ "toml",
+ "unlace-adapter-python",
+ "unlace-adapter-rust",
+ "unlace-adapter-typescript",
+ "unlace-core",
+ "unlace-ir",
+]
+
+[[package]]
+name = "unlace-eval"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
+ "unlace-engine",
+]
+
+[[package]]
+name = "unlace-ir"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "thiserror",
 ]
 
 [[package]]

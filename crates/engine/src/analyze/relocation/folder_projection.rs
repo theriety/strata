@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_core::cluster::Partition;
-use strata_ir::ContainerId;
+use unlace_core::cluster::Partition;
+use unlace_ir::ContainerId;
 
 use crate::analyze::layout::ContainerArena;
 use crate::analyze::relocation::PipelineSolver;

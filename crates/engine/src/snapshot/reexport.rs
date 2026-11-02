@@ -4,14 +4,14 @@
 use std::collections::HashMap;
 
 use smol_str::SmolStr;
-use strata_ir::{Edge, EdgeKind, IntermediateRepresentation, Node, NodeId};
+use unlace_ir::{Edge, EdgeKind, IntermediateRepresentation, Node, NodeId};
 
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 
 /// The maximum re-export chain depth before flattening gives up.
 ///
 /// A legitimate barrel chain is shallow; a chain deeper than this is almost
-/// always a cycle, so the guard raises [`StrataError::ReExportDepthExceeded`]
+/// always a cycle, so the guard raises [`UnlaceError::ReExportDepthExceeded`]
 /// rather than looping.
 const RE_EXPORT_DEPTH_LIMIT: u32 = 64;
 
@@ -25,10 +25,10 @@ const RE_EXPORT_DEPTH_LIMIT: u32 = 64;
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::ReExportDepthExceeded`] when a chain exceeds the guard.
+/// Returns [`UnlaceError::ReExportDepthExceeded`] when a chain exceeds the guard.
 pub(super) fn flatten_re_exports(
     mut ir: IntermediateRepresentation,
-) -> Result<IntermediateRepresentation, StrataError> {
+) -> Result<IntermediateRepresentation, UnlaceError> {
     // map each re-export source to its immediate target, then resolve transitively.
     let re_export_target = re_export_targets(&ir.edges);
 
@@ -58,7 +58,7 @@ pub(super) fn resolve_re_export(
     start: NodeId,
     re_export_target: &HashMap<NodeId, NodeId>,
     name_of: &HashMap<NodeId, SmolStr>,
-) -> Result<NodeId, StrataError> {
+) -> Result<NodeId, UnlaceError> {
     let mut current = start;
     let mut depth = 0_u32;
     while let Some(&next) = re_export_target.get(&current) {
@@ -67,7 +67,7 @@ pub(super) fn resolve_re_export(
         }
         depth += 1;
         if depth > RE_EXPORT_DEPTH_LIMIT {
-            return Err(StrataError::ReExportDepthExceeded {
+            return Err(UnlaceError::ReExportDepthExceeded {
                 origin: name_of
                     .get(&start)
                     .map_or_else(|| format!("node {}", start.0), SmolStr::to_string),

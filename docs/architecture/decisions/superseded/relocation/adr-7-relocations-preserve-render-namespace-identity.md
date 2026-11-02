@@ -13,7 +13,7 @@
 
 ## Context
 
-Strata renders file placements from a laminar scope that deliberately omits
+Unlace renders file placements from a laminar scope that deliberately omits
 transparent path prefixes. Two files can therefore have the same normalized
 folder while belonging to different pass-start render namespaces. A relocation
 that treats only the normalized folder as identity can move a file or symbol

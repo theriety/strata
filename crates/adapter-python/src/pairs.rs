@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 
 use smol_str::SmolStr;
-use strata_ir::{FileFact, unique_test_pairs};
+use unlace_ir::{FileFact, unique_test_pairs};
 
 use crate::parse::ParsedModule;
 

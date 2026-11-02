@@ -31,7 +31,7 @@ guard,index}.ts` where core holds one class over the module data type, ledger's
 core additionally imports `../api/types`, helper wraps core, format/guard
 consume types, index re-exports all five. Every other fixture is hand-written.
 
-Status against current strata (2026-08-22, defaults): welding, collapse, and
+Status against current unlace (2026-08-22, defaults): welding, collapse, and
 large-app pass their targets outright (regression guards); tearing, relief,
 inversion, and naming-drift carry failing assertions that pin today's measured
 distance — see `.state/works/product-perfection/crp01-hand-validation.md`.

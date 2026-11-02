@@ -5,13 +5,13 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use strata_engine::{AnalyzeConfig, analyze, snapshot_from_root};
+use unlace_engine::{AnalyzeConfig, analyze, snapshot_from_root};
 
 /// Writes a throwaway project holding `files` and returns its root.
 fn write_project(files: &[(&str, &str)]) -> Result<PathBuf, String> {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let root = std::env::temp_dir().join(format!(
-        "strata-testonly-{}-{}",
+        "unlace-testonly-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));

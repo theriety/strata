@@ -1,4 +1,4 @@
-# Strata report — cyclic-oversized
+# Unlace report — cyclic-oversized
 
 3 files · 3 symbols · 3 edges
 Snapshot `a1b47905f884a928b2a62c9c2e27d280e17c4c49b2c850f5d57fc091591bb732`
@@ -8,7 +8,7 @@ All findings and moves are suggestions. Applying them may break the build; use y
 
 ```text
 Shared findings (1)
-  - cycle [violation] `alpha.ts`/`beta.ts`/`gamma.ts` — 3-symbol cycle; strata keeps a dependency
+  - cycle [violation] `alpha.ts`/`beta.ts`/`gamma.ts` — 3-symbol cycle; unlace keeps a dependency
     cycle in one file; to split it, break `stepGamma` -> `stepAlpha` (w=1.0, exact)
 
 anchored profile-specific findings (0)

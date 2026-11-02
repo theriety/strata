@@ -1,14 +1,14 @@
-//! The set of languages Strata can analyze, with extension matching and
+//! The set of languages Unlace can analyze, with extension matching and
 //! adapter construction.
 
 use std::path::Path;
 
-use strata_adapter_python::PythonAdapter;
-use strata_adapter_rust::RustAdapter;
-use strata_adapter_typescript::TypeScriptAdapter;
-use strata_ir::Adapter;
+use unlace_adapter_python::PythonAdapter;
+use unlace_adapter_rust::RustAdapter;
+use unlace_adapter_typescript::TypeScriptAdapter;
+use unlace_ir::Adapter;
 
-/// A language Strata can analyze, with its file extensions and adapter factory.
+/// A language Unlace can analyze, with its file extensions and adapter factory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Language {
     /// TypeScript / TSX.

@@ -3,9 +3,9 @@
 use std::collections::BTreeSet;
 
 use smol_str::SmolStr;
-use strata_core::cluster::{ClusterId, Partition};
-use strata_core::condense::Condensation;
-use strata_core::graph::csr::Csr;
+use unlace_core::cluster::{ClusterId, Partition};
+use unlace_core::condense::Condensation;
+use unlace_core::graph::csr::Csr;
 
 use crate::analyze::layout::{rebuild_label, roof_coherence, scc_file_count, token_groups};
 use crate::analyze::relocation::zone_keys;

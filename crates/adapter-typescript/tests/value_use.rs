@@ -1,8 +1,8 @@
 //! Pins that a function passed as a value already counts as a dependency.
 
 use smol_str::SmolStr;
-use strata_adapter_typescript::TypeScriptAdapter;
-use strata_ir::{Adapter, Hardness, IrFragment, NodeId, SourceFile};
+use unlace_adapter_typescript::TypeScriptAdapter;
+use unlace_ir::{Adapter, Hardness, IrFragment, NodeId, SourceFile};
 
 fn bind_inline(contents: &str) -> Result<IrFragment, String> {
     let adapter = TypeScriptAdapter::new(".");

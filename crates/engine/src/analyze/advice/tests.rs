@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use strata_ir::{
+use unlace_ir::{
     Affinity, AffinityKind, ContainerId, Node, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
 };
 

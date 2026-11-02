@@ -16,7 +16,7 @@ use ra_ap_hir::Module;
 use ra_ap_ide::{Semantics, TextSize};
 use ra_ap_syntax::AstNode as _;
 use smol_str::SmolStr;
-use strata_ir::{NodeId, ScopeRung, VisibilityScope};
+use unlace_ir::{NodeId, ScopeRung, VisibilityScope};
 
 use self::ladder::ScopeCache;
 use super::assignment::NodeAssignment;

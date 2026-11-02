@@ -2,8 +2,8 @@
 //! `foo.ts` / `foo.spec.ts` / `__tests__` conventions.
 
 use smol_str::SmolStr;
-use strata_adapter_typescript::TypeScriptAdapter;
-use strata_ir::{Adapter, FileFact, SourceFile};
+use unlace_adapter_typescript::TypeScriptAdapter;
+use unlace_ir::{Adapter, FileFact, SourceFile};
 
 fn facts(paths: &[&str]) -> Vec<FileFact> {
     let adapter = TypeScriptAdapter::default();

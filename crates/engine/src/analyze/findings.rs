@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use strata_ir::{ScopeLevel, Snapshot};
+use unlace_ir::{ScopeLevel, Snapshot};
 
 use crate::analyze::search::{SccSolution, solve_cycles};
 use crate::config::{CapacityConfig, ProfileConfig};

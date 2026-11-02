@@ -19,7 +19,7 @@ question = "Does an import cycle spanning two real directories keep both directo
 mode = "both"        # non_inversion needs both faces on one snapshot
 candidates = 3       # engine default k
 seed = 42            # engine default seed
-config = "defaults"  # pure built-in defaults; no fixture strata.toml
+config = "defaults"  # pure built-in defaults; no fixture unlace.toml
 
 [[precondition]]
 kind = "file_count"

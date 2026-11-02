@@ -1,7 +1,7 @@
-//! `strata-eval` — the in-process quality gate for strata's restructuring
+//! `unlace-eval` — the in-process quality gate for unlace's restructuring
 //! engine (WS-C, product-perfection).
 //!
-//! The harness runs [`strata_engine`] over the synthetic corpus in
+//! The harness runs [`unlace_engine`] over the synthetic corpus in
 //! `crates/eval/fixtures` and asserts distance-to-best-state per committed
 //! target in `crates/eval/targets` (schema v1, see `targets/CONTRACT.md`). It
 //! is dev-only: it ships no library API beyond what its own tests need, and it
@@ -10,7 +10,7 @@
 //! never gated.
 //!
 //! ```no_run
-//! use strata_eval::{eval_fixture_root, eval_target_path, load_target, harness};
+//! use unlace_eval::{eval_fixture_root, eval_target_path, load_target, harness};
 //!
 //! let spec = load_target("tearing").expect("target parses");
 //! let report = harness::run_case(&eval_fixture_root("tearing"), &spec, "tearing")

@@ -100,7 +100,7 @@
 ### D-13: Followed the real `Adapter` trait contract rather than the draft's free-function API
 - **When**: Commit 8 (feat(adapter-typescript): swc parse and bind to IR fragments)
 - **Draft said**: a free `parse(files) -> Vec<ParsedModule>` / `bind(modules) -> ...` API returning `ParsedModule` directly, with an `AdapterParseFailure` error type
-- **What I did instead**: implemented the actual `strata_ir::Adapter` trait — `parse(&self, &[SourceFile]) -> Result<Vec<ParseTree>, AdapterError>` and `bind(&self, Vec<ParseTree>) -> Result<IrFragment, AdapterError>` — threading the `ParsedModule` summary through the opaque `ParseTree.payload` as canonical JSON; errors use the real `AdapterError::{Parse, Bind}` variants
+- **What I did instead**: implemented the actual `unlace_ir::Adapter` trait — `parse(&self, &[SourceFile]) -> Result<Vec<ParseTree>, AdapterError>` and `bind(&self, Vec<ParseTree>) -> Result<IrFragment, AdapterError>` — threading the `ParsedModule` summary through the opaque `ParseTree.payload` as canonical JSON; errors use the real `AdapterError::{Parse, Bind}` variants
 - **Reason**: wrong-integration
 - **Impact on spec**: surface-change
 - **Severity**: minor
@@ -190,7 +190,7 @@
 
 ### D-24: Engine orchestration split into error.rs and snapshot.rs modules
 - **When**: Commit 12 (feat(engine): orchestration, config, and public library surface)
-- **Draft said**: lib.rs holds `StrataError`, `snapshot_from_root`, and `analyze` directly (3-file slice: config/result/lib)
+- **Draft said**: lib.rs holds `UnlaceError`, `snapshot_from_root`, and `analyze` directly (3-file slice: config/result/lib)
 - **What I did instead**: kept lib.rs to crate docs + `pub mod`/`pub use` only (RST-MODL-04) and placed logic in `error.rs`, `snapshot.rs`, and `analyze.rs` alongside `config.rs`/`result.rs`, matching the reference file tree which already lists a separate engine `snapshot.rs`
 - **Reason**: standard-violation
 - **Impact on spec**: surface-change
@@ -207,7 +207,7 @@
 ### D-26: Config DTOs are engine-native serde structs, not core algorithm types
 - **When**: Commit 12
 - **Draft said**: `AnalyzeConfig` fields are typed as core's `LevelCaps`, `EdgeWeights`, `Coefficients`, `SolverLimits`, `DiversityConfig`
-- **What I did instead**: defined engine-native `CapacityConfig`/`WeightsConfig`/`ObjectiveConfig`/`SolverConfig`/`DiversityConfig` serde structs mirroring `strata.toml` exactly (with kebab-case key renames and a `file` SLOC cap that `LevelCaps` lacks), converting into core types at use sites; core's tuned algorithm types do not derive serde and omit config-only fields
+- **What I did instead**: defined engine-native `CapacityConfig`/`WeightsConfig`/`ObjectiveConfig`/`SolverConfig`/`DiversityConfig` serde structs mirroring `unlace.toml` exactly (with kebab-case key renames and a `file` SLOC cap that `LevelCaps` lacks), converting into core types at use sites; core's tuned algorithm types do not derive serde and omit config-only fields
 - **Reason**: arch-conflict
 - **Impact on spec**: surface-change
 - **Severity**: minor
@@ -241,10 +241,10 @@
 - **Severity**: minor
 - **Update (2026-07-06, REVISED)**: `narrate_delta` is deleted from the library surface — it matched container ids across two unrelated interning spaces, which produced the garbage golden moves. Narration is now file-identity based (`engine/narrate.rs`): both trees are indexed at file level by full path (the stable identity), a file moves iff its folded parent path differs, and groups key on (destination folder, followsSubject) with fully deterministic ordering
 
-### D-30: default `strata.toml` uses `[diversity]`, not the reference's `[diversify]`
+### D-30: default `unlace.toml` uses `[diversity]`, not the reference's `[diversify]`
 - **When**: Commit 13 (feat(cli): commands, rendering, e2e fixtures, and parity test)
 - **Draft said**: the reference default-config TOML names the diversification block `[diversify]`
-- **What I did instead**: emitted the block as `[diversity]` in the shipped `strata.toml`, matching the `AnalyzeConfig.diversity` serde field (commit 12, D-26). Using `[diversify]` makes the engine reject its own default config with `CONFIG_INVALID: unknown field`, which broke the rust fixture's `analyze`/`violations` runs until corrected
+- **What I did instead**: emitted the block as `[diversity]` in the shipped `unlace.toml`, matching the `AnalyzeConfig.diversity` serde field (commit 12, D-26). Using `[diversify]` makes the engine reject its own default config with `CONFIG_INVALID: unknown field`, which broke the rust fixture's `analyze`/`violations` runs until corrected
 - **Reason**: stale-symbol
 - **Impact on spec**: surface-change
 - **Severity**: minor
@@ -269,7 +269,7 @@
 
 ### D-33: Several documented config keys parse and validate but drive nothing
 - **When**: Commit 12 (feat(engine): orchestration, config, and public library surface)
-- **Draft said**: `strata.toml` keys configure the run — `[objective]` λ/α/β/μ shape the score, `[weights]` shape edge weights, `[solver]` bounds the suggestion search, `[tests].helper-cap` caps helper fan-in, `[diversity].seeds-per-candidate` widens oversampling, `[analysis].jobs` sets parallelism
+- **Draft said**: `unlace.toml` keys configure the run — `[objective]` λ/α/β/μ shape the score, `[weights]` shape edge weights, `[solver]` bounds the suggestion search, `[tests].helper-cap` caps helper fan-in, `[diversity].seeds-per-candidate` widens oversampling, `[analysis].jobs` sets parallelism
 - **What I did instead**: all of these parse, type-check, and reject unknown fields (`deny_unknown_fields`), but none is read downstream: scoring uses the hardcoded `Coefficients::anchored()`/`greenfield()` presets, edge weights are the baked-in defaults (D-8), the solver never runs (D-32), `helper-cap` and `seeds-per-candidate` have no consumer, and analysis is single-threaded regardless of `jobs` (which is why `--jobs 1` and `--jobs 8` are byte-identical). Validation without effect makes dead keys look honored; wiring `[objective]` is deferred to a dedicated slice by decision
 - **Reason**: wrong-integration
 - **Impact on spec**: behavior-change
@@ -355,11 +355,11 @@
 - **Impact on spec**: surface-change — JSON and text faces list the same findings in a defined order
 - **Severity**: minor
 
-### D-43: Config discovery defaults to `<root>/strata.toml`, not the CWD
+### D-43: Config discovery defaults to `<root>/unlace.toml`, not the CWD
 - **When**: probe retrospective (2026-07-06)
-- **Draft said**: `--config` defaults to `strata.toml` (implicitly CWD-relative), and a missing config silently falls back to built-in defaults
-- **What I did instead**: `--config` became optional; when absent it resolves to `<root>/strata.toml`, so `--root ~/other/repo` picks up that repo's own config. An explicitly passed path that does not exist warns on stderr (`warning: config {path} not found; using built-in defaults`) and still falls back to defaults — no hard error, preserving the documented fail-open contract
-- **Reason**: behavior-change (analyzing a foreign repo from elsewhere silently ignored that repo's strata.toml — fail-open plus CWD-relative default made misconfiguration invisible)
+- **Draft said**: `--config` defaults to `unlace.toml` (implicitly CWD-relative), and a missing config silently falls back to built-in defaults
+- **What I did instead**: `--config` became optional; when absent it resolves to `<root>/unlace.toml`, so `--root ~/other/repo` picks up that repo's own config. An explicitly passed path that does not exist warns on stderr (`warning: config {path} not found; using built-in defaults`) and still falls back to defaults — no hard error, preserving the documented fail-open contract
+- **Reason**: behavior-change (analyzing a foreign repo from elsewhere silently ignored that repo's unlace.toml — fail-open plus CWD-relative default made misconfiguration invisible)
 - **Impact on spec**: behavior-change — runs invoked outside the analyzed root now discover the root-local config; explicit-missing configs gain a stderr warning
 - **Severity**: minor
 
@@ -423,4 +423,4 @@
 - **Reason**: owner ruling [decisions/cycle-span-partitioner-redesign.md] — pinning rejected, ship-with-documented-red rejected; coefficient hard law untouched; edge admission unchanged; FIX11 closed by amended acceptance (in-stream closure = this entry + doc truthing + backlog row)
 - **Impact on spec**: none in-stream — no production code, TOML, DTO, golden, or coefficient movement; the witness moves from red-pending-fix to standing-red-by-ruling; the redesign stream inherits the measured chain above plus the preserved veto evidence
 - **Severity**: minor
-- **Resolution (2026-09-25)**: at `c18f840` the witness passes (`cargo nextest run -p strata-eval`: 36/36 green), so the standing red is retired; the witness now guards against import-cycle tearing regressions and the eval module doc no longer records a waived red
+- **Resolution (2026-09-25)**: at `c18f840` the witness passes (`cargo nextest run -p unlace-eval`: 36/36 green), so the standing red is retired; the witness now guards against import-cycle tearing regressions and the eval module doc no longer records a waived red

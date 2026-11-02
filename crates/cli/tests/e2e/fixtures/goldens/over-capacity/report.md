@@ -1,4 +1,4 @@
-# Strata report — over-capacity
+# Unlace report — over-capacity
 
 3 files · 375 symbols · 0 edges
 Snapshot `3f214d4ce8d116f9db703133f34f3be610b97a013f46bd10049050eb5bbdeaa6`

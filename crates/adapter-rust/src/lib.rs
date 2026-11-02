@@ -1,9 +1,9 @@
-//! The Rust language adapter for Strata.
+//! The Rust language adapter for Unlace.
 //!
-//! It implements the two-phase [`strata_ir::Adapter`] contract: `parse` turns
+//! It implements the two-phase [`unlace_ir::Adapter`] contract: `parse` turns
 //! `.rs` sources into per-file syntax summaries (via syn, in parallel), and
 //! `bind` resolves the cross-crate graph into a language-agnostic
-//! [`strata_ir::IrFragment`] — typed edges, three-valued test polarity, and
+//! [`unlace_ir::IrFragment`] — typed edges, three-valued test polarity, and
 //! per-symbol production SLOC.
 //!
 //! Resolution is semantic: `bind` loads the on-disk cargo workspace into the
@@ -14,7 +14,7 @@
 //! AD-4 binder go decision, CN-1).
 //!
 //! The trait threads the intermediate `parse::ParsedFile` summary through the
-//! opaque [`strata_ir::ParseTree`] payload as JSON, so the engine never needs to
+//! opaque [`unlace_ir::ParseTree`] payload as JSON, so the engine never needs to
 //! understand Rust to merge fragments.
 
 mod bind;
@@ -24,7 +24,7 @@ mod sloc;
 use std::path::{Path, PathBuf};
 
 use smol_str::SmolStr;
-use strata_ir::{Adapter, AdapterError, IrFragment, ParseTree, SourceFile};
+use unlace_ir::{Adapter, AdapterError, IrFragment, ParseTree, SourceFile};
 
 use crate::parse::ParsedFile;
 

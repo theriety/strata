@@ -52,7 +52,7 @@ Analysis results use schema version 8. A top-level `advice` object carries `reco
 
 **Use profile agreement without an evidence gate.** Rejected because profiles share correlated graph evidence and can agree on the same weak inference.
 
-**Publish a rejected group.** Rejected because the complement includes every possible non-move and would imply that Strata had meaningfully evaluated an unbounded set of absent advice.
+**Publish a rejected group.** Rejected because the complement includes every possible non-move and would imply that Unlace had meaningfully evaluated an unbounded set of absent advice.
 
 **Hide moves that do not reach recommendation confidence.** Rejected because partial support and destination ambiguity are actionable review information even when they are insufficient for an automatic recommendation.
 

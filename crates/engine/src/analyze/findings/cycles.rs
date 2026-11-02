@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use strata_ir::{Node, ScopeLevel, Snapshot};
+use unlace_ir::{Node, ScopeLevel, Snapshot};
 
 use crate::analyze::search::{SccSolution, node_names};
 use crate::result::{ConditionalSplit, EdgeBreak, Severity, Violation, ViolationKind};
@@ -119,7 +119,7 @@ pub(super) fn edge_breaks(
 
 /// Renders a cycle violation's detail line, leading with the first file-crossing break.
 fn cycle_detail(size: usize, breaks: &[EdgeBreak]) -> String {
-    const CONSEQUENCE: &str = "strata keeps a dependency cycle in one file";
+    const CONSEQUENCE: &str = "unlace keeps a dependency cycle in one file";
     let Some(first) = breaks.first() else {
         return format!("{size}-symbol cycle; {CONSEQUENCE}");
     };

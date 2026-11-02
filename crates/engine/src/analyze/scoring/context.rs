@@ -28,7 +28,7 @@ mod snapshot;
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_ir::{ContainerId, ContainerTree, ScopeLevel};
+use unlace_ir::{ContainerId, ContainerTree, ScopeLevel};
 
 use super::capacity::TreePressure;
 use crate::config::CapacityConfig;

@@ -1,10 +1,10 @@
 #!/bin/zsh
 # FIX02 working tool: per-fixture J decomposition summary from the
-# strata-eval diagnostics dumps (STRATA_BLESS_EVAL=1 output).
+# unlace-eval diagnostics dumps (UNLACE_BLESS_EVAL=1 output).
 # Usage: scripts/fix02-decomp.sh [fixture ...]   (default: all seven)
 set -euo pipefail
 
-diagnostics="$PWD/target/strata-eval-diagnostics"
+diagnostics="$PWD/target/unlace-eval-diagnostics"
 fixtures=("$@")
 if (( ${#fixtures[@]} == 0 )); then
   fixtures=(collapse inversion large-app naming-drift relief tearing welding)

@@ -1,4 +1,4 @@
-//! `strata report`: a saved analysis rendered as a Markdown report.
+//! `unlace report`: a saved analysis rendered as a Markdown report.
 //!
 //! The command reads saved analysis data and uses the same ordered presentation
 //! as terminal reports: findings, candidate layouts with before/after trees,
@@ -7,7 +7,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use strata_engine::StrataError;
+use unlace_engine::UnlaceError;
 
 use crate::commands::read_result;
 use crate::render::{self, RenderOptions};
@@ -26,26 +26,26 @@ pub struct ReportArgs {
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::InputUnreadable`] when the input cannot be read or the
+/// Returns [`UnlaceError::InputUnreadable`] when the input cannot be read or the
 /// output cannot be written.
 pub fn run_with_options(
     args: &ReportArgs,
     options: RenderOptions,
     out: &mut impl Write,
-) -> Result<(), StrataError> {
+) -> Result<(), UnlaceError> {
     let result = read_result(&args.input)?;
     let markdown = render::markdown(&result, options);
 
     match &args.output {
         Some(path) => std::fs::write(path, markdown.as_bytes()).map_err(|error| {
-            StrataError::InputUnreadable {
+            UnlaceError::InputUnreadable {
                 path: path.clone(),
                 reason: error.to_string(),
             }
         }),
         None => out
             .write_all(markdown.as_bytes())
-            .map_err(|error| StrataError::InputUnreadable {
+            .map_err(|error| UnlaceError::InputUnreadable {
                 path: PathBuf::from("<stdout>"),
                 reason: error.to_string(),
             }),
@@ -56,13 +56,13 @@ pub fn run_with_options(
 mod tests {
     use std::collections::BTreeMap;
 
-    use strata_engine::{
+    use unlace_engine::{
         ConditionalSplit, ContainerNode, CurrentTree, EdgeBreak, FileMove, Level, Modes, Move,
         MoveKind, MoveReason, ProfileConfig, ProfileCurrent, Severity, Summary, ViolationKind,
     };
 
     use super::*;
-    use strata_engine::{
+    use unlace_engine::{
         AnalyzeResult, Candidate, CurrentStanding, ModeResult, ScoreBreakdown, Violation,
     };
 
@@ -79,7 +79,7 @@ mod tests {
     /// Builds a result with one anchored candidate and a cycle violation.
     fn sample() -> AnalyzeResult {
         AnalyzeResult {
-            schema_version: strata_engine::RESULT_SCHEMA_VERSION,
+            schema_version: unlace_engine::RESULT_SCHEMA_VERSION,
             snapshot_hash: "abc123".to_owned(),
             summary: Summary {
                 symbols: 3,
@@ -98,7 +98,7 @@ mod tests {
                     capacity: None,
                 }],
             },
-            advice: strata_engine::Advice::default(),
+            advice: unlace_engine::Advice::default(),
             profiles: Modes {
                 anchored: Some(ModeResult {
                     parameters: ProfileConfig::default(),
@@ -183,7 +183,7 @@ mod tests {
     fn should_render_the_full_report_sections() {
         let markdown = render_markdown(&sample());
 
-        assert!(markdown.contains("# Strata report"));
+        assert!(markdown.contains("# Unlace report"));
         assert!(markdown.contains("Snapshot `abc123`"));
         assert!(markdown.contains("## Structural findings"));
         assert!(markdown.contains("anchored — candidate 1"));
@@ -238,8 +238,8 @@ mod tests {
 
     #[test]
     fn should_write_the_report_to_a_file_when_output_is_set() {
-        let input = std::env::temp_dir().join(format!("strata-report-in-{}.json", nanos()));
-        let output = std::env::temp_dir().join(format!("strata-report-out-{}.md", nanos()));
+        let input = std::env::temp_dir().join(format!("unlace-report-in-{}.json", nanos()));
+        let output = std::env::temp_dir().join(format!("unlace-report-out-{}.md", nanos()));
         let _ = std::fs::write(&input, serde_json::to_vec(&sample()).unwrap_or_default());
         let args = ReportArgs {
             input: input.clone(),
@@ -254,7 +254,7 @@ mod tests {
         let _ = std::fs::remove_file(&output);
         assert!(outcome.is_ok());
         assert_eq!(sink, b"");
-        assert!(written.contains("# Strata report"));
+        assert!(written.contains("# Unlace report"));
     }
 
     /// Returns a unique nanosecond stamp.

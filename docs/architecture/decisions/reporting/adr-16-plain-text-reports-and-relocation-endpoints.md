@@ -9,7 +9,7 @@
 
 ## 🎯 Motivation
 
-Strata users inspect findings, compare candidate layouts, and assess relocation advice in terminal and saved Markdown reports. Different content and ordering make those views difficult to compare. Long numerical explanations can obscure the moves themselves. Users also need to see both the source and destination structure without listing an entire unchanged project.
+Unlace users inspect findings, compare candidate layouts, and assess relocation advice in terminal and saved Markdown reports. Different content and ordering make those views difficult to compare. Long numerical explanations can obscure the moves themselves. Users also need to see both the source and destination structure without listing an entire unchanged project.
 
 ## 🧭 Context
 

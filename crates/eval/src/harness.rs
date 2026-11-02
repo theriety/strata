@@ -1,15 +1,15 @@
-//! The case runner: drives strata in-process, evaluates preconditions and
+//! The case runner: drives unlace in-process, evaluates preconditions and
 //! assertions, and reports distance as verdicts.
 //!
 //! The engine is a library here exactly as the CLI uses it:
 //! [`snapshot_from_root`] + [`analyze`](fn@analyze) with an explicit config. Nothing shells
-//! out; nothing reads a golden score. `STRATA_BLESS_EVAL=1` only regenerates a
+//! out; nothing reads a golden score. `UNLACE_BLESS_EVAL=1` only regenerates a
 //! diagnostic dump — it never rewrites expectations.
 
 use std::path::Path;
 
-use strata_engine::config::{AnalyzeConfig, ProfileName};
-use strata_engine::{analyze, snapshot_from_root};
+use unlace_engine::config::{AnalyzeConfig, ProfileName};
+use unlace_engine::{analyze, snapshot_from_root};
 
 use crate::error::EvalError;
 use crate::target::{AssertBlock, ConfigSource, FaceMode, RunMode, TargetSpec};
@@ -126,8 +126,8 @@ pub fn run_case(
     match spec.run.config {
         ConfigSource::Defaults => {}
         ConfigSource::Fixture => {
-            let fixture_config = root.join("strata.toml");
-            config = strata_engine::load_config(&fixture_config).map_err(|error| {
+            let fixture_config = root.join("unlace.toml");
+            config = unlace_engine::load_config(&fixture_config).map_err(|error| {
                 EvalError::EngineRun {
                     fixture: expected_fixture.to_owned(),
                     message: format!("loading {}: {error}", fixture_config.display()),

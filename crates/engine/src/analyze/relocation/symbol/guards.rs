@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_ir::{ContainerId, Edge, Node, ScopeLevel, Snapshot};
+use unlace_ir::{ContainerId, Edge, Node, ScopeLevel, Snapshot};
 
 use crate::analyze::relocation::CandidateTree;
 

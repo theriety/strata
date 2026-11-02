@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
 #[cfg(test)]
-use strata_ir::{ContainerId, Snapshot};
-use strata_ir::{ContainerTree, ScopeLevel};
+use unlace_ir::{ContainerId, Snapshot};
+use unlace_ir::{ContainerTree, ScopeLevel};
 
 /// Computes the move distance of a candidate tree: the fraction of symbols whose
 /// owning file changes real folder — or, since FIX08, whose effective placement

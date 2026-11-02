@@ -2,7 +2,7 @@
 
 use std::cmp::Reverse;
 
-use strata_engine::{AnalyzeResult, MoveReason};
+use unlace_engine::{AnalyzeResult, MoveReason};
 
 use self::entry::group;
 use super::changes::Changes;

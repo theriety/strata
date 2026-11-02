@@ -1,7 +1,7 @@
 //! The objective function J(T) and its per-candidate breakdown.
 //!
 //! One score must rank wildly different laminar trees, and the same solver must
-//! serve both incremental (anchored) and greenfield restructuring. Strata's
+//! serve both incremental (anchored) and greenfield restructuring. Unlace's
 //! objective is the single scalar
 //!
 //! ```text
@@ -43,7 +43,7 @@
 
 use std::collections::BTreeSet;
 
-use strata_ir::{EdgeKind, ScopeLevel};
+use unlace_ir::{EdgeKind, ScopeLevel};
 
 /// The coefficients of the objective, fixed per parameter profile.
 ///
@@ -75,7 +75,7 @@ pub struct Coefficients {
 /// Per-kind base edge weights `w(e)` — the `[weights]` config surface.
 ///
 /// The default table matches a config-less run; a custom table flows from
-/// `strata.toml` into every consumer that prices an edge: the
+/// `unlace.toml` into every consumer that prices an edge: the
 /// CSR builder, the cut term, MFAS break weights, and narration pull weights.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KindWeights {

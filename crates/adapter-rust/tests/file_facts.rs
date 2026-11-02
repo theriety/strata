@@ -3,8 +3,8 @@
 use std::fs;
 use std::path::Path;
 
-use strata_adapter_rust::RustAdapter;
-use strata_ir::{Adapter, FileFact, SourceFile};
+use unlace_adapter_rust::RustAdapter;
+use unlace_ir::{Adapter, FileFact, SourceFile};
 
 const FILES: [&str; 11] = [
     "build.rs",

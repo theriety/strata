@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use smol_str::SmolStr;
-use strata_ir::{
+use unlace_ir::{
     Edge, EdgeKind, Hardness, IrFragment, Node, NodeId, NodeKind, Polarity, ScopeLevel,
 };
 
@@ -159,7 +159,7 @@ fn is_public(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use strata_ir::{Edge, EdgeKind, Hardness};
+    use unlace_ir::{Edge, EdgeKind, Hardness};
 
     use super::*;
     use crate::parse::{Declaration, DynamicRef, Import};

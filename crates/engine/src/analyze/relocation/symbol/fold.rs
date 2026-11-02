@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use strata_ir::{ContainerId, Node, NodeKind, Polarity};
+use unlace_ir::{ContainerId, Node, NodeKind, Polarity};
 
 use super::SymbolPass;
 use crate::analyze::relocation::SYMBOL_MIN_IMPROVEMENT;

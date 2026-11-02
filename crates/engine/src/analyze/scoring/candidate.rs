@@ -6,8 +6,8 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_core::score::{Candidate as ScoreCandidate, ScoredEdge};
-use strata_ir::{ContainerId, ContainerTree, Node, NodeKind, ScopeLevel, Snapshot};
+use unlace_core::score::{Candidate as ScoreCandidate, ScoredEdge};
+use unlace_ir::{ContainerId, ContainerTree, Node, NodeKind, ScopeLevel, Snapshot};
 
 use super::capacity::capacity_pressure;
 use super::inputs::{cohesion_inputs, container_sizes};

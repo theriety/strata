@@ -22,7 +22,7 @@ use rustpython_parser::Parse;
 use rustpython_parser::ast::Stmt;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
-use strata_ir::{AdapterError, SourceFile};
+use unlace_ir::{AdapterError, SourceFile};
 
 use self::declaration::{
     async_function_declaration, class_declaration, constant_declarations, function_declaration,
@@ -86,7 +86,7 @@ pub struct Import {
 
 /// A serializable, language-agnostic summary of one parsed module.
 ///
-/// This is the payload the adapter threads through [`strata_ir::ParseTree`]:
+/// This is the payload the adapter threads through [`unlace_ir::ParseTree`]:
 /// [`parse`] produces it, [`crate::bind::bind`] consumes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedModule {

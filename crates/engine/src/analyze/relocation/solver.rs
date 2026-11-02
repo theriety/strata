@@ -1,6 +1,6 @@
 //! The pipeline solver that selects relocation candidates.
 
-use strata_core::diversify::{SolvedCandidate, Solver};
+use unlace_core::diversify::{SolvedCandidate, Solver};
 
 use crate::analyze::relocation::PipelineSolver;
 use crate::analyze::relocation::collision::Withdrawals;

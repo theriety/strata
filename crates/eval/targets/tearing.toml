@@ -19,7 +19,7 @@ question = "Does a proposal keep a cohesive directory in one piece?"
 mode = "both"        # both modes must respect the feature boundary
 candidates = 3       # engine default k
 seed = 42            # engine default seed
-config = "defaults"  # pure built-in defaults; no fixture strata.toml
+config = "defaults"  # pure built-in defaults; no fixture unlace.toml
 
 [[precondition]]
 kind = "file_count"

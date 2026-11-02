@@ -1,7 +1,7 @@
 //! Release benchmark for the graph foundation: CSR construction, Tarjan
 //! condensation, and longest-path layering over a 100k-node snapshot.
 //!
-//! Run with `cargo bench -p strata-core`. The synthetic graph is a chain of
+//! Run with `cargo bench -p unlace-core`. The synthetic graph is a chain of
 //! 1,000-node cycles (100 cycles) linked head-to-tail, exercising both the SCC
 //! collapse path and a deep condensation DAG.
 
@@ -9,10 +9,10 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use smol_str::SmolStr;
-use strata_core::condense::condense;
-use strata_core::graph::csr::{HardnessFilter, build_csr};
-use strata_core::layer::layer;
-use strata_ir::{
+use unlace_core::condense::condense;
+use unlace_core::graph::csr::{HardnessFilter, build_csr};
+use unlace_core::layer::layer;
+use unlace_ir::{
     Container, ContainerId, ContainerTree, Edge, EdgeKind, Hardness, IntermediateRepresentation,
     Node, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
 };

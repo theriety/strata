@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use smol_str::SmolStr;
-use strata_ir::{AdvisoryUse, Node, NodeId};
+use unlace_ir::{AdvisoryUse, Node, NodeId};
 
 use super::assignment::NodeAssignment;
 use crate::parse::ParsedFile;

@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use strata_ir::{Edge, EdgeKind, Exposure, Hardness, NodeId, NodeKind};
+use unlace_ir::{Edge, EdgeKind, Exposure, Hardness, NodeId, NodeKind};
 
 use super::assignment::NodeAssignment;
 use super::database::{Database, ResolvedTarget};
@@ -272,7 +272,7 @@ fn push_edge(
 
 #[cfg(test)]
 mod tests {
-    use strata_ir::{EdgeKind, Hardness};
+    use unlace_ir::{EdgeKind, Hardness};
 
     use super::edge_shape;
     use crate::parse::RefKind;

@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn should_return_empty_when_package_json_is_absent() {
-        let imports = load_subpath_imports(Path::new("/nonexistent/strata/root"));
+        let imports = load_subpath_imports(Path::new("/nonexistent/unlace/root"));
 
         assert!(imports.is_empty());
     }

@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use strata_core::shatter::SolverLimits;
+use unlace_core::shatter::SolverLimits;
 
 /// The per-level capacity caps.
 ///

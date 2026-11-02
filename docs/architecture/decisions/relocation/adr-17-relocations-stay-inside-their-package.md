@@ -15,11 +15,11 @@ Filtering such moves out of the report after the search would leave candidate sc
 
 ## 🧭 Context
 
-Strata already recognizes packages. Manifest-based package detection builds `ScopeLevel::Package` containers in the laminar tree, and every file knows its package through its laminar home. Relocation did not use that knowledge.
+Unlace already recognizes packages. Manifest-based package detection builds `ScopeLevel::Package` containers in the laminar tree, and every file knows its package through its laminar home. Relocation did not use that knowledge.
 
 ## ✅ Decision
 
-By default, no relocation crosses a package boundary. A package is the existing `ScopeLevel::Package` container of a file's pass-start laminar home. Strata adds no new package detection. Files with no enclosing package container belong to one implicit root package.
+By default, no relocation crosses a package boundary. A package is the existing `ScopeLevel::Package` container of a file's pass-start laminar home. Unlace adds no new package detection. Files with no enclosing package container belong to one implicit root package.
 
 With the wall up, a package level of the candidate tree is an uncapped mirror of the manifests: the capacity caps never split a real package, and each file of a folder is drawn under its own manifest package, including the files of a cross-package cycle.
 
@@ -62,6 +62,6 @@ The switch lifts only the package wall. Every other admission rule still applies
 
 Candidates describe layouts a maintainer can reach without changing any manifest or public crate surface. Some previously proposed moves disappear, so candidate scores and orderings can get worse and golden fixtures move.
 
-Each profile's `parameters.relocation` in a saved result now carries `allow-cross-package-moves`. Relocation parameters reject unknown fields, so an older binary cannot read a result that contains the key. The result schema version therefore moves from 8 to 9. Readers accept only version 9 and reject version 8 and earlier with the standard schema error. The new `packageBoundary` blocked-mirror reason ships in the same version. A new configuration key and CLI flag need documentation in `README.md` and `strata.toml`, plus tests for the default, the per-profile key, and the flag overriding the key.
+Each profile's `parameters.relocation` in a saved result now carries `allow-cross-package-moves`. Relocation parameters reject unknown fields, so an older binary cannot read a result that contains the key. The result schema version therefore moves from 8 to 9. Readers accept only version 9 and reject version 8 and earlier with the standard schema error. The new `packageBoundary` blocked-mirror reason ships in the same version. A new configuration key and CLI flag need documentation in `README.md` and `unlace.toml`, plus tests for the default, the per-profile key, and the flag overriding the key.
 
-With the switch on, Strata does not model Rust's orphan rule. A cross-crate move of a trait implementation can then produce code that does not compile; the default keeps that case unreachable.
+With the switch on, Unlace does not model Rust's orphan rule. A cross-crate move of a trait implementation can then produce code that does not compile; the default keeps that case unreachable.

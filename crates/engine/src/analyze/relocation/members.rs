@@ -3,10 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_core::cluster::Partition;
-use strata_core::cluster::seed::SeedLevel;
-use strata_core::graph::csr::Csr;
-use strata_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
+use unlace_core::cluster::Partition;
+use unlace_core::cluster::seed::SeedLevel;
+use unlace_core::graph::csr::Csr;
+use unlace_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
 
 use crate::analyze::layout::{NameTally, cluster_level, home_affinity, plurality, vote};
 use crate::analyze::relocation::mirror::PolishEvidence;

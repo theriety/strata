@@ -3,7 +3,7 @@
 //! Every failure the harness can raise is a harness or corpus defect, never
 //! distance: distance lives in [`crate::harness::Verdict`]s. A precondition
 //! failure, a misspelled target path, or an engine error all surface here so
-//! tests can distinguish "the measurement broke" from "strata measured badly".
+//! tests can distinguish "the measurement broke" from "unlace measured badly".
 
 /// Everything that can abort a case before its verdicts are meaningful.
 #[derive(Debug, Clone, thiserror::Error)]
@@ -28,7 +28,7 @@ pub enum EvalError {
         message: String,
     },
 
-    /// Writing a `STRATA_BLESS_EVAL` diagnostic dump failed.
+    /// Writing a `UNLACE_BLESS_EVAL` diagnostic dump failed.
     #[error("diagnostics dump for `{fixture}` failed: {message}")]
     DumpFailed {
         /// Which fixture's dump failed.

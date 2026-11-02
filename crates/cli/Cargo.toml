@@ -1,22 +1,22 @@
 [package]
-name = "strata-cli"
+name = "unlace-cli"
 version = "0.1.0"
 edition = "2024"
 rust-version.workspace = true
 
 [[bin]]
-name = "strata"
+name = "unlace"
 path = "src/main.rs"
 
 [dependencies]
-strata-engine = { path = "../engine" }
+unlace-engine = { path = "../engine" }
 clap = { version = "4", features = ["derive"] }
 serde_json = { workspace = true }
 unicode-width = "0.2"
 
 [dev-dependencies]
 serde_json = { workspace = true }
-strata-engine = { path = "../engine" }
+unlace-engine = { path = "../engine" }
 assert_cmd = "2"
 
 [[test]]

@@ -2,7 +2,7 @@
 
 use std::io::{self, Write};
 
-use strata_engine::AnalyzeResult;
+use unlace_engine::AnalyzeResult;
 
 use super::advice::advice_with_options;
 use super::findings::findings_lines;
@@ -30,7 +30,7 @@ pub(super) struct Report {
 impl Report {
     pub(super) fn build(result: &AnalyzeResult, project: &str, options: RenderOptions) -> Self {
         let summary = vec![
-            format!("Strata report — {project}"),
+            format!("Unlace report — {project}"),
             format!(
                 "{} files · {} symbols · {} edges",
                 result.summary.files, result.summary.symbols, result.summary.edges
@@ -136,7 +136,7 @@ impl Report {
         // Fenced bodies preserve action-list wrapping and Unicode tree geometry.
         let mut blocks = vec![format!(
             "# {}",
-            self.summary.first().map_or("Strata report", String::as_str)
+            self.summary.first().map_or("Unlace report", String::as_str)
         )];
         blocks = fit_lines(blocks);
         blocks.push(fit_lines(self.summary.iter().skip(1).cloned().collect()).join("\n"));

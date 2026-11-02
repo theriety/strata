@@ -6,7 +6,7 @@
 //! single pass over snapshot edges, filtered by hardness, and sorts each row so
 //! the layout is identical across runs and thread counts.
 
-use strata_ir::{Edge, Hardness, NodeId, Snapshot};
+use unlace_ir::{Edge, Hardness, NodeId, Snapshot};
 
 use crate::score::KindWeights;
 
@@ -309,7 +309,7 @@ fn collect_directed(
 #[cfg(test)]
 mod tests {
     use smol_str::SmolStr;
-    use strata_ir::{
+    use unlace_ir::{
         Container, ContainerId, ContainerTree, EdgeKind, IntermediateRepresentation, Node,
         NodeKind, Polarity, ScopeLevel,
     };

@@ -9,7 +9,7 @@ The symbol polish pass is split into a ledger, a pricing part, an admission part
 
 ## 🎯 Motivation
 
-The symbol pass carries the most rules in the relocation engine: no empty shells, one move per symbol, the reach guards, the package wall, the test-polarity pin, collision folds. They all lived in one 1100-line file and one struct with about thirty fields. A reader who wanted to know why a symbol was refused had to hold the placement ledger, the pricing maps and the veto sets in mind at once, and a change to one rule could silently touch state another rule depended on. Strata flagged the file as over its own capacity limit, and the project holds itself to that limit.
+The symbol pass carries the most rules in the relocation engine: no empty shells, one move per symbol, the reach guards, the package wall, the test-polarity pin, collision folds. They all lived in one 1100-line file and one struct with about thirty fields. A reader who wanted to know why a symbol was refused had to hold the placement ledger, the pricing maps and the veto sets in mind at once, and a change to one rule could silently touch state another rule depended on. Unlace flagged the file as over its own capacity limit, and the project holds itself to that limit.
 
 ## 🧭 Context
 

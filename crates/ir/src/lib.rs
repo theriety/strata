@@ -1,4 +1,4 @@
-//! Strata's intermediate representation: the typed-graph contract every other
+//! Unlace's intermediate representation: the typed-graph contract every other
 //! crate depends on.
 //!
 //! This crate defines the nodes, edges, and laminar container tree that model a

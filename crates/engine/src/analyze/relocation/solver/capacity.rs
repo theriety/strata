@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use strata_core::cluster::{ClusterId, Partition};
+use unlace_core::cluster::{ClusterId, Partition};
 
 use crate::analyze::findings::{
     physical_folder_entries_repository_relative, physical_folder_findings, walk_all_capacity,

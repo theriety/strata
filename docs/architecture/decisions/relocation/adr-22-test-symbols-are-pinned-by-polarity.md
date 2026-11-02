@@ -13,7 +13,7 @@ Optimizing test files and test-support declarations independently can produce re
 
 ## 🧭 Context
 
-Test files and test-support declarations participate in useful dependency, scoring, capacity, and cycle evidence. Strata detects test files, and it detects each symbol's polarity; test symbols have polarity `TestCase` or `TestSupport`, and they can live inside production files.
+Test files and test-support declarations participate in useful dependency, scoring, capacity, and cycle evidence. Unlace detects test files, and it detects each symbol's polarity; test symbols have polarity `TestCase` or `TestSupport`, and they can live inside production files.
 
 A source relocation can have one or more test counterparts. Those tests should follow the source when the relationship is exact and the resulting placement is valid, without making the source recommendation depend on every follower succeeding.
 

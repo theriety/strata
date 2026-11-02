@@ -1,6 +1,6 @@
 //! The `AnalyzeResult` DTO.
 //!
-//! This is the contract both faces of Strata share: the library returns an owned
+//! This is the contract both faces of Unlace share: the library returns an owned
 //! [`AnalyzeResult`], and the CLI serializes the very same value as JSON for
 //! `--format json`. Serialization is camelCase so the JSON matches the reference
 //! `AnalyzeResult` interface byte-for-byte; every nested type carries the same

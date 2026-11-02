@@ -11,7 +11,7 @@ Re-export declarations are never subjects of the over-exposure finding, and Rust
 
 Self-analysis showed two classes of false positive in the visibility finding.
 
-First, a `pub use` re-export node has no direct callers, because callers resolve through it to the real item, so it was reported as too wide. Re-exports of a whole crate or module, such as `pub use strata_ir as ir;`, point at no single item and produce no re-export edge, so an edge-based exemption does not reach them.
+First, a `pub use` re-export node has no direct callers, because callers resolve through it to the real item, so it was reported as too wide. Re-exports of a whole crate or module, such as `pub use unlace_ir as ir;`, point at no single item and produce no re-export edge, so an edge-based exemption does not reach them.
 
 Second, `PythonAdapter`, `RustAdapter`, and `TypeScriptAdapter` were reported as unused outside their crate even though other crates construct them with calls such as `PythonAdapter::new()`.
 

@@ -1,6 +1,6 @@
-# strata — Architecture
+# unlace — Architecture
 
-`strata` is a read-only static-analysis tool that proposes a hierarchical, acyclic module decomposition for a codebase. Architecturally it is a two-stage pipeline: language-specific **adapters** turn source files into a single language-agnostic **IR snapshot**, and a pure, deterministic **engine** runs an eleven-phase decomposition followed by evidence qualification and cross-profile advice aggregation. The engine never reads source code — the snapshot is the only contract it understands — which is what lets the same core reason identically about TypeScript, Rust, and Python.
+`unlace` is a read-only static-analysis tool that proposes a hierarchical, acyclic module decomposition for a codebase. Architecturally it is a two-stage pipeline: language-specific **adapters** turn source files into a single language-agnostic **IR snapshot**, and a pure, deterministic **engine** runs an eleven-phase decomposition followed by evidence qualification and cross-profile advice aggregation. The engine never reads source code — the snapshot is the only contract it understands — which is what lets the same core reason identically about TypeScript, Rust, and Python.
 
 ## Crate layout
 
@@ -15,19 +15,19 @@ crates
 ├── adapter-python        # Python → IR fragment (rustpython-parser)
 ├── engine                # orchestration: discover, parse, assemble, analyze
 ├── eval                  # constraint-target evaluation harness over the engine
-└── cli                   # the `strata` binary: flags, dispatch, rendering
+└── cli                   # the `unlace` binary: flags, dispatch, rendering
 ```
 
 ```mermaid
 flowchart TD
-    ir[strata-ir]
-    core[strata-core]
+    ir[unlace-ir]
+    core[unlace-core]
     ats[adapter-typescript]
     ars[adapter-rust]
     aps[adapter-python]
-    engine[strata-engine]
-    cli[strata-cli · binary]
-    eval[strata-eval]
+    engine[unlace-engine]
+    cli[unlace-cli · binary]
+    eval[unlace-eval]
 
     ir --> core
     ir --> ats
@@ -46,7 +46,7 @@ Every crate depends *down*, never sideways or up: adapters and `core` share no d
 
 ## The IR snapshot contract
 
-The `strata-ir` crate defines the single data structure that flows between adapters and the engine. A `Snapshot` (`crates/ir/src/snapshot.rs`) is a validated, content-addressed, immutable view over an `IntermediateRepresentation` — a set of nodes, edges, and a container tree — fingerprinted with a `blake3` hash over its canonical JSON form. Assembly rejects dangling edges, an unsupported schema version, and an invalid container tree, so any snapshot the engine receives is already well-formed. The IR is at schema version 3; assembly still reads version 2 and upgrades it by deriving `Node.re_export` from its re-export edges ([ADR-20](decisions/analysis/adr-20-re-exports-and-associated-calls-in-visibility.md)).
+The `unlace-ir` crate defines the single data structure that flows between adapters and the engine. A `Snapshot` (`crates/ir/src/snapshot.rs`) is a validated, content-addressed, immutable view over an `IntermediateRepresentation` — a set of nodes, edges, and a container tree — fingerprinted with a `blake3` hash over its canonical JSON form. Assembly rejects dangling edges, an unsupported schema version, and an invalid container tree, so any snapshot the engine receives is already well-formed. The IR is at schema version 3; assembly still reads version 2 and upgrades it by deriving `Node.re_export` from its re-export edges ([ADR-20](decisions/analysis/adr-20-re-exports-and-associated-calls-in-visibility.md)).
 
 ```mermaid
 classDiagram
@@ -106,7 +106,7 @@ fn bind(&self, trees: Vec<ParseTree>) -> Result<IrFragment, AdapterError>;
 
 ## The decomposition pipeline
 
-`strata-engine`'s `analyze` (`crates/engine/src/analyze.rs`) is a pure function: identical snapshot + config + seed yields an identical result, with no I/O. Spanning the engine and `strata-core`, the work runs as eleven phases.
+`unlace-engine`'s `analyze` (`crates/engine/src/analyze.rs`) is a pure function: identical snapshot + config + seed yields an identical result, with no I/O. Spanning the engine and `unlace-core`, the work runs as eleven phases.
 
 ```mermaid
 flowchart LR
@@ -132,11 +132,11 @@ flowchart LR
 | 6 | Cluster | Multilevel acyclic clustering (coarsen → seed → refine) | `crates/core/src/cluster.rs` |
 | 7 | Pack | Not built: capacitated file packing was removed unwired; see [ADR-28](decisions/product/adr-28-no-file-packing-until-designed.md) | — |
 | 8 | Derive Visibility | Set each symbol's export scope to the LCA of its consumers | `crates/core/src/visibility.rs` |
-| 9 | Project Tests | Removed from `strata-core`; specs following their subjects is now handled by the engine's relocation test mirror | `crates/engine/src/analyze/relocation/mirror/` |
+| 9 | Project Tests | Removed from `unlace-core`; specs following their subjects is now handled by the engine's relocation test mirror | `crates/engine/src/analyze/relocation/mirror/` |
 | 10 | Score | Evaluate the objective J(T) with a per-term breakdown | `crates/core/src/score.rs` |
 | 11 | Diversify & Report | Multi-start variation-of-information selection, then render | `crates/core/src/diversify.rs`, `crates/cli/src/render.rs` |
 
-The candidate-generation hot loop in `analyze` runs the restructuring subset — Condense → Layer → Cluster → Score → Diversify — once per profile seed. Shatter and Derive Visibility live in `strata-core` and feed cycle-break suggestions and the structural violations surfaced by the `violations`, `tree`, and `diff` commands.
+The candidate-generation hot loop in `analyze` runs the restructuring subset — Condense → Layer → Cluster → Score → Diversify — once per profile seed. Shatter and Derive Visibility live in `unlace-core` and feed cycle-break suggestions and the structural violations surfaced by the `violations`, `tree`, and `diff` commands.
 
 The pipeline honors a fixed constraint priority — **acyclicity > test polarity > capacity > cohesion > anchoring**. The first three are hard vetoes during clustering and refinement, never penalty terms; only cohesion and anchoring are scored. Cycle-breaking uses an exact ILP via the bundled [HiGHS](https://highs.dev/) solver for small strongly-connected components (configurable `ilp-threshold`, default 300 nodes) with lazy cycle constraints, falling back to the Eades–Lin–Smyth heuristic above the threshold or on timeout; every break set records whether it was solved exactly.
 
@@ -209,7 +209,7 @@ A finding is shared only when its complete serialized content is identical in bo
 
 Capacity findings are profile-dependent because caps belong to profiles. A physical folder measures direct files plus immediate child folders; descendants below those children do not inflate it. Measures at or below the cap produce no finding, values above the cap through 110% are `Borderline`, and larger values are `Violation`.
 
-Cycle findings report only components spanning distinct source-file identities; intra-file recursion is not a violation. The optimizer still keeps mutually recursive symbols in one placement unit. Reported cycles resolve every member to repository-relative paths and explain the placement consequence: the members form one placement unit, and strata keeps a dependency cycle in one file; to split it, break the suggested dependency edge. The cheapest cut and its exact-or-heuristic method remain profile-specific when dependency weights change its serialized content.
+Cycle findings report only components spanning distinct source-file identities; intra-file recursion is not a violation. The optimizer still keeps mutually recursive symbols in one placement unit. Reported cycles resolve every member to repository-relative paths and explain the placement consequence: the members form one placement unit, and unlace keeps a dependency cycle in one file; to split it, break the suggested dependency edge. The cheapest cut and its exact-or-heuristic method remain profile-specific when dependency weights change its serialized content.
 
 ## Main components
 
@@ -218,8 +218,8 @@ Cycle findings report only components spanning distinct source-file identities; 
 - **`analyze`** (`crates/engine/src/analyze.rs`): the pure entry point that drives the pipeline per parameter profile and seed and returns an `AnalyzeResult`.
 - **`EvidenceIndex` and advice aggregation** (`crates/engine/src/analyze/advice.rs`): immutable pass-start evidence qualification followed by deterministic cross-profile grouping into recommended and review-candidate advice.
 - **`snapshot_from_root`** (`crates/engine/src/snapshot.rs`): source discovery, adapter dispatch by file extension, fragment merging, and re-export normalization.
-- **`AnalyzeConfig` / `load_config`** (`crates/engine/src/config.rs`): the `strata.toml` schema and validation, mapping config sections to objective weights, capacities, and solver budgets.
-- **`StrataError`** (`crates/engine/src/error.rs`): the typed error surface with stable remedy codes that the CLI maps to exit code `1`.
+- **`AnalyzeConfig` / `load_config`** (`crates/engine/src/config.rs`): the `unlace.toml` schema and validation, mapping config sections to objective weights, capacities, and solver budgets.
+- **`UnlaceError`** (`crates/engine/src/error.rs`): the typed error surface with stable remedy codes that the CLI maps to exit code `1`.
 - **Decomposition algorithms** (`crates/core/src`): `condense`, `shatter`, `layer`, `cluster`, `visibility`, `project`, `score`, and `diversify` — each a pure phase over the IR.
 - **CLI dispatch and rendering** (`crates/cli/src/main.rs`, `crates/cli/src/render.rs`): clap-derived flag parsing, subcommand dispatch, the plain-text default with explicit JSON selection, and the fixed exit-code mapping (`0`/`1`/`2`). Terminal and Markdown reports consume one private report representation assembled from the saved result. Candidate change trees compare saved file identities and recorded moves to show physical before/after paths; virtual grouping labels are not treated as directories. Wrapped change-tree labels retain branch ancestry and literal path characters, preferring word or path boundaries within 100 display columns. Presentation options control numerical detail without changing the analysis payload.
 - **Language adapters** (`crates/adapter-typescript`, `crates/adapter-rust`, `crates/adapter-python`): swc-, syn+rust-analyzer-, and rustpython-based front ends, each pairing a `parse` module with a `bind` reference resolver and an `sloc` size counter.

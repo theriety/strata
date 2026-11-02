@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_ir::{ContainerId, EdgeKind, Node, NodeKind, Polarity, Snapshot};
+use unlace_ir::{ContainerId, EdgeKind, Node, NodeKind, Polarity, Snapshot};
 
 use super::placed::Placed;
 use crate::analyze::scoring::distance::folder_key_of_files;

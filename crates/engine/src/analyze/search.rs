@@ -1,19 +1,19 @@
 use std::collections::BTreeMap;
 
-use strata_core::condense::condense;
-use strata_core::diversify::{ModeConfig, ModeResult as CoreModeResult, SolvedCandidate};
-use strata_core::diversify::{diversify, vi_distance};
-use strata_core::graph::csr::{HardnessFilter, build_csr};
-use strata_core::score::KindWeights;
-use strata_core::shatter::{BreakSet, EdgeRef, EdgeWeights, SccView, shatter};
-use strata_ir::{Hardness, Node, NodeId, NodeKind, Polarity, Snapshot};
+use unlace_core::condense::condense;
+use unlace_core::diversify::{ModeConfig, ModeResult as CoreModeResult, SolvedCandidate};
+use unlace_core::diversify::{diversify, vi_distance};
+use unlace_core::graph::csr::{HardnessFilter, build_csr};
+use unlace_core::score::KindWeights;
+use unlace_core::shatter::{BreakSet, EdgeRef, EdgeWeights, SccView, shatter};
+use unlace_ir::{Hardness, Node, NodeId, NodeKind, Polarity, Snapshot};
 
 use crate::analyze::findings::{conditional_splits, hard_capacity_breaks};
 use crate::analyze::relocation::mirror::PolishEvidence;
 use crate::analyze::relocation::{PipelineSolver, TestPolicy};
 use crate::analyze::scoring::{ProfileSource, score_current_with_affinity};
 use crate::config::ProfileConfig;
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 use crate::result::{CurrentStanding, ProfileCurrent, ProfileResult, Violation};
 
 #[cfg(test)]
@@ -31,12 +31,12 @@ mod tests;
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::SnapshotInvalid`] if a candidate tree cannot be rendered.
+/// Returns [`UnlaceError::SnapshotInvalid`] if a candidate tree cannot be rendered.
 pub(in crate::analyze) fn build_profile_result(
     snapshot: &Snapshot,
     profile: &ProfileConfig,
     findings: &[Violation],
-) -> Result<ProfileResult, StrataError> {
+) -> Result<ProfileResult, UnlaceError> {
     let coefficients = profile.objective.coefficients();
     let tests = TestPolicy::new(&profile.tests)?;
     let capacity_breaks = hard_capacity_breaks(findings);

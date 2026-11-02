@@ -2,11 +2,11 @@
 
 use std::path::Path;
 
-use strata_ir::{IrFragment, SourceFile};
+use unlace_ir::{IrFragment, SourceFile};
 
 use super::Language;
 use crate::config::AnalyzeConfig;
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 
 /// Maps the config's language names to [`Language`] values, dropping any the
 /// engine does not recognize (validation rejects unknown names upstream).
@@ -44,12 +44,12 @@ pub(super) fn run_adapter(
     language: Language,
     sources: &[SourceFile],
     root: &Path,
-) -> Result<IrFragment, StrataError> {
+) -> Result<IrFragment, UnlaceError> {
     let adapter = language.adapter(root);
     let trees = adapter
         .parse(sources)
-        .map_err(|source| StrataError::AdapterParseFailure { source })?;
+        .map_err(|source| UnlaceError::AdapterParseFailure { source })?;
     adapter
         .bind(trees)
-        .map_err(|source| StrataError::AdapterBindFailure { source })
+        .map_err(|source| UnlaceError::AdapterBindFailure { source })
 }

@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_ir::{ContainerTree, ScopeLevel};
+use unlace_ir::{ContainerTree, ScopeLevel};
 
 use super::paths::{
     drain_dataset, path_segments, physical_directory, physical_namespace,
@@ -66,7 +66,7 @@ pub(super) fn folder_entry_counts(
 /// segment (and its injective display label never leaks into a move target).
 pub(super) fn index_files(tree: &ContainerTree, package_rooted: bool) -> FilePlacements {
     let containers = tree.containers();
-    let by_id: BTreeMap<u32, &strata_ir::Container> = containers
+    let by_id: BTreeMap<u32, &unlace_ir::Container> = containers
         .iter()
         .map(|container| (container.id.0, container))
         .collect();

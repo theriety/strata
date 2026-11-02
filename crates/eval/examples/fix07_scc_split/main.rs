@@ -7,17 +7,17 @@
 //! code path changes. The hypothesis under test and the metric definitions
 //! live in `docs/architecture/notes/fix07-scc-seed-granularity.md`.
 //!
-//! Run: `cargo run -p strata-eval --example fix07_scc_split`
+//! Run: `cargo run -p unlace-eval --example fix07_scc_split`
 
 #![allow(clippy::print_stdout)] // diagnostic binary; the workspace deny targets library code
 
 use std::collections::BTreeMap;
 
-use strata_engine::config::{AnalyzeConfig, ProfileName};
-use strata_engine::result::ViolationKind;
-use strata_engine::{analyze, snapshot_from_root};
-use strata_eval::target::{ConfigSource, RunMode, TargetSpec};
-use strata_eval::{eval_fixture_root, load_target};
+use unlace_engine::config::{AnalyzeConfig, ProfileName};
+use unlace_engine::result::ViolationKind;
+use unlace_engine::{analyze, snapshot_from_root};
+use unlace_eval::target::{ConfigSource, RunMode, TargetSpec};
+use unlace_eval::{eval_fixture_root, load_target};
 
 mod displacement;
 mod rows;
@@ -190,7 +190,7 @@ fn probe_fixture(name: &str) -> Result<(), String> {
 }
 
 /// Prints one candidate's rank, score, and move volume.
-fn print_candidate(candidate: &strata_engine::result::Candidate) {
+fn print_candidate(candidate: &unlace_engine::result::Candidate) {
     let moved: usize = candidate
         .delta_narration
         .iter()
