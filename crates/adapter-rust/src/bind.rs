@@ -13,6 +13,7 @@
 //! it. References that originate inside a macro invocation resolve at confidence
 //! below `1.0` — honest uncertainty rather than silence.
 
+mod advisory;
 mod assignment;
 mod containers;
 mod database;
@@ -75,12 +76,14 @@ pub(super) fn bind(
     let database = Database::load(manifest)?;
 
     let assignment = NodeAssignment::build(files, root);
-    let mut edges = resolve_edges(files, &assignment, &database, workspace_root);
+    let (mut edges, exposures) = resolve_edges(files, &assignment, &database, workspace_root);
     resolve_re_exports(&assignment, &database, workspace_root, &mut edges);
     let visibility_scopes = resolve_visibility_scopes(files, &assignment, &database, root);
     let edges = dedup_edges(edges);
+    let advisory = advisory::candidates(files, &assignment);
     let mut nodes = assignment.into_nodes();
     classify_polarity(files, &mut nodes, &edges);
+    let advisory_uses = advisory::settle(advisory, &nodes);
 
     Ok(IrFragment {
         nodes,
@@ -88,6 +91,8 @@ pub(super) fn bind(
         affinities: Vec::new(),
         containers: assignment_containers(files, root),
         visibility_scopes,
+        exposures,
+        advisory_uses,
     })
 }
 
@@ -120,6 +125,7 @@ mod tests {
             sloc: 1,
             owner: None,
             references: Vec::new(),
+            advisory_names: Vec::new(),
         }
     }
 

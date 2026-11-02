@@ -13,7 +13,7 @@ use crate::node::{Node, NodeId, ScopeLevel};
 /// Current IR schema version, bumped on any contract change.
 ///
 /// Version 3 added [`Node::re_export`] (ADR-20). Additive default-empty sidecar
-/// fields such as `scope_ladders` do not bump it (ADR-24).
+/// fields such as `scope_ladders` do not bump it (ADR-24, ADR-25).
 pub const SCHEMA_VERSION: u32 = 3;
 
 /// Oldest IR schema version this build still reads.
@@ -37,24 +37,32 @@ pub struct IntermediateRepresentation {
     pub affinities: Vec<Affinity>,
     /// The laminar container tree.
     pub containers: ContainerTree,
-    /// Per-node scope levels the source language can express, where the
-    /// language restricts them to a ladder; empty for every other node.
+    /// Per-node ladder verdicts for declarations whose language states a scope
+    /// ladder; empty for every other node.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scope_ladders: Vec<ScopeLadder>,
 }
 
-/// The scope levels a language can express for one declaration.
+/// What the language's scope ladder says about one declaration (ADR-25).
 ///
-/// A language whose visibility spellings form a fixed ladder cannot narrow a
-/// declaration to an arbitrary scope; the visibility finding never advises a
-/// level that no rung of this ladder reaches.
+/// A declaration appears here whenever its adapter stated a scope for it, so the
+/// visibility finding never falls back to level labels for it. `needed` is set
+/// only when a strictly narrower rung than the declared one holds the
+/// declaration and every user, signature exposure included.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScopeLadder {
     /// The declaration the ladder belongs to.
     pub node: NodeId,
-    /// Levels of every expressible scope that reaches all of the declaration's
-    /// consumers, in ascending order.
-    pub levels: Vec<ScopeLevel>,
+    /// Level of the rung the declaration states today; `None` when unresolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared: Option<ScopeLevel>,
+    /// Level of the narrowest rung that still holds every user, set only when
+    /// that rung is strictly narrower than the declared one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needed: Option<ScopeLevel>,
+    /// The language's spelling of the needed rung, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spelling: Option<smol_str::SmolStr>,
 }
 
 impl IntermediateRepresentation {

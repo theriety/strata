@@ -88,3 +88,64 @@ fn should_keep_production_nodes_and_sloc_of_a_cfg_not_test_file() -> Result<(), 
     assert!(drive.effective_size > 0);
     Ok(())
 }
+
+fn has_advisory(fragment: &IrFragment, user: &str, used: &str) -> Result<bool, String> {
+    let (user, used) = (node(fragment, user)?.id, node(fragment, used)?.id);
+    Ok(fragment
+        .advisory_uses
+        .iter()
+        .any(|advisory| advisory.user == user && advisory.used == used))
+}
+
+#[test]
+fn should_count_names_in_a_cfg_not_test_file_as_advisory_uses_not_edges() -> Result<(), String> {
+    let fragment = fragment()?;
+
+    assert!(has_advisory(&fragment, "drive", "run")?);
+    assert!(has_advisory(&fragment, "drive", "Helper")?);
+    // advice only: the graph never sees a name-matched use.
+    // (`Helper` keeps its existing edge from the signature path `crate::Helper`.)
+    assert!(!has_edge(&fragment, "drive", "run")?);
+    Ok(())
+}
+
+#[test]
+fn should_count_names_in_an_inline_cfg_not_test_item_as_advisory_uses() -> Result<(), String> {
+    let fragment = fragment()?;
+
+    assert!(has_advisory(&fragment, "inline_drive", "run")?);
+    assert!(!has_edge(&fragment, "inline_drive", "run")?);
+    Ok(())
+}
+
+#[test]
+fn should_not_count_a_name_shared_with_test_code_or_the_user_itself() -> Result<(), String> {
+    let fragment = fragment()?;
+
+    // `path_support` is cfg(test) code: keeping an item wide for it is no use.
+    assert!(!has_advisory(&fragment, "inline_drive", "path_support")?);
+    assert!(
+        fragment
+            .advisory_uses
+            .iter()
+            .all(|advisory| advisory.user != advisory.used)
+    );
+    Ok(())
+}
+
+#[test]
+fn should_emit_advisory_uses_only_from_code_the_loader_cannot_see() -> Result<(), String> {
+    let fragment = fragment()?;
+
+    let gated = [
+        node(&fragment, "drive")?.id,
+        node(&fragment, "inline_drive")?.id,
+    ];
+    assert!(
+        fragment
+            .advisory_uses
+            .iter()
+            .all(|advisory| gated.contains(&advisory.user))
+    );
+    Ok(())
+}
