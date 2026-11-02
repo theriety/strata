@@ -13,7 +13,7 @@ use strata_ir::{
 };
 
 use crate::config::{AnalyzeConfig, ProfileConfig, TestsConfig};
-use crate::result::{ContainerNode, Level, SymbolKind, SymbolMove};
+use crate::result::{ContainerNode, CurrentStanding, Level, SymbolKind, SymbolMove};
 
 use super::*;
 use crate::analyze::relocation::solver::{build_file_graph, test_zone_marks};
@@ -1097,7 +1097,11 @@ fn should_not_relocate_a_production_symbol_into_its_spec_twin() {
         false,
         &tests,
     );
-    let assembled = solver.assemble(&solver.real_partition);
+    let assembled = solver.symbol_tree(
+        solver.is_faithful(&solver.real_partition),
+        &solver.real_partition,
+        &MirrorEvidence::default(),
+    );
     let spec_file = assembled
         .tree
         .containers()
@@ -2910,7 +2914,11 @@ fn should_veto_entry_into_a_pattern_marked_test_zone() {
     );
     // Fresh candidate ids are arena-issued, so locate the zone file by its
     // snapshot name rather than assuming a literal id.
-    let assembled = solver.assemble(&solver.real_partition);
+    let assembled = solver.symbol_tree(
+        solver.is_faithful(&solver.real_partition),
+        &solver.real_partition,
+        &MirrorEvidence::default(),
+    );
     let probe_file = assembled
         .tree
         .containers()
@@ -3165,7 +3173,11 @@ fn should_not_let_an_arrival_unlock_a_lone_resident() {
         false,
         &tests,
     );
-    let assembled = solver.assemble(&solver.real_partition);
+    let assembled = solver.symbol_tree(
+        solver.is_faithful(&solver.real_partition),
+        &solver.real_partition,
+        &MirrorEvidence::default(),
+    );
     let natives = native_residents(&snapshot, &assembled);
     let outcome = solver.symbol_polish(&solver.real_partition);
 
@@ -3203,7 +3215,11 @@ fn should_not_nominate_a_destination_only_a_mid_pass_move_created() {
         false,
         &tests,
     );
-    let assembled = solver.assemble(&solver.real_partition);
+    let assembled = solver.symbol_tree(
+        solver.is_faithful(&solver.real_partition),
+        &solver.real_partition,
+        &MirrorEvidence::default(),
+    );
     let ir = snapshot.ir();
     let outcome = solver.symbol_polish(&solver.real_partition);
 
@@ -3313,5 +3329,349 @@ fn should_not_narrate_a_symbol_moving_twice() {
         contradictions.is_empty(),
         "no candidate may narrate one symbol leaving one origin for two \
              destinations; got {contradictions:?}"
+    );
+}
+
+#[test]
+fn should_report_a_symbol_move_when_the_file_layout_is_unchanged() {
+    // One folder, two files: no file move can improve on reality, so the
+    // winning partition is faithful. The symbol pass still relocates s into
+    // its consumers' file, and that relocation must reach the report.
+    let snapshot = snapshot(
+        vec![
+            node(0, "s", 2, Polarity::Production),
+            node(1, "mate", 2, Polarity::Production),
+            node(2, "c1", 3, Polarity::Production),
+            node(3, "c2", 3, Polarity::Production),
+            node(4, "base", 3, Polarity::Production),
+        ],
+        vec![inherits(2, 0), inherits(3, 0), edge(4, 2), edge(4, 3)],
+        vec![
+            container(0, "app", ScopeLevel::PackageGroup, None),
+            container(1, "keep", ScopeLevel::Folder, Some(0)),
+            container(2, "a.ts", ScopeLevel::File, Some(1)),
+            container(3, "b.ts", ScopeLevel::File, Some(1)),
+        ],
+    );
+
+    let profile = analyze(&snapshot, &AnalyzeConfig::default())
+        .ok()
+        .and_then(|result| result.profiles.greenfield);
+    let current = profile.as_ref().map(|profile| profile.current.score);
+    let standing = profile.as_ref().map(|profile| profile.current.standing);
+    let candidate = profile.and_then(|profile| profile.candidates.into_iter().next());
+
+    assert!(
+        candidate.is_some(),
+        "the improving symbol polish must be offered as a candidate"
+    );
+    let (Some(current), Some(candidate)) = (current, candidate) else {
+        return;
+    };
+    let s_move = candidate
+        .symbol_moves
+        .iter()
+        .find(|entry| entry.symbol == "s");
+    assert!(
+        candidate.delta_narration.is_empty(),
+        "the file layout is unchanged; got {:?}",
+        candidate.delta_narration
+    );
+    assert!(
+        s_move.is_some_and(|entry| entry.from_path == "a.ts" && entry.to_path == "b.ts"),
+        "the accepted symbol move must be reported; got {:?}",
+        candidate.symbol_moves
+    );
+    // The DTO prices exactly what ranked the candidate: the current tree plus
+    // the one accepted relocation.
+    let delta = s_move.map_or(0.0, |entry| entry.delta);
+    assert!(
+        delta < -SYMBOL_MIN_IMPROVEMENT
+            && (candidate.score - (current + delta)).abs() < 1e-9
+            && (candidate.improvement + delta).abs() < 1e-9,
+        "score {} / improvement {} must equal current {current} plus the move's delta {delta}",
+        candidate.score,
+        candidate.improvement
+    );
+    assert_eq!(
+        standing,
+        Some(CurrentStanding::Outscored),
+        "an improving symbol move outscores the unchanged layout"
+    );
+}
+
+/// A multi-level layout: two current domains, `alpha` and `beta`, each holding
+/// a folder and a nested subfolder. `s1` lives in `src/alpha/inner/a.ts` but
+/// its consumers live in `src/beta/c.ts`, across the domain boundary. The
+/// internal candidate tree regroups the upper levels by coupling, so it prices
+/// that relocation differently from the current tree a faithful candidate
+/// renders as.
+fn nested_faithful_snapshot() -> Snapshot {
+    snapshot(
+        vec![
+            node(0, "s1", 7, Polarity::Production),
+            node(1, "mate1", 7, Polarity::Production),
+            node(2, "c1", 9, Polarity::Production),
+            node(3, "c2", 9, Polarity::Production),
+            node(4, "base1", 9, Polarity::Production),
+            node(5, "s2", 9, Polarity::Production),
+            node(6, "mate2", 9, Polarity::Production),
+            node(7, "d1", 10, Polarity::Production),
+            node(8, "d2", 10, Polarity::Production),
+            node(9, "base2", 10, Polarity::Production),
+            node(10, "filler", 8, Polarity::Production),
+        ],
+        vec![
+            inherits(2, 0),
+            inherits(3, 0),
+            edge(4, 2),
+            edge(4, 3),
+            inherits(7, 5),
+            inherits(8, 5),
+            edge(9, 7),
+            edge(9, 8),
+        ],
+        vec![
+            container(0, "app", ScopeLevel::PackageGroup, None),
+            container(1, "alpha", ScopeLevel::Domain, Some(0)),
+            container(2, "src/alpha", ScopeLevel::Folder, Some(1)),
+            container(3, "src/alpha/inner", ScopeLevel::Folder, Some(1)),
+            container(4, "beta", ScopeLevel::Domain, Some(0)),
+            container(5, "src/beta", ScopeLevel::Folder, Some(4)),
+            container(6, "src/beta/deep", ScopeLevel::Folder, Some(4)),
+            container(7, "src/alpha/inner/a.ts", ScopeLevel::File, Some(3)),
+            container(8, "src/alpha/b.ts", ScopeLevel::File, Some(2)),
+            container(9, "src/beta/c.ts", ScopeLevel::File, Some(5)),
+            container(10, "src/beta/deep/d.ts", ScopeLevel::File, Some(6)),
+        ],
+    )
+}
+
+#[test]
+fn should_sum_faithful_symbol_deltas_to_the_improvement_in_a_nested_layout() {
+    // no file may move, so every candidate is the faithful layout plus the
+    // symbol polish.
+    let mut config = AnalyzeConfig::default();
+    for relocation in [
+        &mut config.profiles.anchored.relocation,
+        &mut config.profiles.greenfield.relocation,
+    ] {
+        relocation.forbid_file_moves = vec!["**".to_owned()];
+    }
+    let result = analyze(&nested_faithful_snapshot(), &config);
+    assert!(result.is_ok(), "analysis must succeed; got {result:?}");
+    let Ok(result) = result else {
+        return;
+    };
+    for profile in [result.profiles.anchored, result.profiles.greenfield]
+        .into_iter()
+        .flatten()
+    {
+        for candidate in profile
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.delta_narration.is_empty())
+        {
+            let summed: f64 = candidate.symbol_moves.iter().map(|entry| entry.delta).sum();
+            assert!(
+                (summed + candidate.improvement).abs() < 1e-9,
+                "faithful symbol deltas {summed} must sum to -improvement {}; moves {:?}",
+                candidate.improvement,
+                candidate.symbol_moves
+            );
+            assert!(
+                candidate
+                    .symbol_moves
+                    .iter()
+                    .all(|entry| entry.delta < -SYMBOL_MIN_IMPROVEMENT),
+                "every reported move improves the current tree; got {:?}",
+                candidate.symbol_moves
+            );
+        }
+    }
+}
+
+/// Visibility findings on the current tree with `moves` (symbol name → the
+/// current file path it lands in) applied.
+fn current_visibility_findings(snapshot: &Snapshot, moves: &[(&str, &str)]) -> usize {
+    let ir = snapshot.ir();
+    let file_named = |path: &str| {
+        ir.containers
+            .containers()
+            .iter()
+            .find(|container| container.level == ScopeLevel::File && container.name == path)
+            .map(|container| container.id)
+    };
+    let nodes: Vec<Node> = ir
+        .nodes
+        .iter()
+        .map(|node| {
+            let mut placed = node.clone();
+            if let Some(file) = moves
+                .iter()
+                .find(|(symbol, _)| *symbol == node.name.as_str())
+                .and_then(|(_, path)| file_named(path))
+            {
+                placed.container = file;
+            }
+            placed
+        })
+        .collect();
+    derive_visibility(&ir.containers, &nodes, &ir.edges)
+        .findings
+        .len()
+}
+
+#[test]
+fn should_hold_every_structural_veto_on_the_current_tree_for_a_faithful_layout() {
+    // s1 is declared exactly as wide as its cross-domain consumers need, so
+    // moving it into their file over-exports it on the current tree. The
+    // faithful candidate renders as that tree, so its symbol pass must refuse
+    // the move there, whatever the internal candidate tree would allow.
+    let mut ir = nested_faithful_snapshot().ir().clone();
+    let derived = derive_visibility(&ir.containers, &ir.nodes, &ir.edges);
+    for node in &mut ir.nodes {
+        if let Some(scope) = derived.scopes.iter().find(|scope| scope.node == node.id) {
+            node.visibility = scope.level;
+        }
+    }
+    let assembled = Snapshot::assemble(ir);
+    assert!(assembled.is_ok(), "the re-declared snapshot must assemble");
+    let Ok(snapshot) = assembled else {
+        return;
+    };
+    let baseline = current_visibility_findings(&snapshot, &[]);
+
+    let mut config = AnalyzeConfig::default();
+    for relocation in [
+        &mut config.profiles.anchored.relocation,
+        &mut config.profiles.greenfield.relocation,
+    ] {
+        relocation.forbid_file_moves = vec!["**".to_owned()];
+    }
+    let result = analyze(&snapshot, &config);
+    assert!(result.is_ok(), "analysis must succeed; got {result:?}");
+    let Ok(result) = result else {
+        return;
+    };
+    for profile in [result.profiles.anchored, result.profiles.greenfield]
+        .into_iter()
+        .flatten()
+    {
+        for candidate in profile
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.delta_narration.is_empty())
+        {
+            let moves: Vec<(&str, &str)> = candidate
+                .symbol_moves
+                .iter()
+                .map(|entry| (entry.symbol.as_str(), entry.to_path.as_str()))
+                .collect();
+            assert!(
+                current_visibility_findings(&snapshot, &moves) <= baseline,
+                "a faithful candidate's symbol moves may not raise the current tree's \
+                 visibility findings ({baseline}); moves {moves:?}"
+            );
+        }
+    }
+}
+
+/// [`nested_faithful_snapshot`] with its files renumbered so that, read as
+/// assembled candidate ids, a.ts and c.ts name one branch of the beta folder.
+fn renumbered_files_snapshot() -> Snapshot {
+    let renumber = |id: u32| match id {
+        7 => 9,
+        8 => 7,
+        9 => 8,
+        other => other,
+    };
+    let ir = nested_faithful_snapshot().ir().clone();
+    let nodes = ir
+        .nodes
+        .iter()
+        .map(|node| Node {
+            container: ContainerId(renumber(node.container.0)),
+            ..node.clone()
+        })
+        .collect();
+    let containers = ir
+        .containers
+        .containers()
+        .iter()
+        .map(|container| Container {
+            id: ContainerId(renumber(container.id.0)),
+            parent: container
+                .parent
+                .map(|parent| ContainerId(renumber(parent.0))),
+            ..container.clone()
+        })
+        .collect();
+    snapshot(nodes, ir.edges.clone(), containers)
+}
+
+#[test]
+fn should_derive_the_visibility_baseline_over_the_tree_the_pass_runs_on() {
+    // Candidate file ids are fresh arena ids, so the pass's visibility working
+    // copy must place every declaration by the assembly, not by its current
+    // container id, or the veto reads another container of the same number.
+    let tests = TestPolicy::defaults();
+    let config = AnalyzeConfig::default();
+    let assembled_placement = |snapshot: &Snapshot| {
+        let solver = PipelineSolver::new(
+            snapshot,
+            &config,
+            config.profiles.greenfield.objective.coefficients(),
+            false,
+            &tests,
+        );
+        let assembled = solver.assemble(&solver.real_partition);
+        let placed: Vec<Node> = snapshot
+            .ir()
+            .nodes
+            .iter()
+            .map(|node| Node {
+                container: assembled
+                    .placement
+                    .get(&node.id.0)
+                    .copied()
+                    .unwrap_or(node.container),
+                ..node.clone()
+            })
+            .collect();
+        (assembled, placed)
+    };
+    // declare every node exactly as wide as the assembly needs: no finding.
+    let mut declared = renumbered_files_snapshot().ir().clone();
+    let (fixture_tree, fixture_nodes) = assembled_placement(&renumbered_files_snapshot());
+    let derived = derive_visibility(&fixture_tree.tree, &fixture_nodes, &declared.edges);
+    for node in &mut declared.nodes {
+        if let Some(scope) = derived.scopes.iter().find(|scope| scope.node == node.id) {
+            node.visibility = scope.level;
+        }
+    }
+    let redeclared = Snapshot::assemble(declared);
+    assert!(redeclared.is_ok(), "the re-declared snapshot must assemble");
+    let Ok(snapshot) = redeclared else {
+        return;
+    };
+    let (assembled, placed) = assembled_placement(&snapshot);
+    let ir = snapshot.ir();
+    let expected = derive_visibility(&assembled.tree, &placed, &ir.edges)
+        .findings
+        .len();
+    let solver = PipelineSolver::new(
+        &snapshot,
+        &config,
+        config.profiles.greenfield.objective.coefficients(),
+        false,
+        &tests,
+    );
+    let pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
+
+    assert_eq!(expected, 0, "the declarations match the assembly exactly");
+    assert_eq!(
+        pass.vis_base, expected,
+        "the visibility baseline must be derived over the assembled placement"
     );
 }
