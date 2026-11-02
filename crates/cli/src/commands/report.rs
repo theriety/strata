@@ -188,13 +188,13 @@ mod tests {
         assert!(markdown.contains("## Structural findings"));
         assert!(markdown.contains("anchored — candidate 1"));
         assert!(markdown.contains("## Effective configuration"));
-        assert!(markdown.contains("capacity  file 250 · folder 20"));
+        assert!(markdown.contains("capacity  file 600 · folder 20"));
         assert!(markdown.contains("objective imbalance 0.1 · naming 0.3"));
         assert!(markdown.contains("dependency-only 0.05"));
         assert!(markdown.contains("same-file-symbol 1.0 · same-file-type 3.0"));
         assert!(markdown.contains("solver    ilp-threshold 300"));
         assert!(markdown.contains("diversity seeds-per-candidate 10"));
-        assert!(markdown.contains("tests     helper-cap 250"));
+        assert!(markdown.contains("tests     helper-cap 600"));
         assert!(markdown.contains("Score: 2.0000 → 1.0000; improvement +1.0000"));
         assert!(markdown.contains("Conditional split"));
         assert!(markdown.contains("solution space converged"));

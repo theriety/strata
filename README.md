@@ -195,7 +195,7 @@ candidates = 3
 seed = 42
 
 [profiles.anchored.capacity]
-file = 250
+file = 600
 folder = 20
 domain = 16
 package = 15
@@ -242,7 +242,7 @@ score-tolerance = 0.05
 min-distance = 0.05
 
 [profiles.anchored.tests]
-helper-cap = 250
+helper-cap = 600
 patterns = []
 builtins = true
 
@@ -261,7 +261,7 @@ candidates = 3
 seed = 42
 
 [profiles.greenfield.capacity]
-file = 250
+file = 600
 folder = 20
 domain = 16
 package = 15
@@ -308,7 +308,7 @@ score-tolerance = 0.05
 min-distance = 0.05
 
 [profiles.greenfield.tests]
-helper-cap = 250
+helper-cap = 600
 patterns = []
 builtins = true
 

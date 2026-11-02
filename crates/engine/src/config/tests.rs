@@ -17,7 +17,10 @@ fn should_default_to_the_config_less_baseline() {
     );
     assert_eq!(config.profiles.anchored.candidates, 3);
     assert_eq!(config.profiles.anchored.seed, 42);
-    assert_eq!(config.profiles.anchored.capacity.file, 250);
+    assert_eq!(config.profiles.anchored.capacity.file, 600);
+    assert_eq!(config.profiles.greenfield.capacity.file, 600);
+    assert_eq!(config.profiles.anchored.tests.helper_cap, 600);
+    assert_eq!(config.profiles.greenfield.tests.helper_cap, 600);
     assert_eq!(config.profiles.anchored.capacity.folder, 20);
     assert_eq!(config.profiles.anchored.capacity.domain, 16);
     assert_eq!(config.profiles.anchored.capacity.package, 15);
@@ -142,7 +145,7 @@ fn should_parse_a_partial_toml_filling_omitted_keys_with_defaults() {
     assert_eq!(config.analysis.profiles, vec![ProfileName::Anchored]);
     assert_eq!(config.profiles.anchored.candidates, 5);
     // an omitted key keeps its default.
-    assert_eq!(config.profiles.anchored.capacity.file, 250);
+    assert_eq!(config.profiles.anchored.capacity.file, 600);
 }
 
 #[test]
@@ -657,7 +660,7 @@ fn should_parse_tests_patterns_and_builtins_from_toml() {
     );
     assert!(!config.profiles.anchored.tests.builtins);
     // an omitted key keeps its default.
-    assert_eq!(config.profiles.anchored.tests.helper_cap, 250);
+    assert_eq!(config.profiles.anchored.tests.helper_cap, 600);
 }
 
 #[test]

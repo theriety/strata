@@ -318,7 +318,7 @@
 ### D-38: No oversized-symbol exemption in the capacity walk
 - **When**: Commit 13 (feat(cli): commands, rendering, e2e fixtures, and parity test)
 - **Draft said**: the Test Matrix's oversized-symbol row — a file dominated by a single symbol larger than the file SLOC cap is exempt from capacity findings, because the symbol cannot be split
-- **What I did instead**: the capacity walk (engine `analyze`, relocated from the CLI) flags any file whose production SLOC exceeds the cap with no single-symbol exemption — a lone 400-SLOC function against the 250 cap is reported as a violation
+- **What I did instead**: the capacity walk (engine `analyze`, relocated from the CLI) flags any file whose production SLOC exceeds the cap with no single-symbol exemption — a lone 400-SLOC function against the file cap (250 when recorded) is reported as a violation
 - **Reason**: behavior-change
 - **Impact on spec**: behavior-change
 - **Severity**: minor

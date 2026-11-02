@@ -38,6 +38,10 @@ mod markdown_advice;
 /// configured `strata.toml` in a parent directory must never leak into a run.
 const PURE_DEFAULTS: &str = "/nonexistent/strata-acceptance.toml";
 
+/// A config pinning the file cap at 250 SLOC (both profiles) so the over-cap
+/// fixtures keep their capacity findings under the 600 built-in default.
+const PINNED_CAP_250: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/e2e/cap-250.toml");
+
 /// The captured result of one binary invocation: its exit code and decoded
 /// streams.
 ///
@@ -125,7 +129,11 @@ fn analyze_to_file(name: &str) -> PathBuf {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        if matches!(name, "over-capacity" | "cyclic-oversized") {
+            PINNED_CAP_250
+        } else {
+            PURE_DEFAULTS
+        },
         "--format",
         "json",
         "--output",
@@ -909,7 +917,7 @@ fn should_deliver_a_well_formed_violations_json_face_for_a_violation_carrying_fi
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        PINNED_CAP_250,
         "--format",
         "json",
     ]);
@@ -949,7 +957,7 @@ fn should_match_the_analyze_json_face_even_when_capacity_findings_exist() {
         "--root",
         rust_str,
         "--config",
-        PURE_DEFAULTS,
+        PINNED_CAP_250,
         "--format",
         "json",
     ]);
@@ -958,7 +966,7 @@ fn should_match_the_analyze_json_face_even_when_capacity_findings_exist() {
         "--root",
         rust_str,
         "--config",
-        PURE_DEFAULTS,
+        PINNED_CAP_250,
         "--format",
         "json",
     ]);
@@ -977,7 +985,7 @@ fn should_match_the_analyze_json_face_even_when_capacity_findings_exist() {
         "--root",
         over_str,
         "--config",
-        PURE_DEFAULTS,
+        PINNED_CAP_250,
         "--format",
         "json",
     ]);
@@ -986,7 +994,7 @@ fn should_match_the_analyze_json_face_even_when_capacity_findings_exist() {
         "--root",
         over_str,
         "--config",
-        PURE_DEFAULTS,
+        PINNED_CAP_250,
         "--format",
         "json",
     ]);
@@ -1177,7 +1185,11 @@ fn should_gate_each_violation_class_against_its_triggering_fixture() {
             "--root",
             root_str,
             "--config",
-            PURE_DEFAULTS,
+            if matches!(name, "over-capacity" | "cyclic-oversized") {
+                PINNED_CAP_250
+            } else {
+                PURE_DEFAULTS
+            },
             "--fail-on",
             selector,
         ]);
@@ -1222,7 +1234,7 @@ fn should_never_gate_on_a_borderline_only_capacity_selector() {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        PINNED_CAP_250,
         "--fail-on",
         "capacity:borderline",
     ]);
@@ -1538,7 +1550,7 @@ fn should_cap_the_candidate_count_per_mode_at_the_requested_k() {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        PINNED_CAP_250,
         "-k",
         "2",
         "--mode",
@@ -1824,7 +1836,7 @@ fn should_report_borderline_capacity_without_gating() {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        PINNED_CAP_250,
         "--fail-on",
         "capacity",
     ]);
@@ -1847,7 +1859,7 @@ fn should_flag_an_oversized_single_symbol_file_per_d38() {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        PINNED_CAP_250,
         "--fail-on",
         "capacity",
     ]);
@@ -2307,7 +2319,7 @@ fn should_honor_config_precedence_flags_over_toml_over_defaults() {
 #[test]
 fn should_flip_a_borderline_finding_to_a_gating_violation_via_a_config_cap() {
     // the capacity cap is genuinely honored from config: the same 250-SLOC file
-    // that is merely borderline under the default 250 cap becomes a hard,
+    // that is merely borderline under the pinned 250 cap becomes a hard,
     // gating violation once a toml lowers the cap to 150.
     let root = fixture("borderline-only");
     let root_str = root.to_str().unwrap_or_default();
@@ -2471,7 +2483,7 @@ fn should_mark_a_cap_violating_layout_infeasible_with_the_resolution_notice() {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        PINNED_CAP_250,
         "--format",
         "json",
     ]);
@@ -2480,7 +2492,7 @@ fn should_mark_a_cap_violating_layout_infeasible_with_the_resolution_notice() {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        PINNED_CAP_250,
         "--format",
         "summary",
     ]);
@@ -2585,7 +2597,14 @@ fn should_never_duplicate_a_segment_in_a_capacity_violation_location() {
             "--root",
             root_str,
             "--config",
-            PURE_DEFAULTS,
+            if matches!(
+                name,
+                "over-capacity" | "borderline-only" | "cyclic-oversized"
+            ) {
+                PINNED_CAP_250
+            } else {
+                PURE_DEFAULTS
+            },
             "--format",
             "json",
         ]);
@@ -2964,7 +2983,7 @@ fn should_populate_conditional_splits_for_an_over_cap_scc() {
         "--root",
         root_str,
         "--config",
-        PURE_DEFAULTS,
+        PINNED_CAP_250,
         "--mode",
         "both",
         "--format",

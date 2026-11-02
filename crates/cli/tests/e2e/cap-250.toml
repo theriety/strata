@@ -1,0 +1,8 @@
+# Pins the file cap at the historical 250 SLOC so the over-cap fixtures keep
+# their capacity findings now that the built-in default is 600. It lives beside
+# the fixtures rather than inside one so the analyzer never scans it as source.
+[profiles.anchored.capacity]
+file = 250
+
+[profiles.greenfield.capacity]
+file = 250
