@@ -2,7 +2,7 @@
 //! assertions, and reports distance as verdicts.
 //!
 //! The engine is a library here exactly as the CLI uses it:
-//! [`snapshot_from_root`] + [`analyze`] with an explicit config. Nothing shells
+//! [`snapshot_from_root`] + [`analyze`](fn@analyze) with an explicit config. Nothing shells
 //! out; nothing reads a golden score. `STRATA_BLESS_EVAL=1` only regenerates a
 //! diagnostic dump — it never rewrites expectations.
 

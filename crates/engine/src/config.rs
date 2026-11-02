@@ -67,7 +67,9 @@ pub struct AdaptersConfig {
     /// Directory names treated as transparent when deriving container levels, so
     /// a source file and its test share a domain/folder. One leading source-root
     /// segment below each package root is stripped (`src/adapters/x` and
-    /// `spec/adapters/x` both resolve to the `adapters` domain).
+    /// `spec/adapters/x` both resolve to the `adapters` domain). Spelled
+    /// `source-roots` like every other key; `source_roots` remains accepted.
+    #[serde(rename = "source-roots", alias = "source_roots")]
     pub source_roots: Vec<String>,
 }
 
@@ -1351,6 +1353,26 @@ mod tests {
 
         assert_eq!(config.profiles.anchored.capacity.package_group, 7);
         assert!((config.profiles.anchored.weights.value_import - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn should_accept_source_roots_in_kebab_and_legacy_spelling() {
+        let kebab = "[adapters]\nsource-roots = [\"app\"]\n";
+        let legacy = "[adapters]\nsource_roots = [\"app\"]\n";
+
+        let kebab: Result<AnalyzeConfig, _> = toml::from_str(kebab);
+        let legacy: Result<AnalyzeConfig, _> = toml::from_str(legacy);
+
+        assert_eq!(
+            kebab.map(|config| config.adapters.source_roots).ok(),
+            Some(vec!["app".to_owned()]),
+            "the kebab key matches every other config key"
+        );
+        assert_eq!(
+            legacy.map(|config| config.adapters.source_roots).ok(),
+            Some(vec!["app".to_owned()]),
+            "the snake_case spelling remains accepted"
+        );
     }
 
     #[test]

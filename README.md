@@ -6,7 +6,7 @@ It never writes to your source — every command only reads the repository and p
 
 ## Requirements
 
-- **Rust 1.85+** (the workspace uses edition 2024).
+- **Rust 1.96+** (pinned in `rust-toolchain.toml`; the workspace uses edition 2024).
 - A **C/C++ toolchain and CMake**, required to build the bundled [HiGHS](https://highs.dev/) ILP solver used for exact cycle-breaking on small graphs.
 
 ## Install (local)
@@ -91,7 +91,7 @@ The ambiguity comparison deliberately over-approximates alternatives from pass-s
 | Flag | Meaning |
 |------|---------|
 | `--root <path>` | Repository root to analyze (default `.`). |
-| `--config <path>` | Config file (default `./strata.toml`; built-in defaults apply when absent). |
+| `--config <path>` | Config file (default `<root>/strata.toml`; built-in defaults apply when absent). |
 | `--mode <anchored\|greenfield\|both>` | Select which parameter profile or profiles to execute. |
 | `-k, --candidates <n>` | Override the candidate count for every selected parameter profile. |
 | `--seed <n>` | Override the deterministic seed for every selected parameter profile. |
@@ -152,7 +152,7 @@ Selector classes are `cycle`, `polarity`, `capacity`, and `visibility`, each opt
 | Flag | Meaning |
 |------|---------|
 | `--root <path>` | Repository root to analyze (default `.`). |
-| `--config <path>` | Config file (default `./strata.toml`; built-in defaults apply when absent). |
+| `--config <path>` | Config file (default `<root>/strata.toml`; built-in defaults apply when absent). |
 | `--jobs <n>` | Parallelism for parsing (`0` = all cores). |
 | `--fail-on <selectors>` | Comma-separated `kind[:severity]` selectors that trigger exit code `2`. |
 | `--format <table\|json>` | Output face (default `table`). |
@@ -171,7 +171,7 @@ Every command reads `strata.toml` from the analysis root (override with `--confi
 
 | Section | Controls |
 |---------|----------|
-| `[adapters]` | Which `languages` to run, `include`/`exclude` source globs, and physical source-root handling. |
+| `[adapters]` | Which `languages` to run, `include`/`exclude` source globs, and `source-roots` — directory names (default `src`, `spec`, `test`, `tests`, `lib`, `dist`, `__tests__`) treated as transparent below each package root so a source file and its test share a folder. The legacy `source_roots` spelling is still accepted. |
 | `[analysis]` | Selected parameter profiles and process-wide `jobs`. |
 | `[profiles.anchored]` | Anchored candidate count, seed, capacities, objective, evidence qualification, dependency weights, solver, diversity, test policy, and relocation policy. |
 | `[profiles.greenfield]` | The same complete parameter set for greenfield, independently configurable. |

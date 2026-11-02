@@ -55,7 +55,7 @@ pub fn tokenize(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// The character classes [`tokenize] splits on.
+/// The character classes [`tokenize`] splits on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CharKind {
     Start,

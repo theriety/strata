@@ -26,7 +26,7 @@ pub struct Container {
     /// strictly ascending. The bucket names no real directory, so the DTO
     /// collapses it at render; this flag is the structural signal for that
     /// collapse. It is a transient render hint, never serialized: the public
-    /// result carries the collapsed [`crate::ContainerNode`], not this tree.
+    /// result carries the collapsed engine `ContainerNode` DTO, not this tree.
     #[serde(skip)]
     pub synthetic: bool,
 }
