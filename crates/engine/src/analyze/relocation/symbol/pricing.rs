@@ -1,40 +1,52 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use strata_core::graph::csr::Csr;
-use strata_core::score::{Coefficients, KindWeights, score};
-use strata_ir::{ContainerId, Edge, Node, NodeKind, Snapshot};
+use strata_core::score::{Coefficients, KindWeights};
+use strata_ir::{ContainerId, Node, NodeKind};
 
-use crate::analyze::relocation::CandidateTree;
 use crate::analyze::relocation::SYMBOL_TARGETS;
 use crate::analyze::relocation::symbol::inputs::PassInputs;
 use crate::analyze::relocation::symbol::ledger::Ledger;
-use crate::analyze::scoring::{move_distance, score_candidate};
-use crate::config::CapacityConfig;
+use crate::analyze::scoring::{Placed, ScoringContext};
 use strata_ir::ScopeLevel;
+
+/// Sentinel vertex for a node whose effective file is not a crossing-graph
+/// vertex.
+const NO_VERTEX: u32 = u32::MAX;
 
 /// What a symbol pass prices placements with: the both-direction incidence
 /// that nominates destinations, the full objective over a placement, and the
 /// file crossing graph the cycle floor reads.
 pub(super) struct Pricing<'a> {
-    snapshot: &'a Snapshot,
     coefficients: &'a Coefficients,
     weights: &'a KindWeights,
-    same_file_symbol: f64,
-    same_file_type: f64,
-    capacity: CapacityConfig,
-    assembled: &'a CandidateTree,
     base: &'a BTreeMap<u32, ContainerId>,
-    edges: &'a [Edge],
+    /// The tree's scoring facts, resolved once for every placement priced.
+    context: ScoringContext<'a>,
+    /// The assembly's placement in dense form; a trial layout is this plus the
+    /// overlay.
+    base_placed: Placed,
+    /// Distinct `(source, target)` node pairs of the edges between different
+    /// nodes, ascending. The crossing graph is a function of these pairs, so
+    /// duplicate edges need not be walked again.
+    node_pairs: Vec<(u32, u32)>,
+    /// Crossing-graph vertex of each node under the assembly, by node id, or
+    /// [`NO_VERTEX`].
+    base_vertex: Vec<u32>,
+    /// Crossing-graph vertex of each candidate file, by container id, or
+    /// [`NO_VERTEX`].
+    vertex_of_file: Vec<u32>,
+    vertex_count: usize,
     /// Both-direction priced incidence per node, computed once: an edge
     /// priced 0.0 never nominates a destination (FIX04).
     pub(super) incident: BTreeMap<u32, Vec<(u32, f64)>>,
-    /// Dense vertex per candidate FILE, for the crossing graph.
-    file_vertices: BTreeMap<ContainerId, u32>,
 }
 
 impl<'a> Pricing<'a> {
     /// `touches_zone` is the pass's test-zone predicate (FIX11): an edge with
     /// either endpoint inside the zone prices to zero.
+    // reason: one linear pass that builds every lookup table from the same walk.
+    #[allow(clippy::too_many_lines)]
     pub(super) fn new(inputs: PassInputs<'a>, touches_zone: &dyn Fn(u32) -> bool) -> Self {
         let PassInputs {
             snapshot,
@@ -43,6 +55,7 @@ impl<'a> Pricing<'a> {
             same_file_symbol,
             same_file_type,
             capacity,
+            scoring,
             assembled,
             nodes,
             edges,
@@ -104,18 +117,58 @@ impl<'a> Pricing<'a> {
             .enumerate()
             .map(|(index, container)| (container.id, u32::try_from(index).unwrap_or(u32::MAX)))
             .collect();
+        let mut vertex_of_file = vec![
+            NO_VERTEX;
+            file_vertices
+                .keys()
+                .map(|file| file.0 as usize + 1)
+                .max()
+                .unwrap_or(0)
+        ];
+        for (file, vertex) in &file_vertices {
+            if let Some(cell) = vertex_of_file.get_mut(file.0 as usize) {
+                *cell = *vertex;
+            }
+        }
+        let node_pairs: Vec<(u32, u32)> = edges
+            .iter()
+            .filter(|edge| edge.source != edge.target)
+            .map(|edge| (edge.source.0, edge.target.0))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let vertex_len = node_pairs
+            .iter()
+            .flat_map(|&(source, target)| [source, target])
+            .max()
+            .map_or(0, |id| id as usize + 1);
+        let base_vertex = (0..vertex_len)
+            .map(|id| {
+                u32::try_from(id)
+                    .ok()
+                    .and_then(|id| base.get(&id))
+                    .map_or(NO_VERTEX, |file| Self::vertex_of(&vertex_of_file, *file))
+            })
+            .collect();
+        let context = ScoringContext::new(
+            scoring,
+            &assembled.tree,
+            &assembled.namespace_by_file,
+            &assembled.pass_start_file_by_candidate,
+            &capacity,
+        );
+        let base_placed = scoring.place(&|id| base.get(&id).copied());
         Self {
-            snapshot,
             coefficients,
             weights,
-            same_file_symbol,
-            same_file_type,
-            capacity,
-            assembled,
             base,
-            edges,
+            context,
+            base_placed,
+            node_pairs,
+            base_vertex,
+            vertex_of_file,
+            vertex_count: file_vertices.len(),
             incident,
-            file_vertices,
         }
     }
 
@@ -168,51 +221,46 @@ impl<'a> Pricing<'a> {
 
     /// Full objective value of the layout `state` describes.
     pub(super) fn score_with(&self, state: &BTreeMap<u32, ContainerId>) -> f64 {
-        let placement = |id: u32| {
-            state
-                .get(&id)
-                .copied()
-                .or_else(|| self.base.get(&id).copied())
-        };
-        let distance = move_distance(self.snapshot, &self.assembled.tree, &placement);
-        let candidate = score_candidate(
-            self.snapshot,
-            &placement,
-            &self.assembled.pass_start_file_by_candidate,
-            &self.assembled.tree,
-            &self.assembled.namespace_by_file,
-            distance,
-            &self.capacity,
-            self.same_file_symbol,
-            self.same_file_type,
-        );
-        score(&candidate, self.coefficients, self.weights).total
+        let mut placed = self.base_placed.clone();
+        for (id, file) in state {
+            placed.set(*id, *file);
+        }
+        let distance = self.context.move_distance(&placed);
+        self.context
+            .score(&placed, distance, self.coefficients, self.weights)
+            .total
+    }
+
+    /// The crossing-graph vertex of candidate file `file`, or [`NO_VERTEX`].
+    fn vertex_of(vertex_of_file: &[u32], file: ContainerId) -> u32 {
+        vertex_of_file
+            .get(file.0 as usize)
+            .copied()
+            .unwrap_or(NO_VERTEX)
     }
 
     /// The crossing graph over candidate FILES induced by the ledger's
     /// current overlay, condensed-ready exactly as the file polish builds its
     /// quotient.
     pub(super) fn crossing_csr(&self, ledger: &Ledger<'_>) -> Csr {
-        let mut pairs: BTreeSet<(u32, u32)> = BTreeSet::new();
-        for edge in self.edges {
-            let (Some(source), Some(target)) = (
-                ledger.effective(edge.source.0),
-                ledger.effective(edge.target.0),
-            ) else {
-                continue;
-            };
-            if source == target {
-                continue;
+        let mut vertex = self.base_vertex.clone();
+        for (id, file) in &ledger.overlay {
+            if let Some(cell) = vertex.get_mut(*id as usize) {
+                *cell = Self::vertex_of(&self.vertex_of_file, *file);
             }
-            let (Some(source), Some(target)) = (
-                self.file_vertices.get(&source),
-                self.file_vertices.get(&target),
-            ) else {
-                continue;
-            };
-            pairs.insert((*source, *target));
         }
-        let sorted: Vec<(u32, u32)> = pairs.into_iter().collect();
-        Csr::from_sorted_edges(self.file_vertices.len(), &sorted)
+        let mut pairs: Vec<(u32, u32)> = self
+            .node_pairs
+            .iter()
+            .filter_map(|&(source, target)| {
+                let source = vertex.get(source as usize).copied()?;
+                let target = vertex.get(target as usize).copied()?;
+                (source != NO_VERTEX && target != NO_VERTEX && source != target)
+                    .then_some((source, target))
+            })
+            .collect();
+        pairs.sort_unstable();
+        pairs.dedup();
+        Csr::from_sorted_edges(self.vertex_count, &pairs)
     }
 }

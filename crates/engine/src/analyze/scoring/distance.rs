@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_ir::{ContainerId, ContainerTree, ScopeLevel, Snapshot};
+#[cfg(test)]
+use strata_ir::{ContainerId, Snapshot};
+use strata_ir::{ContainerTree, ScopeLevel};
 
 /// Computes the move distance of a candidate tree: the fraction of symbols whose
 /// owning file changes real folder — or, since FIX08, whose effective placement
@@ -20,6 +22,10 @@ use strata_ir::{ContainerId, ContainerTree, ScopeLevel, Snapshot};
 /// every node to its current file's candidate id, so the extension changes
 /// nothing for them — μ and β stop being blind to symbol moves without any
 /// coefficient moving.
+///
+/// Test oracle for `ScoringContext::move_distance`, which production scores
+/// through.
+#[cfg(test)]
 pub(in crate::analyze) fn move_distance(
     snapshot: &Snapshot,
     candidate: &ContainerTree,

@@ -6,25 +6,32 @@
 use smol_str::SmolStr;
 use strata_ir::{ContainerId, ScopeLevel};
 
+#[cfg(test)]
 mod candidate;
 mod capacity;
+mod context;
 mod current;
 mod cycles;
 mod distance;
+#[cfg(test)]
 mod inputs;
+#[cfg(test)]
 mod relocation_counts;
 mod sources;
 
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
 pub(in crate::analyze) use candidate::score_candidate;
 #[cfg(test)]
 pub(in crate::analyze) use capacity::{binding_pressure, physical_binding_pressure};
+pub(in crate::analyze) use context::{Placed, ScoringContext, SnapshotScoring};
 #[cfg(test)]
 pub(in crate::analyze) use current::score_current;
 pub(in crate::analyze) use current::{score_current_with_affinity, score_current_with_overlay};
 pub(in crate::analyze) use cycles::CycleCounts;
+#[cfg(test)]
 pub(in crate::analyze) use distance::move_distance;
 #[cfg(test)]
 use inputs::cohesion_inputs;

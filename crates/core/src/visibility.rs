@@ -20,8 +20,10 @@
 use strata_ir::{ContainerId, ContainerTree, Edge, EdgeKind, Node, NodeId, NodeKind, ScopeLevel};
 
 mod lca;
+mod prepared;
 
 use lca::LcaTable;
+pub use prepared::PreparedVisibility;
 
 /// The derived export scope of a single symbol, expressed both as the container
 /// that owns the scope and the level that container sits at.
@@ -145,12 +147,8 @@ impl<'nodes> NodeIndex<'nodes> {
 /// stays file-private while one consumed from elsewhere widens to the common
 /// ancestor of its declaration and that consumer. Nodes with no consumers never
 /// appear here and default to their own file later.
-fn initial_scopes(
-    by_id: &NodeIndex,
-    edges: &[Edge],
-    lca: &LcaTable,
-) -> std::collections::BTreeMap<u32, ContainerId> {
-    let mut scope: std::collections::BTreeMap<u32, ContainerId> = std::collections::BTreeMap::new();
+fn initial_scopes(by_id: &NodeIndex, edges: &[Edge], lca: &LcaTable) -> Vec<Option<ContainerId>> {
+    let mut scope: Vec<Option<ContainerId>> = vec![None; by_id.slot.len()];
 
     for edge in edges {
         let (Some(consumer), Some(target)) = (by_id.get(edge.source.0), by_id.get(edge.target.0))
@@ -158,12 +156,13 @@ fn initial_scopes(
             continue;
         };
         let consumer_container = consumer.container;
-        scope
-            .entry(edge.target.0)
-            // seed an unseen symbol with its own container, then fold in the
-            // consumer so the scope is the LCA of declaration and consumption.
-            .and_modify(|current| *current = lca.lca(*current, consumer_container))
-            .or_insert_with(|| lca.lca(target.container, consumer_container));
+        let Some(cell) = scope.get_mut(edge.target.0 as usize) else {
+            continue;
+        };
+        // seed an unseen symbol with its own container, then fold in the
+        // consumer so the scope is the LCA of declaration and consumption.
+        let seed = cell.unwrap_or(target.container);
+        *cell = Some(lca.lca(seed, consumer_container));
     }
 
     scope
@@ -181,7 +180,7 @@ fn widen_by_type_exposure(
     by_id: &NodeIndex,
     edges: &[Edge],
     lca: &LcaTable,
-    scope: &mut std::collections::BTreeMap<u32, ContainerId>,
+    scope: &mut [Option<ContainerId>],
 ) {
     loop {
         let mut changed = false;
@@ -200,8 +199,9 @@ fn widen_by_type_exposure(
             }
 
             let function_scope = scope
-                .get(&function.id.0)
+                .get(function.id.0 as usize)
                 .copied()
+                .flatten()
                 .unwrap_or(function.container);
             // a function only exposes its signature when itself exported above
             // its own file; a file-private function leaks nothing.
@@ -210,12 +210,15 @@ fn widen_by_type_exposure(
             }
 
             let current = scope
-                .get(&referenced.id.0)
+                .get(referenced.id.0 as usize)
                 .copied()
+                .flatten()
                 .unwrap_or(referenced.container);
             let widened = lca.lca(current, function_scope);
-            if widened != current {
-                scope.insert(referenced.id.0, widened);
+            if widened != current
+                && let Some(cell) = scope.get_mut(referenced.id.0 as usize)
+            {
+                *cell = Some(widened);
                 changed = true;
             }
         }
@@ -237,14 +240,18 @@ fn is_signature_edge(kind: EdgeKind) -> bool {
 /// file.
 fn collect_scopes(
     by_id: &NodeIndex,
-    scope: &std::collections::BTreeMap<u32, ContainerId>,
+    scope: &[Option<ContainerId>],
     lca: &LcaTable,
 ) -> Vec<DerivedScope> {
     by_id
         .ordered
         .iter()
         .map(|node| {
-            let container = scope.get(&node.id.0).copied().unwrap_or(node.container);
+            let container = scope
+                .get(node.id.0 as usize)
+                .copied()
+                .flatten()
+                .unwrap_or(node.container);
             DerivedScope {
                 node: node.id,
                 container,
@@ -660,5 +667,66 @@ mod tests {
             scope_zero.map(|scope| scope.level),
             Some(ScopeLevel::Package)
         );
+    }
+
+    #[test]
+    fn should_count_prepared_findings_like_a_full_derivation_for_every_placement() {
+        // files 3 and 4 sit in different folders; a fifth file shares folder 1
+        // with file 3. Eight nodes mix kinds, declared levels and exemptions,
+        // wired by calls, a signature edge onto a type, inheritance and a loop.
+        let tree = ContainerTree::new(vec![
+            container(0, ScopeLevel::Package, None),
+            container(1, ScopeLevel::Folder, Some(0)),
+            container(2, ScopeLevel::Folder, Some(0)),
+            container(3, ScopeLevel::File, Some(1)),
+            container(4, ScopeLevel::File, Some(2)),
+            container(5, ScopeLevel::File, Some(1)),
+        ]);
+        let mut nodes = vec![
+            node(0, 3, NodeKind::Symbol, ScopeLevel::Package),
+            node(1, 3, NodeKind::Type, ScopeLevel::Folder),
+            node(2, 4, NodeKind::Symbol, ScopeLevel::Folder),
+            node(3, 4, NodeKind::Type, ScopeLevel::Package),
+            node(4, 5, NodeKind::Symbol, ScopeLevel::Domain),
+            node(5, 5, NodeKind::Symbol, ScopeLevel::Package),
+            node(6, 3, NodeKind::Symbol, ScopeLevel::File),
+            node(7, 4, NodeKind::FileBody, ScopeLevel::Folder),
+        ];
+        if let Some(exempt) = nodes.get_mut(5) {
+            exempt.public_api = true;
+        }
+        let edges = vec![
+            edge(2, 0, EdgeKind::Call),
+            edge(4, 0, EdgeKind::Call),
+            edge(0, 1, EdgeKind::TypeReference),
+            edge(2, 3, EdgeKind::Inheritance),
+            edge(4, 3, EdgeKind::Call),
+            edge(6, 6, EdgeKind::Call),
+            edge(5, 2, EdgeKind::Call),
+            edge(7, 99, EdgeKind::Call),
+        ];
+        let prepared = PreparedVisibility::new(&tree, &nodes, &edges);
+        let files = [ContainerId(3), ContainerId(4), ContainerId(5)];
+
+        // every assignment of the eight nodes to the three files: 3^8 trials
+        // through one prepared table.
+        for (trial, code) in (0..3_usize.pow(8)).enumerate() {
+            let mut rest = code;
+            let mut containers = Vec::new();
+            for _ in 0..nodes.len() {
+                containers.push(files.get(rest % 3).copied().unwrap_or(ContainerId(3)));
+                rest /= 3;
+            }
+            let mut placed = nodes.clone();
+            for (node, container) in placed.iter_mut().zip(&containers) {
+                node.container = *container;
+            }
+            let expected = derive_visibility(&tree, &placed, &edges).findings.len();
+            assert_eq!(
+                prepared.finding_count(&containers),
+                expected,
+                "trial {trial}"
+            );
+        }
     }
 }

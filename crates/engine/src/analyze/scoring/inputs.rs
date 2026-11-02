@@ -1,4 +1,7 @@
 //! Scorer inputs derived from a placement: naming cohesion groups, path cohesion and container sizes.
+//!
+//! Test oracle: production scores through `ScoringContext`; this builder is kept
+//! so the tests can check the hoisted path against the straightforward one.
 
 use std::collections::BTreeMap;
 

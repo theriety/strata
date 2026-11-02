@@ -4,6 +4,7 @@ use strata_core::score::{Coefficients, KindWeights};
 use strata_ir::{ContainerId, Edge, Node, Snapshot};
 
 use crate::analyze::relocation::CandidateTree;
+use crate::analyze::scoring::SnapshotScoring;
 use crate::config::CapacityConfig;
 
 /// The read-only analysis inputs a [`SymbolPass`] prices placements against.
@@ -15,6 +16,7 @@ pub(super) struct PassInputs<'a> {
     pub(super) same_file_symbol: f64,
     pub(super) same_file_type: f64,
     pub(super) capacity: CapacityConfig,
+    pub(super) scoring: &'a SnapshotScoring,
     pub(super) assembled: &'a CandidateTree,
     pub(super) nodes: &'a [Node],
     pub(super) edges: &'a [Edge],

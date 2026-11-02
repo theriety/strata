@@ -245,15 +245,41 @@ pub struct ScoreBreakdown {
 /// pre-extracted scoped binding pressure, and dependency-only pricing is its
 /// fixed coefficient times the qualifying relocation count. Acyclicity and
 /// polarity stay hard vetoes enforced upstream.
+///
+/// The reference scorer for tests: production prices naming once per tree and
+/// calls [`score_with_naming`].
+#[cfg(test)]
 #[must_use]
 pub fn score(
     candidate: &Candidate,
     coefficients: &Coefficients,
     weights: &KindWeights,
 ) -> ScoreBreakdown {
+    score_with_naming(
+        candidate,
+        naming(&candidate.cohesion_groups),
+        coefficients,
+        weights,
+    )
+}
+
+/// Scores a candidate whose naming cohesion the caller has already priced.
+///
+/// `naming_cohesion` is the value [`weighted_naming`] returns for the
+/// candidate's groups; `candidate.cohesion_groups` is not read. A caller that
+/// scores many placements over one tree computes each group's
+/// [`group_cohesion`] once, since only the SLOC weights move between
+/// placements, and passes the weighted mean here.
+#[must_use]
+pub fn score_with_naming(
+    candidate: &Candidate,
+    naming_cohesion: f64,
+    coefficients: &Coefficients,
+    weights: &KindWeights,
+) -> ScoreBreakdown {
     let cut = cut_cost(&candidate.edges, weights);
     let imbalance = coefficients.lambda * imbalance(&candidate.containers);
-    let naming = -coefficients.alpha * naming(&candidate.cohesion_groups);
+    let naming = -coefficients.alpha * naming_cohesion;
     let path = -coefficients.beta * candidate.path_cohesion;
     let anchor = coefficients.mu * candidate.move_distance;
     let capacity = coefficients.gamma * candidate.capacity_pressure;
@@ -369,12 +395,27 @@ fn squared_cv(sizes: &[u32]) -> f64 {
 ///
 /// A group with fewer than two members has no pairs and contributes no cohesion;
 /// when every group's weight is zero the result is zero.
+#[cfg(test)]
 fn naming(groups: &[CohesionGroup]) -> f64 {
+    weighted_naming(
+        groups
+            .iter()
+            .map(|group| (group.production_sloc, group_cohesion(&group.members))),
+    )
+}
+
+/// Returns the size-weighted mean of per-group cohesion values, each paired with
+/// its group's production SLOC, in group order.
+///
+/// This is the arithmetic the reference scorer applies to a candidate's groups, exposed so
+/// a caller holding precomputed [`group_cohesion`] values prices the same term.
+#[must_use]
+pub fn weighted_naming(groups: impl IntoIterator<Item = (u32, f64)>) -> f64 {
     let mut weighted_sum = 0.0;
     let mut total_weight = 0.0;
-    for group in groups {
-        let weight = f64::from(group.production_sloc);
-        weighted_sum += weight * group_cohesion(&group.members);
+    for (production_sloc, cohesion) in groups {
+        let weight = f64::from(production_sloc);
+        weighted_sum += weight * cohesion;
         total_weight += weight;
     }
     if total_weight == 0.0 {
@@ -386,7 +427,8 @@ fn naming(groups: &[CohesionGroup]) -> f64 {
 
 /// Returns the mean pairwise Jaccard similarity of a group's member token sets,
 /// or zero when the group has fewer than two members.
-fn group_cohesion(members: &[BTreeSet<String>]) -> f64 {
+#[must_use]
+pub fn group_cohesion(members: &[BTreeSet<String>]) -> f64 {
     let count = members.len();
     if count < 2 {
         return 0.0;
