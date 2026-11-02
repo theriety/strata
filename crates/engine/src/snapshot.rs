@@ -476,21 +476,44 @@ fn apply_visibility_scopes(
             continue;
         }
 
+        // a `dir/foo.rs` definition file sits beside the `dir/foo/` folder it
+        // owns; the module's own level is that folder, so the definition file
+        // is left out of the common-ancestor walk. Dropping it is deliberate
+        // per R2 (pub(super)/pub(in) resolve to the module's own folder), and
+        // the adapter states it: it is never guessed from file names, so a
+        // miss widens instead of narrowing.
+        // a definition file outside the stated scope is not trusted: keeping
+        // it in the walk can only widen.
+        let definition = visibility_scope
+            .definition_file
+            .as_ref()
+            .filter(|path| visibility_scope.files.contains(path));
+        let definition_container = definition.and_then(|path| files.get(path).copied());
+
         let mut containers = Vec::with_capacity(visibility_scope.files.len() + 1);
-        containers.push(node.container);
+        if definition_container != Some(node.container) {
+            containers.push(node.container);
+        }
         let mut complete = true;
         for path in &visibility_scope.files {
             let Some(container) = files.get(path).copied() else {
                 complete = false;
                 break;
             };
-            containers.push(container);
+            if Some(path) != definition {
+                containers.push(container);
+            }
         }
         if !complete {
             continue;
         }
         if let Some(level) = common_ancestor_level(tree, &containers) {
-            node.visibility = level;
+            // a lone remaining file still lives in the module's own folder.
+            node.visibility = if definition.is_some() && level == ScopeLevel::File {
+                ScopeLevel::Folder
+            } else {
+                level
+            };
         }
     }
 }
@@ -886,6 +909,118 @@ mod tests {
             .map(|container| container.name.to_string())
             .collect();
         assert_eq!(packages, vec!["ai".to_string()]);
+    }
+
+    /// Projects one scope sidecar over a laminar tree built from `paths` and
+    /// returns the node's resulting level, its container, and the container the
+    /// tree assigned to `home` (the node must not move).
+    #[allow(clippy::expect_used)] // loud failure is the point of this test helper
+    fn scoped_node(
+        paths: &[&str],
+        home: &str,
+        scope: &[&str],
+        definition_file: Option<&str>,
+    ) -> (ScopeLevel, ContainerId, ContainerId) {
+        let paths: Vec<SmolStr> = paths.iter().map(|path| SmolStr::new(*path)).collect();
+        let layout = Layout {
+            package_roots: Vec::new(),
+            source_roots: Vec::new(),
+        };
+        let built = build_laminar_tree(&paths, "pkg", &layout);
+        let expected = built
+            .files
+            .get(home)
+            .copied()
+            .expect("home file must be part of the fixture paths");
+        let mut nodes = vec![node(0, "item", expected.0)];
+        let mut files: Vec<SmolStr> = scope.iter().map(|path| SmolStr::new(*path)).collect();
+        files.sort();
+        let scopes = vec![VisibilityScope {
+            node: NodeId(0),
+            files,
+            definition_file: definition_file.map(SmolStr::new),
+        }];
+        apply_visibility_scopes(&mut nodes, &built.tree, &built.files, &scopes);
+        let item = nodes.first().expect("the fixture node is present");
+        (item.visibility, item.container, expected)
+    }
+
+    #[test]
+    fn should_resolve_a_pub_super_in_a_file_plus_folder_module_to_its_own_folder() {
+        // `dir/foo.rs` owns `dir/foo/`; the module's own level is that folder,
+        // not the `dir` domain the sibling definition file would drag in.
+        let paths = [
+            "a/lib.rs",
+            "dir/foo.rs",
+            "dir/foo/a.rs",
+            "dir/foo/b.rs",
+            "other/x.rs",
+        ];
+        let (level, container, expected) = scoped_node(
+            &paths,
+            "dir/foo/a.rs",
+            &["dir/foo.rs", "dir/foo/a.rs", "dir/foo/b.rs"],
+            Some("dir/foo.rs"),
+        );
+        assert_eq!(level, ScopeLevel::Folder);
+        assert_eq!(container, expected);
+    }
+
+    #[test]
+    fn should_promote_a_lone_remaining_file_to_its_module_folder() {
+        // `dir/foo.rs` plus a single `dir/foo/a.rs`: once the definition file
+        // is set aside only one file remains, which still lives in `dir/foo/`.
+        let paths = ["a/lib.rs", "dir/foo.rs", "dir/foo/a.rs", "other/x.rs"];
+        let (level, _, _) = scoped_node(
+            &paths,
+            "dir/foo/a.rs",
+            &["dir/foo.rs", "dir/foo/a.rs"],
+            Some("dir/foo.rs"),
+        );
+        assert_eq!(level, ScopeLevel::Folder);
+    }
+
+    #[test]
+    fn should_resolve_a_pub_super_in_a_mod_rs_module_to_its_own_folder() {
+        let paths = ["a/lib.rs", "dir/foo/mod.rs", "dir/foo/a.rs", "other/x.rs"];
+        let (level, _, _) = scoped_node(
+            &paths,
+            "dir/foo/a.rs",
+            &["dir/foo/mod.rs", "dir/foo/a.rs"],
+            Some("dir/foo/mod.rs"),
+        );
+        assert_eq!(level, ScopeLevel::Folder);
+    }
+
+    #[test]
+    fn should_keep_a_pub_crate_item_at_package_level() {
+        let paths = ["a/lib.rs", "dir/foo.rs", "dir/foo/a.rs", "other/x.rs"];
+        let (level, _, _) = scoped_node(&paths, "dir/foo/a.rs", &paths, None);
+        assert_eq!(level, ScopeLevel::Package);
+    }
+
+    #[test]
+    fn should_keep_a_crate_root_scope_beside_its_folder_at_package_level() {
+        // `tests/it.rs` is a crate root with a sibling `tests/it/` folder; the
+        // adapter states no definition file for a root, so nothing is dropped
+        // and the lone-file promotion cannot narrow the crate-wide scope.
+        let paths = ["src/lib.rs", "tests/it.rs", "tests/it/a.rs"];
+        let (level, _, _) = scoped_node(&paths, "tests/it/a.rs", &paths, None);
+        assert_eq!(level, ScopeLevel::Package);
+    }
+
+    #[test]
+    fn should_ignore_a_definition_file_outside_the_scope_files() {
+        // the scope lists only `dir/foo/a.rs`; a stated definition file that is
+        // not among `files` must not trigger the lone-file promotion to Folder.
+        let paths = ["a/lib.rs", "dir/foo.rs", "dir/foo/a.rs", "other/x.rs"];
+        let (level, _, _) = scoped_node(
+            &paths,
+            "dir/foo/a.rs",
+            &["dir/foo/a.rs"],
+            Some("dir/foo.rs"),
+        );
+        assert_eq!(level, ScopeLevel::File);
     }
 
     #[test]
