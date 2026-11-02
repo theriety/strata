@@ -34,7 +34,7 @@ Every endpoint Strata prints is a real repository path.
 
 Namespace derivation understands see-through roots. It aligns the physical directory with the logical key while skipping see-through segments, rather than requiring a literal suffix. One derivation serves narration and relocation admission, so the namespace a move is checked against is the namespace it is reported in.
 
-Every printed `from` exists at pass start. Every printed `to` either exists or is a folder the same candidate creates, whose parent exists or is itself created by that candidate. Tests assert this invariant across the golden fixtures.
+Every printed `from` exists at pass start. Every printed `to` either exists or is a folder the same candidate creates, whose parent exists or is itself created by that candidate. Tests assert this invariant across the golden fixtures. A file move never lands on a path another file holds; such a move is folded into symbol moves instead ([ADR-21](../relocation/adr-21-a-colliding-file-move-folds-into-symbol-moves.md)).
 
 ## 🔀 Alternatives considered
 

@@ -4,6 +4,7 @@ use smol_str::SmolStr;
 use strata_core::cluster::{ClusterId, Partition};
 
 use crate::analyze::relocation::PipelineSolver;
+use crate::analyze::relocation::collision::CollisionFold;
 use crate::config::{
     MirrorCaptures, MirrorTemplate, ProfileConfig, TestMirrorRule, builtin_test_mirror_rules,
 };
@@ -13,13 +14,17 @@ use crate::result::{BlockedMirror, BlockedMirrorReason, MirrorMove, Move};
 #[cfg(test)]
 mod tests;
 
-/// Mirror follower decisions produced by the same deterministic solver restart.
+/// Placement decisions produced by the same deterministic solver restart that
+/// must stay coupled to its partition: mirror follower outcomes, and the file
+/// moves withdrawn for a path collision whose declarations the symbol pass is
+/// offered instead (ADR-21).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(in crate::analyze) struct MirrorEvidence {
+pub(in crate::analyze) struct PolishEvidence {
     pub(in crate::analyze) outcomes: Vec<MirrorOutcome>,
+    pub(in crate::analyze) folds: Vec<CollisionFold>,
 }
 
-impl MirrorEvidence {
+impl PolishEvidence {
     pub(super) fn applied_sccs(&self) -> BTreeSet<u32> {
         self.outcomes
             .iter()
@@ -91,7 +96,7 @@ impl ProjectedFolder {
 }
 
 impl PipelineSolver<'_> {
-    pub(super) fn attach_test_mirrors(moves: &mut Vec<Move>, evidence: &MirrorEvidence) {
+    pub(super) fn attach_test_mirrors(moves: &mut Vec<Move>, evidence: &PolishEvidence) {
         let mut follower_paths = BTreeSet::new();
         for outcome in &evidence.outcomes {
             let Some(entry) = moves.iter_mut().find(|entry| {
@@ -143,14 +148,24 @@ impl PipelineSolver<'_> {
 
     #[allow(clippy::too_many_lines)]
     /// Assigns test-zone files to their unique subject twin after polish.
-    pub(super) fn shadow_tests(&self, parts: &mut Partition) -> MirrorEvidence {
+    ///
+    /// `folds` are the restart's withdrawn colliding moves (ADR-21); they ride
+    /// the returned evidence and shape the layout followers are placed against.
+    pub(super) fn shadow_tests(
+        &self,
+        parts: &mut Partition,
+        folds: Vec<CollisionFold>,
+    ) -> PolishEvidence {
+        let mut evidence = PolishEvidence {
+            folds,
+            ..PolishEvidence::default()
+        };
         if !self.mirror_enabled || self.mirror_rules.is_empty() {
-            return MirrorEvidence::default();
+            return evidence;
         }
-        let assembled = self.assemble(parts);
+        let assembled = self.assemble_with_polish_evidence(parts, &evidence);
         let (current_physical, proposed_physical) =
             physical_relocation_folders(&self.snapshot.ir().containers, &assembled.tree);
-        let mut evidence = MirrorEvidence::default();
         for (mirror_vertex, claims) in self.exact_mirror_links() {
             for link in claims.values() {
                 let Some(source_scc) = self
@@ -374,7 +389,7 @@ impl PipelineSolver<'_> {
         parts: &Partition,
         mirror_vertex: u32,
         intended_path: &str,
-        evidence: &MirrorEvidence,
+        evidence: &PolishEvidence,
     ) -> bool {
         self.files.iter().enumerate().any(|(vertex, file)| {
             if vertex == mirror_vertex as usize {
@@ -403,7 +418,7 @@ impl PipelineSolver<'_> {
         &self,
         parts: &Partition,
         vertex: u32,
-        evidence: &MirrorEvidence,
+        evidence: &PolishEvidence,
     ) -> Option<ProjectedFolder> {
         let scc = self.condensation.membership.get(vertex as usize)?.0;
         if let Some(intended) = evidence.applied_destination(scc) {
@@ -424,7 +439,7 @@ impl PipelineSolver<'_> {
         &self,
         parts: &Partition,
         vertex: u32,
-        evidence: &MirrorEvidence,
+        evidence: &PolishEvidence,
     ) -> Option<&SmolStr> {
         let scc = self.condensation.membership.get(vertex as usize)?.0;
         let cluster = parts.cluster_of(scc)?;
@@ -436,7 +451,7 @@ impl PipelineSolver<'_> {
         self.cycle_home_by_vertex.get(&vertex)
     }
 
-    fn repository_path(&self, path: &str) -> String {
+    pub(super) fn repository_path(&self, path: &str) -> String {
         let relative: Vec<String> = path
             .split('/')
             .filter(|segment| !segment.is_empty())

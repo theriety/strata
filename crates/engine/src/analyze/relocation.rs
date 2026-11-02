@@ -32,11 +32,12 @@ use crate::result::{Candidate, ConditionalSplit, ScoreBreakdown};
 #[cfg(test)]
 mod tests;
 
+pub(in crate::analyze) mod collision;
 pub(in crate::analyze) mod mirror;
 pub(in crate::analyze) mod solver;
 pub(in crate::analyze) mod symbol;
 
-pub(in crate::analyze) use mirror::MirrorEvidence;
+pub(in crate::analyze) use mirror::PolishEvidence;
 
 /// The compiled `[tests]` policy deciding which files count as tests for the
 /// clustering tie-cut and the subject-following shadow pass.
@@ -401,7 +402,7 @@ impl RelocationIdentityGuard {
 
     #[cfg(test)]
     pub(in crate::analyze) fn accepts(&self, parts: &Partition) -> bool {
-        self.accepts_with_mirrors(parts, &MirrorEvidence::default())
+        self.accepts_with_mirrors(parts, &PolishEvidence::default())
     }
 
     /// Checks a finished candidate against every pass-start permission: each
@@ -411,7 +412,7 @@ impl RelocationIdentityGuard {
     pub(in crate::analyze) fn accepts_with_mirrors(
         &self,
         parts: &Partition,
-        evidence: &MirrorEvidence,
+        evidence: &PolishEvidence,
     ) -> bool {
         let applied = evidence.applied_sccs();
         let mut occupied: BTreeSet<(ClusterId, &SmolStr, &SmolStr)> = BTreeSet::new();
@@ -529,6 +530,49 @@ impl RelocationIdentityGuard {
             {
                 allowed.extend(scc_values.iter().cloned());
             }
+        }
+    }
+}
+
+/// Carries each folder's fold pin (ADR-21) up to the domain holding it;
+/// domains holding no folded file keep the empty key.
+fn lift_pins(
+    folder_pins: &[SmolStr],
+    domain_parts: &Partition,
+    domain_count: usize,
+) -> Vec<SmolStr> {
+    let mut domain_pins = vec![SmolStr::default(); domain_count];
+    for (folder, pin) in folder_pins.iter().enumerate() {
+        if let Some(slot) = domain_parts
+            .cluster_of(u32::try_from(folder).unwrap_or(u32::MAX))
+            .and_then(|domain| domain_pins.get_mut(domain.0 as usize))
+            && !pin.is_empty()
+        {
+            slot.clone_from(pin);
+        }
+    }
+    domain_pins
+}
+
+/// Names each package holding a pinned domain by its pin alone: a folded file
+/// keeps its pass-start path (ADR-21), so the package drawn around it must be
+/// the one it already lives in, whoever else joined it.
+fn name_pinned_packages(
+    package_tally: &mut NameTally,
+    domain_pins: &[SmolStr],
+    package_parts: &Partition,
+) {
+    for (domain, pin) in domain_pins.iter().enumerate() {
+        let package = u32::try_from(domain)
+            .ok()
+            .and_then(|domain| package_parts.cluster_of(domain));
+        if let (Some(package), false) = (package, pin.is_empty())
+            && let Some(tally) = package_tally.get_mut(&package.0)
+        {
+            let total = tally
+                .values()
+                .fold((0, 0), |(sloc, count), &(s, c)| (sloc + s, count + c));
+            *tally = BTreeMap::from([(pin.clone(), total)]);
         }
     }
 }
@@ -746,13 +790,13 @@ impl PipelineSolver<'_> {
         &self,
         parts: Partition,
         total: f64,
-        evidence: MirrorEvidence,
-    ) -> SolvedCandidate<MirrorEvidence> {
+        evidence: PolishEvidence,
+    ) -> SolvedCandidate<PolishEvidence> {
         if let Some(identity) = &self.identity
             && identity == &parts
         {
             // A faithful partition is priced on the current tree with its
-            // symbol overlay applied (`symbol_polish_with_mirror_evidence`), so
+            // symbol overlay applied (`symbol_polish_with_polish_evidence`), so
             // an improving symbol polish survives as an offer; without one it
             // collapses onto the "change nothing" identity entry.
             let entry = self.identity_entry(identity);
@@ -770,7 +814,7 @@ impl PipelineSolver<'_> {
     /// The identity pool entry: the "change nothing" layout scored on the actual
     /// current tree, so the anchored pool always contains the current score and
     /// a suggested candidate can never silently lose to it.
-    fn identity_entry(&self, identity: &Partition) -> SolvedCandidate<MirrorEvidence> {
+    fn identity_entry(&self, identity: &Partition) -> SolvedCandidate<PolishEvidence> {
         SolvedCandidate {
             partition: identity.clone(),
             score: score_current_with_affinity(
@@ -782,7 +826,7 @@ impl PipelineSolver<'_> {
                 self.same_file_type,
             )
             .total,
-            evidence: MirrorEvidence::default(),
+            evidence: PolishEvidence::default(),
         }
     }
 
@@ -829,7 +873,7 @@ impl PipelineSolver<'_> {
         &self,
         parts: &Partition,
         members_of: &BTreeMap<u32, Vec<u32>>,
-        evidence: &MirrorEvidence,
+        evidence: &PolishEvidence,
     ) -> BTreeMap<u32, Vec<u32>> {
         members_of
             .iter()
@@ -882,6 +926,27 @@ impl PipelineSolver<'_> {
             .collect()
     }
 
+    /// Clusters domains into packages with the wall lifted, keeping every
+    /// domain that holds a folded file (ADR-21) apart from the others by its
+    /// pin.
+    fn cluster_packages(
+        &self,
+        domain_quotient: &Csr,
+        package_homes: &[SmolStr],
+        domain_pins: Option<&[SmolStr]>,
+    ) -> Partition {
+        let clustered = cluster_level(
+            domain_quotient,
+            &self.caps,
+            SeedLevel::Package,
+            &home_affinity(package_homes),
+        );
+        match domain_pins {
+            Some(domain_pins) => split_by_key(&clustered, domain_pins),
+            None => clustered,
+        }
+    }
+
     /// The candidate of a repository with no files: its root package group
     /// alone.
     fn empty_candidate(&self) -> CandidateTree {
@@ -903,6 +968,32 @@ impl PipelineSolver<'_> {
         }
     }
 
+    /// Keys each folder cluster by the pass-start package of a folded file it
+    /// holds (ADR-21), or the empty key when it holds none; `None` when the
+    /// restart folded nothing.
+    fn folded_folder_pins(
+        &self,
+        members_of: &BTreeMap<u32, Vec<u32>>,
+        folder_count: usize,
+        evidence: &PolishEvidence,
+    ) -> Option<Vec<SmolStr>> {
+        if evidence.folds.is_empty() {
+            return None;
+        }
+        let folded: BTreeSet<u32> = evidence.folds.iter().map(|fold| fold.file).collect();
+        let mut pins = vec![SmolStr::default(); folder_count];
+        for (&folder, members) in members_of {
+            let pinned = members
+                .iter()
+                .filter_map(|&vertex| self.files.get(vertex as usize))
+                .find(|file| folded.contains(&file.container));
+            if let (Some(file), Some(slot)) = (pinned, pins.get_mut(folder as usize)) {
+                slot.clone_from(&file.home.package);
+            }
+        }
+        Some(pins)
+    }
+
     /// Assembles the five-level candidate tree a folder partition induces.
     ///
     /// Folders are the partition's non-empty clusters and keep their real
@@ -918,13 +1009,13 @@ impl PipelineSolver<'_> {
     /// resort; the group takes the current root's name — and file leaves keep
     /// their full current paths so file identity stays stable across trees.
     fn assemble(&self, parts: &Partition) -> CandidateTree {
-        self.assemble_with_mirror_evidence(parts, &MirrorEvidence::default())
+        self.assemble_with_polish_evidence(parts, &PolishEvidence::default())
     }
 
-    fn assemble_with_mirror_evidence(
+    fn assemble_with_polish_evidence(
         &self,
         parts: &Partition,
-        evidence: &MirrorEvidence,
+        evidence: &PolishEvidence,
     ) -> CandidateTree {
         if self.files.is_empty() {
             return self.empty_candidate();
@@ -971,8 +1062,12 @@ impl PipelineSolver<'_> {
                 |file| &file.home.package,
             )
         });
-        if let Some(folder_packages) = &folder_packages {
-            domain_parts = split_by_key(&domain_parts, folder_packages);
+        // a folder holding a folded file (ADR-21) stays in that file's
+        // pass-start package, so no level can re-propose the withdrawn move.
+        let folder_pins =
+            self.folded_folder_pins(&members_of, folder_quotient.vertex_count(), evidence);
+        if let Some(folder_keys) = folder_packages.as_ref().or(folder_pins.as_ref()) {
+            domain_parts = split_by_key(&domain_parts, folder_keys);
         }
         let domain_quotient = domain_parts.quotient(&folder_quotient);
         let package_homes = self.home_keys(
@@ -988,15 +1083,13 @@ impl PipelineSolver<'_> {
         // with the wall up a package level is an uncapped mirror of the
         // manifests (ADR-17): its containers are the real packages, which
         // the capacity caps never split, so it is grouped by key, not clustered.
+        let domain_pins = folder_pins
+            .as_ref()
+            .map(|pins| lift_pins(pins, &domain_parts, domain_quotient.vertex_count()));
         let package_parts = if folder_packages.is_some() {
             group_by_key(&package_homes)
         } else {
-            cluster_level(
-                &domain_quotient,
-                &self.caps,
-                SeedLevel::Package,
-                &home_affinity(&package_homes),
-            )
+            self.cluster_packages(&domain_quotient, &package_homes, domain_pins.as_deref())
         };
         let package_quotient = package_parts.quotient(&domain_quotient);
         let group_parts =
@@ -1039,6 +1132,9 @@ impl PipelineSolver<'_> {
                 }
             }
         }
+        if let Some(domain_pins) = &domain_pins {
+            name_pinned_packages(&mut package_tally, domain_pins, &package_parts);
+        }
 
         self.emit(
             parts,
@@ -1060,7 +1156,7 @@ impl PipelineSolver<'_> {
         chain_of: &BTreeMap<u32, (u32, u32, u32)>,
         domain_tally: &NameTally,
         package_tally: &NameTally,
-        mirror_evidence: &MirrorEvidence,
+        polish_evidence: &PolishEvidence,
     ) -> CandidateTree {
         let mut arena = ContainerArena::default();
         let mut key_by_id: BTreeMap<u32, SmolStr> = BTreeMap::new();
@@ -1102,7 +1198,7 @@ impl PipelineSolver<'_> {
                 .cloned()
                 .unwrap_or_else(|| SmolStr::new("workspace"));
             let members_by_folder =
-                self.projected_folder_members(parts, members, mirror_evidence, &key);
+                self.projected_folder_members(parts, members, polish_evidence, &key);
             for (projected_key, namespace_members) in members_by_folder {
                 let projected_cluster = cluster_by_folder.get(&projected_key).copied();
                 // A cycle can be the only resident of its nondominant home.
@@ -1110,7 +1206,7 @@ impl PipelineSolver<'_> {
                 // ancestor chain, including transparent/synthetic containers.
                 let restored_folder = namespace_members.first().and_then(|&vertex| {
                     (projected_cluster.is_none()
-                        && self.retained_cycle_home(parts, vertex, mirror_evidence)
+                        && self.retained_cycle_home(parts, vertex, polish_evidence)
                             == Some(&projected_key))
                     .then(|| self.restore_cycle_folder(vertex, &mut arena, &mut restored_ids))
                     .flatten()
@@ -1176,13 +1272,13 @@ impl PipelineSolver<'_> {
         &self,
         parts: &Partition,
         members: &[u32],
-        mirror_evidence: &MirrorEvidence,
+        polish_evidence: &PolishEvidence,
         fallback: &SmolStr,
     ) -> BTreeMap<SmolStr, Vec<u32>> {
         let mut groups: BTreeMap<SmolStr, Vec<u32>> = BTreeMap::new();
         for &vertex in members {
             let key = self
-                .projected_folder_for_vertex(parts, vertex, mirror_evidence)
+                .projected_folder_for_vertex(parts, vertex, polish_evidence)
                 .map_or_else(
                     || fallback.clone(),
                     |projected| projected.repository_relative(self.root_name.as_str()),
@@ -1496,13 +1592,13 @@ impl PipelineSolver<'_> {
     fn build_faithful_candidate(
         &self,
         current_tree: &ContainerTree,
-        solved: &SolvedCandidate<MirrorEvidence>,
+        solved: &SolvedCandidate<PolishEvidence>,
         index: u32,
         splits: &[ConditionalSplit],
     ) -> Result<Candidate, StrataError> {
         let nodes = &self.snapshot.ir().nodes;
         let current = self.current_candidate_tree();
-        let symbols = self.symbol_polish_with_mirror_evidence(&solved.partition, &solved.evidence);
+        let symbols = self.symbol_polish_with_polish_evidence(&solved.partition, &solved.evidence);
         ensure_namespaces_preserved(&symbols, &current)?;
         let overlay = &symbols.overlay;
         let breakdown = self.score_faithful(overlay);
@@ -1539,7 +1635,7 @@ impl PipelineSolver<'_> {
     pub(in crate::analyze) fn build_candidate(
         &self,
         current_tree: &ContainerTree,
-        solved: &SolvedCandidate<MirrorEvidence>,
+        solved: &SolvedCandidate<PolishEvidence>,
         index: u32,
         splits: &[ConditionalSplit],
     ) -> Result<Candidate, StrataError> {
@@ -1548,11 +1644,11 @@ impl PipelineSolver<'_> {
             return self.build_faithful_candidate(current_tree, solved, index, splits);
         }
 
-        let assembled = self.assemble_with_mirror_evidence(&solved.partition, &solved.evidence);
+        let assembled = self.assemble_with_polish_evidence(&solved.partition, &solved.evidence);
         // FIX08: re-run the deterministic symbol pass on this exact partition.
         // `solve` already priced its result into the ranking score, so the DTO
         // score here matches what ranked this candidate by construction.
-        let symbols = self.symbol_polish_with_mirror_evidence(&solved.partition, &solved.evidence);
+        let symbols = self.symbol_polish_with_polish_evidence(&solved.partition, &solved.evidence);
         ensure_namespaces_preserved(&symbols, &assembled)?;
         let merged = |id: u32| {
             symbols
