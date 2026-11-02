@@ -1,7 +1,15 @@
-# ADR-0016: Plain-text reports and relocation endpoints
+> **Status:** Superseded
+>
+> **Superseded by:** [ADR-16 — Plain-text reports and relocation endpoints](../../reporting/adr-16-plain-text-reports-and-relocation-endpoints.md)
+>
+> **What changed:** Partial: plain text becomes the default for every output sink, and symbol annotations identify relocation endpoints.
+>
+> superseded-by: adr-16
+
+# ADR-15: Consistent reports and change trees
 
 - Status: `Accepted`
-- Date: `2026-09-08`
+- Date: `2026-09-07`
 
 ## Context
 
@@ -11,17 +19,15 @@ Strata users inspect findings, compare candidate layouts, and assess relocation 
 
 Both human-readable formats present the same information in the same order at each verbosity level. A compact project summary precedes **Structural findings**, **Candidate layouts**, and **Advice**. Reports are static text; Markdown changes styling rather than selecting different content. Reports from saved results do not consult the source repository.
 
-`analyze` defaults to the same plain-text summary on a terminal, in a pipe, and when redirected or written with `--output`. JSON requires explicit `--format json`. Existing explicit formats and the Markdown `report` command remain available. Scripts consuming saved results must request JSON explicitly.
+Structural findings contain shared and profile-specific evidence, locations, limits, and suggested cycle cuts. Candidate layouts list every emitted candidate in deterministic order. Each includes its baseline and resulting score, signed improvement, exact moves, changed-folder impacts, and before/after trees. Lower scores are better; scores compare only within the same parameter profile and project. A raw candidate is a proposal, not an instruction to apply every move.
 
-Structural findings contain shared and profile-specific evidence, locations, limits, and suggested cycle cuts. Candidate layouts list every emitted candidate in deterministic order. Both Anchored and Greenfield may return multiple candidates, requesting up to three per profile by default. Candidate numbering remains visible; fewer candidates may survive the diversity, validity, and strict-improvement checks. Each includes its baseline and resulting score, signed improvement, exact moves, changed-folder impacts, and before/after trees. Lower scores are better; scores compare only within the same parameter profile and project. A raw candidate is a proposal, not an instruction to apply every move.
-
-Advice retains the **Recommended** and **Review candidate** groups defined in [ADR-0014](0014-profile-consensus.md). Wrapped action lists identify their grain and retain supporting, qualifying, absent, and conflicting profiles, conflicting destinations, and plain-language review reasons. Terms are defined at first use; agreement between profiles is not independent confirmation.
+Advice retains the **Recommended** and **Review candidate** groups defined in [ADR-14](../../advice/adr-14-profile-consensus.md). Wrapped action lists identify their grain and retain supporting, qualifying, absent, and conflicting profiles, conflicting destinations, and plain-language review reasons. Terms are defined at first use; agreement between profiles is not independent confirmation.
 
 The default report includes all actions, essential warnings, and conditional prerequisites. `--verbose` on `analyze` and `report` adds score-component deltas under each candidate, complete numerical evidence and thresholds under each advice entry, and effective configuration at the end. JSON content and schema are unaffected by verbosity.
 
 ### Before and after trees
 
-Each candidate is compared with the saved current layout. Show only affected branches with enough ancestors to locate the changes. Changed filenames end in `*`; a file is changed when it moves or its symbol contents change. Moved symbols appear beneath their actual before file with `[to path/to/destination]` and their actual after file with `[from path/to/source]`. The destination is the final file location after any whole-file relocation; the source is its original location before any relocation. Endpoint paths use the same root-relative and multi-root qualification rules as the report. Whole-file relocations and successful test mirrors are included. Files gaining or losing symbols remain visible even when their path stays the same. A retained empty file is not a deletion.
+Each candidate is compared with the saved current layout. Show only affected branches with enough ancestors to locate the changes. Changed filenames end in `*`; a file is changed when it moves or its symbol contents change. Moved symbols appear beneath their actual before file with `[moves out]` and their actual after file with `[moved in]`. Whole-file relocations and successful test mirrors are included. Files gaining or losing symbols remain visible even when their path stays the same. A retained empty file is not a deletion.
 
 ```text
 Before
@@ -29,12 +35,12 @@ navigators/
 ├── navigator.ts *
 └── types/
     └── snapshot.ts *
-        └── type `AriaTreeOptions` [to navigators/navigator.ts]
+        └── type `AriaTreeOptions` [moves out]
 
 After
 navigators/
 ├── navigator.ts *
-│   └── type `AriaTreeOptions` [from navigators/types/snapshot.ts]
+│   └── type `AriaTreeOptions` [moved in]
 └── types/
     └── snapshot.ts *
 
@@ -56,8 +62,6 @@ Human-readable lines are deterministic and at most 100 display columns, with los
 - Candidate summaries only: rejected because users want each proposed layout independently inspectable, including its exact moves and impacts.
 - Complete project trees: rejected because unchanged branches obscure the affected structure in larger repositories.
 - Full numerical detail by default: rejected because numerical evidence is useful on demand while essential reasons must remain immediately visible.
-- Switching implicitly to JSON for pipes: rejected because the same command should present the same report regardless of its sink.
-- Direction-only symbol annotations: rejected because explicit endpoints let readers follow moves between trees.
 - A single combined tree: rejected because paired trees make source and destination placement explicit.
 
 ## Consequences

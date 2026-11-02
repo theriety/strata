@@ -27,14 +27,14 @@ The public result has two groups. `Recommended` requires sufficient evidence and
 
 ## Decisions
 
-| Document | Title | Status |
-| --- | --- | --- |
-| [ADR-0001](decisions/0001-recommendations-only.md) | Recommendations only — strata never delivers or executes move scripts | Accepted |
-| [ADR-0005](decisions/0005-pass-start-dependencies-govern-symbol-moves.md) | Pass-start dependencies govern symbol moves | Accepted |
-| [ADR-0006](decisions/0006-symbol-destination-guardrails.md) | Symbol destinations obey pass-start guardrails | Accepted |
-| [ADR-0008](decisions/0008-physical-layout-governs-relocation-and-capacity.md) | Physical layout governs relocation and capacity | Accepted |
-| [ADR-0011](decisions/0011-relocation-ownership-scoring.md) | Relocation ownership and dependency-only scoring | Accepted |
-| [ADR-0012](decisions/0012-companion-owner-affinity.md) | Conservative companion-owner affinity | Accepted |
-| [ADR-0013](decisions/0013-pinned-relocation-policies-and-test-mirrors.md) | Pinned relocation policies and exact test mirrors | Accepted |
-| [ADR-0014](decisions/0014-profile-consensus.md) | Evidence-qualified profile consensus | Accepted |
-| [ADR-0016](decisions/0016-plain-text-reports-and-relocation-endpoints.md) | Plain-text reports — consistent defaults and relocation endpoint trees | Accepted |
+| ADR | Title | Domain | Path | Status |
+| --- | --- | --- | --- | --- |
+| [ADR-1](decisions/product/adr-1-recommendations-only.md) | Recommendations only — strata never delivers or executes move scripts | product | `decisions/product/adr-1-recommendations-only.md` | Accepted |
+| [ADR-5](decisions/relocation/adr-5-pass-start-dependencies-govern-symbol-moves.md) | Pass-start dependencies govern symbol moves | relocation | `decisions/relocation/adr-5-pass-start-dependencies-govern-symbol-moves.md` | Accepted |
+| [ADR-6](decisions/relocation/adr-6-symbol-destination-guardrails.md) | Symbol destinations obey pass-start guardrails | relocation | `decisions/relocation/adr-6-symbol-destination-guardrails.md` | Accepted |
+| [ADR-8](decisions/relocation/adr-8-physical-layout-governs-relocation-and-capacity.md) | Physical layout governs relocation and capacity | relocation | `decisions/relocation/adr-8-physical-layout-governs-relocation-and-capacity.md` | Accepted |
+| [ADR-11](decisions/relocation/adr-11-relocation-ownership-scoring.md) | Relocation ownership and dependency-only scoring | relocation | `decisions/relocation/adr-11-relocation-ownership-scoring.md` | Accepted |
+| [ADR-12](decisions/advice/adr-12-companion-owner-affinity.md) | Conservative companion-owner affinity | advice | `decisions/advice/adr-12-companion-owner-affinity.md` | Accepted |
+| [ADR-13](decisions/relocation/adr-13-pinned-relocation-policies-and-test-mirrors.md) | Pinned relocation policies and exact test mirrors | relocation | `decisions/relocation/adr-13-pinned-relocation-policies-and-test-mirrors.md` | Accepted |
+| [ADR-14](decisions/advice/adr-14-profile-consensus.md) | Evidence-qualified profile consensus | advice | `decisions/advice/adr-14-profile-consensus.md` | Accepted |
+| [ADR-16](decisions/reporting/adr-16-plain-text-reports-and-relocation-endpoints.md) | Plain-text reports and relocation endpoints | reporting | `decisions/reporting/adr-16-plain-text-reports-and-relocation-endpoints.md` | Accepted |
