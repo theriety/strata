@@ -1,1 +1,2 @@
-polarity [violation] serve, sample_fixture :: production symbol `serve` depends on test code `sample_fixture`
+polarity [violation] service.py, conftest.py :: production symbol `serve` (service.py) depends on test code `sample_fixture` (conftest.py)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

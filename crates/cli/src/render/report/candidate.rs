@@ -27,7 +27,7 @@ pub(super) fn candidate_lines(
         lines.extend(wrap(
             &format!(
                 "- Move {kind} `{}` from `{}` → `{}`",
-                entry.symbol,
+                entry.label(),
                 entry.from_path,
                 changes.after_path(&entry.to_path)
             ),

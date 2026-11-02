@@ -36,6 +36,7 @@ impl Report {
                 result.summary.files, result.summary.symbols, result.summary.edges
             ),
             format!("Snapshot `{}`", result.snapshot_hash),
+            super::ADVICE_DISCLAIMER.to_owned(),
         ];
         let mut findings = findings_lines("Shared findings", &result.current.shared_findings);
         for (name, profile) in present_modes(result) {

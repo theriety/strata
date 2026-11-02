@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use strata_engine::{AnalyzeResult, StrataError};
 
 use crate::commands::{candidate_at, mode_result, read_result};
-use crate::render::render_diff;
+use crate::render::{ADVICE_DISCLAIMER, render_diff, render_moves};
 
 /// The parsed inputs of a `diff` run.
 #[derive(Debug)]
@@ -101,14 +101,14 @@ pub fn run(args: &DiffArgs, out: &mut impl Write) -> Result<(), StrataError> {
             // with CANDIDATE_NOT_FOUND instead of silently rendering.
             candidate_at(&result, left_mode, *left_index)?;
             let right_candidate = candidate_at(&result, right_mode, *right_index)?;
-            render_diff(right_candidate, out).map_err(|error| write_error(&error))?;
+            render_moves(right_candidate, out).map_err(|error| write_error(&error))?;
             if left_mode == right_mode {
                 write_distance(&result, left_mode, *left_index, *right_index, out)?;
             }
-            Ok(())
+            writeln!(out, "{ADVICE_DISCLAIMER}").map_err(|error| write_error(&error))
         }
         (Reference::Current, Reference::Current) => {
-            writeln!(out, "no moves").map_err(|error| write_error(&error))
+            writeln!(out, "no moves\n{ADVICE_DISCLAIMER}").map_err(|error| write_error(&error))
         }
     }
 }
@@ -220,6 +220,7 @@ mod tests {
             level: Level::File,
             children: None,
             symbols: Some(vec![SymbolPlacement {
+                display: None,
                 name: "sym".to_owned(),
                 visibility: Level::File,
             }]),

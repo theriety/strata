@@ -19,7 +19,8 @@ pub fn render_tree(
     depth: Option<u32>,
     out: &mut impl Write,
 ) -> io::Result<()> {
-    write_tree_node(node, 0, symbols, depth, out)
+    write_tree_node(node, 0, symbols, depth, out)?;
+    writeln!(out, "{}", super::ADVICE_DISCLAIMER)
 }
 
 /// Writes one tree node at `indent` and recurses into its children.
@@ -46,7 +47,7 @@ fn write_tree_node(
             writeln!(
                 out,
                 "{pad}  - {} ({})",
-                placement.name,
+                placement.label(),
                 level_tag(placement.visibility)
             )?;
         }

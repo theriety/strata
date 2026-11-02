@@ -1,12 +1,12 @@
 Strata report — cyclic
 2 files · 2 symbols · 2 edges
 Snapshot `e3cacddd09bb58d03b941b4d89bf4685acbdb34ba8a92ea20ecc3df7ec112ed1`
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 Structural findings
 Shared findings (1)
-  - cycle [violation] `alpha.py`/`beta.py` — 2-symbol cycle; symbols form one placement unit and 
-    must remain in one file unless a suggested dependency edge is broken; break `beta_step` -> 
-    `alpha_step` (w=1.0, exact)
+  - cycle [violation] `alpha.py`/`beta.py` — 2-symbol cycle; strata keeps a dependency cycle in 
+    one file; to split it, break `beta_step` -> `alpha_step` (w=1.0, exact)
 
 anchored profile-specific findings (0)
   None.

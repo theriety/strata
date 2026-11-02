@@ -4,3 +4,4 @@ cyclic [packageGroup]
       - alpha_step (file)
     beta.py [file] 3 sloc
       - beta_step (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

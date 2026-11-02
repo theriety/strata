@@ -73,6 +73,12 @@ pub struct Node {
     /// Added in schema 3; absent from older snapshots, where it reads `false`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub re_export: bool,
+    /// Human-facing name when it differs from `name` (a method reads
+    /// `Type::method`). Display only: matching and lookup key on `name`.
+    ///
+    /// Added in schema 3; absent means `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<SmolStr>,
 }
 
 /// Serde predicate that omits the default `false` flag from serialized output.

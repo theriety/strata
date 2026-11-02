@@ -8,3 +8,4 @@ python [packageGroup]
         pkg/shape.py [file] 3 sloc
           - Shape (file)
           - describe_shape (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

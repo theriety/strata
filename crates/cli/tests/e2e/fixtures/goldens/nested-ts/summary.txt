@@ -1,6 +1,7 @@
 Strata report — nested-ts
 6 files · 12 symbols · 13 edges
 Snapshot `99f272167594153a48e454ecada5a27fe524775fed78fe6d2a95fe8b54a660d6`
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 Structural findings
 Shared findings (0)

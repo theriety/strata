@@ -2,13 +2,14 @@
 
 2 files · 2 symbols · 1 edges
 Snapshot `1263702a99bb85e1e25cda532596c5a6def25e6b3bdb9e69425c4043913b547f`
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings
 
 ```text
 Shared findings (1)
-  - polarity [violation] at `serve`, `sample_fixture`: production symbol `serve` depends on test 
-    code `sample_fixture`
+  - polarity [violation] at `service.py`, `conftest.py`: production symbol `serve` (service.py) 
+    depends on test code `sample_fixture` (conftest.py)
 
 anchored profile-specific findings (0)
   None.

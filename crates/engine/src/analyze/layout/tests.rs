@@ -757,6 +757,7 @@ fn should_build_candidates_with_real_names_and_five_levels() {
         visibility: ScopeLevel::File,
         effective_size: size,
         re_export: false,
+        display_name: None,
     };
     let snapshot = snapshot(
         vec![sized(0, "alpha", 4, 10), sized(1, "beta", 5, 7)],
@@ -836,6 +837,7 @@ fn homed(id: u32, name: &str, container: u32, size: u32) -> Node {
         visibility: ScopeLevel::File,
         effective_size: size,
         re_export: false,
+        display_name: None,
     }
 }
 
@@ -1811,6 +1813,7 @@ fn should_name_the_package_from_the_manifest_root_not_the_source_root() {
         visibility: ScopeLevel::File,
         effective_size: size,
         re_export: false,
+        display_name: None,
     };
     let snapshot = snapshot(
         vec![sized(0, "openai", 4, 10), sized(1, "anthropic", 5, 7)],

@@ -506,6 +506,7 @@ fn sized_node(id: u32, name: &str, container: u32, size: u32) -> Node {
     Node {
         effective_size: size,
         re_export: false,
+        display_name: None,
         ..node(id, name, container, Polarity::Production)
     }
 }
@@ -706,4 +707,27 @@ fn should_break_a_dominance_tie_by_the_smaller_file_name() {
 
     assert!(clusters.iter().all(Option::is_some));
     assert_eq!(clusters.first(), clusters.get(1));
+}
+
+#[test]
+fn should_prefer_display_name_in_node_names_but_keep_name() {
+    let method = Node {
+        display_name: Some(smol_str::SmolStr::new("Interner::new")),
+        ..node(0, "new", 0, Polarity::Production)
+    };
+    let plain = node(1, "helper", 0, Polarity::Production);
+    let snapshot = snapshot(
+        vec![method, plain],
+        vec![],
+        vec![container(0, "a.rs", ScopeLevel::File, None)],
+    );
+
+    let names = super::node_names(&snapshot);
+
+    assert_eq!(names.get(&0).map(String::as_str), Some("Interner::new"));
+    assert_eq!(names.get(&1).map(String::as_str), Some("helper"));
+    assert_eq!(
+        snapshot.ir().nodes.first().map(|node| node.name.as_str()),
+        Some("new")
+    );
 }

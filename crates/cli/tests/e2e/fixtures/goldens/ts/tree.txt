@@ -6,3 +6,4 @@ ts [packageGroup]
     src/shape.ts [file] 6 sloc
       - Shape (file)
       - describeShape (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

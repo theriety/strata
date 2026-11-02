@@ -1,12 +1,12 @@
 Strata report — cyclic-oversized
 3 files · 3 symbols · 3 edges
 Snapshot `c51792430242b5990bdcf9c2ef33e7d89d835047b1930dad349d1ce8921889cf`
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 Structural findings
 Shared findings (1)
-  - cycle [violation] `alpha.ts`/`beta.ts`/`gamma.ts` — 3-symbol cycle; symbols form one placement 
-    unit and must remain in one file unless a suggested dependency edge is broken; break 
-    `stepGamma` -> `stepAlpha` (w=1.0, exact)
+  - cycle [violation] `alpha.ts`/`beta.ts`/`gamma.ts` — 3-symbol cycle; strata keeps a dependency 
+    cycle in one file; to split it, break `stepGamma` -> `stepAlpha` (w=1.0, exact)
 
 anchored profile-specific findings (0)
   None.
