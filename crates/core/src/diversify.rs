@@ -3,7 +3,7 @@
 //! Returning the top-k candidates by score alone yields k near-clones of one
 //! local optimum — useless when a human is meant to *choose* between structures.
 //! Diversification instead runs `10 * k` deterministic seeded restarts of the
-//! cluster + pack stages, keeps the local optima within a score-tolerance band of
+//! cluster stage, keeps the local optima within a score-tolerance band of
 //! the best, then greedily selects k that are genuinely different by max-min
 //! *variation of information* (Meilă 2007), a true metric on partitions.
 //!
@@ -15,7 +15,7 @@
 //!
 //! The restart itself is supplied as a [`Solver`]: diversification owns the
 //! oversampling, filtering, and selection logic but is agnostic to how a single
-//! seed becomes a scored candidate, so the cluster + pack pipeline plugs in
+//! seed becomes a scored candidate, so the cluster pipeline plugs in
 //! without this module depending on every phase.
 
 use std::collections::BTreeMap;
@@ -63,7 +63,7 @@ pub struct SolvedCandidate<E = ()> {
 /// A restartable solver: maps a seed to a single scored candidate.
 ///
 /// Each call must be a pure, deterministic function of its seed (re-running
-/// cluster + pack with that seed), so the pool is reproducible. The trait is the
+/// cluster with that seed), so the pool is reproducible. The trait is the
 /// only coupling between diversification and the rest of the pipeline.
 pub trait Solver: Sync {
     /// Evidence that must remain coupled to the selected partition.

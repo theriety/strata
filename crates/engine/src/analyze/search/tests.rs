@@ -4,10 +4,10 @@ use std::collections::BTreeMap;
 
 use strata_core::cluster::ClusterId;
 use strata_core::diversify::Solver;
-use strata_core::score::{Coefficients, KindWeights};
+use strata_core::score::KindWeights;
 use strata_ir::{Edge, EdgeKind, Node, NodeId, Polarity, ScopeLevel, Snapshot};
 
-use crate::config::{AnalyzeConfig, CapacityConfig};
+use crate::config::{AnalyzeConfig, CapacityConfig, ObjectiveConfig};
 use crate::error::StrataError;
 use crate::result::{CurrentStanding, Level};
 
@@ -324,7 +324,7 @@ fn should_keep_structural_capacity_findings_and_scores_in_lockstep_at_every_leve
     };
     let baseline = score_current_with_affinity(
         &snapshot,
-        &Coefficients::anchored(),
+        &ObjectiveConfig::default().coefficients(),
         &KindWeights::default(),
         &roomy,
         1.0,
@@ -352,7 +352,7 @@ fn should_keep_structural_capacity_findings_and_scores_in_lockstep_at_every_leve
             .collect();
         let score = score_current_with_affinity(
             &snapshot,
-            &Coefficients::anchored(),
+            &ObjectiveConfig::default().coefficients(),
             &KindWeights::default(),
             &capacity,
             1.0,
@@ -401,7 +401,7 @@ fn should_exclude_test_only_sloc_from_file_findings_and_pressure() -> Result<(),
     let findings = snapshot_capacity_violations(&snapshot, &rendered, &capacity);
     let score = score_current_with_affinity(
         &snapshot,
-        &Coefficients::anchored(),
+        &ObjectiveConfig::default().coefficients(),
         &KindWeights::default(),
         &capacity,
         1.0,
@@ -439,7 +439,7 @@ fn should_include_production_sloc_in_file_findings_and_pressure() -> Result<(), 
     let findings = snapshot_capacity_violations(&snapshot, &rendered, &capacity);
     let score = score_current_with_affinity(
         &snapshot,
-        &Coefficients::anchored(),
+        &ObjectiveConfig::default().coefficients(),
         &KindWeights::default(),
         &capacity,
         1.0,
@@ -600,7 +600,7 @@ fn identity_clusters(snapshot: &Snapshot, file_containers: &[u32]) -> Vec<Option
     let solver = PipelineSolver::new(
         snapshot,
         &AnalyzeConfig::default(),
-        Coefficients::anchored(),
+        ObjectiveConfig::default().coefficients(),
         true,
         &tests,
     );
