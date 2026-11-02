@@ -409,6 +409,7 @@ pub(super) fn assign_re_export_nodes(
                         container,
                         visibility: ScopeLevel::File,
                         effective_size: 0,
+                        re_export: true,
                     });
                     exported.push(true);
                     local
@@ -492,6 +493,7 @@ fn push_namespace_node(
         container,
         visibility: ScopeLevel::File,
         effective_size: 0,
+        re_export: true,
     });
     exported.push(true);
     id

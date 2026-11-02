@@ -669,8 +669,11 @@ mod tests {
         ]);
 
         assert!(
-            fragment.nodes.iter().any(|node| node.name == "toolkit"),
-            "the namespace re-export remains a graph-visible binding"
+            fragment
+                .nodes
+                .iter()
+                .any(|node| node.name == "toolkit" && node.re_export),
+            "the namespace re-export remains a graph-visible binding, flagged as a re-export"
         );
         assert!(
             fragment

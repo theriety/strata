@@ -17,7 +17,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use ra_ap_ide::{
-    AnalysisHost, FilePosition, GotoDefinitionConfig, RaFixtureConfig, Semantics, TextSize,
+    AnalysisHost, FilePosition, GotoDefinitionConfig, RaFixtureConfig, Semantics, SymbolKind,
+    TextSize,
 };
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::{CargoConfig, RustLibSource};
@@ -119,7 +120,13 @@ struct Database {
 /// A semantic target, including definitions outside the analyzed workspace.
 enum ResolvedTarget {
     /// A definition that can be looked up in the snapshot's node assignment.
-    Workspace { path: SmolStr, offset: u32 },
+    /// `module` marks a module definition, whose range (a whole file, for a
+    /// file module) says nothing about the declarations it happens to contain.
+    Workspace {
+        path: SmolStr,
+        offset: u32,
+        module: bool,
+    },
     /// A known definition outside the workspace, never a name-fallback candidate.
     External,
 }
@@ -173,6 +180,7 @@ impl Database {
             |target_path| ResolvedTarget::Workspace {
                 path: target_path,
                 offset: u32::from(target.full_range.start()),
+                module: target.kind == Some(SymbolKind::Module),
             },
         ))
     }
@@ -201,6 +209,63 @@ impl Database {
         token.text_range().start() == offset
             && token.text() == reference.name.as_str()
             && previous_non_trivia_token(token).is_none_or(|previous| previous.kind() != T![.])
+    }
+
+    /// Whether the path a qualifier belongs to starts inside the workspace, so a
+    /// name fallback on the qualifier cannot capture a foreign type: in
+    /// `std::io::Error::new` the qualifier `Error` must not bind to a workspace
+    /// `Error`. A qualifier that leads its path (`Type::new`) keeps the fallback;
+    /// a longer path needs a `crate`/`self`/`super`/`Self` root, a root the
+    /// semantic database places in the workspace, or, when the database cannot
+    /// resolve it, a root named after a workspace module file.
+    fn roots_in_workspace(
+        &self,
+        path: &str,
+        reference: &Reference,
+        assignment: &NodeAssignment,
+        workspace_root: &Path,
+    ) -> bool {
+        let Some(file_id) = self.file_id_for(path, workspace_root) else {
+            return false;
+        };
+        let Ok(parsed) = self.host.analysis().parse(file_id) else {
+            return false;
+        };
+        let offset = TextSize::new(reference.offset);
+        if !parsed.syntax().text_range().contains(offset) {
+            return false;
+        }
+        let Some(qualified) = parsed
+            .syntax()
+            .token_at_offset(offset)
+            .right_biased()
+            .and_then(|token| token.parent_ancestors().find_map(ast::Path::cast))
+        else {
+            return false;
+        };
+        if qualified.qualifier().is_none() {
+            return true;
+        }
+        let Some(root) = qualified.first_segment() else {
+            return false;
+        };
+        match root.kind() {
+            Some(
+                ast::PathSegmentKind::CrateKw
+                | ast::PathSegmentKind::SelfKw
+                | ast::PathSegmentKind::SuperKw
+                | ast::PathSegmentKind::SelfTypeKw,
+            ) => true,
+            Some(ast::PathSegmentKind::Name(name)) if root.coloncolon_token().is_none() => {
+                let start = u32::from(name.syntax().text_range().start());
+                match self.resolve(path, start, workspace_root) {
+                    Some(ResolvedTarget::Workspace { .. }) => true,
+                    Some(ResolvedTarget::External) => false,
+                    None => assignment.names_a_module(path, &name.text()),
+                }
+            }
+            _ => false,
+        }
     }
 
     /// Maps a repository-relative source path to its vfs file id.
@@ -437,8 +502,11 @@ fn resolve_reference(
         if let ResolvedTarget::Workspace {
             path: target_path,
             offset: target_offset,
+            module,
         } = resolved
+            && !(module && reference.kind == RefKind::Qualifier)
             && let Some(target) = assignment.node_at(&target_path, target_offset)
+            && binds(reference.kind, assignment, target)
         {
             let confidence = if reference.macro_expanded {
                 CONFIDENCE_MACRO
@@ -453,7 +521,10 @@ fn resolve_reference(
     // unresolved receiver calls require type information; a matching global
     // name alone cannot identify their target.
     if database.allows_name_fallback(path, reference, workspace_root)
+        && (reference.kind != RefKind::Qualifier
+            || database.roots_in_workspace(path, reference, assignment, workspace_root))
         && let Some(target) = assignment.unique_node_named(&reference.name)
+        && binds(reference.kind, assignment, target)
     {
         push_edge(
             edges,
@@ -464,6 +535,14 @@ fn resolve_reference(
             CONFIDENCE_NAME_FALLBACK,
         );
     }
+}
+
+/// Whether a reference of `kind` may bind to `target`. A path qualifier is a
+/// type reference only when it names a type; landing on a value (a module file
+/// whose first item is a function, or a same-named function reached by name
+/// fallback) is not a dependency on a type, so no edge is emitted.
+fn binds(kind: RefKind, assignment: &NodeAssignment, target: NodeId) -> bool {
+    kind != RefKind::Qualifier || assignment.kind_of(target) == Some(NodeKind::Type)
 }
 
 /// Resolves every `pub use` re-export to its original declaration and emits a
@@ -478,7 +557,7 @@ fn resolve_re_exports(
     edges: &mut Vec<Edge>,
 ) {
     for link in &assignment.re_export_links {
-        let Some(ResolvedTarget::Workspace { path, offset }) =
+        let Some(ResolvedTarget::Workspace { path, offset, .. }) =
             database.resolve(&link.path, link.offset, workspace_root)
         else {
             continue;
@@ -585,7 +664,7 @@ fn edge_shape(kind: RefKind) -> (EdgeKind, Hardness) {
     match kind {
         RefKind::UsePath => (EdgeKind::ValueImport, Hardness::Hard),
         RefKind::Call => (EdgeKind::Call, Hardness::Hard),
-        RefKind::TypeRef => (EdgeKind::TypeReference, Hardness::Hard),
+        RefKind::TypeRef | RefKind::Qualifier => (EdgeKind::TypeReference, Hardness::Hard),
         RefKind::TraitImpl => (EdgeKind::Inheritance, Hardness::Hard),
     }
 }
@@ -773,6 +852,34 @@ impl NodeAssignment {
         matches.next().is_none().then_some(node)
     }
 
+    /// Returns the kind of the node assigned `id`.
+    fn kind_of(&self, id: NodeId) -> Option<NodeKind> {
+        let index = usize::try_from(id.0).ok()?;
+        self.nodes.get(index).map(|node| node.kind)
+    }
+
+    /// Whether a source file in the same crate as `from` declares a module
+    /// called `name`: the file stem, or the directory holding a `mod.rs`. A
+    /// same-named file in another crate cannot be what `from` refers to.
+    fn names_a_module(&self, from: &str, name: &str) -> bool {
+        let crate_src = crate_src_dir(from);
+        self.intervals.keys().any(|file| {
+            if crate_src_dir(file) != crate_src {
+                return false;
+            }
+            let file = Path::new(file.as_str());
+            let stem = file.file_stem().and_then(|stem| stem.to_str());
+            let module = match stem {
+                Some("mod") => file
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|folder| folder.to_str()),
+                other => other,
+            };
+            module == Some(name)
+        })
+    }
+
     /// Returns the single in-workspace declaration named `name`, or `None` when
     /// no declaration or more than one carries that name. Ambiguous names are
     /// deliberately left unresolved so the fallback never invents an edge.
@@ -787,6 +894,16 @@ impl NodeAssignment {
     fn into_nodes(self) -> Vec<Node> {
         self.nodes
     }
+}
+
+/// The repository-relative prefix up to a path's first `src` directory, which
+/// identifies the crate owning a source file; a path with no `src` directory
+/// yields the empty prefix and so shares one scope with every other such path.
+/// The scope is the crate's `src` prefix, not the module path: two files in
+/// different modules of one crate still count as the same scope.
+fn crate_src_dir(path: &str) -> &str {
+    path.split_once("/src/")
+        .map_or("", |(crate_dir, _)| crate_dir)
 }
 
 /// Builds the container tree for the parsed files (free function so the node
@@ -824,6 +941,7 @@ fn node_for(declaration: &Declaration, id: NodeId, container: ContainerId) -> No
         container,
         visibility: declared_visibility(declaration.visibility_kind, declaration.exported),
         effective_size: declaration.sloc,
+        re_export: false,
     }
 }
 
@@ -841,6 +959,7 @@ fn re_export_node(re_export: &ReExport, id: NodeId, container: ContainerId) -> N
         container,
         visibility: declared_visibility(re_export.visibility_kind, true),
         effective_size: 0,
+        re_export: true,
     }
 }
 
@@ -1018,6 +1137,41 @@ mod tests {
     }
 
     #[test]
+    fn should_not_let_a_same_stem_file_in_another_crate_name_a_module() {
+        let files = [
+            file_with("crates/app/src/lib.rs", vec![declaration("a", 0, 10)]),
+            file_with("crates/other/src/render.rs", vec![declaration("b", 0, 10)]),
+        ];
+
+        let assignment = NodeAssignment::build(&files, Path::new("repo"));
+
+        assert!(
+            !assignment.names_a_module("crates/app/src/lib.rs", "render"),
+            "`render.rs` lives in another crate and cannot be `app`'s module"
+        );
+        assert!(
+            assignment.names_a_module("crates/other/src/lib.rs", "render"),
+            "a sibling file in the same crate does name the module"
+        );
+    }
+
+    #[test]
+    fn should_name_a_module_by_its_mod_rs_directory_within_the_crate() {
+        let files = [
+            file_with("crates/app/src/lib.rs", vec![declaration("a", 0, 10)]),
+            file_with(
+                "crates/app/src/render/mod.rs",
+                vec![declaration("b", 0, 10)],
+            ),
+        ];
+
+        let assignment = NodeAssignment::build(&files, Path::new("repo"));
+
+        assert!(assignment.names_a_module("crates/app/src/lib.rs", "render"));
+        assert!(!assignment.names_a_module("crates/app/src/lib.rs", "mod"));
+    }
+
+    #[test]
     fn should_map_an_offset_to_the_innermost_declaration() {
         let files = [file_with(
             "crates/app/src/lib.rs",
@@ -1106,6 +1260,7 @@ mod tests {
             container: ContainerId(0),
             visibility: ScopeLevel::File,
             effective_size: 1,
+            re_export: false,
         };
         let test_case = Node {
             id: NodeId(1),
@@ -1115,6 +1270,7 @@ mod tests {
             container: ContainerId(0),
             visibility: ScopeLevel::File,
             effective_size: 0,
+            re_export: false,
         };
         let mut nodes = vec![helper, test_case];
         let edges = vec![Edge {
@@ -1145,6 +1301,7 @@ mod tests {
             container: ContainerId(0),
             visibility: ScopeLevel::File,
             effective_size: 1,
+            re_export: false,
         };
         let producer = Node {
             id: NodeId(1),
@@ -1154,6 +1311,7 @@ mod tests {
             container: ContainerId(0),
             visibility: ScopeLevel::File,
             effective_size: 1,
+            re_export: false,
         };
         let test_case = Node {
             id: NodeId(2),
@@ -1163,6 +1321,7 @@ mod tests {
             container: ContainerId(0),
             visibility: ScopeLevel::File,
             effective_size: 0,
+            re_export: false,
         };
         let mut nodes = vec![helper, producer, test_case];
         let edges = vec![
@@ -1210,7 +1369,8 @@ mod tests {
     }
 
     /// A `pub use` re-export materializes a barrel-local node that participates in
-    /// the node set even before its target is resolved.
+    /// the node set even before its target is resolved, and is flagged as a
+    /// re-export (ADR-0020) whether or not a target ever resolves.
     #[test]
     fn should_materialize_a_barrel_node_for_a_pub_use_re_export() {
         let file = ParsedFile {
@@ -1235,6 +1395,18 @@ mod tests {
             nodes.first().map(|node| node.visibility),
             Some(ScopeLevel::Package)
         );
+        assert_eq!(nodes.first().map(|node| node.re_export), Some(true));
+    }
+
+    #[test]
+    fn should_not_flag_a_declaration_as_a_re_export() {
+        let files = [file_with(
+            "crates/a/src/lib.rs",
+            vec![declaration("unique", 0, 10)],
+        )];
+        let nodes = NodeAssignment::build(&files, Path::new("repo")).into_nodes();
+
+        assert_eq!(nodes.first().map(|node| node.re_export), Some(false));
     }
 
     #[test]
@@ -1300,6 +1472,10 @@ mod tests {
         assert_eq!(edge_shape(RefKind::Call), (EdgeKind::Call, Hardness::Hard));
         assert_eq!(
             edge_shape(RefKind::TypeRef),
+            (EdgeKind::TypeReference, Hardness::Hard)
+        );
+        assert_eq!(
+            edge_shape(RefKind::Qualifier),
             (EdgeKind::TypeReference, Hardness::Hard)
         );
         assert_eq!(

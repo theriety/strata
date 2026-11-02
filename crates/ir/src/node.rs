@@ -66,4 +66,17 @@ pub struct Node {
     pub visibility: ScopeLevel,
     /// Production sloc attributed to this node (drives the file cap).
     pub effective_size: u32,
+    /// Whether this node is a re-export declaration (ADR-0020): it declares no
+    /// entity of its own but publishes another one under this name (`pub use`,
+    /// `export { x } from`, an `__init__.py` import binding).
+    ///
+    /// Added in schema 3; absent from older snapshots, where it reads `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub re_export: bool,
+}
+
+/// Serde predicate that omits the default `false` flag from serialized output.
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes the field by reference
+const fn is_false(value: &bool) -> bool {
+    !*value
 }

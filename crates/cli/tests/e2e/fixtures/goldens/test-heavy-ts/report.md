@@ -1,7 +1,7 @@
 # Strata report — test-heavy-ts
 
 6 files · 9 symbols · 9 edges
-Snapshot `239f144d4358c3e62cb1eb8bf76b048a052e3d3953f2152d805cdc392bb3d886`
+Snapshot `587c672e981db77d5fd32e9a3cba14ca7f8000050f368987ce93ea2fdabac307`
 
 ## Structural findings
 

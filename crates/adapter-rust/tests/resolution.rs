@@ -37,7 +37,7 @@ fn node_id(fragment: &IrFragment, name: &str) -> Result<NodeId, String> {
 fn fragment() -> Result<&'static IrFragment, String> {
     static FRAGMENT: OnceLock<Result<IrFragment, String>> = OnceLock::new();
     FRAGMENT
-        .get_or_init(|| bind_fixture(&["src/lib.rs", "src/unindexed.rs"]))
+        .get_or_init(|| bind_fixture(&["src/lib.rs", "src/render.rs", "src/unindexed.rs"]))
         .as_ref()
         .map_err(Clone::clone)
 }
@@ -166,6 +166,118 @@ fn should_preserve_nonreceiver_fallback_for_unindexed_source() -> Result<(), Str
             && edge.kind == EdgeKind::Call
             && edge.hardness == Hardness::Soft),
         "unresolved free calls retain conservative fallback: {:?}",
+        fragment.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn should_count_an_associated_call_as_a_reference_to_its_type() -> Result<(), String> {
+    let fragment = fragment()?;
+    let source = node_id(fragment, "associated_caller")?;
+    let built = fragment
+        .nodes
+        .iter()
+        .find(|node| node.name == "Built" && node.kind == strata_ir::NodeKind::Type)
+        .map(|node| node.id)
+        .ok_or("missing Built type")?;
+
+    assert!(
+        fragment.edges.iter().any(|edge| edge.source == source
+            && edge.target == built
+            && edge.kind == EdgeKind::TypeReference),
+        "`Built::new()` must count as a reference to `Built`: {:?}",
+        fragment.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn should_not_count_a_module_qualifier_as_a_type_reference() -> Result<(), String> {
+    let fragment = fragment()?;
+    let source = node_id(fragment, "module_caller")?;
+    let report = node_id(fragment, "report")?;
+
+    assert!(
+        !fragment
+            .edges
+            .iter()
+            .any(|edge| edge.source == source && edge.kind == EdgeKind::TypeReference),
+        "`render::report()` names a module, not a type: {:?}",
+        fragment.edges
+    );
+    assert!(
+        fragment.edges.iter().any(|edge| edge.source == source
+            && edge.target == report
+            && edge.kind == EdgeKind::Call),
+        "the call itself must still bind: {:?}",
+        fragment.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn should_not_name_fall_back_a_qualifier_onto_a_non_type() -> Result<(), String> {
+    let fragment = fragment()?;
+    let source = node_id(fragment, "unindexed_module_caller")?;
+    let render = node_id(fragment, "render")?;
+
+    assert!(
+        !fragment
+            .edges
+            .iter()
+            .any(|edge| edge.source == source && edge.target == render),
+        "an unresolved `render::` qualifier must not bind to the function `render`: {:?}",
+        fragment.edges
+    );
+    Ok(())
+}
+
+fn type_id(fragment: &IrFragment, name: &str) -> Result<NodeId, String> {
+    fragment
+        .nodes
+        .iter()
+        .find(|node| node.name == name && node.kind == strata_ir::NodeKind::Type)
+        .map(|node| node.id)
+        .ok_or_else(|| format!("missing type {name}: {:?}", fragment.nodes))
+}
+
+fn references(fragment: &IrFragment, source: NodeId, target: NodeId) -> bool {
+    fragment.edges.iter().any(|edge| {
+        edge.source == source && edge.target == target && edge.kind == EdgeKind::TypeReference
+    })
+}
+
+#[test]
+fn should_not_name_fall_back_a_qualifier_under_a_foreign_path_root() -> Result<(), String> {
+    let fragment = fragment()?;
+    let source = node_id(fragment, "unindexed_foreign_qualifier_caller")?;
+    let error = type_id(fragment, "Error")?;
+
+    assert!(
+        !references(fragment, source, error),
+        "`std::io::Error::other` is rooted outside the workspace and must not bind to the workspace `Error`: {:?}",
+        fragment.edges
+    );
+    Ok(())
+}
+
+#[test]
+fn should_name_fall_back_a_qualifier_under_a_workspace_path_root() -> Result<(), String> {
+    let fragment = fragment()?;
+    let crate_rooted = node_id(fragment, "unindexed_crate_qualifier_caller")?;
+    let module_rooted = node_id(fragment, "unindexed_module_qualifier_caller")?;
+    let built = type_id(fragment, "Built")?;
+    let frame = type_id(fragment, "Frame")?;
+
+    assert!(
+        references(fragment, crate_rooted, built),
+        "`crate::Built::new()` is rooted in the workspace and keeps its fallback: {:?}",
+        fragment.edges
+    );
+    assert!(
+        references(fragment, module_rooted, frame),
+        "`render::Frame::new()` is rooted in a workspace module and keeps its fallback: {:?}",
         fragment.edges
     );
     Ok(())

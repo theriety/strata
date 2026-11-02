@@ -7,16 +7,26 @@ use thiserror::Error;
 
 use crate::Affinity;
 use crate::container::{ContainerTree, TreeError};
-use crate::edge::Edge;
+use crate::edge::{Edge, EdgeKind};
 use crate::node::{Node, NodeId};
 
-/// Current IR schema version, bumped on any breaking contract change.
-pub const SCHEMA_VERSION: u32 = 2;
+/// Current IR schema version, bumped on any contract change.
+///
+/// Version 3 added [`Node::re_export`] (ADR-0020).
+pub const SCHEMA_VERSION: u32 = 3;
+
+/// Oldest IR schema version this build still reads.
+///
+/// A version-2 IR carries no [`Node::re_export`] flag; [`Snapshot::assemble`]
+/// upgrades it by deriving the flag from the re-export edges that version 2
+/// used to mark a re-export.
+pub const MIN_SCHEMA_VERSION: u32 = 2;
 
 /// The raw, unvalidated typed graph plus its laminar container tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IntermediateRepresentation {
-    /// Bumped on any breaking contract change; checked on deserialization.
+    /// Bumped on any contract change; checked, and upgraded when older, by
+    /// [`Snapshot::assemble`].
     pub schema_version: u32,
     /// All nodes in the graph.
     pub nodes: Vec<Node>,
@@ -53,7 +63,10 @@ pub struct Snapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SnapshotError {
     /// The IR was produced under an incompatible schema version.
-    #[error("unsupported schema version {found}; this build expects {expected}")]
+    #[error(
+        "unsupported schema version {found}; this build reads {oldest} through {expected}",
+        oldest = MIN_SCHEMA_VERSION
+    )]
     SchemaVersion {
         /// The version stamped on the IR.
         found: u32,
@@ -84,11 +97,35 @@ pub enum SnapshotError {
     },
 }
 
+/// Upgrades an older, accepted IR to [`SCHEMA_VERSION`] in place.
+///
+/// Version 2 had no [`Node::re_export`] flag and marked a re-export only by the
+/// [`EdgeKind::ReExport`] edge it sourced, so the flag is derived from those
+/// edges. A v2 IR has no edge for an alias of a non-node target (`pub use crate
+/// as alias`), so such an alias cannot be flagged here. A current IR is left
+/// untouched.
+fn upgrade(ir: &mut IntermediateRepresentation) {
+    if ir.schema_version >= SCHEMA_VERSION {
+        return;
+    }
+    let re_exports: HashSet<NodeId> = ir
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == EdgeKind::ReExport)
+        .map(|edge| edge.source)
+        .collect();
+    for node in &mut ir.nodes {
+        node.re_export |= re_exports.contains(&node.id);
+    }
+    ir.schema_version = SCHEMA_VERSION;
+}
+
 impl Snapshot {
     /// Assembles a validated, hashed snapshot from an [`IntermediateRepresentation`].
     ///
     /// Assembly:
-    /// 1. the schema version must match [`SCHEMA_VERSION`],
+    /// 1. the schema version must lie in [`MIN_SCHEMA_VERSION`]..=[`SCHEMA_VERSION`];
+    ///    an older IR is upgraded to [`SCHEMA_VERSION`] first,
     /// 2. every edge endpoint must reference an existing node,
     /// 3. the container tree must validate,
     /// 4. nodes, edges, and containers are canonicalized (sorted by id),
@@ -102,12 +139,13 @@ impl Snapshot {
     /// Returns a [`SnapshotError`] if the schema version is unsupported, an edge
     /// dangles, the tree is malformed, or serialization fails.
     pub fn assemble(mut ir: IntermediateRepresentation) -> Result<Self, SnapshotError> {
-        if ir.schema_version != SCHEMA_VERSION {
+        if !(MIN_SCHEMA_VERSION..=SCHEMA_VERSION).contains(&ir.schema_version) {
             return Err(SnapshotError::SchemaVersion {
                 found: ir.schema_version,
                 expected: SCHEMA_VERSION,
             });
         }
+        upgrade(&mut ir);
 
         let node_ids: HashSet<NodeId> = ir.nodes.iter().map(|node| node.id).collect();
         for edge in &ir.edges {
@@ -208,6 +246,7 @@ mod tests {
             container: ContainerId(0),
             visibility: ScopeLevel::File,
             effective_size: 1,
+            re_export: false,
         }
     }
 
@@ -258,6 +297,74 @@ mod tests {
                 expected: SCHEMA_VERSION,
             })
         );
+    }
+
+    #[test]
+    fn should_reject_a_schema_version_older_than_the_oldest_readable() {
+        let mut ir = ir_with(vec![node(0, "a")], vec![]);
+        ir.schema_version = MIN_SCHEMA_VERSION - 1;
+
+        assert_eq!(
+            Snapshot::assemble(ir),
+            Err(SnapshotError::SchemaVersion {
+                found: MIN_SCHEMA_VERSION - 1,
+                expected: SCHEMA_VERSION,
+            })
+        );
+    }
+
+    /// A schema-2 IR as serialized before [`Node::re_export`] existed: node 1
+    /// re-exports node 0 and is marked only by its re-export edge.
+    const SCHEMA_2_IR: &str = r#"{
+        "schema_version": 2,
+        "nodes": [
+            {"id": 0, "name": "original", "kind": "Symbol", "polarity": "Production",
+             "container": 0, "visibility": "Package", "effective_size": 3},
+            {"id": 1, "name": "original", "kind": "Symbol", "polarity": "Production",
+             "container": 0, "visibility": "Package", "effective_size": 0}
+        ],
+        "edges": [
+            {"source": 1, "target": 0, "kind": "ReExport", "hardness": "Soft", "confidence": 1.0}
+        ],
+        "affinities": [],
+        "containers": {"containers": [
+            {"id": 0, "name": "root", "level": "File", "parent": null}
+        ]}
+    }"#;
+
+    #[test]
+    fn should_load_a_schema_2_snapshot_and_upgrade_it() -> Result<(), String> {
+        let ir: IntermediateRepresentation =
+            serde_json::from_str(SCHEMA_2_IR).map_err(|error| error.to_string())?;
+
+        let snapshot = Snapshot::assemble(ir).map_err(|error| error.to_string())?;
+
+        let flags: Vec<bool> = snapshot
+            .ir()
+            .nodes
+            .iter()
+            .map(|node| node.re_export)
+            .collect();
+        assert_eq!(snapshot.ir().schema_version, SCHEMA_VERSION);
+        assert_eq!(flags, vec![false, true]);
+        Ok(())
+    }
+
+    #[test]
+    fn should_omit_an_unset_re_export_flag_and_round_trip_a_set_one() -> Result<(), String> {
+        let original = node(0, "original");
+        let re_export = Node {
+            re_export: true,
+            ..node(1, "alias")
+        };
+
+        let plain = serde_json::to_string(&original).map_err(|error| error.to_string())?;
+        let marked = serde_json::to_string(&re_export).map_err(|error| error.to_string())?;
+        let restored: Node = serde_json::from_str(&marked).map_err(|error| error.to_string())?;
+
+        assert!(!plain.contains("re_export"), "{plain}");
+        assert_eq!(restored, re_export);
+        Ok(())
     }
 
     #[test]
