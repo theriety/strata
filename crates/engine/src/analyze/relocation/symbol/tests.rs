@@ -16,6 +16,8 @@ use crate::config::{AnalyzeConfig, ProfileConfig, TestsConfig};
 use crate::result::{ContainerNode, CurrentStanding, Level, SymbolKind, SymbolMove};
 
 use super::*;
+use crate::analyze::relocation::collision::CollisionFold;
+use crate::analyze::relocation::mirror::PolishEvidence;
 use crate::analyze::relocation::solver::{build_file_graph, test_zone_marks};
 use crate::analyze::test_support::*;
 use crate::analyze::*;
@@ -1196,19 +1198,23 @@ fn should_zero_price_incident_edges_touching_the_test_zone() {
 
     // the spec twin nominates nothing: no incident slot at all.
     assert!(
-        pass.incident.get(&3).is_none_or(Vec::is_empty),
+        pass.pricing.incident.get(&3).is_none_or(Vec::is_empty),
         "the test-zone resident must carry no priced incident edges"
     );
     // and no priced production link points at it either way.
     for id in [0u32, 1, 2] {
-        let links = pass.incident.get(&id).map_or(&[][..], Vec::as_slice);
+        let links = pass
+            .pricing
+            .incident
+            .get(&id)
+            .map_or(&[][..], Vec::as_slice);
         assert!(
             links.iter().all(|&(neighbour, _)| neighbour != 3),
             "node {id} still carries a priced link into the test zone"
         );
     }
     // positive control: the production bond survived the cut.
-    let subject_links = pass.incident.get(&0).map_or(&[][..], Vec::as_slice);
+    let subject_links = pass.pricing.incident.get(&0).map_or(&[][..], Vec::as_slice);
     assert!(
         subject_links.iter().any(|&(neighbour, _)| neighbour == 2),
         "the codec's priced bond to its consumer must survive the cut"
@@ -1249,22 +1255,26 @@ fn should_veto_a_cross_boundary_destination_even_when_priced() {
     let mut pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
     // simulate a future nomination path that prices the twin pull despite
     // the tie-cut: the strongest possible lure across the boundary.
-    pass.incident.entry(0).or_default().push((2, 5.0));
+    pass.pricing.incident.entry(0).or_default().push((2, 5.0));
     // Float surgery: hold strict-J aside so a J-cost rejection cannot
     // masquerade as the veto — with best at infinity, any destination
     // that survives the gate chain is deterministically accepted, so
     // `!accepted` proves THIS veto fired.
-    pass.best = f64::INFINITY;
+    pass.ledger.best = f64::INFINITY;
 
     let accepted = ir
         .nodes
         .first()
         .is_some_and(|subject| pass.try_relocate(subject));
     assert!(
-        !accepted && pass.relocations.is_empty(),
+        !accepted && pass.ledger.relocations.is_empty(),
         "a cross-boundary destination must be vetoed even when priced; \
              relocations {:?}",
-        pass.relocations.iter().map(|r| r.node).collect::<Vec<_>>()
+        pass.ledger
+            .relocations
+            .iter()
+            .map(|r| r.node)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -2210,11 +2220,16 @@ fn should_veto_a_later_declaration_after_an_earlier_arrival_claims_its_name()
         .ok_or("the later declaration witness must exist")?;
     let assembled = solver.assemble(&solver.real_partition);
     let mut pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
-    pass.best = f64::INFINITY;
+    pass.ledger.best = f64::INFINITY;
     let first_moved = pass.try_relocate(first_subject);
-    pass.best = f64::INFINITY;
+    pass.ledger.best = f64::INFINITY;
     let second_moved = pass.try_relocate(second_subject);
-    let relocated: Vec<_> = pass.relocations.iter().map(|entry| entry.node).collect();
+    let relocated: Vec<_> = pass
+        .ledger
+        .relocations
+        .iter()
+        .map(|entry| entry.node)
+        .collect();
 
     assert!(
         first_moved,
@@ -2483,14 +2498,18 @@ fn relocates_first_symbol_with_affinities(
     let ir = snapshot.ir();
     let assembled = solver.assemble(&solver.real_partition);
     let mut pass = SymbolPass::new(pass_inputs(snapshot, &solver, &assembled));
-    pass.best = f64::INFINITY;
+    pass.ledger.best = f64::INFINITY;
     let accepted = ir
         .nodes
         .first()
         .is_some_and(|subject| pass.try_relocate(subject));
     (
         accepted,
-        pass.relocations.iter().map(|entry| entry.node).collect(),
+        pass.ledger
+            .relocations
+            .iter()
+            .map(|entry| entry.node)
+            .collect(),
     )
 }
 
@@ -2537,7 +2556,8 @@ fn companion_nomination_count(snapshot: &Snapshot, companion: u32, owner: u32) -
     let assembled = solver.assemble(&solver.real_partition);
     let pass = SymbolPass::new(pass_inputs(snapshot, &solver, &assembled));
 
-    pass.incident
+    pass.pricing
+        .incident
         .get(&companion)
         .into_iter()
         .flatten()
@@ -2570,7 +2590,10 @@ fn first_symbol_delta_with_dependency_only(
     ir.nodes
         .first()
         .and_then(|subject| pass.try_relocate(subject).then_some(()))?;
-    pass.relocations.first().map(|relocation| relocation.delta)
+    pass.ledger
+        .relocations
+        .first()
+        .map(|relocation| relocation.delta)
 }
 
 fn relocates_first_symbol_with_profile(
@@ -2594,7 +2617,11 @@ fn relocates_first_symbol_with_profile(
         .is_some_and(|subject| pass.try_relocate(subject));
     (
         accepted,
-        pass.relocations.iter().map(|entry| entry.node).collect(),
+        pass.ledger
+            .relocations
+            .iter()
+            .map(|entry| entry.node)
+            .collect(),
     )
 }
 
@@ -2614,26 +2641,32 @@ fn relocates_claimant_then_subject(
     let ir = snapshot.ir();
     let assembled = solver.assemble(&solver.real_partition);
     let mut pass = SymbolPass::new(pass_inputs(snapshot, &solver, &assembled));
-    pass.incident
+    pass.pricing
+        .incident
         .entry(1)
         .or_default()
         .push((destination_lure, 5.0));
-    pass.best = f64::INFINITY;
+    pass.ledger.best = f64::INFINITY;
     let claimant_moved = ir
         .nodes
         .iter()
         .find(|node| node.id == NodeId(0))
         .is_some_and(|claimant| pass.try_relocate(claimant));
-    pass.best = f64::INFINITY;
+    pass.ledger.best = f64::INFINITY;
     // Hold visibility aside so the witness isolates cycle admission. The
     // production visibility contract has its own focused relocation cases.
-    pass.vis_base = usize::MAX;
+    pass.visibility.vis_base = usize::MAX;
     let subject_moved = ir
         .nodes
         .iter()
         .find(|node| node.id == NodeId(1))
         .is_some_and(|subject| pass.try_relocate(subject));
-    let relocated = pass.relocations.iter().map(|entry| entry.node).collect();
+    let relocated = pass
+        .ledger
+        .relocations
+        .iter()
+        .map(|entry| entry.node)
+        .collect();
     (claimant_moved, subject_moved, relocated)
 }
 
@@ -2814,22 +2847,26 @@ fn should_keep_a_test_zone_resident_inside_the_test_zone() {
     let assembled = solver.assemble(&solver.real_partition);
     let mut pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
     // a priced-looking lure out toward the production home file.
-    pass.incident.entry(0).or_default().push((2, 3.0));
+    pass.pricing.incident.entry(0).or_default().push((2, 3.0));
     // Float surgery: hold strict-J aside so a J-cost rejection cannot
     // masquerade as the veto — with best at infinity, any destination
     // that survives the gate chain is deterministically accepted, so
     // `!accepted` proves THIS veto fired.
-    pass.best = f64::INFINITY;
+    pass.ledger.best = f64::INFINITY;
 
     let accepted = ir
         .nodes
         .first()
         .is_some_and(|stray| pass.try_relocate(stray));
     assert!(
-        !accepted && pass.relocations.is_empty(),
+        !accepted && pass.ledger.relocations.is_empty(),
         "a test-zone resident must never relocate out of the zone; \
              relocations {:?}",
-        pass.relocations.iter().map(|r| r.node).collect::<Vec<_>>()
+        pass.ledger
+            .relocations
+            .iter()
+            .map(|r| r.node)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -2871,12 +2908,12 @@ fn should_still_allow_moves_inside_one_zone() {
     let mut pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
     // the tie-cut zeroed the zone edges, so nomination needs the simulated
     // priced pull; the destination sits inside the same zone.
-    pass.incident.entry(0).or_default().push((2, 5.0));
+    pass.pricing.incident.entry(0).or_default().push((2, 5.0));
     // Float surgery: hold strict-J aside so THIS test exercises the veto
     // family alone — with zone edges priced zero everywhere, an intra-zone
     // move can never pay its own displacement under J, and that pricing
     // doctrine is covered by the zero-price tests, not here.
-    pass.best = f64::INFINITY;
+    pass.ledger.best = f64::INFINITY;
 
     let accepted = ir
         .nodes
@@ -2886,10 +2923,14 @@ fn should_still_allow_moves_inside_one_zone() {
         accepted,
         "an intra-zone relocation must clear the veto family; relocations \
              {:?}",
-        pass.relocations.iter().map(|r| r.node).collect::<Vec<_>>()
+        pass.ledger
+            .relocations
+            .iter()
+            .map(|r| r.node)
+            .collect::<Vec<_>>()
     );
-    assert_eq!(pass.relocations.len(), 1);
-    assert_eq!(pass.relocations.first().map(|r| r.node), Some(0));
+    assert_eq!(pass.ledger.relocations.len(), 1);
+    assert_eq!(pass.ledger.relocations.first().map(|r| r.node), Some(0));
 }
 
 #[test]
@@ -2938,9 +2979,9 @@ fn should_reject_a_pinned_symbol_before_it_can_change_a_later_admission() {
             ..RelocationPolicy::default()
         },
     );
-    pass.incident.entry(0).or_default().push((4, 5.0));
-    pass.incident.entry(2).or_default().push((4, 5.0));
-    pass.best = f64::INFINITY;
+    pass.pricing.incident.entry(0).or_default().push((4, 5.0));
+    pass.pricing.incident.entry(2).or_default().push((4, 5.0));
+    pass.ledger.best = f64::INFINITY;
 
     let blocked_node = ir.nodes.first();
     assert!(blocked_node.is_some(), "blocked symbol must exist");
@@ -2949,7 +2990,7 @@ fn should_reject_a_pinned_symbol_before_it_can_change_a_later_admission() {
     };
     assert!(!pass.try_relocate(blocked_node));
     assert!(
-        pass.overlay.is_empty(),
+        pass.ledger.overlay.is_empty(),
         "a pinned trial cannot mutate pass state"
     );
     let eligible_node = ir.nodes.get(2);
@@ -2959,7 +3000,11 @@ fn should_reject_a_pinned_symbol_before_it_can_change_a_later_admission() {
     };
     assert!(pass.try_relocate(eligible_node));
     assert_eq!(
-        pass.relocations.iter().map(|r| r.node).collect::<Vec<_>>(),
+        pass.ledger
+            .relocations
+            .iter()
+            .map(|r| r.node)
+            .collect::<Vec<_>>(),
         vec![2]
     );
 }
@@ -3754,7 +3799,7 @@ fn should_derive_the_visibility_baseline_over_the_tree_the_pass_runs_on() {
 
     assert_eq!(expected, 0, "the declarations match the assembly exactly");
     assert_eq!(
-        pass.vis_base, expected,
+        pass.visibility.vis_base, expected,
         "the visibility baseline must be derived over the assembled placement"
     );
 }
