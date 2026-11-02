@@ -40,7 +40,7 @@ Baseline score: 0.7846
 Fewer than the requested candidates survived; the solution space converged.
 
 greenfield — candidate 1
-  Score: 0.7846 → 0.4289; improvement +0.3557
+  Score: 0.7846 → 0.6279; improvement +0.1567
   Proposed moves
     - Move file `crates/core/src/beta/scale.rs` → `crates/core/src/alpha/scale.rs`
       Why: pulled toward `crates/core/src/alpha/parse.rs` — weight 5.0.
