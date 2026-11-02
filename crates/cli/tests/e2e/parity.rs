@@ -199,7 +199,7 @@ fn parent_of(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(parent, _)| parent)
 }
 
-/// Collects every real-path violation of one candidate's narration (ADR-0018).
+/// Collects every real-path violation of one candidate's narration (ADR-18).
 ///
 /// Every `from` must be an existing directory and every moved or mirrored file
 /// an existing file at pass start. Every `to` must be an existing directory or
@@ -309,7 +309,7 @@ fn move_path_violations(name: &str, candidate: &serde_json::Value) -> Vec<String
 }
 
 /// Asserts every move endpoint of every candidate names a real path
-/// (ADR-0018): no invented `src/crates/...` directory ever reaches the user.
+/// (ADR-18): no invented `src/crates/...` directory ever reaches the user.
 fn assert_real_move_paths(name: &str, parsed: &serde_json::Value) {
     let violations = real_move_path_violations(name, parsed);
     assert!(
@@ -318,7 +318,7 @@ fn assert_real_move_paths(name: &str, parsed: &serde_json::Value) {
     );
 }
 
-/// Collects the real-path violations (ADR-0018) of every candidate in both
+/// Collects the real-path violations (ADR-18) of every candidate in both
 /// profiles of one analyze result, each tagged `<profile>/<rank>`.
 fn real_move_path_violations(name: &str, parsed: &serde_json::Value) -> Vec<String> {
     let mut violations = Vec::new();
@@ -526,7 +526,7 @@ fn should_match_the_goldens_for_the_rust_workspace_fixture() {
 
 #[test]
 fn should_narrate_only_real_or_created_move_paths_for_every_fixture_in_both_wall_modes() {
-    // ADR-0018 across every fixture, not only the golden set: a move target's
+    // ADR-18 across every fixture, not only the golden set: a move target's
     // parent is an existing directory or a new folder the same candidate
     // creates. `workspace-ts-leak` once printed `atlas/src/atlas/core` — the
     // package key re-joined under its own see-through source root.

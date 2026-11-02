@@ -1370,7 +1370,7 @@ mod tests {
 
     /// A `pub use` re-export materializes a barrel-local node that participates in
     /// the node set even before its target is resolved, and is flagged as a
-    /// re-export (ADR-0020) whether or not a target ever resolves.
+    /// re-export (ADR-20) whether or not a target ever resolves.
     #[test]
     fn should_materialize_a_barrel_node_for_a_pub_use_re_export() {
         let file = ParsedFile {

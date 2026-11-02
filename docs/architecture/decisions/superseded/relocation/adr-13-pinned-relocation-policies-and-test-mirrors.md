@@ -1,23 +1,23 @@
+> **Status:** Superseded
+>
+> **Superseded by:** [ADR-22 — Test symbols are pinned by polarity](../../relocation/adr-22-test-symbols-are-pinned-by-polarity.md)
+>
+> **What changed:** Partial: pinned relocation policies and exact test mirrors are unchanged, but symbols are now also pinned by detected test polarity — with `pin-detected-test-symbols = true`, a `TestCase` or `TestSupport` symbol is pinned wherever it lives, including Rust `#[cfg(test)]` functions inside production files.
+>
+> superseded-by: adr-22
+
 # ADR-13: Pinned relocation policies and exact test mirrors
-
-📌
-
-Each profile's relocation policy can pin files and symbols in place without removing them from analysis, detected tests are pinned by default, and an accepted source move carries its exact test mirrors as best-effort followers.
 
 - Status: `Accepted`
 - Date: `2026-08-31`
 
-## 🎯 Motivation
+## Context
 
-Optimizing test files and test-support declarations independently can produce recommendations that break the source/test layout readers expect. Matching a test to production code by basename is also ambiguous whenever separate modules use a common filename.
-
-## 🧭 Context
-
-Test files and test-support declarations participate in useful dependency, scoring, capacity, and cycle evidence.
+Test files and test-support declarations participate in useful dependency, scoring, capacity, and cycle evidence, but optimizing them independently can produce recommendations that break the source/test layout readers expect. Matching a test to production code by basename is also ambiguous whenever separate modules use a common filename.
 
 A source relocation can have one or more test counterparts. Those tests should follow the source when the relationship is exact and the resulting placement is valid, without making the source recommendation depend on every follower succeeding.
 
-## ✅ Decision
+## Decision
 
 Each parameter profile owns a relocation policy. Repo-relative glob patterns can pin files against independent file moves and can prevent symbols from leaving or entering matching files. Detected test files and their symbols are pinned by default. Pinned participants remain in the graph and continue to contribute to dependencies, scoring, capacity, cycles, and findings. If one file in a strongly connected file component is pinned, the whole component is pinned.
 
@@ -29,7 +29,7 @@ A rejected follower does not veto the source move. It remains in its original fo
 
 Analysis results use schema version 7. Each primary `Move` carries `mirrors` and `blockedMirrors`. A successful mirror records `sourcePath`, `path`, `from`, and `to`; a blocked mirror records `sourcePath`, `path`, `from`, `intendedTo`, and `reason`. Human output renders source files, mirrored tests, and blocked mirrors as one linked recommendation. File counts include successful followers, while recommendation counts count the linked group once.
 
-## 🔀 Alternatives considered
+## Alternatives considered
 
 **Remove pinned tests from analysis.** Rejected because their dependencies and structural findings remain valid evidence even when their placement is not independently actionable.
 
@@ -39,7 +39,7 @@ Analysis results use schema version 7. Each primary `Move` carries `mirrors` and
 
 **Infer a Rust default mirror.** Rejected because Rust commonly combines inline tests and integration tests without a dependable path-level one-to-one convention.
 
-## ⚖️ Consequences
+## Consequences
 
 Profiles can independently freeze generated, vendored, test, or other policy-owned files and declarations without hiding their graph evidence. Exact nested paths disambiguate repeated basenames, and one source can carry several linked tests in a single recommendation.
 

@@ -66,7 +66,7 @@ pub struct Node {
     pub visibility: ScopeLevel,
     /// Production sloc attributed to this node (drives the file cap).
     pub effective_size: u32,
-    /// Whether this node is a re-export declaration (ADR-0020): it declares no
+    /// Whether this node is a re-export declaration (ADR-20): it declares no
     /// entity of its own but publishes another one under this name (`pub use`,
     /// `export { x } from`, an `__init__.py` import binding).
     ///

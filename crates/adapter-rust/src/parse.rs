@@ -358,7 +358,7 @@ fn push_impl(
 
     // A trait impl is one indivisible Rust item: its methods cannot live in a
     // different file from the impl block, so the whole block is a single
-    // declaration (ADR-0019). It is named after its header and carries the
+    // declaration (ADR-19). It is named after its header and carries the
     // inheritance reference to the trait plus every item's references, so
     // calls into any method resolve to the block that must move as a unit.
     if item_impl.trait_.is_some() {
@@ -1230,7 +1230,7 @@ mod tests {
     #[test]
     fn should_record_a_crate_root_alias_as_a_re_export() {
         // `pub use strata_ir as ir;` names a crate root, which is never a node;
-        // it is still a re-export declaration (ADR-0020).
+        // it is still a re-export declaration (ADR-20).
         let re_exports = parse_re_exports("pub use strata_ir as ir;\n");
 
         assert_eq!(
