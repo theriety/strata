@@ -15,7 +15,7 @@ pub(super) fn violation_identity(violation: &Violation) -> String {
 }
 
 /// Sorts violations into the engine-defined total order — hard violations
-/// before borderline, then kind (cycle, polarity, capacity, visibility), then
+/// before borderline, then kind (cycle, polarity, capacity, visibility, test-only), then
 /// location, then detail — so every face, including JSON, shares one order.
 pub(super) fn sort_violations(violations: &mut [Violation]) {
     violations.sort_by(|left, right| {
@@ -43,5 +43,6 @@ fn kind_rank(kind: ViolationKind) -> u8 {
         ViolationKind::Polarity => 1,
         ViolationKind::Capacity => 2,
         ViolationKind::Visibility => 3,
+        ViolationKind::TestOnly => 4,
     }
 }

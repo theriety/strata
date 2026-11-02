@@ -102,10 +102,11 @@ fn parse_kind(class: &str) -> Result<ViolationKind, StrataError> {
         "polarity" => Ok(ViolationKind::Polarity),
         "capacity" => Ok(ViolationKind::Capacity),
         "visibility" => Ok(ViolationKind::Visibility),
+        "testOnly" | "test-only" => Ok(ViolationKind::TestOnly),
         other => Err(StrataError::ConfigInvalid {
             key: Some("--fail-on".to_owned()),
             reason: format!(
-                "unknown violation class `{other}`; expected cycle, polarity, capacity, or visibility"
+                "unknown violation class `{other}`; expected cycle, polarity, capacity, visibility, or testOnly"
             ),
         }),
     }

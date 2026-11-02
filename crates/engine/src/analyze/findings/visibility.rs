@@ -5,11 +5,14 @@ use std::collections::BTreeMap;
 use strata_core::visibility::{Finding, derive_visibility};
 use strata_ir::{Node, ScopeLadder, ScopeLevel, Snapshot};
 
+use super::test_only::test_only_nodes;
 use crate::analyze::search::node_names;
 use crate::result::{Severity, Violation, ViolationKind};
 
 /// Reports symbols whose declared visibility is wider than their derived scope.
 pub(super) fn visibility_violations(snapshot: &Snapshot) -> Vec<Violation> {
+    // one finding per node: a test-only item is advised once, as test-only.
+    let test_only = test_only_nodes(snapshot);
     let ir = snapshot.ir();
     let result = derive_visibility(&ir.containers, &ir.nodes, &ir.edges);
     let names = node_names(snapshot);
@@ -33,6 +36,7 @@ pub(super) fn visibility_violations(snapshot: &Snapshot) -> Vec<Violation> {
     result
         .findings
         .iter()
+        .filter(|finding| !test_only.contains(&finding.node.0))
         .filter_map(|finding| match ladders.get(&finding.node.0) {
             Some(ladder) => {
                 let (declared, derived) = ladder.declared.zip(ladder.needed)?;

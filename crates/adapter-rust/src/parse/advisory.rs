@@ -29,6 +29,7 @@ pub(super) fn mark_all(file: &mut ParsedFile, source: &str) {
         let mut dropped = DroppedUses::default();
         dropped.collect(&ast.items, true);
         file.dropped_uses = dropped.imported;
+        file.test_dropped_uses = dropped.test_imported;
         file.dropped_re_exports = dropped.re_exported;
         file.dropped_globs = dropped.globs;
     }

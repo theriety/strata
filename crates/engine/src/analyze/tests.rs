@@ -45,7 +45,7 @@ fn should_serialize_profile_results_as_schema_version_nine_without_modes() {
         serialized
             .get("schemaVersion")
             .and_then(serde_json::Value::as_u64),
-        Some(9)
+        Some(10)
     );
     // version 9 carries the per-profile package-wall parameter (ADR-17).
     assert_eq!(

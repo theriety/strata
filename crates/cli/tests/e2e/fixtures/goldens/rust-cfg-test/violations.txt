@@ -1,2 +1,3 @@
-no violations
+testOnly [violation] src/lib.rs, double :: Only tests in this repo use `double`. It is public, so code outside this repo may use it too; check before moving or deleting it.
+testOnly [violation] src/lib.rs, halve :: Only tests in this repo use `halve`. It is public, so code outside this repo may use it too; check before moving or deleting it.
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.

@@ -1,2 +1,2 @@
-no violations
+testOnly [violation] src/api/openai.ts, complete :: Only tests in this repo use `complete`. It is public, so code outside this repo may use it too; check before moving or deleting it.
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.

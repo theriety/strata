@@ -18,6 +18,7 @@ mod cycles;
 mod ordering;
 mod physical;
 mod polarity;
+mod test_only;
 mod visibility;
 
 #[cfg(test)]
@@ -37,6 +38,7 @@ pub(in crate::analyze) use physical::{
     physical_folder_entries_repository_relative, physical_folder_findings,
 };
 use polarity::polarity_violations;
+use test_only::test_only_violations;
 use visibility::visibility_violations;
 
 pub(in crate::analyze) fn profile_findings(
@@ -108,6 +110,7 @@ fn collect_violations(
     violations.extend(cycle_violations(snapshot, cycles));
     violations.extend(polarity_violations(snapshot));
     violations.extend(visibility_violations(snapshot));
+    violations.extend(test_only_violations(snapshot));
     violations.extend(snapshot_capacity_violations(snapshot, tree, capacity));
     sort_and_dedup_violations(&mut violations);
     violations

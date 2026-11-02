@@ -39,6 +39,8 @@ fn node(id: u32, name: &str, container: u32) -> Node {
         effective_size: 1,
         re_export: false,
         display_name: None,
+        test_source: false,
+        owner: None,
     }
 }
 
@@ -946,6 +948,7 @@ fn should_count_an_advisory_use_as_a_user_without_an_edge() {
     let advisory = [AdvisoryUse {
         user: NodeId(1),
         used: NodeId(0),
+        from_test: false,
     }];
     let mut case =
         Case::new(&BCD_PATHS, "src/b/c.rs", &rungs, Some(2)).consumed_by(&["src/b/d.rs"], &[]);
@@ -966,11 +969,15 @@ fn should_merge_advisory_uses_without_changing_nodes_edges_or_containers() {
     let advisory = vec![AdvisoryUse {
         user: NodeId(1),
         used: NodeId(0),
+        from_test: false,
     }];
     let plain = merge_fragments(vec![fragment(Vec::new())], "pkg", &Layout::default());
-    let with = merge_fragments(vec![fragment(advisory)], "pkg", &Layout::default());
+    let mut with = merge_fragments(vec![fragment(advisory.clone())], "pkg", &Layout::default());
+    // the merged uses are kept for advice (test-only reads them), as-is.
+    assert_eq!(with.advisory_uses, advisory);
+    with.advisory_uses.clear();
 
     // the whole graph side of the IR is untouched; advisory uses reach only the
-    // ladder verdicts, which a fragment without scope statements has none of.
+    // ladder verdicts and the advisory list, never nodes, edges or containers.
     assert_eq!(plain, with);
 }

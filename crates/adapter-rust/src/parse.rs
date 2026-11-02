@@ -140,6 +140,16 @@ pub struct Declaration {
     /// for visibility advice only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub advisory_names: Vec<SmolStr>,
+    /// `true` when the declaration is a whole `impl Trait for T` block, whose
+    /// users reach it through the trait and not by name.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub trait_impl: bool,
+}
+
+/// Serde predicate that omits a default `false` flag.
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes the field by reference
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// A `pub use` re-export: the name surfaced in this file's export surface and the
@@ -189,6 +199,10 @@ pub struct ParsedFile {
     /// Names imported by `use` items the loader may drop, for advice only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dropped_uses: Vec<SmolStr>,
+    /// Names inside item-position macros of `cfg(test)` modules: test code the
+    /// loader may not expand, for advice only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub test_dropped_uses: Vec<SmolStr>,
     /// The subset of `dropped_uses` whose `use` is not private (a re-export).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dropped_re_exports: Vec<SmolStr>,
@@ -254,6 +268,7 @@ fn parse_one(file: &SourceFile) -> Result<(ParsedFile, Modules), AdapterError> {
         re_exports,
         names: identifiers(&file.contents),
         dropped_uses: dropped.imported,
+        test_dropped_uses: dropped.test_imported,
         dropped_re_exports: dropped.re_exported,
         dropped_globs: dropped.globs,
         dropped_glob_files: Vec::new(),
@@ -315,6 +330,7 @@ mod tests {
         owner: None,
         references: Vec::new(),
         advisory_names: Vec::new(),
+        trait_impl: false,
     };
 
     #[test]

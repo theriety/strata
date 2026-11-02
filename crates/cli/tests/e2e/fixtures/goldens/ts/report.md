@@ -1,7 +1,7 @@
 # Strata report — ts
 
 2 files · 4 symbols · 4 edges
-Snapshot `e9069b7255c63fe0149058e85e45cf9d442c99f3f2dc456b58ceed568baa3901`
+Snapshot `68973ce3abca82fbcfc337494a3b099f54005be2220a4b732aad8f969e8247fd`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings

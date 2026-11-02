@@ -1,7 +1,7 @@
 # Strata report — over-capacity
 
 3 files · 375 symbols · 0 edges
-Snapshot `5c53b1285628e77956dba246741303c5194feb5b812fd1fc8ed8b4df6ab4a07b`
+Snapshot `3f214d4ce8d116f9db703133f34f3be610b97a013f46bd10049050eb5bbdeaa6`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings
