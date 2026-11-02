@@ -3,9 +3,9 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
+use unlace_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
 #[cfg(test)]
-use strata_ir::{Polarity, Snapshot};
+use unlace_ir::{Polarity, Snapshot};
 
 use crate::analyze::findings::physical_folder_entries_repository_relative;
 use crate::config::CapacityConfig;

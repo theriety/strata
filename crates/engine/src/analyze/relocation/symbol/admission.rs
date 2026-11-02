@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_ir::{ContainerId, Node, NodeKind, ScopeLevel};
+use unlace_ir::{ContainerId, Node, NodeKind, ScopeLevel};
 
 use crate::analyze::relocation::CandidateTree;
 use crate::analyze::relocation::symbol::guards::{ConsumerBranchGuard, PassStartGuard};

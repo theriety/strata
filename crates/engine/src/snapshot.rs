@@ -2,12 +2,12 @@
 //!
 //! [`snapshot_from_root`] is the engine's only filesystem entry point. It globs
 //! sources under a root (honoring the config's include / exclude patterns),
-//! groups files by language, dispatches each language's [`Adapter`](strata_ir::Adapter) in parallel
-//! (rayon), then merges the resulting [`IrFragment`](strata_ir::IrFragment)s into one namespace:
+//! groups files by language, dispatches each language's [`Adapter`](unlace_ir::Adapter) in parallel
+//! (rayon), then merges the resulting [`IrFragment`](unlace_ir::IrFragment)s into one namespace:
 //! per-adapter node and container ids are re-interned to a single dense range so
 //! cross-fragment edges resolve. Re-export edges are flattened to their original
 //! definitions under a depth guard, and the merged IR is handed to
-//! [`Snapshot::assemble`](strata_ir::Snapshot::assemble) for validation and
+//! [`Snapshot::assemble`](unlace_ir::Snapshot::assemble) for validation and
 //! content hashing.
 
 mod discovery;
@@ -24,14 +24,14 @@ use std::path::Path;
 
 use rayon::prelude::*;
 use smol_str::SmolStr;
-use strata_ir::Layout;
+use unlace_ir::Layout;
 
 use self::discovery::discover_sources;
 use self::dispatch::{enabled_languages, group_by_language, run_adapter};
 use self::merge::merge_fragments;
 use self::reexport::flatten_re_exports;
 use crate::config::AnalyzeConfig;
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 
 pub(crate) use self::language::Language;
 
@@ -45,19 +45,19 @@ pub(crate) use self::language::Language;
 /// and the adapters run in parallel. Merging re-interns each fragment's node and
 /// container ids into one dense namespace before assembly.
 ///
-/// [`Snapshot`]: strata_ir::Snapshot
+/// [`Snapshot`]: unlace_ir::Snapshot
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::InputUnreadable`] when discovery cannot read the tree,
-/// [`StrataError::AdapterParseFailure`] / [`StrataError::AdapterBindFailure`] on
-/// adapter failure, [`StrataError::ReExportDepthExceeded`] on a pathological
-/// barrel chain, and [`StrataError::SnapshotInvalid`] when assembly rejects the
+/// Returns [`UnlaceError::InputUnreadable`] when discovery cannot read the tree,
+/// [`UnlaceError::AdapterParseFailure`] / [`UnlaceError::AdapterBindFailure`] on
+/// adapter failure, [`UnlaceError::ReExportDepthExceeded`] on a pathological
+/// barrel chain, and [`UnlaceError::SnapshotInvalid`] when assembly rejects the
 /// merged IR.
 pub fn snapshot_from_root(
     root: impl AsRef<Path>,
     config: &AnalyzeConfig,
-) -> Result<strata_ir::Snapshot, StrataError> {
+) -> Result<unlace_ir::Snapshot, UnlaceError> {
     let root = root.as_ref();
     // rust-analyzer canonicalizes its VFS to an absolute path, so canonicalize the
     // root once here — the engine's only filesystem entry point — and every
@@ -66,7 +66,7 @@ pub fn snapshot_from_root(
     // that cannot be canonicalized (missing, unreadable, a broken symlink) is
     // exactly when the VFS would not match, so falling back to the raw path would
     // silently degrade semantic-edge resolution instead of surfacing the bad root.
-    let root = std::fs::canonicalize(root).map_err(|error| StrataError::InputUnreadable {
+    let root = std::fs::canonicalize(root).map_err(|error| UnlaceError::InputUnreadable {
         path: root.to_path_buf(),
         reason: error.to_string(),
     })?;
@@ -98,5 +98,5 @@ pub fn snapshot_from_root(
     let merged = merge_fragments(fragments, root_name, &layout);
     let flattened = flatten_re_exports(merged)?;
 
-    strata_ir::Snapshot::assemble(flattened).map_err(StrataError::from)
+    unlace_ir::Snapshot::assemble(flattened).map_err(UnlaceError::from)
 }

@@ -1,6 +1,6 @@
 # Architecture
 
-[strata — Architecture](overview.md) describes the current structure: the
+[unlace — Architecture](overview.md) describes the current structure: the
 adapter → IR → engine pipeline, crate layering, snapshot contract, and
 decomposition phases. [Deviations](deviations.md) records where implementation
 departed from spec.
@@ -29,7 +29,7 @@ The public result has two groups. `Recommended` requires sufficient evidence and
 
 | ADR | Title | Domain | Path | Status |
 | --- | --- | --- | --- | --- |
-| [ADR-1](decisions/product/adr-1-recommendations-only.md) | Recommendations only — strata never delivers or executes move scripts | product | `decisions/product/adr-1-recommendations-only.md` | Accepted |
+| [ADR-1](decisions/product/adr-1-recommendations-only.md) | Recommendations only — unlace never delivers or executes move scripts | product | `decisions/product/adr-1-recommendations-only.md` | Accepted |
 | [ADR-5](decisions/relocation/adr-5-pass-start-dependencies-govern-symbol-moves.md) | Pass-start dependencies govern symbol moves | relocation | `decisions/relocation/adr-5-pass-start-dependencies-govern-symbol-moves.md` | Accepted |
 | [ADR-6](decisions/relocation/adr-6-symbol-destination-guardrails.md) | Symbol destinations obey pass-start guardrails | relocation | `decisions/relocation/adr-6-symbol-destination-guardrails.md` | Accepted |
 | [ADR-8](decisions/relocation/adr-8-physical-layout-governs-relocation-and-capacity.md) | Physical layout governs relocation and capacity | relocation | `decisions/relocation/adr-8-physical-layout-governs-relocation-and-capacity.md` | Accepted |

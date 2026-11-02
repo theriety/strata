@@ -19,7 +19,7 @@ question = "Does proposal quality hold at three figures of file count?"
 mode = "both"        # greenfield face is asserted below; anchored is timed too
 candidates = 3       # engine default k
 seed = 42            # engine default seed
-config = "defaults"  # pure built-in defaults; no fixture strata.toml
+config = "defaults"  # pure built-in defaults; no fixture unlace.toml
 
 [[precondition]]
 kind = "file_count"

@@ -1,9 +1,9 @@
-//! The five `strata` subcommands, each a thin shell over the engine.
+//! The five `unlace` subcommands, each a thin shell over the engine.
 //!
-//! Every command parses its flags, calls the same public `strata-engine`
+//! Every command parses its flags, calls the same public `unlace-engine`
 //! functions any embedder would, and renders the typed result — there is no
 //! analysis logic here that the library lacks. The commands share a small set of
-//! helpers for loading a config (CLI flags over `strata.toml` over defaults),
+//! helpers for loading a config (CLI flags over `unlace.toml` over defaults),
 //! reading a saved `AnalyzeResult`, and resolving a `mode/index` reference.
 
 pub mod analyze;
@@ -14,24 +14,24 @@ pub mod violations;
 
 use std::path::Path;
 
-use strata_engine::{
-    AnalyzeConfig, AnalyzeResult, Candidate, ModeResult, RESULT_SCHEMA_VERSION, StrataError,
+use unlace_engine::{
+    AnalyzeConfig, AnalyzeResult, Candidate, ModeResult, RESULT_SCHEMA_VERSION, UnlaceError,
     Violation, load_config,
 };
 
 /// Loads the effective config: the file at `config_path` if it exists, else the
 /// built-in defaults, with the CLI overrides applied last.
 ///
-/// Configuration precedence is fixed — CLI flags override `strata.toml`, which
+/// Configuration precedence is fixed — CLI flags override `unlace.toml`, which
 /// overrides defaults. A missing config file is not an error: defaults apply.
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::ConfigInvalid`] if the file is present but invalid.
+/// Returns [`UnlaceError::ConfigInvalid`] if the file is present but invalid.
 fn resolve_config(
     config_path: &Path,
     overrides: ConfigOverrides,
-) -> Result<AnalyzeConfig, StrataError> {
+) -> Result<AnalyzeConfig, UnlaceError> {
     let mut config = if config_path.exists() {
         load_config(config_path)?
     } else {
@@ -68,7 +68,7 @@ pub struct ConfigOverrides {
     /// The `--jobs` override.
     pub jobs: Option<u32>,
     /// The `--mode` override.
-    pub mode: Option<strata_engine::Mode>,
+    pub mode: Option<unlace_engine::Mode>,
     /// The `--allow-cross-package-moves` switch; `false` leaves each profile's
     /// own key in force.
     pub allow_cross_package_moves: bool,
@@ -99,16 +99,16 @@ impl ConfigOverrides {
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::InputUnreadable`] if the file cannot be read, does not
+/// Returns [`UnlaceError::InputUnreadable`] if the file cannot be read, does not
 /// deserialize into an `AnalyzeResult`, or carries an unsupported
 /// `schemaVersion`.
-fn read_result(path: &Path) -> Result<AnalyzeResult, StrataError> {
-    let text = std::fs::read_to_string(path).map_err(|error| StrataError::InputUnreadable {
+fn read_result(path: &Path) -> Result<AnalyzeResult, UnlaceError> {
+    let text = std::fs::read_to_string(path).map_err(|error| UnlaceError::InputUnreadable {
         path: path.to_path_buf(),
         reason: error.to_string(),
     })?;
     let value: serde_json::Value =
-        serde_json::from_str(&text).map_err(|error| StrataError::InputUnreadable {
+        serde_json::from_str(&text).map_err(|error| UnlaceError::InputUnreadable {
             path: path.to_path_buf(),
             reason: error.to_string(),
         })?;
@@ -118,7 +118,7 @@ fn read_result(path: &Path) -> Result<AnalyzeResult, StrataError> {
         .and_then(|version| u32::try_from(version).ok())
         .unwrap_or_default();
     if schema_version != RESULT_SCHEMA_VERSION {
-        return Err(StrataError::InputUnreadable {
+        return Err(UnlaceError::InputUnreadable {
             path: path.to_path_buf(),
             reason: format!(
                 "unsupported result schemaVersion {schema_version}; expected {RESULT_SCHEMA_VERSION}"
@@ -126,7 +126,7 @@ fn read_result(path: &Path) -> Result<AnalyzeResult, StrataError> {
         });
     }
     let result: AnalyzeResult =
-        serde_json::from_value(value).map_err(|error| StrataError::InputUnreadable {
+        serde_json::from_value(value).map_err(|error| UnlaceError::InputUnreadable {
             path: path.to_path_buf(),
             reason: error.to_string(),
         })?;
@@ -137,14 +137,14 @@ fn read_result(path: &Path) -> Result<AnalyzeResult, StrataError> {
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::CandidateNotFound`] when the named mode is absent.
-fn mode_result<'a>(result: &'a AnalyzeResult, mode: &str) -> Result<&'a ModeResult, StrataError> {
+/// Returns [`UnlaceError::CandidateNotFound`] when the named mode is absent.
+fn mode_result<'a>(result: &'a AnalyzeResult, mode: &str) -> Result<&'a ModeResult, UnlaceError> {
     let found = match mode {
         "anchored" => result.profiles.anchored.as_ref(),
         "greenfield" => result.profiles.greenfield.as_ref(),
         _ => None,
     };
-    found.ok_or_else(|| StrataError::CandidateNotFound {
+    found.ok_or_else(|| UnlaceError::CandidateNotFound {
         mode: mode.to_owned(),
         index: 0,
     })
@@ -154,18 +154,18 @@ fn mode_result<'a>(result: &'a AnalyzeResult, mode: &str) -> Result<&'a ModeResu
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::CandidateNotFound`] when the index is out of range.
+/// Returns [`UnlaceError::CandidateNotFound`] when the index is out of range.
 fn candidate_at<'a>(
     result: &'a AnalyzeResult,
     mode: &str,
     index: usize,
-) -> Result<&'a Candidate, StrataError> {
+) -> Result<&'a Candidate, UnlaceError> {
     let mode_result = mode_result(result, mode)?;
     mode_result
         .candidates
         .iter()
         .find(|candidate| candidate.index as usize == index)
-        .ok_or_else(|| StrataError::CandidateNotFound {
+        .ok_or_else(|| UnlaceError::CandidateNotFound {
             mode: mode.to_owned(),
             index,
         })
@@ -173,9 +173,9 @@ fn candidate_at<'a>(
 
 #[cfg(test)]
 mod tests {
-    use strata_engine::ProfileName;
+    use unlace_engine::ProfileName;
 
-    use strata_engine::Mode;
+    use unlace_engine::Mode;
 
     use super::*;
 
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn should_default_when_the_config_file_is_absent() {
-        let missing = Path::new("/nonexistent/strata.toml");
+        let missing = Path::new("/nonexistent/unlace.toml");
 
         let config = resolve_config(missing, ConfigOverrides::default());
 
@@ -326,28 +326,28 @@ mod tests {
         let result = AnalyzeResult {
             schema_version: RESULT_SCHEMA_VERSION,
             snapshot_hash: "h".to_owned(),
-            summary: strata_engine::Summary {
+            summary: unlace_engine::Summary {
                 symbols: 0,
                 edges: 0,
                 files: 0,
                 files_by_language: std::collections::BTreeMap::new(),
             },
-            current: strata_engine::CurrentTree {
-                tree: strata_engine::ContainerNode {
+            current: unlace_engine::CurrentTree {
+                tree: unlace_engine::ContainerNode {
                     name: "r".to_owned(),
-                    level: strata_engine::Level::File,
+                    level: unlace_engine::Level::File,
                     children: None,
                     symbols: Some(Vec::new()),
                     production_sloc: Some(0),
                 },
                 shared_findings: Vec::new(),
             },
-            profiles: strata_engine::Profiles::default(),
-            advice: strata_engine::Advice::default(),
+            profiles: unlace_engine::Profiles::default(),
+            advice: unlace_engine::Advice::default(),
         };
 
         let found = mode_result(&result, "anchored");
 
-        assert!(matches!(found, Err(StrataError::CandidateNotFound { .. })));
+        assert!(matches!(found, Err(UnlaceError::CandidateNotFound { .. })));
     }
 }

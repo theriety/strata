@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use strata_ir::EdgeKind;
+use unlace_ir::EdgeKind;
 
 use crate::config::ProfileConfig;
 use crate::result::EvidenceSignals;

@@ -2,15 +2,15 @@
 
 use std::collections::BTreeMap;
 
-use strata_core::cluster::Partition;
-use strata_core::diversify::SolvedCandidate;
-use strata_ir::{ContainerId, ContainerTree, Node};
+use unlace_core::cluster::Partition;
+use unlace_core::diversify::SolvedCandidate;
+use unlace_ir::{ContainerId, ContainerTree, Node};
 
 use crate::analyze::relocation::mirror::PolishEvidence;
 use crate::analyze::relocation::{CandidateTree, PipelineSolver, symbol};
 use crate::analyze::rendering::render_tree;
 use crate::analyze::scoring::{score_current_with_affinity, score_current_with_overlay};
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 use crate::narrate::narrate_repository_relative;
 use crate::result::{Candidate, ConditionalSplit, ScoreBreakdown};
 
@@ -114,7 +114,7 @@ impl PipelineSolver<'_> {
     pub(super) fn score_faithful(
         &self,
         overlay: &BTreeMap<u32, ContainerId>,
-    ) -> strata_core::score::ScoreBreakdown {
+    ) -> unlace_core::score::ScoreBreakdown {
         score_current_with_overlay(
             self.snapshot,
             &self.coefficients,
@@ -136,7 +136,7 @@ impl PipelineSolver<'_> {
         solved: &SolvedCandidate<PolishEvidence>,
         index: u32,
         splits: &[ConditionalSplit],
-    ) -> Result<Candidate, StrataError> {
+    ) -> Result<Candidate, UnlaceError> {
         let nodes = &self.snapshot.ir().nodes;
         let current = self.current_candidate_tree();
         let symbols = self.symbol_polish_with_polish_evidence(&solved.partition, &solved.evidence);
@@ -172,14 +172,14 @@ impl PipelineSolver<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`StrataError::SnapshotInvalid`] if the tree cannot be rendered.
+    /// Returns [`UnlaceError::SnapshotInvalid`] if the tree cannot be rendered.
     pub(in crate::analyze) fn build_candidate(
         &self,
         current_tree: &ContainerTree,
         solved: &SolvedCandidate<PolishEvidence>,
         index: u32,
         splits: &[ConditionalSplit],
-    ) -> Result<Candidate, StrataError> {
+    ) -> Result<Candidate, UnlaceError> {
         let nodes = &self.snapshot.ir().nodes;
         if self.is_faithful(&solved.partition) {
             return self.build_faithful_candidate(current_tree, solved, index, splits);
@@ -228,12 +228,12 @@ impl PipelineSolver<'_> {
 fn ensure_namespaces_preserved(
     symbols: &symbol::SymbolOutcome,
     tree: &CandidateTree,
-) -> Result<(), StrataError> {
+) -> Result<(), UnlaceError> {
     if symbols.preserves_namespaces(tree) {
         return Ok(());
     }
-    Err(StrataError::SnapshotInvalid {
-        source: strata_ir::SnapshotError::Serialization {
+    Err(UnlaceError::SnapshotInvalid {
+        source: unlace_ir::SnapshotError::Serialization {
             reason: "symbol relocation crossed a pass-start render namespace".to_owned(),
         },
     })

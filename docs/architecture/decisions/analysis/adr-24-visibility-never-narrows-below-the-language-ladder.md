@@ -2,7 +2,7 @@
 
 📌
 
-The Rust adapter states which scopes Rust can spell for each restricted declaration, and the visibility finding raises its derived scope to the smallest such scope, so strata no longer advises a narrowing Rust cannot express.
+The Rust adapter states which scopes Rust can spell for each restricted declaration, and the visibility finding raises its derived scope to the smallest such scope, so unlace no longer advises a narrowing Rust cannot express.
 
 - Status: `Accepted`, partly superseded by [ADR-25](adr-25-visibility-advises-only-spellable-narrower-scopes.md)
 - Date: `2026-10-01`

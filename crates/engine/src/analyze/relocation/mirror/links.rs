@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_core::cluster::Partition;
+use unlace_core::cluster::Partition;
 
 use crate::analyze::relocation::mirror::pairs::derive_link;
 use crate::analyze::relocation::mirror::{

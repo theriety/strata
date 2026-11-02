@@ -3,9 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_core::cluster::{ClusterId, Partition};
-use strata_core::graph::csr::Csr;
-use strata_ir::{
+use unlace_core::cluster::{ClusterId, Partition};
+use unlace_core::graph::csr::Csr;
+use unlace_ir::{
     Affinity, AffinityKind, Container, ContainerId, ContainerTree, Edge, EdgeKind, Hardness,
     IntermediateRepresentation, Layout, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
     build_laminar_tree,
@@ -3986,7 +3986,7 @@ fn should_pin_only_the_production_symbol_a_start_fact_names_in_its_file() {
             ]),
         );
         ir.file_facts
-            .push(strata_ir::FileFact::entry_with_start(fact_file, "main"));
+            .push(unlace_ir::FileFact::entry_with_start(fact_file, "main"));
         ir
     };
 

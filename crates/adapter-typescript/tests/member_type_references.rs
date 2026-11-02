@@ -1,6 +1,6 @@
 use smol_str::SmolStr;
-use strata_adapter_typescript::TypeScriptAdapter;
-use strata_ir::{Adapter, EdgeKind, Hardness, IrFragment, NodeId, NodeKind, SourceFile};
+use unlace_adapter_typescript::TypeScriptAdapter;
+use unlace_ir::{Adapter, EdgeKind, Hardness, IrFragment, NodeId, NodeKind, SourceFile};
 
 fn bind_inline(contents: &str) -> Result<IrFragment, String> {
     let adapter = TypeScriptAdapter::new(".");

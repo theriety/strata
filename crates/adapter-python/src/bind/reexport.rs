@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use smol_str::SmolStr;
-use strata_ir::{Edge, EdgeKind, Hardness, Node, NodeId, NodeKind, Polarity, ScopeLevel};
+use unlace_ir::{Edge, EdgeKind, Hardness, Node, NodeId, NodeKind, Polarity, ScopeLevel};
 
 use super::containers::ContainerBuilder;
 use super::resolver::{Resolver, is_package_init};

@@ -3,9 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_core::cluster::{ClusterId, Partition};
-use strata_core::condense::Condensation;
-use strata_ir::NodeId;
+use unlace_core::cluster::{ClusterId, Partition};
+use unlace_core::condense::Condensation;
+use unlace_ir::NodeId;
 
 use crate::analyze::layout::{LaminarHome, qualify_folder_names};
 use crate::analyze::relocation::FileInfo;

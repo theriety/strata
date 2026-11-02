@@ -2,7 +2,7 @@
 //! rooted coordinates.
 
 use smol_str::SmolStr;
-use strata_core::cluster::Partition;
+use unlace_core::cluster::Partition;
 
 use crate::analyze::relocation::PipelineSolver;
 use crate::analyze::relocation::mirror::{PolishEvidence, ProjectedFolder};

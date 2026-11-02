@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_engine::{AnalyzeResult, Candidate, ContainerNode, Level, SymbolKind};
+use unlace_engine::{AnalyzeResult, Candidate, ContainerNode, Level, SymbolKind};
 
 use super::wrap;
 

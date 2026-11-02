@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_core::cluster::Partition;
+use unlace_core::cluster::Partition;
 
 use crate::analyze::relocation::PipelineSolver;
 use crate::analyze::relocation::collision::CollisionFold;
@@ -168,7 +168,7 @@ impl PipelineSolver<'_> {
         evidence: &PolishEvidence,
         proposed: &Layout,
         (source_path, mirror_vertex, link): (&str, u32, &ExactMirrorLink),
-        target: strata_core::cluster::ClusterId,
+        target: unlace_core::cluster::ClusterId,
     ) -> MirrorOutcome {
         let mirror_scc = self.scc_of_vertex(mirror_vertex).unwrap_or(u32::MAX);
         let mirror_path = self
@@ -227,7 +227,7 @@ impl PipelineSolver<'_> {
         parts: &Partition,
         mirror_vertex: u32,
         intended_path: &str,
-        target: strata_core::cluster::ClusterId,
+        target: unlace_core::cluster::ClusterId,
         prospective: &PolishEvidence,
     ) -> Option<MirrorBlock> {
         let mirror_scc = self.scc_of_vertex(mirror_vertex)?;

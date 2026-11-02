@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_ir::{ContainerId, Node, NodeId, NodeKind, Polarity, Snapshot};
+use unlace_ir::{ContainerId, Node, NodeId, NodeKind, Polarity, Snapshot};
 
 /// Counts companions not placed in the immutable pass-start file of their owner.
 pub(in crate::analyze) fn companion_separations(

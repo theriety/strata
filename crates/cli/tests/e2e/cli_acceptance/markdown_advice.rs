@@ -4,7 +4,7 @@ use std::fs;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use strata_engine::{
+use unlace_engine::{
     AnalyzeResult, EvidenceSignals, ProfileAssessment, ProfileConflict, ProfileName,
     QualificationThresholds, RelocationAdvice, RelocationProposal, ReviewReason, SymbolKind,
     SymbolMove,
@@ -31,7 +31,7 @@ fn report(result: &AnalyzeResult) -> Result<String, String> {
 fn report_with_detail(result: &AnalyzeResult, verbose: bool) -> Result<String, String> {
     static NEXT_REPORT: AtomicUsize = AtomicUsize::new(0);
     let path = std::env::temp_dir().join(format!(
-        "strata-markdown-{}-{}-{}.json",
+        "unlace-markdown-{}-{}-{}.json",
         std::process::id(),
         nanos(),
         NEXT_REPORT.fetch_add(1, Ordering::Relaxed)
@@ -450,7 +450,7 @@ fn should_roundtrip_finite_analyzed_advice_through_saved_report() -> Result<(), 
 #[test]
 fn should_preserve_distinct_visibility_sources_in_cli_outputs() -> Result<(), String> {
     let root = std::env::temp_dir().join(format!(
-        "strata-visibility-{}-{}",
+        "unlace-visibility-{}-{}",
         std::process::id(),
         nanos()
     ));
@@ -497,7 +497,7 @@ fn should_preserve_distinct_visibility_sources_in_cli_outputs() -> Result<(), St
         .current
         .shared_findings
         .iter()
-        .filter(|finding| finding.kind == strata_engine::ViolationKind::Visibility)
+        .filter(|finding| finding.kind == unlace_engine::ViolationKind::Visibility)
         .collect();
     assert_eq!(findings.len(), 2, "{findings:?}");
     for path in ["src/left.rs", "src/right.rs"] {

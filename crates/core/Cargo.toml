@@ -1,15 +1,15 @@
 [package]
-name = "strata-core"
+name = "unlace-core"
 version = "0.1.0"
 edition = "2024"
 rust-version.workspace = true
 
 [lib]
-name = "strata_core"
+name = "unlace_core"
 path = "src/lib.rs"
 
 [dependencies]
-strata-ir = { path = "../ir" }
+unlace-ir = { path = "../ir" }
 smol_str = { workspace = true }
 highs = { workspace = true }
 rayon = { workspace = true }

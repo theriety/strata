@@ -1,4 +1,4 @@
-# Strata report — workspace-rust
+# Unlace report — workspace-rust
 
 3 files · 13 symbols · 19 edges
 Snapshot `dd25b5608167df2407fe8960be4ef6973e9d1c4e9ff4d6501ee0da9632af9682`

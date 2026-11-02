@@ -3,7 +3,7 @@
 # a cross-crate trait impl, method calls, and a `pub use` re-export.
 #
 # This is itself a `[workspace]`, so cargo and rust-analyzer load it in isolation
-# and never treat it as a member of the outer strata workspace (which lists its
+# and never treat it as a member of the outer unlace workspace (which lists its
 # members explicitly and excludes this fixture tree).
 [workspace]
 resolver = "2"

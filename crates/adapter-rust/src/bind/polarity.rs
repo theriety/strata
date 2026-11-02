@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use strata_ir::{ContainerId, Edge, Node, Polarity, ScopeLevel};
+use unlace_ir::{ContainerId, Edge, Node, Polarity, ScopeLevel};
 
 use super::containers::ContainerBuilder;
 use crate::parse::ParsedFile;

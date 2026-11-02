@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 use std::io::{self, Write};
 
-use strata_engine::{EdgeBreak, Severity, Violation, ViolationKind};
+use unlace_engine::{EdgeBreak, Severity, Violation, ViolationKind};
 
 use super::limit::{more_line, take_worst};
 use super::{RenderOptions, nq, wrap};

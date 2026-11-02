@@ -1,4 +1,4 @@
-# Strata report — nested-ts
+# Unlace report — nested-ts
 
 6 files · 12 symbols · 13 edges
 Snapshot `7a78215efee4889f9060cb366e53fab26f8254875e90a6ec7fabb14abebd6470`

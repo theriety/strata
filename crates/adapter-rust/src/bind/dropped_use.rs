@@ -10,12 +10,12 @@
 use std::collections::HashSet;
 
 use smol_str::SmolStr;
-use strata_ir::NodeId;
+use unlace_ir::NodeId;
 
 use super::assignment::NodeAssignment;
 use crate::parse::{ParsedFile, VisibilityKind};
 
-/// Nodes that [`Node::advice_exempt`](strata_ir::Node::advice_exempt) marks:
+/// Nodes that [`Node::advice_exempt`](unlace_ir::Node::advice_exempt) marks:
 /// the names of dropped re-exports, the names a dropped `use` imports into a
 /// file with no declaration to carry them, and every declaration of the files
 /// a dropped glob may import from (any visibility).

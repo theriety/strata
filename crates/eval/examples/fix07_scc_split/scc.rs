@@ -3,10 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use strata_engine::config::AnalyzeConfig;
-use strata_engine::core::condense::condense;
-use strata_engine::core::graph::csr::Csr;
-use strata_engine::ir::Snapshot;
+use unlace_engine::config::AnalyzeConfig;
+use unlace_engine::core::condense::condense;
+use unlace_engine::core::graph::csr::Csr;
+use unlace_engine::ir::Snapshot;
 
 use super::rows::FileRow;
 

@@ -1,4 +1,4 @@
-//! End-to-end acceptance: the built `strata` binary delivers the expected output.
+//! End-to-end acceptance: the built `unlace` binary delivers the expected output.
 //!
 //! Where `parity.rs` pins the AD-5 library/CLI byte-parity guarantee and the
 //! committed goldens, this suite is the user-facing acceptance layer: it drives
@@ -10,7 +10,7 @@
 //! Oracle layering, by design:
 //! - **Goldens** (in `parity.rs`) are the single oracle for rendered output —
 //!   `tree`, `diff`, `violations`, `report`, and `analyze --format summary`. Bless
-//!   them with `STRATA_BLESS=1`.
+//!   them with `UNLACE_BLESS=1`.
 //! - **These hand-written asserts** check exit codes and structural invariants
 //!   (the node/edge census, candidate counts, header presence, `move ...`
 //!   narration, a `[violation]` line) — never the exact rendered bytes, which the
@@ -35,8 +35,8 @@ mod markdown_advice;
 
 /// A non-existent config path, forcing the binary onto its built-in defaults so
 /// the output is identical no matter which directory the harness runs from. A
-/// configured `strata.toml` in a parent directory must never leak into a run.
-const PURE_DEFAULTS: &str = "/nonexistent/strata-acceptance.toml";
+/// configured `unlace.toml` in a parent directory must never leak into a run.
+const PURE_DEFAULTS: &str = "/nonexistent/unlace-acceptance.toml";
 
 /// A config pinning the file cap at 250 SLOC (both profiles) so the over-cap
 /// fixtures keep their capacity findings under the 600 built-in default.
@@ -65,12 +65,12 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// Runs the built `strata` binary with `args` and captures its outcome.
+/// Runs the built `unlace` binary with `args` and captures its outcome.
 ///
 /// The binary is the real artifact cargo builds for this crate, invoked exactly
 /// as a shell would — this is the acceptance contract, not an in-process call.
 fn run(args: &[&str]) -> Run {
-    let spawned = match Command::cargo_bin("strata") {
+    let spawned = match Command::cargo_bin("unlace") {
         Ok(mut command) => command.args(args).output().ok(),
         Err(_) => None,
     };
@@ -88,14 +88,14 @@ fn run(args: &[&str]) -> Run {
     }
 }
 
-/// Runs the built `strata` binary with `args` from `dir` as the working
+/// Runs the built `unlace` binary with `args` from `dir` as the working
 /// directory, so a relative `--root` (e.g. `.`) resolves against `dir`.
 ///
 /// The default [`run`] inherits the harness's working directory, which is
 /// unspecified; setting it explicitly is what lets a test exercise the
 /// user-typed relative-root forms that Bug B degraded.
 fn run_in(dir: &Path, args: &[&str]) -> Run {
-    let spawned = match Command::cargo_bin("strata") {
+    let spawned = match Command::cargo_bin("unlace") {
         Ok(mut command) => command.current_dir(dir).args(args).output().ok(),
         Err(_) => None,
     };
@@ -113,7 +113,7 @@ fn run_in(dir: &Path, args: &[&str]) -> Run {
     }
 }
 
-/// Runs `strata analyze --format json` over a fixture with pure defaults, writes
+/// Runs `unlace analyze --format json` over a fixture with pure defaults, writes
 /// the result to a unique temp file, and returns that path.
 ///
 /// The saved result is what `tree`, `diff`, and `report` consume, so the whole
@@ -121,7 +121,7 @@ fn run_in(dir: &Path, args: &[&str]) -> Run {
 fn analyze_to_file(name: &str) -> PathBuf {
     let root = fixture(name);
     let root_str = root.to_str().unwrap_or_default();
-    let path = std::env::temp_dir().join(format!("strata-accept-{name}-{}.json", nanos()));
+    let path = std::env::temp_dir().join(format!("unlace-accept-{name}-{}.json", nanos()));
     let path_str = path.to_str().unwrap_or_default();
 
     let outcome = run(&[
@@ -600,7 +600,7 @@ fn should_deliver_a_well_formed_report_for_the_rust_fixture() {
     assert_eq!(outcome.code, 0, "report renders and exits 0");
     // the report sections must be present and well-formed Markdown.
     assert!(
-        outcome.stdout.starts_with("# Strata report"),
+        outcome.stdout.starts_with("# Unlace report"),
         "the title heading leads"
     );
     assert!(
@@ -791,7 +791,7 @@ fn should_exit_non_zero_with_a_helpful_message_on_an_unreadable_input() {
     let outcome = run(&[
         "tree",
         "--input",
-        "/nonexistent/strata-result.json",
+        "/nonexistent/unlace-result.json",
         "--current",
     ]);
 
@@ -885,7 +885,7 @@ fn should_print_per_subcommand_help_and_exit_zero() {
 
         assert_eq!(outcome.code, 0, "{command} --help is a success");
         assert!(
-            outcome.stdout.contains(&format!("Usage: strata {command}")),
+            outcome.stdout.contains(&format!("Usage: unlace {command}")),
             "{command} --help prints its usage line"
         );
     }
@@ -897,7 +897,7 @@ fn should_print_top_level_help_and_exit_zero() {
 
     assert_eq!(outcome.code, 0, "--help is a success");
     assert!(
-        outcome.stdout.contains("Usage: strata"),
+        outcome.stdout.contains("Usage: unlace"),
         "the top-level help lists the usage"
     );
 }
@@ -1116,7 +1116,7 @@ fn should_populate_break_suggestions_with_real_names_weights_and_exactness() {
             .unwrap_or_default();
         assert!(
             detail.contains("-symbol cycle;")
-                && detail.contains("strata keeps a dependency cycle in one file")
+                && detail.contains("unlace keeps a dependency cycle in one file")
                 && detail.contains("; to split it, break ")
                 && detail.contains("exact"),
             "the detail states the placement consequence and first break: {detail}"
@@ -1516,7 +1516,7 @@ fn should_write_a_report_to_a_file_matching_its_stdout_form() {
     // never silently reshapes it.
     let result = analyze_to_file("rust");
     let result_str = result.to_str().unwrap_or_default();
-    let report_path = std::env::temp_dir().join(format!("strata-accept-report-{}.md", nanos()));
+    let report_path = std::env::temp_dir().join(format!("unlace-accept-report-{}.md", nanos()));
     let report_str = report_path.to_str().unwrap_or_default();
 
     let to_file = run(&["report", "--input", result_str, "--output", report_str]);
@@ -1684,7 +1684,7 @@ fn should_error_on_an_empty_repository_with_a_stable_code() {
     // the current, intentional behavior — an empty repo is a hard, coded error rather
     // than an empty success summary. Built at runtime because git cannot commit an
     // empty directory.
-    let empty = std::env::temp_dir().join(format!("strata-accept-empty-{}", nanos()));
+    let empty = std::env::temp_dir().join(format!("unlace-accept-empty-{}", nanos()));
     let created = std::fs::create_dir_all(&empty).is_ok();
     let empty_str = empty.to_str().unwrap_or_default();
 
@@ -1744,7 +1744,7 @@ fn should_error_on_an_invalid_config_with_a_stable_code() {
     // and the run exits 1 with the stable `error[CONFIG_INVALID]` code — never the
     // gating 2, and never a silent fallback to defaults (a present-but-invalid file is
     // an error, unlike an absent one).
-    let bad = std::env::temp_dir().join(format!("strata-accept-badconfig-{}.toml", nanos()));
+    let bad = std::env::temp_dir().join(format!("unlace-accept-badconfig-{}.toml", nanos()));
     let written = std::fs::write(&bad, b"this is = not valid = toml ][\n").is_ok();
     let bad_str = bad.to_str().unwrap_or_default();
     let root = fixture("rust");
@@ -1973,7 +1973,7 @@ fn should_reject_malformed_and_absent_mode_candidate_refs() {
     let root = fixture("rust");
     let root_str = root.to_str().unwrap_or_default();
     let anchored_only =
-        std::env::temp_dir().join(format!("strata-accept-anchored-{}.json", nanos()));
+        std::env::temp_dir().join(format!("unlace-accept-anchored-{}.json", nanos()));
     let anchored_only_str = anchored_only.to_str().unwrap_or_default();
     let saved = run(&[
         "analyze",
@@ -2015,7 +2015,7 @@ fn should_reject_malformed_and_absent_mode_candidate_refs() {
 #[test]
 fn should_exit_one_on_a_malformed_result_input_for_every_reader() {
     // all three result readers reject non-JSON input with the same coded error.
-    let bad = std::env::temp_dir().join(format!("strata-accept-badinput-{}.json", nanos()));
+    let bad = std::env::temp_dir().join(format!("unlace-accept-badinput-{}.json", nanos()));
     let bad_str = bad.to_str().unwrap_or_default();
     let written = std::fs::write(&bad, b"not json {{{").is_ok();
 
@@ -2106,7 +2106,7 @@ fn should_write_analyze_json_to_a_file_byte_identical_to_stdout() {
     // have carried (trailing newline included) and stdout stays empty.
     let root = fixture("python");
     let root_str = root.to_str().unwrap_or_default();
-    let path = std::env::temp_dir().join(format!("strata-accept-output-{}.json", nanos()));
+    let path = std::env::temp_dir().join(format!("unlace-accept-output-{}.json", nanos()));
     let path_str = path.to_str().unwrap_or_default();
 
     let to_stdout = run(&[
@@ -2169,9 +2169,9 @@ fn should_default_to_summary_when_stdout_is_piped() {
 fn should_default_to_summary_when_stdout_is_redirected() -> Result<(), Box<dyn std::error::Error>> {
     let root = fixture("python");
     let root_str = root.to_str().ok_or("non-UTF8 root")?;
-    let path = std::env::temp_dir().join(format!("strata-summary-redirect-{}.txt", nanos()));
+    let path = std::env::temp_dir().join(format!("unlace-summary-redirect-{}.txt", nanos()));
     let output = std::fs::File::create(&path)?;
-    let outcome = std::process::Command::new(assert_cmd::cargo::cargo_bin("strata"))
+    let outcome = std::process::Command::new(assert_cmd::cargo::cargo_bin("unlace"))
         .args(["analyze", "--root", root_str, "--config", PURE_DEFAULTS])
         .stdout(output)
         .output()?;
@@ -2267,7 +2267,7 @@ fn should_honor_config_precedence_flags_over_toml_over_defaults() {
     // over that same toml brings it back — flag > toml > default.
     let root = fixture("python");
     let root_str = root.to_str().unwrap_or_default();
-    let toml = std::env::temp_dir().join(format!("strata-accept-precedence-{}.toml", nanos()));
+    let toml = std::env::temp_dir().join(format!("unlace-accept-precedence-{}.toml", nanos()));
     let toml_str = toml.to_str().unwrap_or_default();
     let written = std::fs::write(
         &toml,
@@ -2323,7 +2323,7 @@ fn should_flip_a_borderline_finding_to_a_gating_violation_via_a_config_cap() {
     // gating violation once a toml lowers the cap to 150.
     let root = fixture("borderline-only");
     let root_str = root.to_str().unwrap_or_default();
-    let toml = std::env::temp_dir().join(format!("strata-accept-lowcap-{}.toml", nanos()));
+    let toml = std::env::temp_dir().join(format!("unlace-accept-lowcap-{}.toml", nanos()));
     let toml_str = toml.to_str().unwrap_or_default();
     let written = std::fs::write(
         &toml,
@@ -2728,7 +2728,7 @@ fn should_home_a_test_heavy_cluster_under_its_production_directory() {
 
 #[test]
 fn should_discover_the_root_local_config_without_an_explicit_flag() {
-    // configured-python carries its own strata.toml with a one-SLOC file cap:
+    // configured-python carries its own unlace.toml with a one-SLOC file cap:
     // `--root` alone must pick it up (the default config path is root-relative,
     // not CWD-relative), which surfaces as a capacity violation.
     let root = fixture("configured-python");
@@ -2758,7 +2758,7 @@ fn should_discover_the_root_local_config_without_an_explicit_flag() {
 fn should_warn_on_stderr_when_an_explicit_config_is_missing() {
     // an explicit --config pointing nowhere still succeeds on built-in defaults
     // (the harness contract), but says so on stderr instead of staying silent —
-    // and the root-local strata.toml must NOT sneak in behind the explicit flag.
+    // and the root-local unlace.toml must NOT sneak in behind the explicit flag.
     let root = fixture("configured-python");
     let root_str = root.to_str().unwrap_or_default();
 
@@ -2790,7 +2790,7 @@ fn should_warn_on_stderr_when_an_explicit_config_is_missing() {
         });
     assert!(
         !has_capacity_violation,
-        "the explicit (missing) config wins over the root-local strata.toml: {}",
+        "the explicit (missing) config wins over the root-local unlace.toml: {}",
         outcome.stdout
     );
 }
@@ -2905,8 +2905,8 @@ fn should_honor_objective_and_weights_config_keys() {
             .unwrap_or(f64::NAN)
     };
     let objective_toml =
-        std::env::temp_dir().join(format!("strata-accept-objective-{}.toml", nanos()));
-    let weights_toml = std::env::temp_dir().join(format!("strata-accept-weights-{}.toml", nanos()));
+        std::env::temp_dir().join(format!("unlace-accept-objective-{}.toml", nanos()));
+    let weights_toml = std::env::temp_dir().join(format!("unlace-accept-weights-{}.toml", nanos()));
     let objective_written = std::fs::write(
         &objective_toml,
         b"[profiles.anchored.objective]\nimbalance = 0.0\n",
@@ -2942,7 +2942,7 @@ fn should_reject_a_zero_seeds_per_candidate_from_config() {
     // multiplier is refused up front with the coded error naming the key.
     let root = fixture("python");
     let root_str = root.to_str().unwrap_or_default();
-    let toml = std::env::temp_dir().join(format!("strata-accept-seeds-{}.toml", nanos()));
+    let toml = std::env::temp_dir().join(format!("unlace-accept-seeds-{}.toml", nanos()));
     let toml_str = toml.to_str().unwrap_or_default();
     let written = std::fs::write(
         &toml,
@@ -3121,7 +3121,7 @@ fn max_files_per_folder(tree: &serde_json::Value) -> usize {
 
 #[test]
 fn should_yield_byte_identical_output_across_root_path_forms() {
-    // Bug B: rust-analyzer canonicalizes its VFS to an absolute path, but strata
+    // Bug B: rust-analyzer canonicalizes its VFS to an absolute path, but unlace
     // once forwarded the raw --root string, so a non-canonical form (`.`, or an
     // absolute path containing `..`) failed every semantic-edge lookup and
     // silently degraded the rust dependency graph from 13 hard cross-crate edges
@@ -3191,7 +3191,7 @@ fn should_yield_byte_identical_output_across_root_path_forms() {
 
 #[test]
 fn should_resolve_a_relative_root_to_real_names_and_full_rust_edges() {
-    // the `.`-form is the default a user gets running strata from inside their
+    // the `.`-form is the default a user gets running unlace from inside their
     // repo; `.` has no `file_name()`, so Bug B dropped it to 4 edges and the
     // empty-name fallback group `root`. Canonicalization makes the snapshot a
     // function of the resolved directory, not of the root's spelling: the
@@ -3201,8 +3201,8 @@ fn should_resolve_a_relative_root_to_real_names_and_full_rust_edges() {
     let canonical = std::fs::canonicalize(fixture("workspace-rust"))
         .unwrap_or_else(|_| fixture("workspace-rust"));
     let canonical_str = canonical.to_str().unwrap_or_default();
-    let dot_result = std::env::temp_dir().join(format!("strata-accept-dotroot-{}.json", nanos()));
-    let abs_result = std::env::temp_dir().join(format!("strata-accept-absroot-{}.json", nanos()));
+    let dot_result = std::env::temp_dir().join(format!("unlace-accept-dotroot-{}.json", nanos()));
+    let abs_result = std::env::temp_dir().join(format!("unlace-accept-absroot-{}.json", nanos()));
     let dot_str = dot_result.to_str().unwrap_or_default();
     let abs_str = abs_result.to_str().unwrap_or_default();
 
@@ -3257,7 +3257,7 @@ fn should_reject_a_missing_analysis_root_with_input_unreadable() {
     // fs::canonicalize makes analyze the guard for "does --root exist?": a
     // nonexistent root is a clean exit-1 INPUT_UNREADABLE, never the gating 2 and
     // never a silently degraded snapshot.
-    let missing = std::env::temp_dir().join(format!("strata-absent-{}", nanos()));
+    let missing = std::env::temp_dir().join(format!("unlace-absent-{}", nanos()));
     let missing_str = missing.to_str().unwrap_or_default();
 
     let outcome = run(&[

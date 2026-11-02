@@ -2,13 +2,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_core::graph::csr::Csr;
-use strata_core::score::KindWeights;
-use strata_ir::{Edge, FileFact, Node, Polarity};
+use unlace_core::graph::csr::Csr;
+use unlace_core::score::KindWeights;
+use unlace_ir::{Edge, FileFact, Node, Polarity};
 
 use crate::analyze::relocation::FileInfo;
 use crate::config::TestsConfig;
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 
 /// Marks each file-graph vertex whose clustering edges are priced to zero.
 /// Built-in detection marks a file that holds at least one symbol and nothing
@@ -155,7 +155,7 @@ impl TestPolicy {
     /// [`AnalyzeConfig::validate`] compiles every pattern once during loading;
     /// this second compilation covers embedders who build an
     /// [`AnalyzeConfig`] directly and never validate it.
-    pub(in crate::analyze) fn new(config: &TestsConfig) -> Result<Self, StrataError> {
+    pub(in crate::analyze) fn new(config: &TestsConfig) -> Result<Self, UnlaceError> {
         let mut policy = Self {
             builtins: config.builtins,
             path_patterns: Vec::new(),
@@ -163,7 +163,7 @@ impl TestPolicy {
         };
         for (index, pattern) in config.patterns.iter().enumerate() {
             let compiled =
-                glob::Pattern::new(pattern).map_err(|error| StrataError::ConfigInvalid {
+                glob::Pattern::new(pattern).map_err(|error| UnlaceError::ConfigInvalid {
                     key: Some(format!("tests.patterns[{index}]")),
                     reason: error.to_string(),
                 })?;

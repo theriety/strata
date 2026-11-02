@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use smol_str::SmolStr;
-use strata_ir::{ContainerId, ContainerTree, ScopeLevel};
+use unlace_ir::{ContainerId, ContainerTree, ScopeLevel};
 
 /// Resolves one stated scope to its level on the final tree, or `None` when the
 /// scope is unsorted, empty, or names a file the tree does not hold.

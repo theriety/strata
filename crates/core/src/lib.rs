@@ -1,4 +1,4 @@
-//! Strata's solver core: graph algorithms over the IR (Tarjan, layering, MFAS,
+//! Unlace's solver core: graph algorithms over the IR (Tarjan, layering, MFAS,
 //! clustering, scoring).
 //!
 //! Commit 2 lays the graph foundation: CSR adjacency ([`graph`]), iterative
@@ -24,4 +24,4 @@ pub mod score;
 pub mod shatter;
 pub mod visibility;
 
-pub use strata_ir as ir;
+pub use unlace_ir as ir;

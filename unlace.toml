@@ -1,4 +1,4 @@
-# Strata configuration — every key is optional and the file itself is optional.
+# Unlace configuration — every key is optional and the file itself is optional.
 # Values below use built-in defaults except for repository fixture exclusions.
 # CLI flags override these values; these override the built-in defaults.
 

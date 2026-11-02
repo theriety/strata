@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use strata_core::visibility::PreparedVisibility;
-use strata_ir::{ContainerId, Node};
+use unlace_core::visibility::PreparedVisibility;
+use unlace_ir::{ContainerId, Node};
 
 use crate::analyze::relocation::symbol::inputs::PassInputs;
 

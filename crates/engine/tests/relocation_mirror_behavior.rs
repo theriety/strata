@@ -6,11 +6,11 @@
 
 use serde_json::Value;
 use smol_str::SmolStr;
-use strata_engine::ir::{
+use unlace_engine::ir::{
     Container, ContainerId, ContainerTree, Edge, EdgeKind, FileFact, Hardness,
     IntermediateRepresentation, Node, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
 };
-use strata_engine::{AnalyzeConfig, ProfileName, analyze};
+use unlace_engine::{AnalyzeConfig, ProfileName, analyze};
 
 fn container(id: u32, name: &str, level: ScopeLevel, parent: Option<u32>) -> Container {
     Container {
@@ -245,7 +245,7 @@ fn mirror_config() -> AnalyzeConfig {
     config.profiles.anchored.capacity.folder = 2;
     config.profiles.anchored.relocation.test_mirroring.builtins = false;
     config.profiles.anchored.relocation.test_mirroring.rules =
-        vec![strata_engine::config::TestMirrorRule {
+        vec![unlace_engine::config::TestMirrorRule {
             source: "source/{dir}/{stem}.ts".to_owned(),
             tests: vec!["spec/{dir}/{stem}.spec.ts".to_owned()],
         }];
@@ -521,8 +521,8 @@ fn mirror_owners(json: &Value, mirror: &str) -> Vec<String> {
         .collect()
 }
 
-fn rule(source: &str, test: &str) -> strata_engine::config::TestMirrorRule {
-    strata_engine::config::TestMirrorRule {
+fn rule(source: &str, test: &str) -> unlace_engine::config::TestMirrorRule {
+    unlace_engine::config::TestMirrorRule {
         source: source.to_owned(),
         tests: vec![test.to_owned()],
     }

@@ -4,7 +4,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use strata_engine::{Mode, StrataError};
+use unlace_engine::{Mode, UnlaceError};
 
 use crate::args::{
     AnalyzeCli, Command, DiffCli, FormatChoice, ReportCli, TreeCli, ViolationFormatChoice,
@@ -23,12 +23,12 @@ use crate::render::{Format, RenderOptions};
 ///
 /// # Errors
 ///
-/// Returns the command's [`StrataError`], which the caller maps to exit code `1`.
+/// Returns the command's [`UnlaceError`], which the caller maps to exit code `1`.
 pub(super) fn dispatch(
     command: Command,
     out: &mut impl Write,
     err: &mut impl Write,
-) -> Result<ExitCode, StrataError> {
+) -> Result<ExitCode, UnlaceError> {
     match command {
         Command::Analyze(args) => run_analyze(args, out, err),
         Command::Tree(args) => run_tree(args, out),
@@ -39,7 +39,7 @@ pub(super) fn dispatch(
 }
 
 /// Resolves the effective config path: an explicit `--config` wins (warning to
-/// `err` when the file is missing), otherwise the root's own `strata.toml`.
+/// `err` when the file is missing), otherwise the root's own `unlace.toml`.
 fn resolve_config_path(
     explicit: Option<PathBuf>,
     root: &std::path::Path,
@@ -56,7 +56,7 @@ fn resolve_config_path(
             }
             path
         }
-        None => root.join("strata.toml"),
+        None => root.join("unlace.toml"),
     }
 }
 
@@ -65,7 +65,7 @@ fn run_analyze(
     cli: AnalyzeCli,
     out: &mut impl Write,
     err: &mut impl Write,
-) -> Result<ExitCode, StrataError> {
+) -> Result<ExitCode, UnlaceError> {
     let format = Format::resolve(
         cli.format.map(format_from_choice),
         out_is_terminal(),
@@ -93,7 +93,7 @@ fn run_analyze(
     if let Some(path) = cli.output {
         let mut buffer = Vec::new();
         commands::analyze::run_with_options(&args, options, &mut buffer)?;
-        std::fs::write(&path, &buffer).map_err(|error| StrataError::InputUnreadable {
+        std::fs::write(&path, &buffer).map_err(|error| UnlaceError::InputUnreadable {
             path,
             reason: error.to_string(),
         })?;
@@ -104,7 +104,7 @@ fn run_analyze(
 }
 
 /// Runs `tree`.
-fn run_tree(cli: TreeCli, out: &mut impl Write) -> Result<ExitCode, StrataError> {
+fn run_tree(cli: TreeCli, out: &mut impl Write) -> Result<ExitCode, UnlaceError> {
     let args = TreeArgs {
         input: cli.input,
         mode: cli.mode,
@@ -118,7 +118,7 @@ fn run_tree(cli: TreeCli, out: &mut impl Write) -> Result<ExitCode, StrataError>
 }
 
 /// Runs `diff`.
-fn run_diff(cli: DiffCli, out: &mut impl Write) -> Result<ExitCode, StrataError> {
+fn run_diff(cli: DiffCli, out: &mut impl Write) -> Result<ExitCode, UnlaceError> {
     let args = DiffArgs {
         input: cli.input,
         left: cli.left,
@@ -133,7 +133,7 @@ fn run_violations(
     cli: ViolationsCli,
     out: &mut impl Write,
     err: &mut impl Write,
-) -> Result<ExitCode, StrataError> {
+) -> Result<ExitCode, UnlaceError> {
     let fail_on = match cli.fail_on {
         Some(value) => violations::parse_fail_on(&value)?,
         None => Vec::new(),
@@ -157,7 +157,7 @@ fn run_violations(
 }
 
 /// Runs `report`.
-fn run_report(cli: ReportCli, out: &mut impl Write) -> Result<ExitCode, StrataError> {
+fn run_report(cli: ReportCli, out: &mut impl Write) -> Result<ExitCode, UnlaceError> {
     let args = ReportArgs {
         input: cli.input,
         output: cli.output,
@@ -188,26 +188,26 @@ mod tests {
     use super::resolve_config_path;
 
     #[test]
-    fn should_default_the_config_to_the_root_strata_toml() {
+    fn should_default_the_config_to_the_root_unlace_toml() {
         let mut err = Vec::new();
 
         let path = resolve_config_path(None, std::path::Path::new("/some/root"), &mut err);
 
-        assert_eq!(path, std::path::PathBuf::from("/some/root/strata.toml"));
+        assert_eq!(path, std::path::PathBuf::from("/some/root/unlace.toml"));
         assert!(err.is_empty(), "no warning for the implicit default");
     }
 
     #[test]
     fn should_warn_when_an_explicit_config_is_missing() {
         let mut err = Vec::new();
-        let missing = std::path::PathBuf::from("/nonexistent/strata.toml");
+        let missing = std::path::PathBuf::from("/nonexistent/unlace.toml");
 
         let path = resolve_config_path(Some(missing.clone()), std::path::Path::new("."), &mut err);
 
         assert_eq!(path, missing, "the explicit path still wins");
         let text = String::from_utf8(err).unwrap_or_default();
         assert!(text.contains(
-            "warning: config /nonexistent/strata.toml not found; using built-in defaults"
+            "warning: config /nonexistent/unlace.toml not found; using built-in defaults"
         ));
     }
 }

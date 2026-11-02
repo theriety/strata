@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use strata_core::cluster::{ClusterId, Partition};
+use unlace_core::cluster::{ClusterId, Partition};
 
 #[cfg(test)]
 use crate::analyze::relocation::mirror::PolishEvidence;

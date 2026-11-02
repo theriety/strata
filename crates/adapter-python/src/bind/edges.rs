@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use smol_str::SmolStr;
-use strata_ir::{Edge, EdgeKind, Hardness, NodeId};
+use unlace_ir::{Edge, EdgeKind, Hardness, NodeId};
 
 use super::dynamic::emit_dynamic;
 use super::resolver::{Resolver, resolve_imports, resolve_star_imports};

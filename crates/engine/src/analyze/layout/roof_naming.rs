@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_core::condense::Condensation;
+use unlace_core::condense::Condensation;
 
 use crate::analyze::layout::{basename_stem, union_root};
 use crate::analyze::relocation::FileInfo;

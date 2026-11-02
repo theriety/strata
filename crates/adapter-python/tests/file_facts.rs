@@ -2,8 +2,8 @@
 //! `test_foo.py` / `foo_test.py` conventions.
 
 use smol_str::SmolStr;
-use strata_adapter_python::PythonAdapter;
-use strata_ir::{Adapter, FileFact, SourceFile};
+use unlace_adapter_python::PythonAdapter;
+use unlace_ir::{Adapter, FileFact, SourceFile};
 
 fn facts(paths: &[&str]) -> Vec<FileFact> {
     let adapter = PythonAdapter::default();

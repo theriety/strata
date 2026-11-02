@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use strata_core::cluster::{ClusterId, Partition};
+use unlace_core::cluster::{ClusterId, Partition};
 
 use crate::analyze::relocation::PipelineSolver;
 use crate::analyze::relocation::mirror::PolishEvidence;

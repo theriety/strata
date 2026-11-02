@@ -1,6 +1,6 @@
 //! Qualification and relocation checks, including mirror-template ambiguity detection.
 
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 
 use super::ceilings::{non_negative_finite, unit_interval};
 use crate::config::mirror::{mirror_templates_overlap, validate_mirror_template};
@@ -10,7 +10,7 @@ impl AnalyzeConfig {
     pub(super) fn validate_qualification(
         prefix: &str,
         qualification: &QualificationConfig,
-    ) -> Result<(), StrataError> {
+    ) -> Result<(), UnlaceError> {
         let key = |suffix: &str| format!("{prefix}.{suffix}");
         for (suffix, value) in [
             (
@@ -53,7 +53,7 @@ impl AnalyzeConfig {
             + qualification_weights.architectural_reach;
         non_negative_finite(&key("qualification.weights"), qualification_total)?;
         if qualification_total <= 0.0 {
-            return Err(StrataError::ConfigInvalid {
+            return Err(UnlaceError::ConfigInvalid {
                 key: Some(key("qualification.weights")),
                 reason: "at least one qualification weight must be positive".to_owned(),
             });
@@ -64,7 +64,7 @@ impl AnalyzeConfig {
     pub(super) fn validate_relocation(
         prefix: &str,
         relocation: &RelocationConfig,
-    ) -> Result<(), StrataError> {
+    ) -> Result<(), UnlaceError> {
         for (field, patterns) in [
             ("forbid-file-moves", &relocation.forbid_file_moves),
             ("forbid-symbol-moves", &relocation.forbid_symbol_moves),
@@ -72,12 +72,12 @@ impl AnalyzeConfig {
             for (index, pattern) in patterns.iter().enumerate() {
                 let key = format!("{prefix}.relocation.{field}[{index}]");
                 if pattern.is_empty() {
-                    return Err(StrataError::ConfigInvalid {
+                    return Err(UnlaceError::ConfigInvalid {
                         key: Some(key),
                         reason: "a pattern must not be empty".to_owned(),
                     });
                 }
-                glob::Pattern::new(pattern).map_err(|error| StrataError::ConfigInvalid {
+                glob::Pattern::new(pattern).map_err(|error| UnlaceError::ConfigInvalid {
                     key: Some(key),
                     reason: error.to_string(),
                 })?;
@@ -90,7 +90,7 @@ impl AnalyzeConfig {
             let source_key = format!("{mirror_prefix}[{rule_index}].source");
             validate_mirror_template(&rule.source, &source_key)?;
             let source =
-                MirrorTemplate::parse(&rule.source).ok_or_else(|| StrataError::ConfigInvalid {
+                MirrorTemplate::parse(&rule.source).ok_or_else(|| UnlaceError::ConfigInvalid {
                     key: Some(source_key.clone()),
                     reason: "mirror template is invalid".to_owned(),
                 })?;
@@ -98,7 +98,7 @@ impl AnalyzeConfig {
                 .iter()
                 .any(|(existing, _)| mirror_templates_overlap(existing, &source))
             {
-                return Err(StrataError::ConfigInvalid {
+                return Err(UnlaceError::ConfigInvalid {
                     key: Some(source_key),
                     reason: "overlapping source template is ambiguous".to_owned(),
                 });
@@ -108,7 +108,7 @@ impl AnalyzeConfig {
                 let test_key = format!("{mirror_prefix}[{rule_index}].tests[{test_index}]");
                 validate_mirror_template(test, &test_key)?;
                 let template =
-                    MirrorTemplate::parse(test).ok_or_else(|| StrataError::ConfigInvalid {
+                    MirrorTemplate::parse(test).ok_or_else(|| UnlaceError::ConfigInvalid {
                         key: Some(test_key.clone()),
                         reason: "mirror template is invalid".to_owned(),
                     })?;
@@ -123,7 +123,7 @@ impl AnalyzeConfig {
                                 .any(|existing| mirror_templates_overlap(existing, &template))
                     });
                 if overlaps_same_rule || overlaps_source_and_test {
-                    return Err(StrataError::ConfigInvalid {
+                    return Err(UnlaceError::ConfigInvalid {
                         key: Some(test_key),
                         reason: "overlapping test template is ambiguous".to_owned(),
                     });

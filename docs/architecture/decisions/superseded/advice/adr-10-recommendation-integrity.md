@@ -13,7 +13,7 @@
 
 ## Context
 
-Strata presents restructuring candidates as improvements under a selected
+Unlace presents restructuring candidates as improvements under a selected
 parameter profile. That promise is broken when an infeasible current layout
 causes a higher-scoring fallback candidate to be offered, or when capacity
 findings and the capacity objective measure different structures. Because lower
@@ -99,7 +99,7 @@ contract away from its owner.
 evidence and do not generalize across languages or repositories.
 
 **Rely on compilation to detect declaration-name collisions.** Rejected
-because Strata should not recommend a placement that is already known to create
+because Unlace should not recommend a placement that is already known to create
 an invalid destination scope.
 
 **Require users to configure every qualified test pattern.** Rejected because
@@ -114,7 +114,7 @@ actual sign of the score change and the edits a maintainer would need.
 ## Consequences
 
 An infeasible analysis can legitimately produce no candidate. Users still see
-the hard findings and profile baseline, but Strata does not recommend a
+the hard findings and profile baseline, but Unlace does not recommend a
 restructuring unless the full objective improves.
 
 Capacity values and candidate ordering can change because all configured levels

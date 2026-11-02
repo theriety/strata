@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use strata_ir::{NodeId, Polarity};
+use unlace_ir::{NodeId, Polarity};
 
 use crate::analyze::advice::evidence::measure::dependency_weight;
 use crate::analyze::advice::evidence::{EvidenceIndex, EvidencePlace};

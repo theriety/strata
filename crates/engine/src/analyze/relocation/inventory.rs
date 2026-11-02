@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_core::condense::Condensation;
-use strata_ir::{Container, IntermediateRepresentation, Polarity, ScopeLevel};
+use unlace_core::condense::Condensation;
+use unlace_ir::{Container, IntermediateRepresentation, Polarity, ScopeLevel};
 
 use crate::analyze::layout::{LaminarHome, laminar_home, qualify_folder_names, render_namespace};
 use crate::analyze::relocation::FileInfo;

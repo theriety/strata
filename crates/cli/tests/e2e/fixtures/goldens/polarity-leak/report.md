@@ -1,4 +1,4 @@
-# Strata report — polarity-leak
+# Unlace report — polarity-leak
 
 2 files · 2 symbols · 1 edges
 Snapshot `4a3648adf18cf1d8bcbff4a788d0cabc55e1b60d743b6a331137cb0743109119`

@@ -1,7 +1,7 @@
 //! Snapshot unit tests.
 
 use smol_str::SmolStr;
-use strata_ir::{
+use unlace_ir::{
     AdvisoryUse, Affinity, AffinityKind, Container, ContainerId, Edge, EdgeKind, Exposure,
     FileFact, Hardness, IntermediateRepresentation, IrFragment, Layout, Node, NodeId, NodeKind,
     Polarity, ScopeLadder, ScopeLevel, VisibilityScope, build_laminar_tree,
@@ -73,7 +73,7 @@ impl TempDir {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path =
-            std::env::temp_dir().join(format!("strata-discover-{}-{unique}", std::process::id()));
+            std::env::temp_dir().join(format!("unlace-discover-{}-{unique}", std::process::id()));
         let created = std::fs::create_dir_all(&path).is_ok();
         assert!(created, "could not create temp dir {}", path.display());
         Self { path }
@@ -496,7 +496,7 @@ fn scope_of(node: NodeId, rungs: &[FixtureRung], declared: Option<u32>) -> Visib
         definition_file: label.and_then(|rung| rung.1).map(SmolStr::new),
         expressible: rungs
             .iter()
-            .map(|(files, definition)| strata_ir::ScopeRung {
+            .map(|(files, definition)| unlace_ir::ScopeRung {
                 files: sorted(files),
                 definition_file: definition.map(SmolStr::new),
                 spelling: None,
@@ -816,11 +816,11 @@ fn should_flatten_a_re_export_chain_to_its_definition() {
             edge(1, 2, EdgeKind::ReExport),
             edge(3, 0, EdgeKind::Call),
         ],
-        strata_ir::ContainerTree::new(vec![container(0, "src/a.ts")]),
+        unlace_ir::ContainerTree::new(vec![container(0, "src/a.ts")]),
     );
 
     let flattened = flatten_re_exports(ir).unwrap_or_else(|_| {
-        IntermediateRepresentation::new(vec![], vec![], strata_ir::ContainerTree::new(vec![]))
+        IntermediateRepresentation::new(vec![], vec![], unlace_ir::ContainerTree::new(vec![]))
     });
 
     let call = flattened
@@ -840,14 +840,14 @@ fn should_raise_on_a_pathological_re_export_cycle() {
             edge(1, 0, EdgeKind::ReExport),
             edge(2, 0, EdgeKind::Call),
         ],
-        strata_ir::ContainerTree::new(vec![container(0, "src/a.ts")]),
+        unlace_ir::ContainerTree::new(vec![container(0, "src/a.ts")]),
     );
 
     let result = flatten_re_exports(ir);
 
     assert!(matches!(
         result,
-        Err(StrataError::ReExportDepthExceeded { .. })
+        Err(UnlaceError::ReExportDepthExceeded { .. })
     ));
 }
 
@@ -904,7 +904,7 @@ fn should_name_the_package_group_for_a_dotdot_roots_real_directory() {
 
 #[test]
 fn should_fail_loud_from_the_canonicalize_guard_when_the_root_does_not_exist() {
-    // `fs::canonicalize` requires the path to exist, making this strata's
+    // `fs::canonicalize` requires the path to exist, making this unlace's
     // de-facto "does --root exist?" guard: a root that cannot be canonicalized
     // is exactly when rust-analyzer's absolute VFS would not match, so a
     // fallback-to-raw would silently reproduce the degraded 4-edge snapshot.
@@ -931,7 +931,7 @@ fn should_fail_loud_from_the_canonicalize_guard_when_the_root_does_not_exist() {
     let result = snapshot_from_root(&missing, &config);
 
     let (path, reason) = match result {
-        Err(StrataError::InputUnreadable { path, reason }) => (Some(path), Some(reason)),
+        Err(UnlaceError::InputUnreadable { path, reason }) => (Some(path), Some(reason)),
         _ => (None, None),
     };
     assert_eq!(

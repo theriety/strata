@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
+use unlace_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
 
 use crate::analyze::BORDERLINE_CAPACITY_MARGIN;
 use crate::narrate::{

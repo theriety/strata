@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use strata_ir::{ContainerTree, ScopeLevel};
+use unlace_ir::{ContainerTree, ScopeLevel};
 
 use super::ScoringContext;
 use super::placed::Placed;

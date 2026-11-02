@@ -8,13 +8,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use strata_engine::{AnalyzeConfig, analyze, snapshot_from_root};
+use unlace_engine::{AnalyzeConfig, analyze, snapshot_from_root};
 
 /// Writes a throwaway crate holding `files` and returns its root.
 fn write_crate(files: &[(&str, &str)]) -> Result<PathBuf, String> {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let root = std::env::temp_dir().join(format!(
-        "strata-ladder-{}-{}",
+        "unlace-ladder-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));

@@ -1,7 +1,7 @@
 //! The objective coefficients and per-kind edge weights, with their scorer conversions.
 
 use serde::{Deserialize, Serialize};
-use strata_core::score::{Coefficients, KindWeights};
+use unlace_core::score::{Coefficients, KindWeights};
 
 /// The objective coefficients (the `J(T)` weights).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

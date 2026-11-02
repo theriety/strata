@@ -1,4 +1,4 @@
-//! `strata violations`: the CI gate over the current codebase.
+//! `unlace violations`: the CI gate over the current codebase.
 //!
 //! The command snapshots the root, derives the current tree's violations
 //! (cycles, polarity breaches, over-exports, and capacity findings against the
@@ -10,7 +10,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use strata_engine::{Severity, StrataError, Violation, ViolationKind, analyze, snapshot_from_root};
+use unlace_engine::{Severity, UnlaceError, Violation, ViolationKind, analyze, snapshot_from_root};
 
 use crate::commands::{ConfigOverrides, findings, resolve_config};
 use crate::render::{RenderOptions, write_json, write_violation_table};
@@ -75,9 +75,9 @@ pub enum Outcome {
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::ConfigInvalid`] when a class or severity name is
+/// Returns [`UnlaceError::ConfigInvalid`] when a class or severity name is
 /// unknown.
-pub fn parse_fail_on(value: &str) -> Result<Vec<FailOn>, StrataError> {
+pub fn parse_fail_on(value: &str) -> Result<Vec<FailOn>, UnlaceError> {
     let mut selectors = Vec::new();
     for token in value.split(',').map(str::trim).filter(|t| !t.is_empty()) {
         let (class, severity_token) = match token.split_once(':') {
@@ -98,15 +98,15 @@ pub fn parse_fail_on(value: &str) -> Result<Vec<FailOn>, StrataError> {
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::ConfigInvalid`] when the class name is unknown.
-fn parse_kind(class: &str) -> Result<ViolationKind, StrataError> {
+/// Returns [`UnlaceError::ConfigInvalid`] when the class name is unknown.
+fn parse_kind(class: &str) -> Result<ViolationKind, UnlaceError> {
     match class {
         "cycle" => Ok(ViolationKind::Cycle),
         "polarity" => Ok(ViolationKind::Polarity),
         "capacity" => Ok(ViolationKind::Capacity),
         "visibility" => Ok(ViolationKind::Visibility),
         "testOnly" | "test-only" => Ok(ViolationKind::TestOnly),
-        other => Err(StrataError::ConfigInvalid {
+        other => Err(UnlaceError::ConfigInvalid {
             key: Some("--fail-on".to_owned()),
             reason: format!(
                 "unknown violation class `{other}`; expected cycle, polarity, capacity, visibility, or testOnly"
@@ -119,12 +119,12 @@ fn parse_kind(class: &str) -> Result<ViolationKind, StrataError> {
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::ConfigInvalid`] when the severity name is unknown.
-fn parse_severity(severity: &str) -> Result<Severity, StrataError> {
+/// Returns [`UnlaceError::ConfigInvalid`] when the severity name is unknown.
+fn parse_severity(severity: &str) -> Result<Severity, UnlaceError> {
     match severity {
         "violation" => Ok(Severity::Violation),
         "borderline" => Ok(Severity::Borderline),
-        other => Err(StrataError::ConfigInvalid {
+        other => Err(UnlaceError::ConfigInvalid {
             key: Some("--fail-on".to_owned()),
             reason: format!("unknown severity `{other}`; expected violation or borderline"),
         }),
@@ -135,8 +135,8 @@ fn parse_severity(severity: &str) -> Result<Severity, StrataError> {
 ///
 /// # Errors
 ///
-/// Returns any [`StrataError`] from config loading, snapshotting, or analysis.
-pub fn run(args: &ViolationsArgs, out: &mut impl Write) -> Result<Outcome, StrataError> {
+/// Returns any [`UnlaceError`] from config loading, snapshotting, or analysis.
+pub fn run(args: &ViolationsArgs, out: &mut impl Write) -> Result<Outcome, UnlaceError> {
     let overrides = ConfigOverrides {
         jobs: args.jobs,
         ..ConfigOverrides::default()
@@ -197,9 +197,9 @@ fn matches(selector: FailOn, violation: &Violation) -> bool {
     }
 }
 
-/// Wraps a rendering I/O failure into a [`StrataError`].
-fn write_error(error: &std::io::Error) -> StrataError {
-    StrataError::InputUnreadable {
+/// Wraps a rendering I/O failure into a [`UnlaceError`].
+fn write_error(error: &std::io::Error) -> UnlaceError {
+    UnlaceError::InputUnreadable {
         path: PathBuf::from("<stdout>"),
         reason: error.to_string(),
     }
@@ -253,7 +253,7 @@ mod tests {
     fn should_reject_an_unknown_fail_on_class() {
         assert!(matches!(
             parse_fail_on("bogus"),
-            Err(StrataError::ConfigInvalid { .. })
+            Err(UnlaceError::ConfigInvalid { .. })
         ));
     }
 
@@ -261,7 +261,7 @@ mod tests {
     fn should_reject_an_unknown_severity_qualifier() {
         assert!(matches!(
             parse_fail_on("capacity:bogus"),
-            Err(StrataError::ConfigInvalid { .. })
+            Err(UnlaceError::ConfigInvalid { .. })
         ));
     }
 

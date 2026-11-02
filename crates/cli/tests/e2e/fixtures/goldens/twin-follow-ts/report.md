@@ -1,4 +1,4 @@
-# Strata report — twin-follow-ts
+# Unlace report — twin-follow-ts
 
 2 files · 2 symbols · 1 edges
 Snapshot `1f2d68065bf97a7ab84b4f85a62c91f34b767247d5cc5cf99f964cd1e93d5af7`

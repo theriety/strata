@@ -18,7 +18,7 @@ question = "Does relieving an over-cap folder register in the proposal at all?"
 mode = "both"        # both modes must produce a feasible best candidate
 candidates = 3       # engine default k
 seed = 42            # engine default seed
-config = "defaults"  # pure built-in defaults; no fixture strata.toml
+config = "defaults"  # pure built-in defaults; no fixture unlace.toml
 
 [[precondition]]
 kind = "violation_present"

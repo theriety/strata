@@ -17,7 +17,7 @@
 //! folder or domain barrel exports exactly the symbols whose derived scope
 //! reaches that level.
 
-use strata_ir::{ContainerId, ContainerTree, Edge, EdgeKind, Node, NodeId, NodeKind, ScopeLevel};
+use unlace_ir::{ContainerId, ContainerTree, Edge, EdgeKind, Node, NodeId, NodeKind, ScopeLevel};
 
 mod lca;
 mod prepared;
@@ -304,7 +304,7 @@ pub const fn exempt_from_advice(node: &Node) -> bool {
 #[cfg(test)]
 mod tests {
     use smol_str::SmolStr;
-    use strata_ir::{Container, Hardness, NodeKind, Polarity};
+    use unlace_ir::{Container, Hardness, NodeKind, Polarity};
 
     use super::*;
 

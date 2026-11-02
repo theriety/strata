@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_core::score::{Coefficients, KindWeights, ScoreBreakdown as CoreBreakdown};
-use strata_ir::{ContainerId, ScopeLevel, Snapshot};
+use unlace_core::score::{Coefficients, KindWeights, ScoreBreakdown as CoreBreakdown};
+use unlace_ir::{ContainerId, ScopeLevel, Snapshot};
 
 use super::context::{ScoringContext, SnapshotScoring};
 use crate::analyze::relocation::file_inventory;

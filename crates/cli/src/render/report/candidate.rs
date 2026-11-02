@@ -1,6 +1,6 @@
 //! Candidate report lines: proposed file and symbol moves, splits, and impact.
 
-use strata_engine::{AnalyzeResult, Candidate};
+use unlace_engine::{AnalyzeResult, Candidate};
 
 use crate::render::advice::caption_for;
 use crate::render::changes::Changes;
@@ -19,7 +19,7 @@ pub(super) fn candidate_lines(
     }
     let mut moves = file_move_items(candidate, &changes);
     for entry in &candidate.symbol_moves {
-        let kind = if entry.kind == strata_engine::SymbolKind::Type {
+        let kind = if entry.kind == unlace_engine::SymbolKind::Type {
             "type"
         } else {
             "symbol"
@@ -139,27 +139,27 @@ fn file_move_items(candidate: &Candidate, changes: &Changes) -> MoveList {
         let group = list.captions.len();
         let last = entry.files.len().saturating_sub(1);
         let reason = match &entry.reason {
-            strata_engine::MoveReason::PulledBy { partner, weight } => {
-                strata_engine::MoveReason::PulledBy {
+            unlace_engine::MoveReason::PulledBy { partner, weight } => {
+                unlace_engine::MoveReason::PulledBy {
                     partner: changes.path(partner),
                     weight: *weight,
                 }
             }
-            strata_engine::MoveReason::RelievesOverCap {
+            unlace_engine::MoveReason::RelievesOverCap {
                 container,
                 count,
                 cap,
-            } => strata_engine::MoveReason::RelievesOverCap {
+            } => unlace_engine::MoveReason::RelievesOverCap {
                 container: changes.path(container),
                 count: *count,
                 cap: *cap,
             },
-            strata_engine::MoveReason::Follows { subject } => strata_engine::MoveReason::Follows {
+            unlace_engine::MoveReason::Follows { subject } => unlace_engine::MoveReason::Follows {
                 subject: changes.path(subject),
             },
-            strata_engine::MoveReason::Clustering => strata_engine::MoveReason::Clustering,
-            strata_engine::MoveReason::NamingCohesion { cohesion } => {
-                strata_engine::MoveReason::NamingCohesion {
+            unlace_engine::MoveReason::Clustering => unlace_engine::MoveReason::Clustering,
+            unlace_engine::MoveReason::NamingCohesion { cohesion } => {
+                unlace_engine::MoveReason::NamingCohesion {
                     cohesion: *cohesion,
                 }
             }

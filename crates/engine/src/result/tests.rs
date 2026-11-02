@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use strata_ir::ScopeLevel;
+use unlace_ir::ScopeLevel;
 
 use super::*;
 

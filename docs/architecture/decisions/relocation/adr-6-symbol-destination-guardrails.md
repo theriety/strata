@@ -9,7 +9,7 @@ Symbol relocation rejects, before scoring, any destination that breaks a pass-st
 
 ## 🎯 Motivation
 
-Symbol-move scoring compares the cost of candidate placements, but some destinations are invalid regardless of their score. A runtime symbol placed in a type-only file changes that file's architectural role. A symbol placed in a folder that did not already depend on all of the symbol's dependencies gives that folder new directional coupling. If either placement merely scored well, Strata would recommend it.
+Symbol-move scoring compares the cost of candidate placements, but some destinations are invalid regardless of their score. A runtime symbol placed in a type-only file changes that file's architectural role. A symbol placed in a folder that did not already depend on all of the symbol's dependencies gives that folder new directional coupling. If either placement merely scored well, Unlace would recommend it.
 
 ## 🧭 Context
 

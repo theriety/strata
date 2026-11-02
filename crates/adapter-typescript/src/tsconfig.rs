@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn should_return_empty_when_tsconfig_is_absent() {
-        let aliases = load_aliases(Path::new("/nonexistent/strata/root"));
+        let aliases = load_aliases(Path::new("/nonexistent/unlace/root"));
 
         assert!(aliases.is_empty());
     }

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_ir::{ContainerId, Node, ScopeLevel};
+use unlace_ir::{ContainerId, Node, ScopeLevel};
 
 use crate::analyze::relocation::{CandidateTree, PipelineSolver};
 use crate::result::{SymbolKind, SymbolMove};
@@ -43,9 +43,9 @@ impl PipelineSolver<'_> {
             .map(|container| (container.id.0, container.name.as_str()))
             .collect();
         let kind_of = |node: &Node| match node.kind {
-            strata_ir::NodeKind::Symbol => SymbolKind::Symbol,
-            strata_ir::NodeKind::Type => SymbolKind::Type,
-            strata_ir::NodeKind::FileBody => {
+            unlace_ir::NodeKind::Symbol => SymbolKind::Symbol,
+            unlace_ir::NodeKind::Type => SymbolKind::Type,
+            unlace_ir::NodeKind::FileBody => {
                 unreachable!("file-body nodes are immobile and cannot appear in symbol narration")
             }
         };

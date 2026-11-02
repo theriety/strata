@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use smol_str::SmolStr;
-use strata_ir::NodeId;
+use unlace_ir::NodeId;
 
 use super::{ExportTable, is_public};
 use crate::parse::{Import, ParsedModule};

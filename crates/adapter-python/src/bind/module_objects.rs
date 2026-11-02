@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use smol_str::SmolStr;
-use strata_ir::{Node, NodeId};
+use unlace_ir::{Node, NodeId};
 
 use super::polarity::{is_support_path, is_test_path};
 use super::resolver::Resolver;

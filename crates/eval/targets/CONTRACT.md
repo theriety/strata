@@ -7,7 +7,7 @@ version: **1** (the `schema` key in every target TOML).
 
 ## Purpose
 
-Measure distance-to-best-state: run strata on a synthetic repo that is
+Measure distance-to-best-state: run unlace on a synthetic repo that is
 deliberately unsatisfying in exactly one way, then check the proposal against a
 machine-checkable constraint target encoding what a *good* proposal must do.
 Assertion failures are signal, not shame — they are the gate every algorithm
@@ -23,7 +23,7 @@ finding.
    randomness, no host-dependent paths).
 2. **One failure mode per fixture**, named by `[meta].failure_mode` from the
    canonical list below.
-3. **Adapter-parseable.** `strata analyze --root <fixture> --config
+3. **Adapter-parseable.** `unlace analyze --root <fixture> --config
    /nonexistent.toml --format json` must exit 0 with no syntax-error findings.
 4. **No `Cargo.toml` inside any fixture.** A manifest would drag the fixture into
    cargo's workspace resolution; Rust-flavored scenarios use the TS multi-package
@@ -33,7 +33,7 @@ finding.
    dependency graph, nothing else. Python needs no manifest; TS packages mark
    their root with a minimal `package.json` only when package-boundary semantics
    matter.
-6. A fixture may carry its own `strata.toml` to shape caps; then `[run].config =
+6. A fixture may carry its own `unlace.toml` to shape caps; then `[run].config =
    "fixture"`. Default is pure built-in defaults (`[run].config = "defaults"`),
    which is what all first-batch fixtures use so results stay comparable.
 
@@ -52,9 +52,9 @@ test-zone tie-cut cannot reach (FIX11).
 All assertions read one JSON document:
 
 ```
-strata analyze \
+unlace analyze \
   --root <repo>/crates/eval/fixtures/<name> \
-  --config /nonexistent/strata-eval.toml        # when [run].config = "defaults"
+  --config /nonexistent/unlace-eval.toml        # when [run].config = "defaults"
   --mode <[run].mode> --seed <[run].seed> -k <[run].candidates> \
   --format json
 ```
@@ -346,5 +346,5 @@ Each batch includes at least one target hand-validated against the current
 binary before commit: run the exact `[run]` invocation, evaluate every
 assertion by hand from the JSON, record observed values and verdicts in the
 stream notes, and change neither fixture nor target to make a failing assertion
-pass. A failing assertion on hand-validation is a finding about strata, which
+pass. A failing assertion on hand-validation is a finding about unlace, which
 is the corpus working as intended.

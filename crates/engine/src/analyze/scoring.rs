@@ -4,7 +4,7 @@
 //! candidate view handed to the scorer, and the placement-derived inputs it reads.
 
 use smol_str::SmolStr;
-use strata_ir::{ContainerId, ScopeLevel};
+use unlace_ir::{ContainerId, ScopeLevel};
 
 #[cfg(test)]
 mod candidate;

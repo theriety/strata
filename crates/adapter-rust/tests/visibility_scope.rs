@@ -4,8 +4,8 @@ use std::fs;
 use std::path::Path;
 
 use smol_str::SmolStr;
-use strata_adapter_rust::RustAdapter;
-use strata_ir::{Adapter, IrFragment, SourceFile, VisibilityScope};
+use unlace_adapter_rust::RustAdapter;
+use unlace_ir::{Adapter, IrFragment, SourceFile, VisibilityScope};
 
 /// Parses and binds the `scope/app` fixture, whose `parse` module holds
 /// `cfg`-disabled children beside a doc-commented `pub(super)` item.

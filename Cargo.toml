@@ -8,7 +8,7 @@ members = [
     "crates/adapter-typescript",
     "crates/adapter-rust",
     "crates/adapter-python",
-    # Dev-only eval harness (WS-C): drives strata-engine in-process over the
+    # Dev-only eval harness (WS-C): drives unlace-engine in-process over the
     # synthetic corpus in crates/eval/{fixtures,targets}; ships no library API.
     "crates/eval",
 ]

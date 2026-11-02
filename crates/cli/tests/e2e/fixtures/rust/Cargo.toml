@@ -4,10 +4,10 @@
 [workspace]
 
 [package]
-name = "strata-e2e-rust-fixture"
+name = "unlace-e2e-rust-fixture"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "strata_e2e_rust_fixture"
+name = "unlace_e2e_rust_fixture"
 path = "src/lib.rs"

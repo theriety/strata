@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_core::condense::Condensation;
-use strata_core::graph::csr::Csr;
+use unlace_core::condense::Condensation;
+use unlace_core::graph::csr::Csr;
 
 use crate::analyze::relocation::FileInfo;
 

@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use smol_str::SmolStr;
-use strata_ir::FileFact;
+use unlace_ir::FileFact;
 
 use super::database::Database;
 use crate::parse::ParsedFile;

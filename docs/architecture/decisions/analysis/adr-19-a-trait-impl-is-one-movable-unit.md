@@ -2,14 +2,14 @@
 
 📌
 
-The Rust adapter emits each `impl Trait for Type` block as one declaration named from its header, so Strata can never propose moving part of a trait implementation.
+The Rust adapter emits each `impl Trait for Type` block as one declaration named from its header, so Unlace can never propose moving part of a trait implementation.
 
 - Status: `Accepted`
 - Date: `2026-09-25`
 
 ## 🎯 Motivation
 
-Strata could suggest moving one method of a trait implementation, such as `fmt`, to another file. Rust requires a trait implementation to be one block, so that advice could never compile.
+Unlace could suggest moving one method of a trait implementation, such as `fmt`, to another file. Rust requires a trait implementation to be one block, so that advice could never compile.
 
 A first fix emitted the whole block as one declaration named after the self type. A type with several trait impls then produced several declarations with the same name as the type itself, which made reports ambiguous.
 
@@ -39,6 +39,6 @@ The block uses an existing declaration kind. No IR schema change is needed.
 
 ## ⚖️ Consequences
 
-Strata can no longer propose moving part of a trait impl. Trees and JSON show one entry per trait impl instead of its methods. Symbol counts and SLOC in Rust fixtures change and are re-blessed. Crossing a crate with a trait impl is only possible with the ADR-17 switch on, where the orphan rule is not modeled.
+Unlace can no longer propose moving part of a trait impl. Trees and JSON show one entry per trait impl instead of its methods. Symbol counts and SLOC in Rust fixtures change and are re-blessed. Crossing a crate with a trait impl is only possible with the ADR-17 switch on, where the orphan rule is not modeled.
 
 The impl block keeps the type declaration kind. A file that holds only trait impls therefore counts as type-only, and the block is priced at type affinity. It needs a strictly greater pull toward the destination than a plain type to move. Fixtures shift accordingly: two scores in the `workspace-rust` goldens move, 0.6929 to 0.6958 and 0.8929 to 0.8958.

@@ -1,10 +1,10 @@
-//! Strata's command-line entry point.
+//! Unlace's command-line entry point.
 //!
-//! The binary is a thin shell over `strata-engine`: each subcommand parses its
+//! The binary is a thin shell over `unlace-engine`: each subcommand parses its
 //! flags (clap derive, mirroring the reference flag tables), calls the same
 //! public library functions an embedder would, and renders the typed result.
 //!
-//! Exit codes are fixed (AD-8): `0` on success, `1` for any [`StrataError`]
+//! Exit codes are fixed (AD-8): `0` on success, `1` for any [`UnlaceError`]
 //! (printed with the error's remedy code), and `2` reserved exclusively for a
 //! `violations --fail-on` match. A borderline capacity finding never gates, so it
 //! never produces a `2`.
@@ -18,7 +18,7 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use clap::Parser;
-use strata_engine::StrataError;
+use unlace_engine::UnlaceError;
 
 use crate::args::Cli;
 use crate::dispatch::dispatch;
@@ -79,7 +79,7 @@ fn clap_exit_code(kind: clap::error::ErrorKind) -> u8 {
 }
 
 /// Writes a one-line error report with its stable code and remedy hint to `err`.
-fn report_error(error: &StrataError, err: &mut impl Write) {
+fn report_error(error: &UnlaceError, err: &mut impl Write) {
     let _ = writeln!(err, "error[{}]: {error}", error.code());
     let mut source = std::error::Error::source(error);
     while let Some(cause) = source {
@@ -110,21 +110,21 @@ mod tests {
 
     #[test]
     fn should_map_an_unknown_flag_to_exit_code_one() {
-        let kind = parse_error_kind(&["strata", "--bogus-flag"]);
+        let kind = parse_error_kind(&["unlace", "--bogus-flag"]);
 
         assert_eq!(clap_exit_code(kind), 1);
     }
 
     #[test]
     fn should_map_an_unknown_subcommand_to_exit_code_one() {
-        let kind = parse_error_kind(&["strata", "nonexistent-subcommand"]);
+        let kind = parse_error_kind(&["unlace", "nonexistent-subcommand"]);
 
         assert_eq!(clap_exit_code(kind), 1);
     }
 
     #[test]
     fn should_map_a_bad_value_to_exit_code_one() {
-        let kind = parse_error_kind(&["strata", "analyze", "--candidates", "notanumber"]);
+        let kind = parse_error_kind(&["unlace", "analyze", "--candidates", "notanumber"]);
 
         assert_eq!(clap_exit_code(kind), 1);
     }
@@ -132,10 +132,10 @@ mod tests {
     #[test]
     fn should_never_map_a_usage_error_to_the_gating_exit_code_two() {
         for argv in [
-            vec!["strata", "--bogus-flag"],
-            vec!["strata", "nonexistent-subcommand"],
-            vec!["strata", "analyze", "--candidates", "notanumber"],
-            vec!["strata", "tree"],
+            vec!["unlace", "--bogus-flag"],
+            vec!["unlace", "nonexistent-subcommand"],
+            vec!["unlace", "analyze", "--candidates", "notanumber"],
+            vec!["unlace", "tree"],
         ] {
             let kind = parse_error_kind(&argv);
 
@@ -145,15 +145,15 @@ mod tests {
 
     #[test]
     fn should_parse_analyze_without_an_explicit_config() {
-        let cli = Cli::try_parse_from(["strata", "analyze"]);
+        let cli = Cli::try_parse_from(["unlace", "analyze"]);
 
         assert!(cli.is_ok(), "--config is optional");
     }
 
     #[test]
     fn should_parse_the_cross_package_switch_as_off_unless_passed() {
-        let passed = Cli::try_parse_from(["strata", "analyze", "--allow-cross-package-moves"]);
-        let absent = Cli::try_parse_from(["strata", "analyze"]);
+        let passed = Cli::try_parse_from(["unlace", "analyze", "--allow-cross-package-moves"]);
+        let absent = Cli::try_parse_from(["unlace", "analyze"]);
 
         let switch = |cli: Result<Cli, clap::Error>| match cli.map(|cli| cli.command) {
             Ok(Command::Analyze(analyze)) => Some(analyze.allow_cross_package_moves),
@@ -165,21 +165,21 @@ mod tests {
 
     #[test]
     fn should_map_help_to_exit_code_zero() {
-        let kind = parse_error_kind(&["strata", "--help"]);
+        let kind = parse_error_kind(&["unlace", "--help"]);
 
         assert_eq!(clap_exit_code(kind), 0);
     }
 
     #[test]
     fn should_map_version_to_exit_code_zero() {
-        let kind = parse_error_kind(&["strata", "--version"]);
+        let kind = parse_error_kind(&["unlace", "--version"]);
 
         assert_eq!(clap_exit_code(kind), 0);
     }
 
     #[test]
     fn should_map_a_bare_invocation_help_to_exit_code_zero() {
-        let kind = parse_error_kind(&["strata"]);
+        let kind = parse_error_kind(&["unlace"]);
 
         assert_eq!(clap_exit_code(kind), 0);
     }

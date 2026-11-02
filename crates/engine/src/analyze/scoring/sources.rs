@@ -1,6 +1,6 @@
 //! Config views the scorer reads: the profile and capacity sources and the level caps.
 
-use strata_core::cluster::LevelCaps;
+use unlace_core::cluster::LevelCaps;
 
 use crate::config::{AnalyzeConfig, CapacityConfig, ProfileConfig};
 

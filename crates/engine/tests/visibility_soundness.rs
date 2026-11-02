@@ -9,13 +9,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use strata_engine::{AnalyzeConfig, analyze, snapshot_from_root};
+use unlace_engine::{AnalyzeConfig, analyze, snapshot_from_root};
 
 /// Writes a throwaway project holding `files` and returns its root.
 fn write_project(files: &[(&str, &str)], manifest: bool) -> Result<PathBuf, String> {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let root = std::env::temp_dir().join(format!(
-        "strata-soundness-{}-{}",
+        "unlace-soundness-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
@@ -502,7 +502,7 @@ fn should_not_flag_a_public_fn_used_only_by_an_integration_test_target() -> Resu
 
 #[test]
 fn should_not_flag_a_public_fn_of_a_library_with_no_users() -> Result<(), String> {
-    // the R3 hole: its users live in projects strata cannot see.
+    // the R3 hole: its users live in projects unlace cannot see.
     let advice = rust_advice(&[
         ("src/lib.rs", "pub mod m;\n"),
         ("src/m.rs", "pub fn h() {}\n"),
@@ -677,7 +677,7 @@ fn should_not_flag_the_pub_items_of_a_path_attribute_module() -> Result<(), Stri
 fn should_not_flag_a_target_of_a_gated_pub_use_or_pub_crate_use() -> Result<(), String> {
     // the loader drops a `use` behind a feature or platform cfg, so its
     // re-export (and the floor it sets) is invisible to the analysis. End-to-end
-    // guard; the fail proof is `strata-adapter-rust::dropped_use`.
+    // guard; the fail proof is `unlace-adapter-rust::dropped_use`.
     let feature = rust_advice(&[
         ("src/lib.rs", "pub mod outer;\n"),
         (
@@ -740,7 +740,7 @@ fn should_keep_a_file_shared_by_a_library_and_a_binary_a_library_file() -> Resul
         ("src/shared.rs", "#[cfg(windows)]\npub fn gated() {}\n"),
     ])?;
     // end-to-end guard only: the fail proof for the shared-file rule is
-    // `strata-adapter-rust::dropped_use` (public_api flag).
+    // `unlace-adapter-rust::dropped_use` (public_api flag).
     assert!(!mentions(&advice, "gated"), "{advice:?}");
     Ok(())
 }

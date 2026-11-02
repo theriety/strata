@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use assert_cmd::Command;
-use strata_engine::{
+use unlace_engine::{
     AnalyzeResult, ContainerNode, FileMove, Level, MirrorMove, Move, MoveKind, MoveReason,
     SymbolKind, SymbolMove, SymbolPlacement,
 };
@@ -16,7 +16,7 @@ use unicode_width::UnicodeWidthStr;
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 fn execute(args: &[&str]) -> TestResult<String> {
-    let output = Command::cargo_bin("strata")?.args(args).output()?;
+    let output = Command::cargo_bin("unlace")?.args(args).output()?;
     assert!(
         output.status.success(),
         "{}",
@@ -46,7 +46,7 @@ fn analyze(format: &str, verbose: bool) -> TestResult<String> {
 fn saved_report(result: &AnalyzeResult, verbose: bool) -> TestResult<String> {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let path = std::env::temp_dir().join(format!(
-        "strata-presentation-{}-{}.json",
+        "unlace-presentation-{}-{}.json",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
@@ -675,7 +675,7 @@ fn should_follow_combined_multi_package_moves_in_markdown() -> TestResult {
 fn saved_report_with(result: &AnalyzeResult, extra: &[&str]) -> TestResult<String> {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let path = std::env::temp_dir().join(format!(
-        "strata-display-limit-{}-{}.json",
+        "unlace-display-limit-{}-{}.json",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
@@ -760,7 +760,7 @@ fn should_leave_json_uncapped_whatever_the_full_flag() -> TestResult {
 fn project_with_hidden_capacity_finding() -> TestResult<PathBuf> {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let root = std::env::temp_dir().join(format!(
-        "strata-fail-on-{}-{}",
+        "unlace-fail-on-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
@@ -785,14 +785,14 @@ fn project_with_hidden_capacity_finding() -> TestResult<PathBuf> {
         )?;
     }
     fs::write(
-        root.join("strata.toml"),
+        root.join("unlace.toml"),
         "[profiles.anchored.capacity]\nfolder = 8\n[profiles.greenfield.capacity]\nfolder = 8\n",
     )?;
     Ok(root)
 }
 
 fn violations_run(root: &Path, extra: &[&str]) -> TestResult<(Option<i32>, String)> {
-    let config = root.join("strata.toml");
+    let config = root.join("unlace.toml");
     let mut args = vec![
         "violations",
         "--root",
@@ -803,7 +803,7 @@ fn violations_run(root: &Path, extra: &[&str]) -> TestResult<(Option<i32>, Strin
         "capacity",
     ];
     args.extend_from_slice(extra);
-    let output = Command::cargo_bin("strata")?.args(&args).output()?;
+    let output = Command::cargo_bin("unlace")?.args(&args).output()?;
     Ok((output.status.code(), String::from_utf8(output.stdout)?))
 }
 

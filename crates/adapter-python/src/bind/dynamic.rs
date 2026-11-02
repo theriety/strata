@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use smol_str::SmolStr;
-use strata_ir::{Edge, EdgeKind, Hardness, NodeId};
+use unlace_ir::{Edge, EdgeKind, Hardness, NodeId};
 
 use super::resolver::Resolver;
 use super::{CONFIDENCE_DYNAMIC, ExportTable, is_public, push_edge};

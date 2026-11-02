@@ -1,11 +1,11 @@
 [package]
-name = "strata-ir"
+name = "unlace-ir"
 version = "0.1.0"
 edition = "2024"
 rust-version.workspace = true
 
 [lib]
-name = "strata_ir"
+name = "unlace_ir"
 path = "src/lib.rs"
 
 [dependencies]

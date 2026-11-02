@@ -2,13 +2,13 @@
 
 use std::path::Path;
 
-use strata_engine::result::AnalyzeResult;
+use unlace_engine::result::AnalyzeResult;
 
 use crate::error::EvalError;
 
 use super::{CaseReport, ModeObservation, PairF1Report, Verdict};
 
-/// A serializable diagnostics dump written when `STRATA_BLESS_EVAL` is set.
+/// A serializable diagnostics dump written when `UNLACE_BLESS_EVAL` is set.
 ///
 /// This regenerates evidence only — expectations live in the targets, never in
 /// a golden file, so there is no bless path that could rewrite them.
@@ -33,7 +33,7 @@ struct DumpDoc<'a> {
 /// Writes the diagnostic dump when the environment asks for one; a dump
 /// failure surfaces as a case error, never silently.
 pub(super) fn dump_diagnostics(result: &AnalyzeResult, report: &mut CaseReport) {
-    if std::env::var_os("STRATA_BLESS_EVAL").is_none() {
+    if std::env::var_os("UNLACE_BLESS_EVAL").is_none() {
         return;
     }
     let fixture = report.fixture.clone();
@@ -49,7 +49,7 @@ pub(super) fn dump_diagnostics(result: &AnalyzeResult, report: &mut CaseReport) 
         .ancestors()
         .nth(2)
         .unwrap_or(Path::new(env!("CARGO_MANIFEST_DIR")));
-    let directory = workspace.join("target").join("strata-eval-diagnostics");
+    let directory = workspace.join("target").join("unlace-eval-diagnostics");
     let outcome = std::fs::create_dir_all(&directory).and_then(|()| {
         let path = directory.join(format!("{fixture}.json"));
         std::fs::write(path, serde_json::to_string_pretty(&doc).unwrap_or_default())

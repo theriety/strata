@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_engine::result::MoveReason;
+use unlace_engine::result::MoveReason;
 
 use super::rows::FileRow;
 
@@ -35,7 +35,7 @@ pub(super) enum Origin {
 /// polish. Returns the displacements plus how many paths failed to map back to
 /// the replica's file identity.
 pub(super) fn collect_displacements(
-    narration: &[strata_engine::result::Move],
+    narration: &[unlace_engine::result::Move],
     index_of_path: &BTreeMap<String, usize>,
     scc_of_vertex: &[Option<usize>],
     mixed_of_scc: &[bool],

@@ -9,7 +9,7 @@ Human text and Markdown reports show the five worst items of each list and one l
 
 ## 🎯 Motivation
 
-Strata's own repository printed 3,224 lines from one `analyze` run. A report that long hides the worst findings and the best moves under thousands of lesser ones, and nobody reads it to the end.
+Unlace's own repository printed 3,224 lines from one `analyze` run. A report that long hides the worst findings and the best moves under thousands of lesser ones, and nobody reads it to the end.
 
 ## 🧭 Context
 

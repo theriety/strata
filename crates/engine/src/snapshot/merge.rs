@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use smol_str::SmolStr;
-use strata_ir::{
+use unlace_ir::{
     ContainerId, IntermediateRepresentation, IrFragment, Layout, Node, NodeId, ScopeLevel,
     build_laminar_tree,
 };

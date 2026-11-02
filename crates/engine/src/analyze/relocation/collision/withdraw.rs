@@ -1,6 +1,6 @@
 //! Withdrawal of one colliding file move (ADR-21).
 
-use strata_core::cluster::{ClusterId, Partition};
+use unlace_core::cluster::{ClusterId, Partition};
 
 use crate::analyze::relocation::PipelineSolver;
 

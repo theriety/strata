@@ -1,7 +1,7 @@
 //! One displayed advice entry: a single item, or symbol items merged because
 //! everything they print except the symbol name is identical.
 
-use strata_engine::{
+use unlace_engine::{
     ProfileName, RelocationAdvice, RelocationProposal, ReviewReason, SymbolKind, SymbolMove,
 };
 

@@ -4,8 +4,8 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use strata_core::score::ContainerSizes;
-use strata_ir::{ContainerId, ContainerTree, ScopeLevel};
+use unlace_core::score::ContainerSizes;
+use unlace_ir::{ContainerId, ContainerTree, ScopeLevel};
 
 use super::ScoringContext;
 

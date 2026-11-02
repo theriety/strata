@@ -1,20 +1,20 @@
-//! Strata's orchestration engine and public library surface.
+//! Unlace's orchestration engine and public library surface.
 //!
-//! This crate is the only one that sees both the solver ([`strata_core`]) and the
-//! language adapters; it is also the embeddable library `strata-engine` (AD-5).
+//! This crate is the only one that sees both the solver ([`unlace_core`]) and the
+//! language adapters; it is also the embeddable library `unlace-engine` (AD-5).
 //! Everything the CLI can do is a plain Rust call with typed inputs and outputs:
 //!
-//! - [`load_config`] parses and validates a `strata.toml` into an [`AnalyzeConfig`];
+//! - [`load_config`] parses and validates a `unlace.toml` into an [`AnalyzeConfig`];
 //! - [`snapshot_from_root`] discovers sources, runs adapters, merges fragments,
 //!   flattens re-exports, and assembles a validated, hashed [`Snapshot`];
 //! - [`analyze`](fn@analyze) is a pure, deterministic function of a snapshot and config that
 //!   returns an owned [`AnalyzeResult`] — no I/O, no global state.
 //!
-//! All seven failure modes collapse into the single [`StrataError`] enum. The
+//! All seven failure modes collapse into the single [`UnlaceError`] enum. The
 //! crate re-exports the `ir` contract so consumers can assemble snapshots from a
 //! custom adapter and call [`analyze`](fn@analyze) directly.
 //!
-//! [`Snapshot`]: strata_ir::Snapshot
+//! [`Snapshot`]: unlace_ir::Snapshot
 
 pub mod analyze;
 pub mod config;
@@ -23,8 +23,8 @@ mod narrate;
 pub mod result;
 pub mod snapshot;
 
-pub use strata_core as core;
-pub use strata_ir as ir;
+pub use unlace_core as core;
+pub use unlace_ir as ir;
 
 pub use crate::analyze::{BORDERLINE_CAPACITY_MARGIN, analyze};
 pub use crate::config::{
@@ -33,7 +33,7 @@ pub use crate::config::{
     QualificationWeightsConfig, RelocationConfig, SolverConfig, TestMirrorRule,
     TestMirroringConfig, TestsConfig, WeightsConfig, load_config,
 };
-pub use crate::error::StrataError;
+pub use crate::error::UnlaceError;
 pub use crate::result::{
     Advice, AnalyzeResult, Candidate, CapacityBreach, CapacityRemainder, ConditionalSplit,
     ContainerNode, CurrentStanding, CurrentTree, EdgeBreak, EvidenceSignals, FileMove, Level,

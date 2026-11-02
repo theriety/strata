@@ -1,6 +1,6 @@
-//! The `strata.toml` schema, its built-in defaults, and validation.
+//! The `unlace.toml` schema, its built-in defaults, and validation.
 //!
-//! [`AnalyzeConfig`] mirrors `strata.toml` exactly: every key is optional and
+//! [`AnalyzeConfig`] mirrors `unlace.toml` exactly: every key is optional and
 //! every default matches a config-less CLI run (FR / the reference tables). The
 //! config is the only knob surface — coefficients, caps, edge weights, the solver
 //! budget, and diversification parameters all flow from here into the pure
@@ -10,10 +10,10 @@
 //! Parsing is two-staged: [`toml`] rejects unknown keys and type mismatches at
 //! deserialization (the structs `deny_unknown_fields`), then [`AnalyzeConfig::validate`]
 //! range-checks every value and attributes a dotted key path on failure. Both
-//! stages raise [`StrataError::ConfigInvalid`].
+//! stages raise [`UnlaceError::ConfigInvalid`].
 //!
 //! [`analyze`]: fn@crate::analyze
-//! [`StrataError::ConfigInvalid`]: crate::error::StrataError::ConfigInvalid
+//! [`UnlaceError::ConfigInvalid`]: crate::error::UnlaceError::ConfigInvalid
 
 mod adapters;
 mod analysis;
@@ -40,7 +40,7 @@ pub use search::{CapacityConfig, DiversityConfig, SolverConfig, TestsConfig};
 
 use serde::{Deserialize, Serialize};
 
-/// The full `strata.toml` schema with built-in defaults.
+/// The full `unlace.toml` schema with built-in defaults.
 ///
 /// Every field is optional in the file and defaults to a config-less CLI run.
 /// [`AnalyzeConfig::default`] is exactly the no-config baseline, so an embedder

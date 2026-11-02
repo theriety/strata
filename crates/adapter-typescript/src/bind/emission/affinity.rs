@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use smol_str::SmolStr;
-use strata_ir::{Affinity, AffinityKind, Node, NodeId, NodeKind};
+use unlace_ir::{Affinity, AffinityKind, Node, NodeId, NodeKind};
 
 use crate::parse::ParsedModule;
 

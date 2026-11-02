@@ -1,6 +1,6 @@
 //! Precondition evaluation: filters violations by class, severity, and location.
 
-use strata_engine::result::{
+use unlace_engine::result::{
     AnalyzeResult, Severity as EngineSeverity, Violation, ViolationKind as EngineViolationKind,
 };
 
@@ -179,7 +179,7 @@ fn location_suffix_matches(location: &str, suffix: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use strata_engine::result::{
+    use unlace_engine::result::{
         Severity as EngineSeverity, Violation, ViolationKind as EngineViolationKind,
     };
 

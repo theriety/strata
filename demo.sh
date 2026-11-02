@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Demonstrates a full strata run: analyze once, then render every face from the saved result.
+# Demonstrates a full unlace run: analyze once, then render every face from the saved result.
 # Usage: ./demo.sh [target-repo] [out-dir]
 set -euo pipefail
 
 TARGET="${1:-$HOME/Repositories/ai}"
-OUT="${2:-/tmp/strata-demo}"
+OUT="${2:-/tmp/unlace-demo}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BIN="$HERE/target/release/strata"
+BIN="$HERE/target/release/unlace"
 
 [ -d "$TARGET" ] || { echo "error: target repo not found: $TARGET" >&2; exit 1; }
-[ -x "$BIN" ] || cargo build --release --manifest-path "$HERE/Cargo.toml" -p strata-cli
+[ -x "$BIN" ] || cargo build --release --manifest-path "$HERE/Cargo.toml" -p unlace-cli
 
-# use the target's own strata.toml when present; otherwise pin built-in defaults
+# use the target's own unlace.toml when present; otherwise pin built-in defaults
 # (a nonexistent --config falls back silently, shielding the demo from any ambient toml)
-CFG="$TARGET/strata.toml"
-[ -f "$CFG" ] || CFG="/nonexistent/strata-demo.toml"
+CFG="$TARGET/unlace.toml"
+[ -f "$CFG" ] || CFG="/nonexistent/unlace-demo.toml"
 
 mkdir -p "$OUT"
 RESULT="$OUT/result.json"

@@ -1,6 +1,6 @@
 //! The test-root zone permission of the identity guard (ADR-26).
 
-use strata_core::cluster::ClusterId;
+use unlace_core::cluster::ClusterId;
 
 use crate::analyze::relocation::identity_guard::RelocationIdentityGuard;
 
@@ -26,7 +26,7 @@ impl RelocationIdentityGuard {
 #[cfg(test)]
 mod tests {
     use smol_str::SmolStr;
-    use strata_core::cluster::{ClusterId, Partition};
+    use unlace_core::cluster::{ClusterId, Partition};
 
     use crate::analyze::relocation::identity_guard::RelocationIdentityGuard;
     use crate::analyze::relocation::{FileInfo, LaminarHome};

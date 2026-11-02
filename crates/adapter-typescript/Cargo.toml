@@ -1,15 +1,15 @@
 [package]
-name = "strata-adapter-typescript"
+name = "unlace-adapter-typescript"
 version = "0.1.0"
 edition = "2024"
 rust-version.workspace = true
 
 [lib]
-name = "strata_adapter_typescript"
+name = "unlace_adapter_typescript"
 path = "src/lib.rs"
 
 [dependencies]
-strata-ir = { path = "../ir" }
+unlace-ir = { path = "../ir" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol_str = { workspace = true }

@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_core::cluster::Partition;
+use unlace_core::cluster::Partition;
 
 use crate::analyze::relocation::PipelineSolver;
 use crate::analyze::relocation::mirror::PolishEvidence;
@@ -148,7 +148,7 @@ impl PipelineSolver<'_> {
 
 #[cfg(test)]
 mod tests {
-    use strata_core::cluster::{ClusterId, Partition};
+    use unlace_core::cluster::{ClusterId, Partition};
 
     use std::collections::BTreeSet;
 

@@ -2,7 +2,7 @@
 
 📌
 
-Every move endpoint Strata prints is a real repository path, because namespace derivation now aligns physical directories with logical keys while skipping see-through source roots.
+Every move endpoint Unlace prints is a real repository path, because namespace derivation now aligns physical directories with logical keys while skipping see-through source roots.
 
 - Status: `Accepted`
 - Date: `2026-09-25`
@@ -22,11 +22,11 @@ Every file sitting directly in a see-through root is affected, not only cross-pa
 
 [ADR-8](../relocation/adr-8-physical-layout-governs-relocation-and-capacity.md) requires move endpoints to be physical, dataset-qualified paths with transparent segments visible. Clustering keeps a separate logical folder key in which source roots such as `src`, `spec`, `test`, `tests`, `lib`, `dist`, and `__tests__` are see-through.
 
-When Strata places a file into a new group, it keeps the file's real folder prefix, its namespace, and adds the group folder beneath it. That grouping is intended. The namespace, however, was computed as the part of the physical directory not covered by a literal common suffix with the logical key. A see-through root breaks that suffix match.
+When Unlace places a file into a new group, it keeps the file's real folder prefix, its namespace, and adds the group folder beneath it. That grouping is intended. The namespace, however, was computed as the part of the physical directory not covered by a literal common suffix with the logical key. A see-through root breaks that suffix match.
 
 ## ✅ Decision
 
-Every endpoint Strata prints is a real repository path.
+Every endpoint Unlace prints is a real repository path.
 
 - `from` is always the file's actual pass-start physical parent directory.
 - A `to` naming an existing folder is that folder's physical path.

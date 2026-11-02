@@ -1,4 +1,4 @@
-//! `strata analyze`: the full decomposition pipeline.
+//! `unlace analyze`: the full decomposition pipeline.
 //!
 //! The command loads the effective config, discovers and snapshots the sources
 //! under the root, runs the pure [`analyze`](fn@analyze) pass, and renders the result. It is
@@ -7,7 +7,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use strata_engine::{StrataError, analyze, snapshot_from_root};
+use unlace_engine::{UnlaceError, analyze, snapshot_from_root};
 
 use crate::commands::{ConfigOverrides, resolve_config};
 use crate::render::{Format, RenderOptions, render_with_options};
@@ -37,14 +37,14 @@ pub struct AnalyzeArgs {
 ///
 /// # Errors
 ///
-/// Returns any [`StrataError`] from config loading, snapshotting, or analysis;
-/// an I/O failure writing the result surfaces as [`StrataError::InputUnreadable`]
+/// Returns any [`UnlaceError`] from config loading, snapshotting, or analysis;
+/// an I/O failure writing the result surfaces as [`UnlaceError::InputUnreadable`]
 /// keyed at the root.
 pub fn run_with_options(
     args: &AnalyzeArgs,
     options: RenderOptions,
     out: &mut impl Write,
-) -> Result<(), StrataError> {
+) -> Result<(), UnlaceError> {
     let config = resolve_config(&args.config, args.overrides)?;
     let snapshot = snapshot_from_root(&args.root, &config)?;
     let result = analyze(&snapshot, &config)?;
@@ -55,7 +55,7 @@ pub fn run_with_options(
         options,
         out,
     );
-    output.map_err(|error| StrataError::InputUnreadable {
+    output.map_err(|error| UnlaceError::InputUnreadable {
         path: args.root.clone(),
         reason: error.to_string(),
     })
@@ -69,7 +69,7 @@ mod tests {
 
     /// Builds a temp dir holding `files` (path, contents) pairs and returns it.
     fn fixture(files: &[(&str, &str)]) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("strata-analyze-{}", unique()));
+        let dir = std::env::temp_dir().join(format!("unlace-analyze-{}", unique()));
         for (path, contents) in files {
             let full = dir.join(path);
             if let Some(parent) = full.parent() {
@@ -93,7 +93,7 @@ mod tests {
         let root = fixture(&[("a.py", "def alpha():\n    return 1\n")]);
         let args = AnalyzeArgs {
             root: root.clone(),
-            config: root.join("strata.toml"),
+            config: root.join("unlace.toml"),
             overrides: ConfigOverrides::default(),
             format: Format::Json,
         };

@@ -9,7 +9,7 @@
 //! edges as node positions, and the nodes that can be flagged at all — and
 //! answers each query from the containers alone.
 
-use strata_ir::{ContainerId, ContainerTree, Edge, Node, NodeKind, ScopeLevel};
+use unlace_ir::{ContainerId, ContainerTree, Edge, Node, NodeKind, ScopeLevel};
 
 use super::{LcaTable, exempt_from_advice, is_signature_edge};
 

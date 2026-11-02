@@ -1,10 +1,10 @@
 //! Shared builders for analyze unit-test fixtures.
 
 use smol_str::SmolStr;
-use strata_core::condense::Condensation;
-use strata_core::condense::SccId;
-use strata_core::graph::csr::Csr;
-use strata_ir::{
+use unlace_core::condense::Condensation;
+use unlace_core::condense::SccId;
+use unlace_core::graph::csr::Csr;
+use unlace_ir::{
     Affinity, Container, ContainerId, ContainerTree, Edge, EdgeKind, Hardness,
     IntermediateRepresentation, Node, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
 };

@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 #[cfg(test)]
-use strata_core::visibility::derive_visibility;
-use strata_ir::{ContainerId, Node, NodeKind, Polarity};
+use unlace_core::visibility::derive_visibility;
+use unlace_ir::{ContainerId, Node, NodeKind, Polarity};
 
 use crate::analyze::relocation::{CandidateTree, SYMBOL_MIN_IMPROVEMENT, SYMBOL_SWEEPS};
 use crate::analyze::scoring::CycleCounts;

@@ -1,6 +1,6 @@
 //! Public API of library crates (ADR-25 rule 8).
 //!
-//! An item a library exports is used by crates strata cannot see, so advice
+//! An item a library exports is used by crates unlace cannot see, so advice
 //! never narrows it. The set is asked of rust-analyzer instead of re-derived
 //! from syntax: a module's scope seen from a module of *another* crate is
 //! exactly the names an outside user can write, with glob and renamed
@@ -17,7 +17,7 @@ use std::path::Path;
 use ra_ap_hir::{Crate, HasVisibility as _, Module, ModuleDef, ScopeDef, Visibility, attach_db};
 use ra_ap_ide::{RootDatabase, Semantics, TryToNav as _};
 use smol_str::SmolStr;
-use strata_ir::NodeId;
+use unlace_ir::NodeId;
 
 use super::assignment::NodeAssignment;
 use super::database::Database;

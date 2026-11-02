@@ -14,7 +14,7 @@
 
 ## Context
 
-Strata's reports propose codebase structure changes as a static text dump. Ten
+Unlace's reports propose codebase structure changes as a static text dump. Ten
 design rounds, two independent cold-reader comprehension gates, and two
 independent usefulness critiques established that earlier report faces failed
 their reader twice over: field vocabulary was unexplained (leaf, weight, score
@@ -28,13 +28,13 @@ durable authority.
 
 ## Decision
 
-Strata's suggestion reports are **suggested action lists**:
+Unlace's suggestion reports are **suggested action lists**:
 
 1. **No action = no suggestion.** Unchanged placements are never listed.
    Files that stay are not suggestions; container blast-radius deltas carry
    the "what stays" information instead.
 2. **No marker column, no removal entries.** Change tables are exactly
-   `leaf | before place | after place`. Strata does not propose deletions;
+   `leaf | before place | after place`. Unlace does not propose deletions;
    if a candidate implies something disappears, it renders as relocation or
    is omitted.
 3. **Every suggestion states its grain** — whole files, symbols within one

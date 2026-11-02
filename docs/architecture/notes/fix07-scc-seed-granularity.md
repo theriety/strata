@@ -217,7 +217,7 @@ On this fixture the engine reports `engine_cycle_findings=0` while the replica
 finds 1 multi-file SCC. Both are correct: the engine's Cycle violations come
 from condensing the SYMBOL-level hard-edge graph (`solve_cycles` over IR nodes,
 whose projection here is the DAG run_motor -> spin -> torque_curve), while the
-search grain that tears is the FILE-level graph. Strata therefore reports
+search grain that tears is the FILE-level graph. Unlace therefore reports
 cycles at symbol granularity but tears at file granularity at seed time; a
 file-only import cycle is invisible to the violation layer. For this reason the
 `cycle-span` target deliberately omits any `violation_present(cycle)`

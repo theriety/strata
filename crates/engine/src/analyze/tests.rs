@@ -1,6 +1,6 @@
 #![allow(clippy::assertions_on_constants)]
 
-use strata_ir::{Polarity, ScopeLevel};
+use unlace_ir::{Polarity, ScopeLevel};
 
 use crate::config::AnalyzeConfig;
 

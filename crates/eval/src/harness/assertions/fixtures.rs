@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_engine::result::{ContainerNode, Level};
+use unlace_engine::result::{ContainerNode, Level};
 
 use crate::harness::inputs::{EvalInputs, FaceInputs, discover_packages};
 use crate::metrics::{members, structural_placement};

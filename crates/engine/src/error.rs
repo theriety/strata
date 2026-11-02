@@ -1,7 +1,7 @@
 //! The single public error type every engine entry point surfaces.
 //!
 //! All seven failure modes the CLI and library can hit collapse into one typed
-//! [`StrataError`] enum (AD-8): config validation, the two adapter phases,
+//! [`UnlaceError`] enum (AD-8): config validation, the two adapter phases,
 //! candidate lookup, input reads, snapshot validation, and the re-export depth
 //! guard. Each variant mirrors the `code`-field convention of the error
 //! reference and carries identifying context so a reader never sees a bare
@@ -9,8 +9,8 @@
 
 use std::path::PathBuf;
 
-use strata_ir::{AdapterError, SnapshotError};
 use thiserror::Error;
+use unlace_ir::{AdapterError, SnapshotError};
 
 /// Every failure an engine entry point can surface, as one typed enum.
 ///
@@ -18,8 +18,8 @@ use thiserror::Error;
 /// `1`, and library consumers match on them directly. Adapter and snapshot
 /// failures source-chain their underlying error rather than stringifying it.
 #[derive(Debug, Error)]
-pub enum StrataError {
-    /// A `strata.toml` file or programmatic [`AnalyzeConfig`] failed validation —
+pub enum UnlaceError {
+    /// A `unlace.toml` file or programmatic [`AnalyzeConfig`] failed validation —
     /// an unknown key, a malformed value, or an out-of-range coefficient.
     ///
     /// [`AnalyzeConfig`]: crate::AnalyzeConfig
@@ -88,7 +88,7 @@ pub enum StrataError {
     },
 }
 
-impl StrataError {
+impl UnlaceError {
     /// Returns the stable `SCREAMING_SNAKE_CASE` code for this error, mirroring
     /// the error-reference `code` field so machine consumers can switch on a
     /// string without depending on the Rust variant layout.
@@ -106,7 +106,7 @@ impl StrataError {
     }
 }
 
-impl From<SnapshotError> for StrataError {
+impl From<SnapshotError> for UnlaceError {
     fn from(source: SnapshotError) -> Self {
         Self::SnapshotInvalid { source }
     }
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn should_expose_a_stable_code_per_variant() {
-        let error = StrataError::ReExportDepthExceeded {
+        let error = UnlaceError::ReExportDepthExceeded {
             origin: "barrel".to_owned(),
             limit: 64,
         };
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn should_name_the_offending_config_key_in_its_message() {
-        let error = StrataError::ConfigInvalid {
+        let error = UnlaceError::ConfigInvalid {
             key: Some("capacity.file".to_owned()),
             reason: "must be positive".to_owned(),
         };
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn should_render_a_keyless_config_error_without_a_suffix() {
-        let error = StrataError::ConfigInvalid {
+        let error = UnlaceError::ConfigInvalid {
             key: None,
             reason: "unparseable".to_owned(),
         };
@@ -163,7 +163,7 @@ mod tests {
             expected: 1,
         };
 
-        let error = StrataError::from(source);
+        let error = UnlaceError::from(source);
 
         assert_eq!(error.code(), "SNAPSHOT_INVALID");
     }

@@ -1,7 +1,7 @@
 //! The AD-5 library/CLI parity test plus golden-file assertions, pinned across
 //! all three language fixtures.
 //!
-//! For each fixture repo the parity test runs the real `strata` binary with
+//! For each fixture repo the parity test runs the real `unlace` binary with
 //! `analyze --format json` and, in the same process, calls `snapshot_from_root`
 //! plus `analyze` on the same root. The two must agree byte-for-byte: the CLI's
 //! JSON (sans the trailing newline it adds) must equal `serde_json::to_vec` of the
@@ -11,11 +11,11 @@
 //! The golden tests then exercise the rendered faces of the downstream commands —
 //! `tree`, `diff`, `violations`, `report`, and `analyze --format summary` —
 //! against the saved result for every fixture and assert their human-readable
-//! output is byte-identical to a committed golden file. Set `STRATA_BLESS=1` to
+//! output is byte-identical to a committed golden file. Set `UNLACE_BLESS=1` to
 //! regenerate the goldens from the current binary.
 //!
 //! Oracle layering, by design: **goldens here are the single oracle for rendered
-//! output** (one bless path, `STRATA_BLESS=1`); the hand-written asserts in
+//! output** (one bless path, `UNLACE_BLESS=1`); the hand-written asserts in
 //! `cli_acceptance.rs` check only exit codes and structural invariants; and the
 //! parity test above pins library↔CLI byte-equality of the json face.
 
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use strata_engine::{analyze, load_config, snapshot_from_root};
+use unlace_engine::{analyze, load_config, snapshot_from_root};
 
 /// Every structurally clean fixture the parity and golden suites drive as a
 /// group.
@@ -49,9 +49,9 @@ const FIXTURES: [&str; 11] = [
 
 /// A non-existent config path, forcing the binary onto its built-in defaults so
 /// every analysis is identical no matter which directory the harness runs from —
-/// a configured `strata.toml` in a parent directory must never leak into a run.
+/// a configured `unlace.toml` in a parent directory must never leak into a run.
 /// The library side loads the same path, which falls back to the defaults.
-const PURE_DEFAULTS: &str = "/nonexistent/strata-parity.toml";
+const PURE_DEFAULTS: &str = "/nonexistent/unlace-parity.toml";
 
 /// A config pinning the file cap at 250 SLOC, so the over-cap fixtures
 /// keep the capacity findings they exist to show under the 600 default.
@@ -86,17 +86,17 @@ fn golden_path(name: &str, file: &str) -> PathBuf {
         .join(file)
 }
 
-/// Returns the built `strata` binary path cargo injects for integration tests.
-fn strata_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_strata"))
+/// Returns the built `unlace` binary path cargo injects for integration tests.
+fn unlace_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_unlace"))
 }
 
-/// Runs `strata <args...>` and returns its (status code, stdout bytes).
+/// Runs `unlace <args...>` and returns its (status code, stdout bytes).
 ///
 /// A spawn failure returns the sentinel code `-1` with empty output so the
 /// caller's status assertions fail loudly without a panic.
-fn run_strata(args: &[&str]) -> (i32, Vec<u8>) {
-    match Command::new(strata_bin()).args(args).output() {
+fn run_unlace(args: &[&str]) -> (i32, Vec<u8>) {
+    match Command::new(unlace_bin()).args(args).output() {
         Ok(output) => (output.status.code().unwrap_or(-1), output.stdout),
         Err(_) => (-1, Vec::new()),
     }
@@ -121,7 +121,7 @@ fn assert_parity(name: &str) {
     let root = fixture(name);
     let root_str = root.to_str().unwrap_or_default();
 
-    let (code, mut stdout) = run_strata(&[
+    let (code, mut stdout) = run_unlace(&[
         "analyze",
         "--root",
         root_str,
@@ -154,7 +154,7 @@ fn analyze_to_file(name: &str) -> PathBuf {
 fn analyze_to_file_with(name: &str, extra: &[&str]) -> PathBuf {
     let root = fixture(name);
     let root_str = root.to_str().unwrap_or_default();
-    let path = std::env::temp_dir().join(format!("strata-e2e-{name}-{}.json", nanos()));
+    let path = std::env::temp_dir().join(format!("unlace-e2e-{name}-{}.json", nanos()));
     let path_str = path.to_str().unwrap_or_default();
 
     let mut args = vec![
@@ -169,19 +169,19 @@ fn analyze_to_file_with(name: &str, extra: &[&str]) -> PathBuf {
         path_str,
     ];
     args.extend_from_slice(extra);
-    let (code, _) = run_strata(&args);
+    let (code, _) = run_unlace(&args);
     assert_eq!(code, 0, "analyze writes a result file for {name}");
     path
 }
 
 /// Asserts the bytes of a downstream command equal a committed golden, or
-/// regenerates the golden when `STRATA_BLESS=1` is set.
+/// regenerates the golden when `UNLACE_BLESS=1` is set.
 ///
 /// The actual bytes come from a real binary invocation; the expected bytes come
 /// from the on-disk golden, so a drift in any renderer surfaces as a byte diff.
 fn assert_golden(name: &str, file: &str, actual: &[u8]) {
     let path = golden_path(name, file);
-    if std::env::var_os("STRATA_BLESS").is_some() {
+    if std::env::var_os("UNLACE_BLESS").is_some() {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -191,7 +191,7 @@ fn assert_golden(name: &str, file: &str, actual: &[u8]) {
     let expected = std::fs::read(&path);
     assert!(
         expected.is_ok(),
-        "missing golden {}; run with STRATA_BLESS=1 to generate it",
+        "missing golden {}; run with UNLACE_BLESS=1 to generate it",
         path.display()
     );
     let expected = expected.unwrap_or_default();
@@ -409,7 +409,7 @@ fn analyze_json(name: &str, extra: &[&str]) -> serde_json::Value {
         "json",
     ];
     args.extend_from_slice(extra);
-    let (code, stdout) = run_strata(&args);
+    let (code, stdout) = run_unlace(&args);
     assert_eq!(code, 0, "analyze exits 0 for {name} {extra:?}");
     let parsed = serde_json::from_slice(&stdout);
     assert!(
@@ -433,20 +433,20 @@ fn assert_goldens(name: &str) {
         .is_some_and(|candidates| !candidates.is_empty());
 
     let (tree_code, tree_out) =
-        run_strata(&["tree", "--input", result_str, "--current", "--symbols"]);
+        run_unlace(&["tree", "--input", result_str, "--current", "--symbols"]);
     assert_eq!(tree_code, 0, "tree exits 0 for {name}");
     assert_golden(name, "tree.txt", &tree_out);
 
     if anchored_candidate_exists {
         let (diff_code, diff_out) =
-            run_strata(&["diff", "--input", result_str, "current", "anchored/1"]);
+            run_unlace(&["diff", "--input", result_str, "current", "anchored/1"]);
         assert_eq!(diff_code, 0, "candidate diff exits 0 for {name}");
         assert_golden(name, "diff.txt", &diff_out);
     }
 
     let root = fixture(name);
     let root_str = root.to_str().unwrap_or_default();
-    let (violations_code, violations_out) = run_strata(&[
+    let (violations_code, violations_out) = run_unlace(&[
         "violations",
         "--root",
         root_str,
@@ -461,7 +461,7 @@ fn assert_goldens(name: &str) {
     // the analyze-summary rendered face: run over the same root, both modes, so the
     // committed golden pins the human-readable summary bytes (census, scores, and
     // per-mode candidate headlines) the same deterministic way the other goldens are.
-    let (summary_code, summary_out) = run_strata(&[
+    let (summary_code, summary_out) = run_unlace(&[
         "analyze",
         "--root",
         root_str,
@@ -475,7 +475,7 @@ fn assert_goldens(name: &str) {
     assert_eq!(summary_code, 0, "analyze summary exits 0 for {name}");
     assert_golden(name, "summary.txt", &summary_out);
 
-    let (report_code, report_out) = run_strata(&["report", "--input", result_str]);
+    let (report_code, report_out) = run_unlace(&["report", "--input", result_str]);
     assert_eq!(report_code, 0, "report exits 0 for {name}");
     assert_golden(name, "report.md", &report_out);
 
@@ -608,7 +608,7 @@ fn should_draw_each_file_inside_its_own_crate_in_the_workspace_move_candidate_tr
     // no default-profile move could ever produce.
     let result_path = analyze_to_file("workspace-move-rust");
     let result_str = result_path.to_str().unwrap_or_default();
-    let (code, tree_out) = run_strata(&[
+    let (code, tree_out) = run_unlace(&[
         "tree",
         "--input",
         result_str,
@@ -882,7 +882,7 @@ fn should_match_the_goldens_for_the_relief_nest_py_fixture() {
 fn should_match_the_full_summary_golden_for_the_relief_nest_py_fixture() {
     let name = "relief-nest-py";
     let root = fixture(name);
-    let (code, out) = run_strata(&[
+    let (code, out) = run_unlace(&[
         "analyze",
         "--root",
         root.to_str().unwrap_or_default(),
@@ -904,7 +904,7 @@ fn should_exit_zero_for_violations_without_fail_on() {
         let root = fixture(name);
         let root_str = root.to_str().unwrap_or_default();
 
-        let (code, _) = run_strata(&["violations", "--root", root_str, "--config", PURE_DEFAULTS]);
+        let (code, _) = run_unlace(&["violations", "--root", root_str, "--config", PURE_DEFAULTS]);
 
         assert_eq!(code, 0, "a clean run without --fail-on exits 0 for {name}");
     }
@@ -917,7 +917,7 @@ fn should_keep_exit_code_two_reserved_for_a_fail_on_match() {
         let root = fixture(name);
         let root_str = root.to_str().unwrap_or_default();
 
-        let (code, _) = run_strata(&[
+        let (code, _) = run_unlace(&[
             "violations",
             "--root",
             root_str,
@@ -937,7 +937,7 @@ fn should_accept_a_severity_qualified_fail_on_selector() {
     let root = fixture("rust");
     let root_str = root.to_str().unwrap_or_default();
 
-    let (code, _) = run_strata(&[
+    let (code, _) = run_unlace(&[
         "violations",
         "--root",
         root_str,
@@ -957,7 +957,7 @@ fn should_reject_a_malformed_fail_on_selector_without_gating() {
     let root = fixture("rust");
     let root_str = root.to_str().unwrap_or_default();
 
-    let (code, _) = run_strata(&[
+    let (code, _) = run_unlace(&[
         "violations",
         "--root",
         root_str,

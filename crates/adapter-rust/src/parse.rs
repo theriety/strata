@@ -24,7 +24,7 @@ mod tokens;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
-use strata_ir::{AdapterError, SourceFile};
+use unlace_ir::{AdapterError, SourceFile};
 
 use self::advisory::{identifiers, mark_inline};
 use self::dropped::{DroppedUses, has_pub_use};
@@ -182,7 +182,7 @@ fn public_visibility_kind() -> VisibilityKind {
 
 /// A serializable summary of one parsed Rust source file.
 ///
-/// This is the payload the adapter threads through [`strata_ir::ParseTree`]:
+/// This is the payload the adapter threads through [`unlace_ir::ParseTree`]:
 /// [`parse`] produces it, [`crate::bind::bind`] consumes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedFile {
@@ -823,9 +823,9 @@ mod tests {
 
     #[test]
     fn should_record_a_crate_root_alias_as_a_re_export() {
-        // `pub use strata_ir as ir;` names a crate root, which is never a node;
+        // `pub use unlace_ir as ir;` names a crate root, which is never a node;
         // it is still a re-export declaration (ADR-20).
-        let re_exports = parse_re_exports("pub use strata_ir as ir;\n");
+        let re_exports = parse_re_exports("pub use unlace_ir as ir;\n");
 
         assert_eq!(
             re_exports.first().map(|re| re.name.clone()),

@@ -1,4 +1,4 @@
-Strata report — workspace-move-rust
+Unlace report — workspace-move-rust
 8 files · 11 symbols · 18 edges
 Snapshot `3e0e064e424c81f2fe26b015dde84a77b9cab5dca6dce7dfaf31305cee49ab5f`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.

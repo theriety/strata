@@ -1,6 +1,6 @@
 //! One evaluation's dense view of a placement function.
 
-use strata_ir::ContainerId;
+use unlace_ir::ContainerId;
 
 /// The dense view of one placement: the candidate file each node id occupies.
 #[derive(Clone)]

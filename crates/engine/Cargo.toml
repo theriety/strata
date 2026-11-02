@@ -1,19 +1,19 @@
 [package]
-name = "strata-engine"
+name = "unlace-engine"
 version = "0.1.0"
 edition = "2024"
 rust-version.workspace = true
 
 [lib]
-name = "strata_engine"
+name = "unlace_engine"
 path = "src/lib.rs"
 
 [dependencies]
-strata-ir = { path = "../ir" }
-strata-core = { path = "../core" }
-strata-adapter-typescript = { path = "../adapter-typescript" }
-strata-adapter-rust = { path = "../adapter-rust" }
-strata-adapter-python = { path = "../adapter-python" }
+unlace-ir = { path = "../ir" }
+unlace-core = { path = "../core" }
+unlace-adapter-typescript = { path = "../adapter-typescript" }
+unlace-adapter-rust = { path = "../adapter-rust" }
+unlace-adapter-python = { path = "../adapter-python" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol_str = { workspace = true }

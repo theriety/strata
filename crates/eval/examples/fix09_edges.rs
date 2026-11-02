@@ -4,9 +4,9 @@
 
 #![allow(clippy::print_stdout)] // diagnostic binary; the workspace deny targets library code
 
-use strata_engine::config::AnalyzeConfig;
-use strata_engine::snapshot_from_root;
-use strata_eval::{eval_fixture_root, load_target};
+use unlace_engine::config::AnalyzeConfig;
+use unlace_engine::snapshot_from_root;
+use unlace_eval::{eval_fixture_root, load_target};
 
 fn main() {
     if let Err(error) = run() {

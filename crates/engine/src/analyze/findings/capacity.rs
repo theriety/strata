@@ -1,6 +1,6 @@
 //! Capacity findings over the container tree against the configured per-level caps.
 
-use strata_ir::Snapshot;
+use unlace_ir::Snapshot;
 
 use crate::analyze::BORDERLINE_CAPACITY_MARGIN;
 use crate::analyze::findings::physical::{

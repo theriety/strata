@@ -9,8 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use smol_str::SmolStr;
-use strata_adapter_python::PythonAdapter;
-use strata_ir::{
+use unlace_adapter_python::PythonAdapter;
+use unlace_ir::{
     Adapter, ContainerTree, EdgeKind, Hardness, IntermediateRepresentation, NodeKind, Polarity,
     ScopeLevel, Snapshot, SourceFile,
 };
@@ -139,14 +139,14 @@ fn build_views() -> Result<(Vec<NodeView>, Vec<EdgeView>, IntermediateRepresenta
         .bind(trees)
         .map_err(|error| format!("bind failed: {error}"))?;
 
-    let container_name = |id: strata_ir::ContainerId| -> String {
+    let container_name = |id: unlace_ir::ContainerId| -> String {
         fragment
             .containers
             .iter()
             .find(|container| container.id == id && container.level == ScopeLevel::File)
             .map_or_else(|| "?".to_string(), |container| container.name.to_string())
     };
-    let node_name = |id: strata_ir::NodeId| -> String {
+    let node_name = |id: unlace_ir::NodeId| -> String {
         fragment
             .nodes
             .iter()
@@ -362,7 +362,7 @@ fn should_surface_a_syntax_error_rather_than_skipping_the_file() {
     let result = adapter.parse(&files);
 
     assert!(
-        matches!(result, Err(strata_ir::AdapterError::Parse { ref path, .. }) if path == "pkg/broken.py"),
+        matches!(result, Err(unlace_ir::AdapterError::Parse { ref path, .. }) if path == "pkg/broken.py"),
         "expected a Parse error pointing at the broken file, got {result:?}"
     );
 }

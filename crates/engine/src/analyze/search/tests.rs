@@ -2,13 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use strata_core::cluster::ClusterId;
-use strata_core::diversify::Solver;
-use strata_core::score::KindWeights;
-use strata_ir::{Edge, EdgeKind, Node, NodeId, Polarity, ScopeLevel, Snapshot};
+use unlace_core::cluster::ClusterId;
+use unlace_core::diversify::Solver;
+use unlace_core::score::KindWeights;
+use unlace_ir::{Edge, EdgeKind, Node, NodeId, Polarity, ScopeLevel, Snapshot};
 
 use crate::config::{AnalyzeConfig, CapacityConfig, ObjectiveConfig};
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 use crate::result::{CurrentStanding, Level};
 
 use super::*;
@@ -280,7 +280,7 @@ fn should_score_file_capacity_with_each_profiles_file_cap() {
 
 #[test]
 fn should_keep_structural_capacity_findings_and_scores_in_lockstep_at_every_level()
--> Result<(), StrataError> {
+-> Result<(), UnlaceError> {
     let snapshot = snapshot(
         vec![
             node(0, "first", 10, Polarity::Production),
@@ -374,7 +374,7 @@ fn should_keep_structural_capacity_findings_and_scores_in_lockstep_at_every_leve
 }
 
 #[test]
-fn should_exclude_test_only_sloc_from_file_findings_and_pressure() -> Result<(), StrataError> {
+fn should_exclude_test_only_sloc_from_file_findings_and_pressure() -> Result<(), UnlaceError> {
     let mut test_case = node(0, "exercise", 3, Polarity::TestCase);
     test_case.effective_size = 5;
     let snapshot = snapshot(
@@ -414,7 +414,7 @@ fn should_exclude_test_only_sloc_from_file_findings_and_pressure() -> Result<(),
 }
 
 #[test]
-fn should_include_production_sloc_in_file_findings_and_pressure() -> Result<(), StrataError> {
+fn should_include_production_sloc_in_file_findings_and_pressure() -> Result<(), UnlaceError> {
     let snapshot = snapshot(
         vec![sized_node(0, "execute", 3, 5)],
         vec![],

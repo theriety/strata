@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_core::cluster::Partition;
-use strata_ir::{ContainerId, NodeKind, Polarity, ScopeLevel};
+use unlace_core::cluster::Partition;
+use unlace_ir::{ContainerId, NodeKind, Polarity, ScopeLevel};
 
 use crate::analyze::relocation::mirror::PolishEvidence;
 use crate::analyze::relocation::{CandidateTree, PipelineSolver};
@@ -150,7 +150,7 @@ impl PipelineSolver<'_> {
 /// The production symbols the adapter named as a program's start function
 /// (`FileFact::start`): a file fact names the function, the file's own nodes
 /// say which ones carry that name.
-pub(super) fn start_symbol_nodes(ir: &strata_ir::IntermediateRepresentation) -> BTreeSet<u32> {
+pub(super) fn start_symbol_nodes(ir: &unlace_ir::IntermediateRepresentation) -> BTreeSet<u32> {
     let files: BTreeMap<&str, ContainerId> = ir
         .containers
         .containers()

@@ -1,6 +1,6 @@
 //! Binary-lifting lowest-common-ancestor tables over the container forest.
 
-use strata_ir::{ContainerId, ContainerTree, ScopeLevel};
+use unlace_ir::{ContainerId, ContainerTree, ScopeLevel};
 
 /// Binary-lifting ancestor tables over a [`ContainerTree`] forest.
 ///

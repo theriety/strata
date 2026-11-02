@@ -4,11 +4,11 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_core::cluster::{LevelCaps, Partition};
-use strata_core::condense::Condensation;
-use strata_core::graph::csr::Csr;
-use strata_core::score::{Coefficients, KindWeights};
-use strata_ir::{ContainerId, ContainerTree, Snapshot};
+use unlace_core::cluster::{LevelCaps, Partition};
+use unlace_core::condense::Condensation;
+use unlace_core::graph::csr::Csr;
+use unlace_core::score::{Coefficients, KindWeights};
+use unlace_ir::{ContainerId, ContainerTree, Snapshot};
 
 use crate::analyze::layout::LaminarHome;
 use crate::analyze::scoring::SnapshotScoring;
@@ -40,7 +40,7 @@ pub(in crate::analyze) use identity_guard::zone_keys::zone_keys;
 pub(in crate::analyze) use inventory::file_inventory;
 pub(in crate::analyze) use solver::TestPolicy;
 #[cfg(test)]
-use strata_ir::{Container, ScopeLevel};
+use unlace_ir::{Container, ScopeLevel};
 
 #[cfg(test)]
 use facts::file_facts;
@@ -57,7 +57,7 @@ use inventory::cycle_homes;
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::SnapshotInvalid`] if the snapshot's container tree
+/// Returns [`UnlaceError::SnapshotInvalid`] if the snapshot's container tree
 /// cannot be rendered (it is otherwise pre-validated at assembly).
 pub(in crate::analyze) struct FileInfo {
     /// The file's container id in the current tree.

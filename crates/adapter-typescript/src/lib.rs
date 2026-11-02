@@ -1,13 +1,13 @@
-//! The TypeScript / TSX language adapter for Strata.
+//! The TypeScript / TSX language adapter for Unlace.
 //!
-//! It implements the two-phase [`strata_ir::Adapter`] contract: `parse`
+//! It implements the two-phase [`unlace_ir::Adapter`] contract: `parse`
 //! turns `.ts` / `.tsx` sources into syntax summaries (via swc, in parallel),
 //! and `bind` resolves the module graph into a language-agnostic
-//! [`strata_ir::IrFragment`] — typed edges, three-valued test polarity, and
+//! [`unlace_ir::IrFragment`] — typed edges, three-valued test polarity, and
 //! per-symbol production SLOC.
 //!
 //! The trait threads the intermediate `parse::ParsedModule` summary through
-//! the opaque [`strata_ir::ParseTree`] payload as canonical JSON, so the engine
+//! the opaque [`unlace_ir::ParseTree`] payload as canonical JSON, so the engine
 //! never needs to understand TypeScript to merge fragments.
 
 mod bind;
@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use smol_str::SmolStr;
-use strata_ir::{Adapter, AdapterError, IrFragment, ParseTree, SourceFile};
+use unlace_ir::{Adapter, AdapterError, IrFragment, ParseTree, SourceFile};
 
 use crate::parse::ParsedModule;
 
@@ -106,7 +106,7 @@ fn deserialize_module(tree: &ParseTree) -> Result<ParsedModule, AdapterError> {
 
 #[cfg(test)]
 mod tests {
-    use strata_ir::{AffinityKind, EdgeKind, NodeKind};
+    use unlace_ir::{AffinityKind, EdgeKind, NodeKind};
 
     use super::*;
 

@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_ir::Snapshot;
+use unlace_ir::Snapshot;
 
 use crate::config::{AnalyzeConfig, ProfileName};
 use crate::result::{Advice, ProfileConflict, Profiles, RelocationAdvice, ReviewReason};

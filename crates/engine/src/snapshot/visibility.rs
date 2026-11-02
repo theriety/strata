@@ -8,8 +8,8 @@ mod rung;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use smol_str::SmolStr;
-use strata_core::visibility::exempt_from_advice;
-use strata_ir::{
+use unlace_core::visibility::exempt_from_advice;
+use unlace_ir::{
     AdvisoryUse, ContainerId, ContainerTree, Edge, EdgeKind, Exposure, Node, NodeId, ScopeLadder,
     ScopeLevel, VisibilityScope,
 };
@@ -167,7 +167,7 @@ fn compare(
 ) -> Option<(ScopeLevel, Option<ScopeLevel>, Option<SmolStr>)> {
     let declared_index = usize::try_from(scope.declared_rung?).ok()?;
     let declared_rung = scope.expressible.get(declared_index)?;
-    let level_of = |rung: &strata_ir::ScopeRung| {
+    let level_of = |rung: &unlace_ir::ScopeRung| {
         scope_level(
             facts.tree,
             facts.files,

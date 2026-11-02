@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_core::cluster::{ClusterId, Partition};
-use strata_ir::{Container, Node, Polarity, ScopeLevel};
+use unlace_core::cluster::{ClusterId, Partition};
+use unlace_ir::{Container, Node, Polarity, ScopeLevel};
 
 use crate::config::{AnalyzeConfig, ObjectiveConfig, TestMirrorRule};
 #[cfg(test)]

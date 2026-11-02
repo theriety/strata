@@ -3,9 +3,9 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_ir::{Container, ContainerId, ContainerTree, Node, Polarity, ScopeLevel};
+use unlace_ir::{Container, ContainerId, ContainerTree, Node, Polarity, ScopeLevel};
 
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 use crate::result::{ContainerNode, Level, SymbolPlacement};
 
 mod names;
@@ -20,13 +20,13 @@ use names::{folder_increment, increment_name, merge_sibling_folders, nest_folder
 ///
 /// # Errors
 ///
-/// Returns [`StrataError::SnapshotInvalid`] if the tree has no root container.
+/// Returns [`UnlaceError::SnapshotInvalid`] if the tree has no root container.
 pub(in crate::analyze) fn render_tree(
     tree: &ContainerTree,
     nodes: &[Node],
     placement: &dyn Fn(&Node) -> Option<ContainerId>,
     key_by_id: &BTreeMap<u32, SmolStr>,
-) -> Result<ContainerNode, StrataError> {
+) -> Result<ContainerNode, UnlaceError> {
     let containers = tree.containers();
     let mut children_by_parent: BTreeMap<u32, Vec<&Container>> = BTreeMap::new();
     let mut roots = Vec::new();
@@ -45,8 +45,8 @@ pub(in crate::analyze) fn render_tree(
     // a forest with several roots is wrapped under a synthetic package group so
     // the DTO is always a single tree; a lone root is rendered directly.
     match roots.as_slice() {
-        [] => Err(StrataError::SnapshotInvalid {
-            source: strata_ir::SnapshotError::Serialization {
+        [] => Err(UnlaceError::SnapshotInvalid {
+            source: unlace_ir::SnapshotError::Serialization {
                 reason: "container tree has no root".to_owned(),
             },
         }),

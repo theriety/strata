@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use strata_ir::{ContainerId, NodeId, Polarity, ScopeLevel};
+use unlace_ir::{ContainerId, NodeId, Polarity, ScopeLevel};
 
 use crate::analyze::advice::evidence::EvidenceIndex;
 use crate::analyze::advice::evidence::EvidencePlace;

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
-use strata_core::score::{Coefficients, KindWeights};
-use strata_ir::{ContainerId, Edge, Node, Snapshot};
+use unlace_core::score::{Coefficients, KindWeights};
+use unlace_ir::{ContainerId, Edge, Node, Snapshot};
 
 use crate::analyze::relocation::CandidateTree;
 use crate::analyze::scoring::SnapshotScoring;

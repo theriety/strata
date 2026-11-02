@@ -3,11 +3,11 @@
 //! Everything here is total: no panics, no indexing, no engine calls. The
 //! harness composes these into verdicts; the unit tests at the bottom pin each
 //! rule CONTRACT.md states so a semantic drift in the harness itself is caught
-//! independently of strata's behavior.
+//! independently of unlace's behavior.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_engine::result::{ContainerNode, Level};
+use unlace_engine::result::{ContainerNode, Level};
 
 /// Splits a container key or path into its `/`-separated segments.
 ///

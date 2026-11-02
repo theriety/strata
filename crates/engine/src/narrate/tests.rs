@@ -1,7 +1,7 @@
 //! Narration unit tests.
 
 use smol_str::SmolStr;
-use strata_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
+use unlace_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
 
 use super::*;
 use crate::result::MoveReason;
@@ -286,7 +286,7 @@ fn should_compose_a_destination_in_another_package_below_its_namespace() {
 /// `crates/engine` holds `src/analyze`.
 fn multi_package_tree(placements: [(u32, &str); 2]) -> ContainerTree {
     let mut containers = vec![
-        container(0, "strata", ScopeLevel::PackageGroup, None),
+        container(0, "unlace", ScopeLevel::PackageGroup, None),
         container(1, "crates/core", ScopeLevel::Package, Some(0)),
         container(2, "crates/engine", ScopeLevel::Package, Some(0)),
         Container {
@@ -313,7 +313,7 @@ fn multi_package_tree(placements: [(u32, &str); 2]) -> ContainerTree {
 #[test]
 fn should_narrate_real_paths_for_files_under_a_nested_package_source_root() {
     // ADR-18: the package path must precede the see-through `src`, never
-    // follow it (`strata/crates/core/src/crates/core`).
+    // follow it (`unlace/crates/core/src/crates/core`).
     let current = multi_package_tree([
         (3, "crates/core/src/lib.rs"),
         (4, "crates/core/src/cluster/refine.rs"),
@@ -338,14 +338,14 @@ fn should_narrate_real_paths_for_files_under_a_nested_package_source_root() {
         narrated,
         vec![
             (
-                "strata/crates/core/src/cluster/refine.rs".to_owned(),
-                "strata/crates/core/src/cluster".to_owned(),
-                "strata/crates/core/src/fresh".to_owned(),
+                "unlace/crates/core/src/cluster/refine.rs".to_owned(),
+                "unlace/crates/core/src/cluster".to_owned(),
+                "unlace/crates/core/src/fresh".to_owned(),
             ),
             (
-                "strata/crates/core/src/lib.rs".to_owned(),
-                "strata/crates/core/src".to_owned(),
-                "strata/crates/engine/src/analyze".to_owned(),
+                "unlace/crates/core/src/lib.rs".to_owned(),
+                "unlace/crates/core/src".to_owned(),
+                "unlace/crates/engine/src/analyze".to_owned(),
             ),
         ]
     );
@@ -363,7 +363,7 @@ fn should_not_carry_a_source_root_into_a_package_that_has_no_manifest() {
         (4, "crates/core/src/cluster/refine.rs"),
     ]);
     let candidate = ContainerTree::new(vec![
-        container(0, "strata", ScopeLevel::PackageGroup, None),
+        container(0, "unlace", ScopeLevel::PackageGroup, None),
         container(1, "crates", ScopeLevel::Package, Some(0)),
         container(2, "crates/engine", ScopeLevel::Package, Some(0)),
         Container {

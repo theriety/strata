@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use strata_core::visibility::{Finding, derive_visibility};
-use strata_ir::{Node, ScopeLadder, ScopeLevel, Snapshot};
+use unlace_core::visibility::{Finding, derive_visibility};
+use unlace_ir::{Node, ScopeLadder, ScopeLevel, Snapshot};
 
 use super::test_only::test_only_nodes;
 use crate::analyze::search::node_names;

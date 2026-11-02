@@ -15,15 +15,15 @@ Cycle membership alone is also an incomplete budget. A tentative move can add a 
 
 ## 🧭 Context
 
-Strata refines a candidate layout at two grains. `SymbolPass` drains symbols from files one relocation at a time, and file-level polish relocates whole files. Both loops must preserve the dependency evidence that made the candidate safe when the loop began.
+Unlace refines a candidate layout at two grains. `SymbolPass` drains symbols from files one relocation at a time, and file-level polish relocates whole files. Both loops must preserve the dependency evidence that made the candidate safe when the loop began.
 
 ## ✅ Decision
 
 `SymbolPass` admits relocations against an immutable pass-start dependency baseline in addition to its evolving checks.
 
-At the start of a pass, Strata builds the file dependency graph from the assembly placement and structural edges. For every symbol, it records each original file containing a dependant that shares the symbol's file. Before a relocation is applied, Strata rejects any destination that could already reach one of those original claimant files in the pass-start graph. Reachability is transitive: an indirect path carries the same veto as a direct dependency. Moving a dependant earlier in the pass therefore cannot erase the claim used to judge a later symbol move.
+At the start of a pass, Unlace builds the file dependency graph from the assembly placement and structural edges. For every symbol, it records each original file containing a dependant that shares the symbol's file. Before a relocation is applied, Unlace rejects any destination that could already reach one of those original claimant files in the pass-start graph. Reachability is transitive: an indirect path carries the same veto as a direct dependency. Moving a dependant earlier in the pass therefore cannot erase the claim used to judge a later symbol move.
 
-The immutable admission rule operates alongside dynamic cycle checking. After the baseline guard passes, Strata evaluates the tentative evolving graph to defend against cycle shapes that were not represented by an original same-file claimant.
+The immutable admission rule operates alongside dynamic cycle checking. After the baseline guard passes, Unlace evaluates the tentative evolving graph to defend against cycle shapes that were not represented by an original same-file claimant.
 
 Both symbol refinement and file-level polish use one two-dimensional cycle budget:
 

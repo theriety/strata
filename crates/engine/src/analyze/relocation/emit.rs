@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_core::cluster::Partition;
-use strata_ir::{ContainerId, ContainerTree, ScopeLevel};
+use unlace_core::cluster::Partition;
+use unlace_ir::{ContainerId, ContainerTree, ScopeLevel};
 
 use crate::analyze::layout::{ContainerArena, NameTally};
 use crate::analyze::relocation::mirror::PolishEvidence;

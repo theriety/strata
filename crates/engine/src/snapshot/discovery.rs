@@ -4,11 +4,11 @@
 use std::path::Path;
 
 use smol_str::SmolStr;
-use strata_ir::SourceFile;
+use unlace_ir::SourceFile;
 
 use super::Language;
 use crate::config::AnalyzeConfig;
-use crate::error::StrataError;
+use crate::error::UnlaceError;
 
 /// Reads every file under `root` that matches the include globs, clears the
 /// exclude globs, survives the repo's own `.gitignore` rules, and is claimed by
@@ -29,7 +29,7 @@ pub(super) fn discover_sources(
     root: &Path,
     config: &AnalyzeConfig,
     languages: &[Language],
-) -> Result<Discovery, StrataError> {
+) -> Result<Discovery, UnlaceError> {
     let includes = compile_globs(&config.adapters.include)?;
     let excludes = compile_globs(&config.adapters.exclude)?;
 
@@ -49,7 +49,7 @@ pub(super) fn discover_sources(
         })
         .build();
     for entry in walker {
-        let entry = entry.map_err(|error| StrataError::InputUnreadable {
+        let entry = entry.map_err(|error| UnlaceError::InputUnreadable {
             path: root.to_path_buf(),
             reason: error.to_string(),
         })?;
@@ -84,7 +84,7 @@ pub(super) fn discover_sources(
             continue;
         }
         let contents =
-            std::fs::read_to_string(path).map_err(|error| StrataError::InputUnreadable {
+            std::fs::read_to_string(path).map_err(|error| UnlaceError::InputUnreadable {
                 path: path.to_path_buf(),
                 reason: error.to_string(),
             })?;
@@ -129,11 +129,11 @@ pub(super) fn manifest_dir(relative: &str) -> Option<SmolStr> {
 }
 
 /// Compiles each glob pattern, attributing a config error on a bad pattern.
-fn compile_globs(patterns: &[String]) -> Result<Vec<glob::Pattern>, StrataError> {
+fn compile_globs(patterns: &[String]) -> Result<Vec<glob::Pattern>, UnlaceError> {
     patterns
         .iter()
         .map(|pattern| {
-            glob::Pattern::new(pattern).map_err(|error| StrataError::ConfigInvalid {
+            glob::Pattern::new(pattern).map_err(|error| UnlaceError::ConfigInvalid {
                 key: Some("adapters".to_owned()),
                 reason: format!("invalid glob `{pattern}`: {error}"),
             })

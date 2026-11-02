@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_core::score::group_cohesion;
-use strata_ir::{ContainerTree, ScopeLevel};
+use unlace_core::score::group_cohesion;
+use unlace_ir::{ContainerTree, ScopeLevel};
 
 use super::ScoringContext;
 use super::snapshot::SnapshotScoring;

@@ -6,8 +6,8 @@
 use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
-use strata_core::score::{CohesionGroup, ContainerSizes};
-use strata_ir::{ContainerId, ContainerTree, Polarity, ScopeLevel, Snapshot};
+use unlace_core::score::{CohesionGroup, ContainerSizes};
+use unlace_ir::{ContainerId, ContainerTree, Polarity, ScopeLevel, Snapshot};
 
 use super::distance::folder_key_of_files;
 use crate::narrate::tokenize;

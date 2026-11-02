@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
-use strata_ir::{Container, ScopeLevel};
+use unlace_ir::{Container, ScopeLevel};
 
 use crate::narrate::{path_segments, physical_namespace};
 

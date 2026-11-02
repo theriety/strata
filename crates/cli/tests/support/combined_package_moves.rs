@@ -1,6 +1,6 @@
 //! A producer-shaped saved result with a file move and a symbol entering that file.
 
-use strata_engine::{
+use unlace_engine::{
     AnalyzeResult, ContainerNode, FileMove, Level, Move, MoveKind, MoveReason, SymbolKind,
     SymbolMove, SymbolPlacement,
 };

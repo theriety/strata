@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_ir::{ContainerId, Node, Polarity};
+use unlace_ir::{ContainerId, Node, Polarity};
 
 use crate::analyze::relocation::symbol::inputs::PassInputs;
 use crate::analyze::relocation::symbol::outcome::SymbolRelocation;
