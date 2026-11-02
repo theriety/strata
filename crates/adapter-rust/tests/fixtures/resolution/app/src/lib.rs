@@ -25,6 +25,14 @@ pub fn local_value() -> u32 {
     1
 }
 
+pub fn double_value(value: u32) -> u32 {
+    value * 2
+}
+
+pub fn value_use_caller() -> Option<u32> {
+    Some(1).map(double_value)
+}
+
 pub struct Local;
 
 impl Local {

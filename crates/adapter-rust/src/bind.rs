@@ -206,9 +206,17 @@ impl Database {
         let Some(token) = parsed.syntax().token_at_offset(offset).right_biased() else {
             return false;
         };
-        token.text_range().start() == offset
-            && token.text() == reference.name.as_str()
-            && previous_non_trivia_token(token).is_none_or(|previous| previous.kind() != T![.])
+        let previous = previous_non_trivia_token(token.clone());
+        if token.text_range().start() != offset
+            || token.text() != reference.name.as_str()
+            || previous.as_ref().is_some_and(|prior| prior.kind() == T![.])
+        {
+            return false;
+        }
+        // A bare call-kind name that is not a callee is a function used as a
+        // value; only the semantic database may bind it, never its name.
+        let bare = previous.is_none_or(|prior| prior.kind() != T![::]);
+        !(reference.kind == RefKind::Call && bare && !is_followed_by_call_or_path(&token))
     }
 
     /// Whether the path a qualifier belongs to starts inside the workspace, so a
@@ -535,6 +543,19 @@ fn resolve_reference(
             CONFIDENCE_NAME_FALLBACK,
         );
     }
+}
+
+/// Whether the next non-trivia token after `token` opens a call (`(`) or
+/// continues a path (`::`), i.e. `token` is a callee or a leading path segment.
+fn is_followed_by_call_or_path(token: &ra_ap_syntax::SyntaxToken) -> bool {
+    let mut next = token.next_token();
+    while let Some(current) = next {
+        if !current.kind().is_trivia() {
+            return matches!(current.kind(), T!['('] | T![::]);
+        }
+        next = current.next_token();
+    }
+    false
 }
 
 /// Whether a reference of `kind` may bind to `target`. A path qualifier is a
