@@ -2005,7 +2005,7 @@ mod tests {
                 display: None,
                 symbol: format!("Thing{index}"),
                 kind: SymbolKind::Type,
-                from_path: "origin/options.ts".to_owned(),
+                from_path: format!("origin/options{index}.ts"),
                 to_path: "shared/owner.ts".to_owned(),
                 delta: -0.1,
                 broken_imports: 1,
@@ -2037,6 +2037,245 @@ mod tests {
         assert_eq!(
             everything.matches("- type `Thing").count() - capped.matches("- type `Thing").count(),
             2
+        );
+    }
+
+    fn advice_symbol(name: &str, kind: SymbolKind, from: &str) -> strata_engine::RelocationAdvice {
+        strata_engine::RelocationAdvice {
+            proposal: strata_engine::RelocationProposal::Symbol {
+                relocation: SymbolMove {
+                    display: None,
+                    symbol: name.to_owned(),
+                    kind,
+                    from_path: from.to_owned(),
+                    to_path: "src/a.ts".to_owned(),
+                    delta: -0.1,
+                    broken_imports: 1,
+                },
+            },
+            destination: "src/a.ts".to_owned(),
+            supporting_profiles: vec![strata_engine::ProfileName::Anchored],
+            qualified_profiles: Vec::new(),
+            absent_profiles: Vec::new(),
+            conflicting_destinations: Vec::new(),
+            assessments: Vec::new(),
+            review_reasons: vec![strata_engine::ReviewReason::WeakEvidence],
+        }
+    }
+
+    fn advice_text(items: Vec<strata_engine::RelocationAdvice>, options: RenderOptions) -> String {
+        let mut result = result_with_candidate();
+        result.advice.review_candidates = items;
+        summary(&result, options)
+    }
+
+    fn flat(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn assessment_for(margin: f64) -> strata_engine::ProfileAssessment {
+        strata_engine::ProfileAssessment {
+            profile: strata_engine::ProfileName::Anchored,
+            destination: "src/a.ts".to_owned(),
+            evidence: strata_engine::EvidenceSignals {
+                unique_owner: 0.5,
+                role_affinity: 0.5,
+                source_cohesion: 0.5,
+                destination_cohesion: 0.5,
+                producer_evidence: 0.5,
+                architectural_reach: 0.5,
+            },
+            weighted_score: 0.5,
+            structural_score: 0.5,
+            ambiguity_margin: margin,
+            best_alternative: None,
+            thresholds: strata_engine::QualificationThresholds {
+                minimum_evidence: 0.5,
+                minimum_structural: 0.5,
+                minimum_ambiguity_margin: 0.1,
+            },
+            qualified: true,
+        }
+    }
+
+    #[test]
+    fn should_merge_symbols_sharing_source_destination_and_evidence() {
+        let items = vec![
+            advice_symbol("emitError", SymbolKind::Symbol, "src/a/helpers.ts"),
+            advice_symbol("emitThinking", SymbolKind::Symbol, "src/a/helpers.ts"),
+        ];
+
+        let text = advice_text(items, RenderOptions::default());
+
+        assert!(text.contains(" Review candidate (2):"), "{text}");
+        assert!(
+            flat(&text).contains("- 2 symbols `emitError`, `emitThinking` from `src/a/helpers.ts` → `src/a.ts` · supporting [anchored] · qualified [] · absent [] · conflicts []"),
+            "{text}"
+        );
+        assert_eq!(text.matches("review reasons:").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn should_not_merge_symbols_whose_review_reasons_differ() {
+        let mut other = advice_symbol("emitThinking", SymbolKind::Symbol, "src/a/helpers.ts");
+        other.review_reasons = vec![strata_engine::ReviewReason::WeakStructuralEvidence];
+        let items = vec![
+            advice_symbol("emitError", SymbolKind::Symbol, "src/a/helpers.ts"),
+            other,
+        ];
+
+        let text = advice_text(items, RenderOptions::default());
+
+        assert!(text.contains("- symbol `emitError` from"), "{text}");
+        assert!(text.contains("- symbol `emitThinking` from"), "{text}");
+        assert_eq!(text.matches("review reasons:").count(), 2, "{text}");
+    }
+
+    #[test]
+    fn should_not_merge_symbols_from_different_sources() {
+        let items = vec![
+            advice_symbol("one", SymbolKind::Symbol, "src/a/x.ts"),
+            advice_symbol("two", SymbolKind::Symbol, "src/a/y.ts"),
+        ];
+
+        let text = advice_text(items, RenderOptions::default());
+
+        assert!(!flat(&text).contains("- 2 symbols"), "{text}");
+    }
+
+    #[test]
+    fn should_not_merge_symbols_whose_verbose_evidence_differs() {
+        let mut first = advice_symbol("one", SymbolKind::Symbol, "src/a/x.ts");
+        let mut second = advice_symbol("two", SymbolKind::Symbol, "src/a/x.ts");
+        first.assessments = vec![assessment_for(0.2)];
+        second.assessments = vec![assessment_for(0.3)];
+        let verbose = RenderOptions {
+            verbose: true,
+            full: false,
+        };
+
+        let split = advice_text(vec![first.clone(), second], verbose);
+        let same = advice_text(vec![first.clone(), first], verbose);
+
+        assert!(!flat(&split).contains("- 2 symbols"), "{split}");
+        assert!(split.contains("margin 0.20"), "{split}");
+        assert!(split.contains("margin 0.30"), "{split}");
+        assert!(
+            flat(&same).contains("- 2 symbols `one`, `one` from"),
+            "{same}"
+        );
+        assert_eq!(same.matches("margin 0.20").count(), 1, "{same}");
+    }
+
+    #[test]
+    fn should_print_a_lone_symbol_exactly_as_before() {
+        let items = vec![advice_symbol("solo", SymbolKind::Symbol, "src/a/x.ts")];
+
+        let text = advice_text(items, RenderOptions::default());
+
+        assert!(
+            flat(&text).contains("- symbol `solo` from `src/a/x.ts` → `src/a.ts` · supporting [anchored] · qualified [] · absent [] · conflicts [] review reasons: destination evidence is below the configured minimum"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn should_say_types_only_when_every_member_is_a_type() {
+        let types = advice_text(
+            vec![
+                advice_symbol("A", SymbolKind::Type, "src/a/x.ts"),
+                advice_symbol("B", SymbolKind::Type, "src/a/x.ts"),
+            ],
+            RenderOptions::default(),
+        );
+        let mixed = advice_text(
+            vec![
+                advice_symbol("A", SymbolKind::Type, "src/a/x.ts"),
+                advice_symbol("b", SymbolKind::Symbol, "src/a/x.ts"),
+            ],
+            RenderOptions::default(),
+        );
+
+        assert!(types.contains("- 2 types `A`, `B` from"), "{types}");
+        assert!(mixed.contains("- 2 symbols `A`, `b` from"), "{mixed}");
+    }
+
+    #[test]
+    fn should_wrap_a_long_merged_name_list() {
+        let items = (0..12)
+            .map(|index| {
+                advice_symbol(
+                    &format!("someLongSymbolName{index}"),
+                    SymbolKind::Symbol,
+                    "src/a/x.ts",
+                )
+            })
+            .collect();
+
+        let text = advice_text(items, full());
+
+        assert!(
+            text.contains("- 12 symbols `someLongSymbolName0`"),
+            "{text}"
+        );
+        assert!(
+            text.lines().all(|line| line.chars().count() <= 99),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn should_count_groups_for_the_cap_and_items_for_the_more_line() {
+        let mut items = Vec::new();
+        for group in 0..7 {
+            for member in 0..3 {
+                items.push(advice_symbol(
+                    &format!("g{group}m{member}"),
+                    SymbolKind::Symbol,
+                    &format!("src/a/{group}.ts"),
+                ));
+            }
+        }
+
+        let capped = advice_text(items.clone(), RenderOptions::default());
+        let everything = advice_text(items, full());
+
+        assert!(capped.contains(" Review candidate (21):"), "{capped}");
+        assert_eq!(capped.matches("- 3 symbols").count(), 5, "{capped}");
+        assert_eq!(
+            more_lines(&capped),
+            vec!["   … 6 more — rerun with --full to see all"]
+        );
+        assert_eq!(everything.matches("- 3 symbols").count(), 7);
+        assert_eq!(more_lines(&everything).len(), 0);
+    }
+
+    #[test]
+    fn should_rank_groups_with_the_item_ranking() {
+        let mut strong = advice_symbol("strong", SymbolKind::Symbol, "src/a/strong.ts");
+        strong.supporting_profiles = vec![
+            strata_engine::ProfileName::Anchored,
+            strata_engine::ProfileName::Greenfield,
+        ];
+        // `strong` comes last, so only the ranking can lift it into the shown five.
+        let mut items: Vec<_> = (0..5)
+            .map(|index| {
+                advice_symbol(
+                    &format!("filler{index}"),
+                    SymbolKind::Symbol,
+                    &format!("src/a/filler{index}.ts"),
+                )
+            })
+            .collect();
+        items.push(strong);
+
+        let text = advice_text(items, RenderOptions::default());
+
+        assert!(text.contains("`strong`"), "{text}");
+        assert!(!text.contains("`filler4`"), "{text}");
+        assert_eq!(
+            more_lines(&text),
+            vec!["   … 1 more — rerun with --full to see all"]
         );
     }
 
