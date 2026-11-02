@@ -27,7 +27,7 @@ pub(super) fn push_item(
     re_exports: &mut Vec<ReExport>,
 ) {
     match item {
-        Item::Use(item_use) => push_re_exports(item_use, re_exports),
+        Item::Use(item_use) => push_re_exports(item_use, cfg_test_ancestor, re_exports),
         Item::Fn(item_fn) => push_fn(item_fn, contents, cfg_test_ancestor, out),
         Item::Struct(item_struct) => push_type(
             &item_struct.ident.to_string(),

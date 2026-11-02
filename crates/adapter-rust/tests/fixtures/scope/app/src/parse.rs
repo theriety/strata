@@ -1,8 +1,8 @@
 mod refs;
 #[cfg(test)]
 mod tests;
-#[cfg(all(test, not(windows)))]
-mod extra_tests;
+#[cfg(not(test))]
+mod prod_only;
 #[cfg(all(test, feature = "x"))]
 mod gated;
 
