@@ -1,20 +1,20 @@
 //! Ordered declaration, import, and re-export extraction from TypeScript modules.
 
-use std::collections::BTreeSet;
+mod builders;
+mod companions;
 
 use smol_str::SmolStr;
 use swc_common::{BytePos, Spanned};
-use swc_ecma_ast::{
-    ClassDecl, ClassMember, Decl, DefaultDecl, Expr, FnDecl, Module, ModuleDecl, ModuleItem, Pat,
-    PropName, TsEnumDecl, TsExprWithTypeArgs, TsInterfaceDecl, TsTypeAliasDecl, VarDecl,
-};
+use swc_ecma_ast::{Decl, DefaultDecl, Module, ModuleDecl, ModuleItem};
 
 use crate::sloc::production_sloc;
 
-use super::references::{
-    References, collect_class, collect_expression, collect_function, collect_interface,
-    collect_statements, collect_type_alias, signature_type_names,
+use self::builders::{
+    class_declaration, enum_declaration, fn_declaration, interface_declaration,
+    supertypes_of_class, type_alias_declaration, var_declarations,
 };
+use self::companions::{class_signature_companions, function_signature_companions};
+use super::references::{collect_class, collect_function, collect_statements};
 use super::{
     Declaration, DeclarationKind, ParsedModule, ReExport, ReExportBinding, StaticImport, specifier,
 };
@@ -212,241 +212,6 @@ fn push_default_decl(
         DefaultDecl::TsInterfaceDecl(interface) => {
             out.push(interface_declaration(interface, true, contents, base));
         }
-    }
-}
-
-/// Builds a [`Declaration`] for a class, capturing supertypes and references.
-fn class_declaration(
-    class: &ClassDecl,
-    exported: bool,
-    contents: &str,
-    base: BytePos,
-) -> Declaration {
-    let references = collect_class(&class.class);
-    Declaration {
-        name: SmolStr::new(class.ident.sym.as_str()),
-        kind: DeclarationKind::Symbol,
-        exported,
-        sloc: slice_sloc(class.class.span(), contents, base),
-        supertypes: supertypes_of_class(&class.class),
-        referenced: references.referenced,
-        called: references.called,
-        dynamic_imports: references.dynamic_imports,
-        signature_companions: class_signature_companions(class.ident.sym.as_str(), &class.class),
-    }
-}
-
-/// Builds a [`Declaration`] for a function.
-fn fn_declaration(function: &FnDecl, exported: bool, contents: &str, base: BytePos) -> Declaration {
-    let references = collect_function(&function.function);
-    Declaration {
-        name: SmolStr::new(function.ident.sym.as_str()),
-        kind: DeclarationKind::Symbol,
-        exported,
-        sloc: slice_sloc(function.function.span(), contents, base),
-        supertypes: Vec::new(),
-        referenced: references.referenced,
-        called: references.called,
-        dynamic_imports: references.dynamic_imports,
-        signature_companions: function_signature_companions(
-            function.ident.sym.as_str(),
-            &function.function,
-        ),
-    }
-}
-
-/// Appends a [`Declaration`] for each binding in a `const` / `let` / `var`.
-fn var_declarations(
-    var: &VarDecl,
-    exported: bool,
-    contents: &str,
-    base: BytePos,
-    out: &mut Vec<Declaration>,
-) {
-    for declarator in &var.decls {
-        let Pat::Ident(binding) = &declarator.name else {
-            continue;
-        };
-        let references = declarator
-            .init
-            .as_deref()
-            .map_or_else(References::default, collect_expression);
-        out.push(Declaration {
-            name: SmolStr::new(binding.id.sym.as_str()),
-            kind: DeclarationKind::Symbol,
-            exported,
-            sloc: slice_sloc(declarator.span(), contents, base),
-            supertypes: Vec::new(),
-            referenced: references.referenced,
-            called: references.called,
-            dynamic_imports: references.dynamic_imports,
-            signature_companions: Vec::new(),
-        });
-    }
-}
-
-/// Builds a type-level [`Declaration`] for an interface, capturing `extends`.
-fn interface_declaration(
-    interface: &TsInterfaceDecl,
-    exported: bool,
-    contents: &str,
-    base: BytePos,
-) -> Declaration {
-    let references = collect_interface(interface);
-    Declaration {
-        name: SmolStr::new(interface.id.sym.as_str()),
-        kind: DeclarationKind::Type,
-        exported,
-        sloc: slice_sloc(interface.span, contents, base),
-        supertypes: interface.extends.iter().filter_map(type_ref_name).collect(),
-        referenced: references.referenced,
-        called: references.called,
-        dynamic_imports: references.dynamic_imports,
-        signature_companions: Vec::new(),
-    }
-}
-
-/// Builds a type-level [`Declaration`] for a `type` alias.
-fn type_alias_declaration(
-    alias: &TsTypeAliasDecl,
-    exported: bool,
-    contents: &str,
-    base: BytePos,
-) -> Declaration {
-    let references = collect_type_alias(alias);
-    Declaration {
-        name: SmolStr::new(alias.id.sym.as_str()),
-        kind: DeclarationKind::Type,
-        exported,
-        sloc: slice_sloc(alias.span, contents, base),
-        supertypes: Vec::new(),
-        referenced: references.referenced,
-        called: references.called,
-        dynamic_imports: references.dynamic_imports,
-        signature_companions: Vec::new(),
-    }
-}
-
-/// Builds a type-level [`Declaration`] for an `enum`.
-fn enum_declaration(
-    ts_enum: &TsEnumDecl,
-    exported: bool,
-    contents: &str,
-    base: BytePos,
-) -> Declaration {
-    Declaration {
-        name: SmolStr::new(ts_enum.id.sym.as_str()),
-        kind: DeclarationKind::Type,
-        exported,
-        sloc: slice_sloc(ts_enum.span, contents, base),
-        supertypes: Vec::new(),
-        referenced: Vec::new(),
-        called: Vec::new(),
-        dynamic_imports: Vec::new(),
-        signature_companions: Vec::new(),
-    }
-}
-
-fn function_signature_companions(
-    owner_name: &str,
-    function: &swc_ecma_ast::Function,
-) -> Vec<SmolStr> {
-    signature_type_names(function)
-        .into_iter()
-        .filter(|type_name| companion_name_matches(type_name, owner_name))
-        .collect()
-}
-
-fn class_signature_companions(class_name: &str, class: &swc_ecma_ast::Class) -> Vec<SmolStr> {
-    let mut companions = Vec::new();
-    for member in &class.body {
-        let ClassMember::Method(method) = member else {
-            continue;
-        };
-        let PropName::Ident(method_name) = &method.key else {
-            continue;
-        };
-        let owner_name = format!("{class_name}_{}", method_name.sym);
-        companions.extend(
-            signature_type_names(&method.function)
-                .into_iter()
-                .filter(|type_name| companion_name_matches(type_name, &owner_name)),
-        );
-    }
-    companions
-}
-
-fn companion_name_matches(type_name: &str, owner_name: &str) -> bool {
-    const SUFFIXES: [&str; 7] = [
-        "Params", "Options", "Input", "Output", "Result", "Context", "State",
-    ];
-    let Some(stem) = SUFFIXES
-        .iter()
-        .find_map(|suffix| type_name.strip_suffix(suffix))
-    else {
-        return false;
-    };
-    let companion = semantic_tokens(stem);
-    companion.len() >= 2 && companion == semantic_tokens(owner_name)
-}
-
-fn semantic_tokens(name: &str) -> BTreeSet<String> {
-    let mut words = Vec::new();
-    let mut current = String::new();
-    let chars: Vec<char> = name.chars().collect();
-    for (index, ch) in chars.iter().copied().enumerate() {
-        let boundary = !current.is_empty()
-            && (ch == '_'
-                || ch == '-'
-                || (ch.is_uppercase()
-                    && chars
-                        .get(index.wrapping_sub(1))
-                        .is_some_and(|previous| previous.is_lowercase())));
-        if boundary {
-            words.push(std::mem::take(&mut current));
-        }
-        if ch != '_' && ch != '-' {
-            current.push(ch.to_ascii_lowercase());
-        }
-    }
-    if !current.is_empty() {
-        words.push(current);
-    }
-    words
-        .into_iter()
-        .filter(|word| word != "adapter" && word != "to")
-        .map(|word| normalize_ing(&word))
-        .collect()
-}
-
-fn normalize_ing(word: &str) -> String {
-    let Some(stem) = word.strip_suffix("ing") else {
-        return word.to_owned();
-    };
-    let mut normalized = stem.to_owned();
-    if matches!(normalized.as_bytes(), [.., penultimate, last] if penultimate == last) {
-        normalized.pop();
-    }
-    normalized
-}
-
-/// Collects the names a class extends and implements.
-fn supertypes_of_class(class: &swc_ecma_ast::Class) -> Vec<SmolStr> {
-    let mut names = Vec::new();
-    if let Some(super_class) = &class.super_class
-        && let Expr::Ident(ident) = super_class.as_ref()
-    {
-        names.push(SmolStr::new(ident.sym.as_str()));
-    }
-    names.extend(class.implements.iter().filter_map(type_ref_name));
-    names
-}
-
-/// Extracts the leading identifier name of a `extends` / `implements` clause.
-fn type_ref_name(reference: &TsExprWithTypeArgs) -> Option<SmolStr> {
-    match reference.expr.as_ref() {
-        Expr::Ident(ident) => Some(SmolStr::new(ident.sym.as_str())),
-        _ => None,
     }
 }
 
