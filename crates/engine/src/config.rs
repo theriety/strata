@@ -372,7 +372,8 @@ pub struct RelocationConfig {
     /// Prevent detected test files from relocating independently.
     #[serde(rename = "pin-detected-test-files")]
     pub pin_detected_test_files: bool,
-    /// Prevent declarations in detected tests from relocating independently.
+    /// Prevent declarations in detected tests, and test-polarity declarations in
+    /// any file, from relocating independently.
     #[serde(rename = "pin-detected-test-symbols")]
     pub pin_detected_test_symbols: bool,
     /// Repo-relative file globs whose matching files cannot relocate independently.

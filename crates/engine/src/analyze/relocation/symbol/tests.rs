@@ -745,6 +745,145 @@ fn should_pin_symbols_in_production_polarity_test_support_by_default() {
     );
 }
 
+/// Bundles a solver's pricing inputs for a directly constructed pass.
+fn pass_inputs<'a>(
+    snapshot: &'a Snapshot,
+    solver: &'a PipelineSolver<'_>,
+    assembled: &'a CandidateTree,
+) -> PassInputs<'a> {
+    let ir = snapshot.ir();
+    PassInputs {
+        snapshot,
+        coefficients: &solver.coefficients,
+        weights: &solver.weights,
+        same_file_symbol: solver.same_file_symbol,
+        same_file_type: solver.same_file_type,
+        capacity: solver.capacity,
+        assembled,
+        nodes: &ir.nodes,
+        edges: &ir.edges,
+    }
+}
+
+/// Fixture where symbol `s`, carrying `polarity`, sits in `a.ts` and is pulled
+/// toward `b.ts` by two consumers that also feed `base`.
+fn misfiled_symbol_snapshot(polarity: Polarity) -> Snapshot {
+    snapshot(
+        vec![
+            node(0, "s", 3, polarity),
+            node(1, "mate", 3, Polarity::Production),
+            node(2, "c1", 4, Polarity::Production),
+            node(3, "c2", 4, Polarity::Production),
+            node(4, "base", 4, Polarity::Production),
+            // a second production resident keeps a.ts above the no-empty-shell
+            // floor, which counts production declarations only.
+            node(5, "mate2", 3, Polarity::Production),
+        ],
+        vec![inherits(2, 0), inherits(3, 0), edge(4, 2), edge(4, 3)],
+        vec![
+            container(0, "app", ScopeLevel::PackageGroup, None),
+            container(1, "keep", ScopeLevel::Folder, Some(0)),
+            container(2, "sink", ScopeLevel::Folder, Some(0)),
+            container(3, "a.ts", ScopeLevel::File, Some(1)),
+            container(4, "b.ts", ScopeLevel::File, Some(2)),
+        ],
+    )
+}
+
+/// Greenfield symbol moves for the misfiled-symbol fixture with `s` carrying
+/// `polarity`, under the given `pin-detected-test-symbols` policy.
+fn misfiled_symbol_moves(polarity: Polarity, pin_test_symbols: bool) -> Vec<SymbolMove> {
+    let snapshot = misfiled_symbol_snapshot(polarity);
+    let mut config = AnalyzeConfig::default();
+    config.profiles.anchored.candidates = 1;
+    config
+        .profiles
+        .greenfield
+        .relocation
+        .pin_detected_test_symbols = pin_test_symbols;
+    let result = analyze(&snapshot, &config);
+    assert!(result.is_ok(), "analysis must succeed; got {result:?}");
+    let candidate = result
+        .ok()
+        .and_then(|result| result.profiles.greenfield)
+        .and_then(|mode| mode.candidates.into_iter().next());
+    // a.ts still misfiles its production resident's consumers, so a
+    // greenfield candidate exists either way; its absence would make the
+    // pin assertion vacuous.
+    assert!(
+        candidate.is_some(),
+        "the misfiled fixture must yield a greenfield candidate"
+    );
+    candidate
+        .map(|candidate| candidate.symbol_moves)
+        .unwrap_or_default()
+}
+
+#[test]
+fn should_pin_a_test_polarity_symbol_living_in_a_production_file() {
+    for polarity in [Polarity::TestSupport, Polarity::TestCase] {
+        let moves = misfiled_symbol_moves(polarity, true);
+
+        assert!(
+            moves.iter().all(|entry| entry.symbol != "s"),
+            "a {polarity:?} declaration in a production file stays pinned by its \
+             own polarity; got {moves:?}"
+        );
+    }
+}
+
+#[test]
+fn should_release_a_test_polarity_symbol_when_symbol_pinning_is_off() {
+    for polarity in [Polarity::TestSupport, Polarity::TestCase] {
+        let moves = misfiled_symbol_moves(polarity, false);
+
+        assert!(
+            moves.iter().any(|entry| entry.symbol == "s"),
+            "without pin-detected-test-symbols the same pull relocates the \
+             {polarity:?} declaration, proving the pin is what held it; got {moves:?}"
+        );
+    }
+}
+
+/// Drives a bare pass over the misfiled fixture so the polarity pin is the
+/// only thing that can hold `s`, independent of the config plumbing.
+fn relocates_test_polarity_symbol(pin_test_polarity: bool) -> bool {
+    let snapshot = misfiled_symbol_snapshot(Polarity::TestSupport);
+    let tests = TestPolicy::defaults();
+    let config = AnalyzeConfig::default();
+    let solver = PipelineSolver::new(
+        &snapshot,
+        &config,
+        config.profiles.greenfield.objective.coefficients(),
+        false,
+        &tests,
+    );
+    let assembled = solver.assemble(&solver.real_partition);
+    let mut pass = SymbolPass::new_with_policy(
+        pass_inputs(&snapshot, &solver, &assembled),
+        RelocationPolicy {
+            pin_test_polarity,
+            ..RelocationPolicy::default()
+        },
+    );
+    let ir = snapshot.ir();
+    let subject = ir.nodes.first();
+    assert!(subject.is_some(), "the fixture declares symbol s first");
+    subject.is_some_and(|subject| pass.try_relocate(subject))
+}
+
+#[test]
+fn should_refuse_a_test_polarity_symbol_only_when_the_pass_pins_polarity() {
+    assert!(
+        relocates_test_polarity_symbol(false),
+        "without the pin the fixture's pull must relocate s, else the pin case is vacuous"
+    );
+    assert!(
+        !relocates_test_polarity_symbol(true),
+        "the polarity pin alone must hold a test-polarity declaration in place"
+    );
+}
+
 #[test]
 fn should_leave_the_zone_inert_when_builtins_are_off_and_no_patterns_given() {
     let nodes = vec![node(0, "spec", 1, Polarity::TestCase)];
@@ -988,19 +1127,8 @@ fn should_zero_price_incident_edges_touching_the_test_zone() {
         false,
         &tests,
     );
-    let ir = snapshot.ir();
     let assembled = solver.assemble(&solver.real_partition);
-    let pass = SymbolPass::new(
-        &snapshot,
-        &solver.coefficients,
-        &solver.weights,
-        solver.same_file_symbol,
-        solver.same_file_type,
-        solver.capacity,
-        &assembled,
-        &ir.nodes,
-        &ir.edges,
-    );
+    let pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
 
     // the spec twin nominates nothing: no incident slot at all.
     assert!(
@@ -1054,17 +1182,7 @@ fn should_veto_a_cross_boundary_destination_even_when_priced() {
     );
     let ir = snapshot.ir();
     let assembled = solver.assemble(&solver.real_partition);
-    let mut pass = SymbolPass::new(
-        &snapshot,
-        &solver.coefficients,
-        &solver.weights,
-        solver.same_file_symbol,
-        solver.same_file_type,
-        solver.capacity,
-        &assembled,
-        &ir.nodes,
-        &ir.edges,
-    );
+    let mut pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
     // simulate a future nomination path that prices the twin pull despite
     // the tie-cut: the strongest possible lure across the boundary.
     pass.incident.entry(0).or_default().push((2, 5.0));
@@ -1946,17 +2064,7 @@ fn should_veto_a_later_declaration_after_an_earlier_arrival_claims_its_name()
         .get(2)
         .ok_or("the later declaration witness must exist")?;
     let assembled = solver.assemble(&solver.real_partition);
-    let mut pass = SymbolPass::new(
-        &snapshot,
-        &solver.coefficients,
-        &solver.weights,
-        solver.same_file_symbol,
-        solver.same_file_type,
-        solver.capacity,
-        &assembled,
-        &ir.nodes,
-        &ir.edges,
-    );
+    let mut pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
     pass.best = f64::INFINITY;
     let first_moved = pass.try_relocate(first_subject);
     pass.best = f64::INFINITY;
@@ -2229,17 +2337,7 @@ fn relocates_first_symbol_with_affinities(
     );
     let ir = snapshot.ir();
     let assembled = solver.assemble(&solver.real_partition);
-    let mut pass = SymbolPass::new(
-        snapshot,
-        &solver.coefficients,
-        &solver.weights,
-        solver.same_file_symbol,
-        solver.same_file_type,
-        solver.capacity,
-        &assembled,
-        &ir.nodes,
-        &ir.edges,
-    );
+    let mut pass = SymbolPass::new(pass_inputs(snapshot, &solver, &assembled));
     pass.best = f64::INFINITY;
     let accepted = ir
         .nodes
@@ -2291,19 +2389,8 @@ fn companion_nomination_count(snapshot: &Snapshot, companion: u32, owner: u32) -
         false,
         &tests,
     );
-    let ir = snapshot.ir();
     let assembled = solver.assemble(&solver.real_partition);
-    let pass = SymbolPass::new(
-        snapshot,
-        &solver.coefficients,
-        &solver.weights,
-        solver.same_file_symbol,
-        solver.same_file_type,
-        solver.capacity,
-        &assembled,
-        &ir.nodes,
-        &ir.edges,
-    );
+    let pass = SymbolPass::new(pass_inputs(snapshot, &solver, &assembled));
 
     pass.incident
         .get(&companion)
@@ -2334,17 +2421,7 @@ fn first_symbol_delta_with_dependency_only(
     );
     let ir = snapshot.ir();
     let assembled = solver.assemble(&solver.real_partition);
-    let mut pass = SymbolPass::new(
-        snapshot,
-        &solver.coefficients,
-        &solver.weights,
-        solver.same_file_symbol,
-        solver.same_file_type,
-        solver.capacity,
-        &assembled,
-        &ir.nodes,
-        &ir.edges,
-    );
+    let mut pass = SymbolPass::new(pass_inputs(snapshot, &solver, &assembled));
     ir.nodes
         .first()
         .and_then(|subject| pass.try_relocate(subject).then_some(()))?;
@@ -2365,17 +2442,7 @@ fn relocates_first_symbol_with_profile(
     );
     let ir = snapshot.ir();
     let assembled = solver.assemble(&solver.real_partition);
-    let mut pass = SymbolPass::new(
-        snapshot,
-        &solver.coefficients,
-        &solver.weights,
-        solver.same_file_symbol,
-        solver.same_file_type,
-        solver.capacity,
-        &assembled,
-        &ir.nodes,
-        &ir.edges,
-    );
+    let mut pass = SymbolPass::new(pass_inputs(snapshot, &solver, &assembled));
     let accepted = ir
         .nodes
         .first()
@@ -2401,17 +2468,7 @@ fn relocates_claimant_then_subject(
     );
     let ir = snapshot.ir();
     let assembled = solver.assemble(&solver.real_partition);
-    let mut pass = SymbolPass::new(
-        snapshot,
-        &solver.coefficients,
-        &solver.weights,
-        solver.same_file_symbol,
-        solver.same_file_type,
-        solver.capacity,
-        &assembled,
-        &ir.nodes,
-        &ir.edges,
-    );
+    let mut pass = SymbolPass::new(pass_inputs(snapshot, &solver, &assembled));
     pass.incident
         .entry(1)
         .or_default()
@@ -2610,17 +2667,7 @@ fn should_keep_a_test_zone_resident_inside_the_test_zone() {
     );
     let ir = snapshot.ir();
     let assembled = solver.assemble(&solver.real_partition);
-    let mut pass = SymbolPass::new(
-        &snapshot,
-        &solver.coefficients,
-        &solver.weights,
-        solver.same_file_symbol,
-        solver.same_file_type,
-        solver.capacity,
-        &assembled,
-        &ir.nodes,
-        &ir.edges,
-    );
+    let mut pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
     // a priced-looking lure out toward the production home file.
     pass.incident.entry(0).or_default().push((2, 3.0));
     // Float surgery: hold strict-J aside so a J-cost rejection cannot
@@ -2676,17 +2723,7 @@ fn should_still_allow_moves_inside_one_zone() {
     );
     let ir = snapshot.ir();
     let assembled = solver.assemble(&solver.real_partition);
-    let mut pass = SymbolPass::new(
-        &snapshot,
-        &solver.coefficients,
-        &solver.weights,
-        solver.same_file_symbol,
-        solver.same_file_type,
-        solver.capacity,
-        &assembled,
-        &ir.nodes,
-        &ir.edges,
-    );
+    let mut pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
     // the tie-cut zeroed the zone edges, so nomination needs the simulated
     // priced pull; the destination sits inside the same zone.
     pass.incident.entry(0).or_default().push((2, 5.0));
@@ -2750,17 +2787,11 @@ fn should_reject_a_pinned_symbol_before_it_can_change_a_later_admission() {
         return;
     };
     let mut pass = SymbolPass::new_with_policy(
-        &snapshot,
-        &solver.coefficients,
-        &solver.weights,
-        solver.same_file_symbol,
-        solver.same_file_type,
-        solver.capacity,
-        &assembled,
-        &ir.nodes,
-        &ir.edges,
-        BTreeSet::from([blocked_file]),
-        BTreeSet::new(),
+        pass_inputs(&snapshot, &solver, &assembled),
+        RelocationPolicy {
+            forbidden_sources: BTreeSet::from([blocked_file]),
+            ..RelocationPolicy::default()
+        },
     );
     pass.incident.entry(0).or_default().push((4, 5.0));
     pass.incident.entry(2).or_default().push((4, 5.0));
