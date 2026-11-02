@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use smol_str::SmolStr;
-use strata_core::visibility::derive_visibility;
+use strata_core::visibility::{Finding, derive_visibility};
 use strata_ir::{Container, ContainerId, ContainerTree, Node, Polarity, ScopeLevel, Snapshot};
 
 use crate::analyze::BORDERLINE_CAPACITY_MARGIN;
@@ -335,9 +335,25 @@ pub(in crate::analyze) fn visibility_violations(snapshot: &Snapshot) -> Vec<Viol
         .map(|container| (container.id.0, container.name.to_string()))
         .collect();
 
+    // a language with a fixed ladder of spellable scopes cannot narrow below its
+    // smallest rung that still covers the derived scope.
+    let ladders: BTreeMap<u32, &[ScopeLevel]> = ir
+        .scope_ladders
+        .iter()
+        .map(|ladder| (ladder.node.0, ladder.levels.as_slice()))
+        .collect();
+
     result
         .findings
         .iter()
+        .filter_map(|finding| {
+            let levels = ladders.get(&finding.node.0).copied().unwrap_or_default();
+            let derived = expressible_floor(finding.derived, levels);
+            (finding.declared > derived).then_some(Finding {
+                derived,
+                ..*finding
+            })
+        })
         .map(|finding| {
             let name = names.get(&finding.node.0).cloned().unwrap_or_default();
             let source_path = nodes
@@ -371,6 +387,18 @@ pub(in crate::analyze) fn visibility_violations(snapshot: &Snapshot) -> Vec<Viol
             }
         })
         .collect()
+}
+
+/// Raises `derived` to the smallest expressible level that covers it.
+///
+/// With no ladder, or when no rung reaches `derived`, the level is unchanged.
+fn expressible_floor(derived: ScopeLevel, ladder: &[ScopeLevel]) -> ScopeLevel {
+    ladder
+        .iter()
+        .copied()
+        .filter(|level| *level >= derived)
+        .min()
+        .unwrap_or(derived)
 }
 
 /// Derives capacity violations from the current tree against the configured caps.
