@@ -49,7 +49,7 @@ impl SymbolPass<'_> {
     /// [`SYMBOL_MIN_IMPROVEMENT`]. A fold may drain the source of every
     /// production declaration: the file is being retired, and the collision
     /// pass never offers a module root.
-    pub(super) fn try_fold(
+    fn try_fold(
         &mut self,
         file: ContainerId,
         source: ContainerId,

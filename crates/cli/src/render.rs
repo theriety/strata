@@ -50,7 +50,11 @@ impl Format {
     /// An explicit choice wins; otherwise every sink uses `default_human`.
     /// The terminal argument is retained for API compatibility and is ignored.
     #[must_use]
-    pub fn resolve(explicit: Option<Format>, _is_terminal: bool, default_human: Format) -> Format {
+    pub(super) fn resolve(
+        explicit: Option<Format>,
+        _is_terminal: bool,
+        default_human: Format,
+    ) -> Format {
         explicit.unwrap_or(default_human)
     }
 }

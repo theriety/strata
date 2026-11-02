@@ -221,11 +221,7 @@ impl PipelineSolver<'_> {
     /// Pairs each colliding mover (file-graph vertex) with the file that keeps
     /// the path: the file already there when one stays put, otherwise the mover
     /// with the smallest path.
-    pub(super) fn path_collisions(
-        &self,
-        parts: &Partition,
-        evidence: &PolishEvidence,
-    ) -> Vec<(usize, usize)> {
+    fn path_collisions(&self, parts: &Partition, evidence: &PolishEvidence) -> Vec<(usize, usize)> {
         let assembled = self.assemble_with_polish_evidence(parts, evidence);
         let (current, proposed) =
             physical_relocation_folders(&self.snapshot.ir().containers, &assembled.tree);
