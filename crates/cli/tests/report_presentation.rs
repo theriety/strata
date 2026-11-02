@@ -376,7 +376,6 @@ fn should_follow_relocated_symbol_destination_and_mirrored_test_in_paired_trees(
             from: "project/tests".into(),
             to: "project/tests/nested".into(),
         }],
-        blocked_mirrors: vec![],
     }];
     candidate.symbol_moves = vec![SymbolMove {
         display: None,
@@ -596,7 +595,6 @@ fn should_preserve_same_name_destination_folder_for_whole_file_move() -> TestRes
         to: "project/project".into(),
         reason: MoveReason::Clustering,
         mirrors: vec![],
-        blocked_mirrors: vec![],
     }];
     candidate.tree = folder(
         "project",

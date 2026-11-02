@@ -196,6 +196,7 @@ mod tests {
             test_dropped_uses: Vec::new(),
             pub_use: false,
             test_of: None,
+            root_main: false,
         }
     }
 
@@ -542,6 +543,7 @@ mod tests {
             test_dropped_uses: Vec::new(),
             pub_use: false,
             test_of: None,
+            root_main: false,
         };
         let assignment = NodeAssignment::build(&[file], Path::new("repo"));
 

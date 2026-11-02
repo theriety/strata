@@ -26,8 +26,7 @@ pub use self::finding::{
     CapacityBreach, ConditionalSplit, EdgeBreak, Severity, Violation, ViolationKind,
 };
 pub use self::movement::{
-    BlockedMirror, BlockedMirrorReason, FileMove, MirrorMove, Move, MoveKind, MoveReason,
-    SymbolKind, SymbolMove,
+    FileMove, MirrorMove, Move, MoveKind, MoveReason, SymbolKind, SymbolMove,
 };
 pub use self::profile::{
     CapacityRemainder, CurrentStanding, CurrentTree, ModeResult, Modes, ProfileCurrent,

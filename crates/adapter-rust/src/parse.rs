@@ -29,7 +29,7 @@ use strata_ir::{AdapterError, SourceFile};
 use self::advisory::{identifiers, mark_inline};
 use self::dropped::{DroppedUses, has_pub_use};
 use self::items::push_item;
-use self::metadata::loader_may_drop;
+use self::metadata::{has_cfg_test, loader_may_drop};
 use self::modules::{Modules, collect_mod_decls, propagate_gates};
 
 /// The category of a top-level declaration: a value symbol or a type.
@@ -221,6 +221,11 @@ pub struct ParsedFile {
     /// the module tree proves one (`#[cfg(test)] mod tests;` in that file).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub test_of: Option<SmolStr>,
+    /// Whether the file's module root declares a free, non-`cfg(test)` `fn main`
+    /// (a `main` inside a nested module does not count). With a program-starting
+    /// cargo target root this is the program's start symbol.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub root_main: bool,
 }
 
 /// Parses Rust sources into [`ParsedFile`]s, one rayon task per file.
@@ -278,8 +283,17 @@ fn parse_one(file: &SourceFile) -> Result<(ParsedFile, Modules), AdapterError> {
         dropped_glob_files: Vec::new(),
         pub_use: has_pub_use(&ast.items),
         test_of: None,
+        root_main: has_root_main(&ast.items),
     };
     Ok((file, modules))
+}
+
+/// Whether `items` (a module root) declare a free `fn main` outside `cfg(test)`.
+fn has_root_main(items: &[syn::Item]) -> bool {
+    items.iter().any(|item| {
+        matches!(item, syn::Item::Fn(function)
+            if function.sig.ident == "main" && !has_cfg_test(&function.attrs))
+    })
 }
 
 /// Renders a syn error as a `line L, column C: message` string.

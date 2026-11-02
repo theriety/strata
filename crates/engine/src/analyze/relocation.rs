@@ -35,6 +35,7 @@ mod upper_levels;
 #[cfg(test)]
 use crate::analyze::rendering::render_tree;
 pub(in crate::analyze) use identity_guard::RelocationIdentityGuard;
+pub(in crate::analyze) use identity_guard::zone_keys::zone_keys;
 pub(in crate::analyze) use inventory::file_inventory;
 pub(in crate::analyze) use solver::TestPolicy;
 #[cfg(test)]

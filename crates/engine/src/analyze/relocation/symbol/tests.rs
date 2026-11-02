@@ -692,7 +692,7 @@ fn should_mark_a_polarity_detected_spec_as_the_test_zone() {
     ];
 
     assert_eq!(
-        test_zone_marks(&TestPolicy::defaults(), &files, &nodes),
+        test_zone_marks(&TestPolicy::defaults(), &files, &nodes, &[]),
         vec![false, true]
     );
 }
@@ -706,7 +706,7 @@ fn should_not_mark_a_file_holding_any_production_symbol() {
     let files = [file_info(1, "src/mixed.ts", 1)];
 
     assert_eq!(
-        test_zone_marks(&TestPolicy::defaults(), &files, &nodes),
+        test_zone_marks(&TestPolicy::defaults(), &files, &nodes, &[]),
         vec![false]
     );
 }
@@ -724,7 +724,7 @@ fn should_mark_a_pattern_matched_file_even_when_production_polarity() {
     ];
 
     assert_eq!(
-        test_zone_marks(&policy(&tests), &files, &nodes),
+        test_zone_marks(&policy(&tests), &files, &nodes, &[]),
         vec![false, true]
     );
 }
@@ -735,7 +735,7 @@ fn should_mark_production_polarity_support_under_a_builtin_test_root() {
     let files = [file_info(1, "tests/support/fixtures.ts", 1)];
 
     assert_eq!(
-        test_zone_marks(&TestPolicy::defaults(), &files, &nodes),
+        test_zone_marks(&TestPolicy::defaults(), &files, &nodes, &[]),
         vec![true],
         "test-support declarations inherit the conventional test root"
     );
@@ -980,7 +980,7 @@ fn should_leave_the_zone_inert_when_builtins_are_off_and_no_patterns_given() {
     let files = [file_info(1, "src/x.spec.ts", 0)];
 
     assert_eq!(
-        test_zone_marks(&TestPolicy::disabled(), &files, &nodes),
+        test_zone_marks(&TestPolicy::disabled(), &files, &nodes, &[]),
         vec![false]
     );
 }
@@ -3921,5 +3921,81 @@ fn should_refuse_a_fold_that_invents_a_reach_for_a_dependant() {
             .iter()
             .all(|&(node, fold)| node != 0 && fold.is_none()),
         "the fold would invent b/c -> b, so `moving` stays and nothing folds; got {relocations:?}"
+    );
+}
+
+/// Whether a bare pass over the misfiled fixture relocates `s` (node 0) when
+/// `start` names the nodes pinned as a program's start symbol.
+fn relocates_symbol_with_start_pins(start: &[u32]) -> bool {
+    let snapshot = misfiled_symbol_snapshot(Polarity::Production);
+    let tests = TestPolicy::defaults();
+    let config = AnalyzeConfig::default();
+    let solver = PipelineSolver::new(
+        &snapshot,
+        &config,
+        config.profiles.greenfield.objective.coefficients(),
+        false,
+        &tests,
+    );
+    let assembled = solver.assemble(&solver.real_partition);
+    let mut pass = SymbolPass::new_with_policy(
+        pass_inputs(&snapshot, &solver, &assembled),
+        RelocationPolicy {
+            start_symbols: start.iter().copied().collect(),
+            ..RelocationPolicy::default()
+        },
+    );
+    let ir = snapshot.ir();
+    ir.nodes
+        .first()
+        .is_some_and(|subject| pass.try_relocate(subject))
+}
+
+#[test]
+fn should_never_relocate_a_start_symbol_while_its_file_helpers_still_can() {
+    assert!(
+        relocates_symbol_with_start_pins(&[]),
+        "without a start pin the fixture's pull must relocate s, else the pin case is vacuous"
+    );
+    assert!(
+        !relocates_symbol_with_start_pins(&[0]),
+        "the start pin alone must hold the start symbol in its file"
+    );
+    assert!(
+        relocates_symbol_with_start_pins(&[5]),
+        "pinning another symbol of the file as the start must leave s free to move"
+    );
+}
+
+#[test]
+fn should_pin_only_the_production_symbol_a_start_fact_names_in_its_file() {
+    let ir_with = |fact_file: &str| {
+        let mut ir = IntermediateRepresentation::new(
+            vec![
+                node(0, "main", 3, Polarity::Production),
+                node(1, "helper", 3, Polarity::Production),
+                node(2, "main", 4, Polarity::Production),
+            ],
+            Vec::new(),
+            ContainerTree::new(vec![
+                container(0, "app", ScopeLevel::PackageGroup, None),
+                container(1, "keep", ScopeLevel::Folder, Some(0)),
+                container(2, "sink", ScopeLevel::Folder, Some(0)),
+                container(3, "a.rs", ScopeLevel::File, Some(1)),
+                container(4, "b.rs", ScopeLevel::File, Some(2)),
+            ]),
+        );
+        ir.file_facts
+            .push(strata_ir::FileFact::entry_with_start(fact_file, "main"));
+        ir
+    };
+
+    assert_eq!(
+        super::polish::start_symbol_nodes(&ir_with("a.rs")),
+        BTreeSet::from([0])
+    );
+    assert_eq!(
+        super::polish::start_symbol_nodes(&ir_with("c.rs")),
+        BTreeSet::new()
     );
 }

@@ -89,6 +89,31 @@ fn exact_mirror_snapshot_with_facts(
     mirror_path: &str,
     fact_source: Option<&str>,
 ) -> Snapshot {
+    assemble(exact_mirror_ir(
+        include_mirror,
+        fill_test_destination,
+        source_name,
+        mirror_path,
+        fact_source,
+    ))
+}
+
+fn assemble(ir: IntermediateRepresentation) -> Snapshot {
+    let assembled = Snapshot::assemble(ir);
+    assert!(assembled.is_ok(), "neutral mirror fixture must assemble");
+    match assembled {
+        Ok(snapshot) => snapshot,
+        Err(_) => std::process::abort(),
+    }
+}
+
+fn exact_mirror_ir(
+    include_mirror: bool,
+    fill_test_destination: bool,
+    source_name: &str,
+    mirror_path: &str,
+    fact_source: Option<&str>,
+) -> IntermediateRepresentation {
     let mirror_folder = mirror_path
         .rsplit_once('/')
         .map_or("spec/module", |(path, _)| path);
@@ -155,12 +180,7 @@ fn exact_mirror_snapshot_with_facts(
         // the language adapter's pair fact; the engine knows no convention
         ir.file_facts.push(FileFact::test_pair(mirror_path, source));
     }
-    let assembled = Snapshot::assemble(ir);
-    assert!(assembled.is_ok(), "neutral mirror fixture must assemble");
-    match assembled {
-        Ok(snapshot) => snapshot,
-        Err(_) => std::process::abort(),
-    }
+    ir
 }
 
 #[test]
@@ -300,29 +320,34 @@ fn should_serialize_linked_relocations_as_schema_version_ten() {
 }
 
 #[test]
-fn should_keep_a_source_move_when_its_mirror_is_blocked_by_capacity() {
+fn should_drop_the_whole_move_when_its_mirror_is_blocked_by_capacity() {
     let snapshot = exact_mirror_snapshot(true, true);
     let json = serialized_analysis(&snapshot, &mirror_config());
-    let primary = source_move(&json, "workspace/source/module/task.ts");
 
     assert!(
-        primary.is_some(),
-        "the blocked follower must not veto its source: {json}"
+        source_move(&json, "workspace/source/module/task.ts").is_none(),
+        "a source whose paired test cannot follow does not move at all (ADR-26): {json}"
     );
     assert!(
-        primary
-            .and_then(|entry| entry.get("blockedMirrors"))
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|mirror| {
-                mirror.get("path").and_then(Value::as_str)
-                    == Some("workspace/spec/module/task.spec.ts")
-                    && mirror.get("intendedTo").and_then(Value::as_str)
-                        == Some("workspace/spec/target")
-                    && mirror.get("reason").and_then(Value::as_str) == Some("capacity")
-            }),
-        "the blocked mirror reports one deterministic reason: {json}"
+        source_move(&json, "workspace/spec/module/task.spec.ts").is_none(),
+        "the refused test is never narrated on its own: {json}"
+    );
+    assert!(
+        !json.to_string().contains("blockedMirrors"),
+        "a dropped move leaves no best-effort leftovers in the result: {json}"
+    );
+}
+
+#[test]
+fn should_never_move_a_file_the_adapter_marks_as_an_entry() {
+    let mut ir = exact_mirror_ir(false, false, "task.ts", "spec/module/task.spec.ts", None);
+    ir.file_facts
+        .push(FileFact::entry_file("source/module/task.ts"));
+    let json = serialized_analysis(&assemble(ir), &mirror_config());
+
+    assert!(
+        source_move(&json, "workspace/source/module/task.ts").is_none(),
+        "an entry file is pinned: {json}"
     );
 }
 
@@ -343,12 +368,9 @@ fn should_not_change_a_source_move_when_no_mirror_exists() {
             .map(Vec::len),
         Some(0)
     );
-    assert_eq!(
-        primary
-            .and_then(|entry| entry.get("blockedMirrors"))
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(0)
+    assert!(
+        primary.is_some_and(|entry| entry.get("blockedMirrors").is_none()),
+        "the result no longer carries blocked mirrors: {json}"
     );
 }
 
@@ -357,7 +379,6 @@ fn should_not_follow_a_same_basename_test_when_mirroring_is_disabled() {
     let snapshot = exact_mirror_snapshot(true, false);
     let mut config = mirror_config();
     config.profiles.anchored.relocation.test_mirroring.enabled = false;
-    config.profiles.anchored.relocation.pin_detected_test_files = false;
     let json = serialized_analysis(&snapshot, &config);
     let primary = source_move(&json, "workspace/source/module/task.ts");
 

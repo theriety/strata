@@ -2,19 +2,9 @@
 
 use std::io::{self, Write};
 
-use strata_engine::{BlockedMirrorReason, Candidate, Move, MoveKind, SymbolKind, SymbolMove};
+use strata_engine::{Candidate, Move, MoveKind, SymbolKind, SymbolMove};
 
 use super::{improvement_summary, nq};
-
-pub(super) fn blocked_mirror_reason(reason: BlockedMirrorReason) -> &'static str {
-    match reason {
-        BlockedMirrorReason::AmbiguousMapping => "ambiguous mapping",
-        BlockedMirrorReason::PackageBoundary => "package boundary",
-        BlockedMirrorReason::NamespaceBoundary => "namespace boundary",
-        BlockedMirrorReason::Capacity => "capacity",
-        BlockedMirrorReason::PathCollision => "path collision",
-    }
-}
 
 fn moved_file_count(entry: &Move) -> usize {
     entry.files.len().saturating_add(entry.mirrors.len())
@@ -124,15 +114,6 @@ fn move_step_lines(moves: &[Move]) -> Vec<String> {
                 mirror.path, mirror.from, mirror.to, mirror.source_path
             ));
             step = step.saturating_add(1);
-        }
-        for mirror in &entry.blocked_mirrors {
-            lines.push(format!(
-                "  blocked: {} [{} → {}] ({})",
-                mirror.path,
-                mirror.from,
-                mirror.intended_to,
-                blocked_mirror_reason(mirror.reason)
-            ));
         }
     }
     lines

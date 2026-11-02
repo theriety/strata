@@ -92,7 +92,6 @@ pub fn configure(result: &mut AnalyzeResult) -> Result<(), &'static str> {
         to: "workspace/right/nested".into(),
         reason: MoveReason::Clustering,
         mirrors: vec![],
-        blocked_mirrors: vec![],
     }];
     candidate.delta_narration.push(Move {
         kind: MoveKind::Move,
@@ -103,7 +102,6 @@ pub fn configure(result: &mut AnalyzeResult) -> Result<(), &'static str> {
         to: "workspace/left/relocated".into(),
         reason: MoveReason::Clustering,
         mirrors: vec![],
-        blocked_mirrors: vec![],
     });
     candidate.symbol_moves = vec![SymbolMove {
         display: None,

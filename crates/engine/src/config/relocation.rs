@@ -6,9 +6,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct RelocationConfig {
-    /// Prevent detected test files from relocating independently.
-    #[serde(rename = "pin-detected-test-files")]
-    pub pin_detected_test_files: bool,
     /// Prevent declarations in detected tests, and test-polarity declarations in
     /// any file, from relocating independently.
     #[serde(rename = "pin-detected-test-symbols")]
@@ -31,7 +28,6 @@ pub struct RelocationConfig {
 impl Default for RelocationConfig {
     fn default() -> Self {
         Self {
-            pin_detected_test_files: true,
             pin_detected_test_symbols: true,
             allow_cross_package_moves: false,
             forbid_file_moves: Vec::new(),

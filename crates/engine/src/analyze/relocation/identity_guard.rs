@@ -10,6 +10,8 @@ use crate::analyze::layout::dominant_member;
 use crate::analyze::relocation::FileInfo;
 
 mod permits;
+pub(in crate::analyze) mod zone_keys;
+mod zones;
 
 /// Preserves pass-start render namespaces and namespace-scoped leaf identity,
 /// and keeps every file inside its manifest package (ADR-17).
@@ -36,6 +38,8 @@ pub(in crate::analyze) struct RelocationIdentityGuard {
     allowed_packages: Vec<BTreeSet<SmolStr>>,
     homes_by_scc: Vec<Vec<ClusterId>>,
     package_wall: bool,
+    zones_by_scc: Vec<BTreeSet<SmolStr>>,
+    allowed_zones: Vec<BTreeSet<SmolStr>>,
 }
 
 type RenderIdentity = (SmolStr, SmolStr);
@@ -44,12 +48,28 @@ type IdentitySubgroup = (Vec<u32>, BTreeSet<RenderIdentity>);
 impl RelocationIdentityGuard {
     /// Builds a guard with the package wall up; lift it with
     /// [`Self::lift_package_wall`].
+    #[cfg(test)]
     pub(in crate::analyze) fn new(
         files: &[FileInfo],
         condensation: &Condensation,
         identity: &Partition,
         relieved: &Partition,
         roof_rebuild: Option<&Partition>,
+    ) -> Self {
+        Self::new_with_zones(files, condensation, identity, relieved, roof_rebuild, &[])
+    }
+
+    /// Like [`Self::new`], also keeping every test file inside its test-root
+    /// zone (ADR-26): `zone_keys` is parallel to `files` (see
+    /// [`zone_keys`](crate::analyze::relocation::zone_keys)); a missing
+    /// key is a production file.
+    pub(in crate::analyze) fn new_with_zones(
+        files: &[FileInfo],
+        condensation: &Condensation,
+        identity: &Partition,
+        relieved: &Partition,
+        roof_rebuild: Option<&Partition>,
+        zone_keys: &[SmolStr],
     ) -> Self {
         let identities_by_scc: Vec<Vec<RenderIdentity>> = condensation
             .members
@@ -105,6 +125,23 @@ impl RelocationIdentityGuard {
                     .collect()
             })
             .collect();
+        let zones_by_scc: Vec<BTreeSet<SmolStr>> = condensation
+            .members
+            .iter()
+            .map(|members| {
+                members
+                    .iter()
+                    .map(|member| {
+                        zone_keys
+                            .get(member.0 as usize)
+                            .cloned()
+                            .unwrap_or_default()
+                    })
+                    .collect()
+            })
+            .collect();
+        let allowed_zones =
+            Self::pass_start_values(identity, relieved, roof_rebuild, &zones_by_scc);
         let allowed_namespaces =
             Self::pass_start_values(identity, relieved, roof_rebuild, &namespaces_by_scc);
         let allowed_packages =
@@ -118,6 +155,8 @@ impl RelocationIdentityGuard {
             allowed_packages,
             homes_by_scc,
             package_wall: true,
+            zones_by_scc,
+            allowed_zones,
         }
     }
 
