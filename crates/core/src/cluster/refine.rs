@@ -18,145 +18,16 @@
 //! one completes with no applied move; determinism comes from a fixed
 //! descending-gain order with ties broken by node index.
 
+mod candidates;
+mod gain;
+
+pub use self::gain::GainFn;
+
 use crate::cluster::coarsen::CoarseGraph;
 use crate::cluster::quotient::{QuotientEdges, ReverseEdges};
-use crate::cluster::{ClusterId, LevelCaps, Partition};
-use crate::graph::csr::Csr;
+use crate::cluster::{LevelCaps, Partition};
 
-/// The cohesion-aware gain model: per-node token sets plus the α / β mixing
-/// coefficients that select anchored vs greenfield behaviour.
-///
-/// `naming_tokens[v]` are the case/underscore-split tokens of node `v`'s symbol
-/// name; `path_tokens[v]` are the tokens of its current container path. Naming
-/// cohesion (weighted by `alpha`) is always on; path cohesion (weighted by
-/// `beta`) is greenfield-disabled by passing `beta = 0.0`. Cohesion between a
-/// node and a cluster is the mean Jaccard similarity of the node's tokens
-/// against the cluster's members' tokens.
-#[derive(Debug, Clone)]
-pub struct GainFn {
-    /// Naming-token sets per node, each sorted and deduplicated.
-    naming_tokens: Vec<Vec<u32>>,
-    /// Path-token sets per node, each sorted and deduplicated.
-    path_tokens: Vec<Vec<u32>>,
-    /// Weight on naming-token cohesion (α).
-    alpha: f32,
-    /// Weight on path cohesion (β); zero in greenfield mode.
-    beta: f32,
-}
-
-impl GainFn {
-    /// Builds a gain model from interned per-node token sets and the mixing
-    /// coefficients. Token vectors are sorted and deduplicated defensively so
-    /// the Jaccard computation can assume set semantics.
-    #[must_use]
-    pub fn new(
-        naming_tokens: Vec<Vec<u32>>,
-        path_tokens: Vec<Vec<u32>>,
-        alpha: f32,
-        beta: f32,
-    ) -> Self {
-        let normalise = |mut sets: Vec<Vec<u32>>| {
-            for set in &mut sets {
-                set.sort_unstable();
-                set.dedup();
-            }
-            sets
-        };
-        Self {
-            naming_tokens: normalise(naming_tokens),
-            path_tokens: normalise(path_tokens),
-            alpha,
-            beta,
-        }
-    }
-
-    /// A cohesion-free gain model: gain reduces to the cut-weight delta alone.
-    /// Useful for tests and for runs where cohesion is disabled.
-    #[must_use]
-    pub fn cut_only(node_count: usize) -> Self {
-        Self {
-            naming_tokens: vec![Vec::new(); node_count],
-            path_tokens: vec![Vec::new(); node_count],
-            alpha: 0.0,
-            beta: 0.0,
-        }
-    }
-
-    /// The cohesion bonus a node gains by being a member of `cluster`:
-    /// `α · naming + β · path`.
-    fn bonus(&self, node: u32, cluster: ClusterId, parts: &Partition) -> f32 {
-        let naming = cohesion(&self.naming_tokens, node, cluster, parts);
-        let path = cohesion(&self.path_tokens, node, cluster, parts);
-        self.alpha * naming + self.beta * path
-    }
-}
-
-/// Mean Jaccard cohesion of `node`'s `tokens` against the members of `cluster`
-/// (excluding `node` itself). Returns `0.0` for an empty cluster.
-fn cohesion(tokens: &[Vec<u32>], node: u32, cluster: ClusterId, parts: &Partition) -> f32 {
-    let Some(node_set) = tokens.get(node as usize) else {
-        return 0.0;
-    };
-    let mut total = 0.0_f32;
-    let mut peers = 0_u32;
-    for (other, owner) in parts.assignment().iter().enumerate() {
-        if *owner != cluster {
-            continue;
-        }
-        let other_u32 = u32::try_from(other).unwrap_or(u32::MAX);
-        if other_u32 == node {
-            continue;
-        }
-        if let Some(other_set) = tokens.get(other) {
-            total += jaccard(node_set, other_set);
-            peers += 1;
-        }
-    }
-    if peers == 0 {
-        return 0.0;
-    }
-    // `peers` counts cluster members (bounded by the level cap, ≤ 15), well
-    // within f32's exact-integer range; the precision lint is allowed for this
-    // single averaging conversion.
-    #[allow(clippy::cast_precision_loss)]
-    let mean = total / peers as f32;
-    mean
-}
-
-/// Jaccard similarity of two sorted, deduplicated token sets: `|A ∩ B| / |A ∪ B|`.
-fn jaccard(a: &[u32], b: &[u32]) -> f32 {
-    if a.is_empty() && b.is_empty() {
-        return 0.0;
-    }
-    let mut left = a.iter().copied().peekable();
-    let mut right = b.iter().copied().peekable();
-    let mut intersection = 0_usize;
-    while let (Some(&x), Some(&y)) = (left.peek(), right.peek()) {
-        match x.cmp(&y) {
-            std::cmp::Ordering::Less => {
-                left.next();
-            }
-            std::cmp::Ordering::Greater => {
-                right.next();
-            }
-            std::cmp::Ordering::Equal => {
-                intersection += 1;
-                left.next();
-                right.next();
-            }
-        }
-    }
-    let union = a.len() + b.len() - intersection;
-    if union == 0 {
-        return 0.0;
-    }
-    // Token-set cardinalities are tiny (per-symbol name fragments), so the
-    // ratio of two small counts is exactly representable; the precision lint is
-    // allowed here for the single unavoidable count-to-float conversion.
-    #[allow(clippy::cast_precision_loss)]
-    let ratio = intersection as f32 / union as f32;
-    ratio
-}
+use self::candidates::{move_gain, ranked_moves};
 
 /// Refines `parts` in place with FM single-node moves over `g`, under the
 /// `level` cap and the cohesion-aware `gain`.
@@ -264,153 +135,16 @@ pub fn refine(
     }
 }
 
-/// A scored candidate move of one node to a neighbouring cluster.
-struct Candidate {
-    /// The node to move.
-    node: u32,
-    /// The cluster to move it into.
-    target: ClusterId,
-    /// The move's gain: cut-weight reduction plus cohesion delta.
-    gain: f32,
-}
-
-/// Scores, for every node, its best target cluster among the clusters its
-/// neighbours occupy, returning one candidate per node.
-fn ranked_moves(
-    graph: &Csr,
-    reverse: &ReverseEdges,
-    parts: &Partition,
-    gain: &GainFn,
-) -> Vec<Candidate> {
-    let mut out = Vec::new();
-    for v in 0..graph.vertex_count() {
-        let v32 = u32::try_from(v).unwrap_or(u32::MAX);
-        let Some(source) = parts.cluster_of(v32) else {
-            continue;
-        };
-        if let Some(candidate) = best_move(graph, reverse, parts, gain, v32, source) {
-            out.push(candidate);
-        }
-    }
-    out
-}
-
-/// Finds `node`'s highest-gain move to a distinct cluster occupied by one of its
-/// graph neighbours (in either direction). Ties break toward the smaller cluster
-/// id. Returns `None` when no neighbouring cluster differs from `source`.
-fn best_move(
-    graph: &Csr,
-    reverse: &ReverseEdges,
-    parts: &Partition,
-    gain: &GainFn,
-    node: u32,
-    source: ClusterId,
-) -> Option<Candidate> {
-    let mut targets: Vec<ClusterId> = neighbouring_clusters(graph, reverse, parts, node)
-        .into_iter()
-        .filter(|&c| c != source)
-        .collect();
-    targets.sort_unstable();
-    targets.dedup();
-
-    let mut best: Option<Candidate> = None;
-    for target in targets {
-        let g = move_gain(graph, reverse, parts, gain, node, source, target);
-        let take = match &best {
-            None => true,
-            Some(current) => g > current.gain,
-        };
-        if take {
-            best = Some(Candidate {
-                node,
-                target,
-                gain: g,
-            });
-        }
-    }
-    best
-}
-
-/// The clusters occupied by `node`'s neighbours in *both* directions: the
-/// clusters of its forward dependencies and of its reverse dependents. Pulling a
-/// node toward either side can reduce the cut, so both are candidate targets.
-fn neighbouring_clusters(
-    graph: &Csr,
-    reverse: &ReverseEdges,
-    parts: &Partition,
-    node: u32,
-) -> Vec<ClusterId> {
-    let mut clusters = Vec::new();
-    for &neighbour in graph.neighbors(node) {
-        if let Some(cluster) = parts.cluster_of(neighbour) {
-            clusters.push(cluster);
-        }
-    }
-    for &(predecessor, _) in reverse.of(node) {
-        if let Some(cluster) = parts.cluster_of(predecessor) {
-            clusters.push(cluster);
-        }
-    }
-    clusters
-}
-
-/// The gain of moving `node` from `source` to `target`: the reduction in cut
-/// weight plus the change in cohesion bonus.
-///
-/// The cut-weight delta spans the node's incident edges in *both* directions.
-/// An edge to `source` (a forward dependency or reverse dependent currently in
-/// `source`) becomes a cut edge after the move (a loss); an edge to `target`
-/// stops being cut (a gain). Folding the incoming edges in is required: omitting
-/// them would halve the cut term and score a move as if it severed no in-edges.
-fn move_gain(
-    graph: &Csr,
-    reverse: &ReverseEdges,
-    parts: &Partition,
-    gain: &GainFn,
-    node: u32,
-    source: ClusterId,
-    target: ClusterId,
-) -> f32 {
-    let mut internal_to_source = 0.0_f32;
-    let mut internal_to_target = 0.0_f32;
-    let mut tally = |neighbour: u32, weight: f32| match parts.cluster_of(neighbour) {
-        Some(c) if c == source => internal_to_source += weight,
-        Some(c) if c == target => internal_to_target += weight,
-        _ => {}
-    };
-
-    // Outgoing edges node -> w.
-    let neighbours = graph.neighbors(node);
-    let weights = graph.weights(node);
-    for (slot, &neighbour) in neighbours.iter().enumerate() {
-        if neighbour == node {
-            continue;
-        }
-        let weight = weights.get(slot).copied().unwrap_or(0.0);
-        tally(neighbour, weight);
-    }
-    // Incoming edges p -> node.
-    for &(predecessor, weight) in reverse.of(node) {
-        if predecessor == node {
-            continue;
-        }
-        tally(predecessor, weight);
-    }
-
-    // Cut delta: edges that were internal to source become cut (a loss), edges
-    // to target stop being cut (a gain). Positive favours the move.
-    let cut_delta = internal_to_target - internal_to_source;
-
-    let bonus_delta = gain.bonus(node, target, parts) - gain.bonus(node, source, parts);
-    cut_delta + bonus_delta
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
+    use super::candidates::move_gain;
+    use super::gain::jaccard;
     use super::*;
+    use crate::cluster::ClusterId;
     use crate::cluster::seed::SeedLevel;
+    use crate::graph::csr::Csr;
 
     /// Builds a CSR over `vertex_count` vertices from `(source, target)` edges,
     /// sorted and deduplicated.
