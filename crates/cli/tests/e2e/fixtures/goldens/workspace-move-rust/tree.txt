@@ -1,0 +1,26 @@
+workspace-move-rust [packageGroup]
+  crates/core [package]
+    alpha [domain]
+      alpha [folder]
+        crates/core/src/alpha/mod.rs [file] 0 sloc
+        crates/core/src/alpha/parse.rs [file] 6 sloc
+          - parse (package)
+          - parse_max (package)
+        crates/core/src/alpha/score.rs [file] 6 sloc
+          - score (package)
+          - score_pair (package)
+    beta [domain]
+      beta [folder]
+        crates/core/src/beta/mod.rs [file] 0 sloc
+        crates/core/src/beta/report.rs [file] 6 sloc
+          - render (package)
+          - render_all (package)
+        crates/core/src/beta/scale.rs [file] 9 sloc
+          - unit (package)
+          - scale (package)
+          - clamp (package)
+    crates/core/src/lib.rs [file] 0 sloc
+  crates/util [package]
+    crates/util/src/lib.rs [file] 6 sloc
+      - Weight (package)
+      - new (package)

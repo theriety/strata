@@ -11,39 +11,23 @@ use strata_ir::{Container, ContainerId, NodeId, ScopeLevel};
 
 use crate::analyze::relocation::{FileInfo, ROOF_COHERENCE_FLOOR, RelocationIdentityGuard};
 use crate::analyze::scoring::ContainerSpec;
-use crate::narrate::tokenize;
+use crate::narrate::{path_segments, physical_namespace, tokenize};
 
 #[cfg(test)]
 mod tests;
 
+/// Renders a file's package-relative namespace (ADR-0018) from its real path
+/// and laminar home — the see-through source-root segments its folder key
+/// omits (`src` for `crates/core/src/x.rs`).
 pub(in crate::analyze) fn render_namespace(path: &str, home: &LaminarHome) -> SmolStr {
-    let raw_directory = path.rsplit_once('/').map_or("", |(directory, _)| directory);
-    let relative_directory = if raw_directory == home.package {
-        ""
+    let directory = path_segments(path.rsplit_once('/').map_or("", |(directory, _)| directory));
+    let package = path_segments(&home.package);
+    let folder = if home.synthetic {
+        package.clone()
     } else {
-        raw_directory
-            .strip_prefix(home.package.as_str())
-            .and_then(|suffix| suffix.strip_prefix('/'))
-            .unwrap_or(raw_directory)
+        path_segments(&home.folder)
     };
-    let scope = if home.synthetic || home.folder == home.package {
-        ""
-    } else {
-        home.folder
-            .strip_prefix(home.package.as_str())
-            .and_then(|suffix| suffix.strip_prefix('/'))
-            .unwrap_or(home.folder.as_str())
-    };
-    if scope.is_empty() {
-        return SmolStr::new(relative_directory);
-    }
-    if relative_directory == scope {
-        return SmolStr::new("");
-    }
-    relative_directory
-        .strip_suffix(scope)
-        .and_then(|prefix| prefix.strip_suffix('/'))
-        .map_or_else(|| SmolStr::new(relative_directory), SmolStr::new)
+    SmolStr::new(physical_namespace(&directory, &package, &folder).join("/"))
 }
 
 /// The laminar container tree's already-resolved folder, domain, and package

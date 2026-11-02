@@ -1,0 +1,6 @@
+visibility [violation] crates/core/src/alpha/parse.rs, parse :: `parse` in `crates/core/src/alpha/parse.rs` is exported at Package but needed only at Folder
+visibility [violation] crates/core/src/alpha/parse.rs, parse_max :: `parse_max` in `crates/core/src/alpha/parse.rs` is exported at Package but needed only at File
+visibility [violation] crates/core/src/alpha/score.rs, score :: `score` in `crates/core/src/alpha/score.rs` is exported at Package but needed only at File
+visibility [violation] crates/core/src/alpha/score.rs, score_pair :: `score_pair` in `crates/core/src/alpha/score.rs` is exported at Package but needed only at File
+visibility [violation] crates/core/src/beta/report.rs, render :: `render` in `crates/core/src/beta/report.rs` is exported at Package but needed only at File
+visibility [violation] crates/core/src/beta/report.rs, render_all :: `render_all` in `crates/core/src/beta/report.rs` is exported at Package but needed only at File
