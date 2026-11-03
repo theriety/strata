@@ -316,6 +316,7 @@ mod tests {
             level,
             parent: parent.map(ContainerId),
             synthetic: false,
+            label_keyed: false,
         }
     }
 

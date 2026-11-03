@@ -5,8 +5,8 @@ All findings and moves are suggestions. Applying them may break the build; use y
 
 Structural findings
 Shared findings (1)
-  - capacity [violation] at container ancestry `relief-nest-py`, `hub`: folder
-    `relief-nest-py/hub` holds 24 against a cap of 20
+  - capacity [violation] in `hub`: 24 entries (files and subfolders); the folder cap is 20
+    (`capacity.folder`).
 
 anchored profile-specific findings (0)
   None.
@@ -33,7 +33,8 @@ anchored — candidate 1
     - Move file `hub/ingest_02.py` → `hub/ingest/ingest_02.py`
     - Move file `hub/ingest_03.py` → `hub/ingest/ingest_03.py`
     - Move file `hub/ingest_04.py` → `hub/ingest/ingest_04.py`
-      Why: relieves `hub`, which holds 24 against a cap of 20.
+      Why: relieves `hub`, which has 24 entries (files and subfolders) against the folder cap of
+      20 (`capacity.folder`).
     … 7 more — rerun with --full to see all
   Folder impacts
     `hub`: 12 file(s) leaving · 0 entering
@@ -86,7 +87,8 @@ greenfield — candidate 1
     - Move file `hub/ingest_02.py` → `hub/ingest/ingest_02.py`
     - Move file `hub/ingest_03.py` → `hub/ingest/ingest_03.py`
     - Move file `hub/ingest_04.py` → `hub/ingest/ingest_04.py`
-      Why: relieves `hub`, which holds 24 against a cap of 20.
+      Why: relieves `hub`, which has 24 entries (files and subfolders) against the folder cap of
+      20 (`capacity.folder`).
     … 7 more — rerun with --full to see all
   Folder impacts
     `hub`: 12 file(s) leaving · 0 entering

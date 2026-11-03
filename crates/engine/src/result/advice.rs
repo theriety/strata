@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Move, SymbolMove};
+use super::{GroupKeyed, Move, SymbolMove};
 use crate::config::ProfileName;
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -23,6 +23,36 @@ pub struct RelocationAdvice {
     pub conflicting_destinations: Vec<ProfileConflict>,
     pub assessments: Vec<ProfileAssessment>,
     pub review_reasons: Vec<ReviewReason>,
+}
+
+impl RelocationAdvice {
+    /// The group-keyed paths of the advice. A file proposal's move, destination,
+    /// conflicts and assessments are all keyed under the group; a symbol
+    /// proposal's are real paths from the start, so it has none.
+    pub(crate) fn group_keyed(&mut self) -> Vec<GroupKeyed<'_>> {
+        let Self {
+            proposal,
+            destination,
+            conflicting_destinations,
+            assessments,
+            ..
+        } = self;
+        let RelocationProposal::File { relocation } = proposal else {
+            return Vec::new();
+        };
+        let mut keyed = relocation.group_keyed();
+        keyed.push(GroupKeyed::new(destination));
+        keyed.extend(
+            conflicting_destinations
+                .iter_mut()
+                .map(|conflict| GroupKeyed::new(&mut conflict.destination)),
+        );
+        for assessment in assessments {
+            keyed.push(GroupKeyed::new(&mut assessment.destination));
+            keyed.extend(assessment.best_alternative.as_mut().map(GroupKeyed::new));
+        }
+        keyed
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

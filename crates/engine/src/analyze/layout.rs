@@ -23,7 +23,7 @@ pub(in crate::analyze) use home::{
 };
 pub(in crate::analyze) use levels::{cluster_level, home_affinity};
 use piles::{basename_stem, connected_piles, elect_split_token, scc_file_count, union_root};
-pub(in crate::analyze) use real_dirs::{dominant_member, real_dir_partition};
+pub(in crate::analyze) use real_dirs::{dominant_member, label_keyed_folders, real_dir_partition};
 pub(in crate::analyze) use relief::relieve_over_capacity;
 #[cfg(test)]
 use relief::{relief_child_entries, relief_sccs_by_namespace};

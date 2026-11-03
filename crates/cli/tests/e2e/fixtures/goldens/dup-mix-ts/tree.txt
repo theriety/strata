@@ -1,0 +1,27 @@
+dup-mix-ts [packageGroup]
+  dup-mix-ts [package]
+    atlas [domain]
+      bar [folder]
+        atlas/bar/y.ts [file] 1 sloc
+          - y (file)
+      foo [folder]
+        atlas/foo/x.ts [file] 1 sloc
+          - x (file)
+  atlas [package]
+    agent [domain]
+      agent [folder]
+        dup-mix-ts/atlas/src/agent/loop.ts [file] 3 sloc
+          - loop (file)
+        dup-mix-ts/atlas/src/agent/plan.ts [file] 3 sloc
+          - plan (file)
+    core [domain]
+      core [folder]
+        dup-mix-ts/atlas/src/core/alpha.ts [file] 3 sloc
+          - alpha (file)
+        dup-mix-ts/atlas/src/core/beta.ts [file] 3 sloc
+          - beta (file)
+        dup-mix-ts/atlas/src/core/delta.ts [file] 3 sloc
+          - delta (file)
+        dup-mix-ts/atlas/src/core/gamma.ts [file] 3 sloc
+          - gamma (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

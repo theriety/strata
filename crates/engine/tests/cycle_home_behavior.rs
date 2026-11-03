@@ -14,6 +14,7 @@ fn container(id: u32, name: &str, level: ScopeLevel, parent: Option<u32>) -> Con
         level,
         parent: parent.map(ContainerId),
         synthetic: false,
+        label_keyed: false,
     }
 }
 

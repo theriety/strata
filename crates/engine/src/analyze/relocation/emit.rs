@@ -12,6 +12,19 @@ use crate::analyze::relocation::{CandidateTree, PipelineSolver};
 use crate::analyze::scoring::ContainerSpec;
 
 impl PipelineSolver<'_> {
+    /// Whether the candidate folder standing for real folder cluster `cluster`
+    /// is keyed under the package-group label. A folder no real cluster names is
+    /// a mirror's intended destination, a rooted path whose first segment is the
+    /// package-group label itself.
+    fn folder_label_keyed(&self, cluster: Option<u32>) -> bool {
+        cluster.is_none_or(|cluster| {
+            self.real_folder_label_keyed
+                .get(cluster as usize)
+                .copied()
+                .unwrap_or(false)
+        })
+    }
+
     /// Interns the candidate containers parent-before-child — package groups,
     /// packages, domains, then each folder with its files — and records every
     /// symbol's file placement.
@@ -94,6 +107,7 @@ impl PipelineSolver<'_> {
                                     .get(projected_cluster.unwrap_or(folder) as usize)
                                     .copied()
                                     .unwrap_or(false),
+                                label_keyed: self.folder_label_keyed(projected_cluster),
                             })
                         })
                 });
@@ -106,6 +120,7 @@ impl PipelineSolver<'_> {
                         level: ScopeLevel::File,
                         parent: Some(folder_id),
                         synthetic: false,
+                        label_keyed: false,
                     });
                     file_ids.insert(vertex, id);
                     pass_start_file_by_candidate.insert(id, ContainerId(file.container));

@@ -33,6 +33,7 @@ impl ContainerArena {
             level,
             parent,
             synthetic,
+            label_keyed,
         } = spec;
         let siblings = self
             .used
@@ -52,6 +53,7 @@ impl ContainerArena {
             level,
             parent,
             synthetic,
+            label_keyed,
         });
         id
     }

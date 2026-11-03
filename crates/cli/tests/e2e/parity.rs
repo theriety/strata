@@ -57,12 +57,43 @@ const PURE_DEFAULTS: &str = "/nonexistent/unlace-parity.toml";
 /// keep the capacity findings they exist to show under the 600 default.
 const PINNED_CAP_250: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/e2e/cap-250.toml");
 
+/// A config pinning the domain and package caps at 1, so the nested
+/// `dup-ws-ts` workspace breaches both while its folder cap keeps the default
+/// and the greenfield search still proposes its move.
+const TIGHT_DOMAIN_PACKAGE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/e2e/tight-domain-package.toml"
+);
+
+/// Configs pinning the folder cap at 2 and 3, so the mixed-root fixtures keep
+/// the folder breaches their candidate pricing is measured on.
+const FOLDER_CAP_2: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/e2e/folder-2.toml");
+const FOLDER_CAP_3: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/e2e/folder-3.toml");
+
+/// The folder cap at 3 with cross-package moves allowed.
+const CROSS_PACKAGE_FOLDER_3: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/e2e/cross-package-folder-3.toml"
+);
+
 /// Returns the config path a fixture is analyzed under: pure defaults, except
-/// the over-cap fixture, which pins the 250 cap. The CLI and library sides both
-/// use it so parity holds.
+/// the over-cap fixtures, which pin the 250 cap, and the nested workspace, which
+/// pins tight domain and package caps. The CLI and library sides both use it so
+/// parity holds.
 fn config_for(name: &str) -> &'static str {
     if matches!(name, "over-capacity" | "cyclic-oversized") {
         PINNED_CAP_250
+    } else if matches!(name, "mixed-root-ts" | "dup-split-ts" | "cycle-loose-ts") {
+        FOLDER_CAP_3
+    } else if name == "cross-package-ts" {
+        CROSS_PACKAGE_FOLDER_3
+    } else if name == "dup-mix-ctl-ts" {
+        FOLDER_CAP_2
+    } else if matches!(
+        name,
+        "dup-ws-ts" | "dup-pkg-ts" | "dup-pkg-rs" | "dup-mix-ts"
+    ) {
+        TIGHT_DOMAIN_PACKAGE
     } else {
         PURE_DEFAULTS
     }
@@ -204,16 +235,11 @@ fn assert_golden(name: &str, file: &str, actual: &[u8]) {
 
 /// Resolves a narrated path against the fixture on disk.
 ///
-/// Narrated paths are projected beneath the package-group root, which is the
-/// fixture directory's own name, so they resolve against its parent.
+/// Every narrated path is repo-relative, so it joins the fixture root as it
+/// stands. A fixture directory nested under a same-named one (`proj/proj/...`)
+/// resolves only when the path keeps that real leading segment.
 fn on_disk(name: &str, path: &str) -> PathBuf {
-    let root = fixture(name);
-    match path.strip_prefix(name) {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
-            root.join(rest.trim_start_matches('/'))
-        }
-        _ => root.join(path),
-    }
+    fixture(name).join(path)
 }
 
 /// Returns the parent of a `/`-separated path, or `""` at the top.
@@ -694,15 +720,15 @@ fn should_narrate_a_same_package_move_through_a_source_root_for_the_workspace_mo
 
     assert!(
         moves.contains(&(
-            "workspace-move-rust/crates/core/src/beta/scale.rs".to_owned(),
-            "workspace-move-rust/crates/core/src/beta".to_owned(),
-            "workspace-move-rust/crates/core/src/alpha".to_owned(),
+            "crates/core/src/beta/scale.rs".to_owned(),
+            "crates/core/src/beta".to_owned(),
+            "crates/core/src/alpha".to_owned(),
         )),
         "the misfiled scale helper must move within core's src; got {moves:#?}"
     );
     assert!(
         moves.iter().all(|(path, _, to)| {
-            let package = |text: &str| text.split('/').take(3).collect::<Vec<_>>().join("/");
+            let package = |text: &str| text.split('/').take(2).collect::<Vec<_>>().join("/");
             package(path) == package(to)
         }),
         "no default-profile move may leave its crate; got {moves:#?}"
@@ -896,6 +922,673 @@ fn should_match_the_full_summary_golden_for_the_relief_nest_py_fixture() {
     ]);
     assert_eq!(code, 0, "analyze --full exits 0 for {name}");
     assert_golden(name, "summary-full.txt", &out);
+}
+
+/// Fixtures nested under a directory of their own name (`dup-hub-py/dup-hub-py/`),
+/// the Python flat layout (`django/django/`): the package-group label equals a
+/// real top-level directory, so a path that loses its first segment names a
+/// file that does not exist. `dup-hub-py` relieves an over-cap folder with file
+/// moves; `dup-geo-py` moves a symbol between two files; `dupflat` imports
+/// through its own package name and carries a cycle, a polarity leak and a
+/// test-only item. `dup-ws-ts` is the `workspace-ts-leak` workspace under such
+/// a directory: its package directories (`dup-ws-ts/atlas`) begin with the
+/// root's name, so a package or domain finding and a file move must keep that
+/// first segment. `dup-pkg-ts` holds a package whose own directory has the
+/// root's name (`tokio/tokio`), and `dup-mix-ts` a loose directory named like a
+/// real package. `dup-pkg-rs`, the Rust form of `dup-pkg-ts`, is slow to bind
+/// and is checked once, by the package-directory test below.
+const SAME_NAME_FIXTURES: [&str; 7] = [
+    "dup-hub-py",
+    "dup-geo-py",
+    "dupflat",
+    "dup-ws-ts",
+    "dup-pkg-ts",
+    "dup-mix-ts",
+    "dup-split-ts",
+];
+
+/// Reads `key` of a JSON object as text, or `""`.
+fn json_text(value: &serde_json::Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Reads `key` of a JSON object as an array, or an empty list.
+fn json_list(value: &serde_json::Value, key: &str) -> Vec<serde_json::Value> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The candidates of both profiles in one analyze result.
+fn all_candidates(parsed: &serde_json::Value) -> Vec<serde_json::Value> {
+    ["anchored", "greenfield"]
+        .iter()
+        .filter_map(|profile| parsed.pointer(&format!("/profiles/{profile}/candidates")))
+        .flat_map(json_list_of)
+        .collect()
+}
+
+/// The elements of a JSON array value, or an empty list.
+fn json_list_of(value: &serde_json::Value) -> Vec<serde_json::Value> {
+    value.as_array().cloned().unwrap_or_default()
+}
+
+/// Where a file named `path` lands when moved into folder `to`; `.` is the root.
+fn landing(path: &str, to: &str) -> String {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    if to == "." {
+        leaf.to_owned()
+    } else {
+        format!("{to}/{leaf}")
+    }
+}
+
+/// Every path the JSON names across all candidates' file, mirror and symbol moves.
+fn json_move_paths(parsed: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    let mut paths = std::collections::BTreeSet::new();
+    for candidate in all_candidates(parsed) {
+        for relocation in json_list(&candidate, "deltaNarration") {
+            let to = json_text(&relocation, "to");
+            for file in json_list(&relocation, "files") {
+                let path = json_text(&file, "path");
+                paths.insert(landing(&path, &to));
+                paths.insert(path);
+            }
+            for mirror in json_list(&relocation, "mirrors") {
+                let path = json_text(&mirror, "path");
+                paths.insert(landing(&path, &json_text(&mirror, "to")));
+                paths.insert(path);
+                paths.insert(json_text(&mirror, "sourcePath"));
+            }
+        }
+        for symbol_move in json_list(&candidate, "symbolMoves") {
+            paths.insert(json_text(&symbol_move, "fromPath"));
+            paths.insert(json_text(&symbol_move, "toPath"));
+        }
+    }
+    paths
+}
+
+/// Every path the text names on its `- Move` lines, symbol names left out.
+///
+/// A long move wraps after its arrow, so a line ending in `→` continues on the
+/// next one.
+fn text_move_paths(text: &str) -> std::collections::BTreeSet<String> {
+    let mut paths = std::collections::BTreeSet::new();
+    let mut lines = text.lines().map(str::trim_start);
+    while let Some(first) = lines.next() {
+        if !first.starts_with("- Move ") {
+            continue;
+        }
+        let mut line = first.to_owned();
+        while line.ends_with('\u{2192}') {
+            let Some(next) = lines.next() else { break };
+            line = format!("{line} {next}");
+        }
+        let skip =
+            usize::from(line.starts_with("- Move symbol ") || line.starts_with("- Move type "));
+        paths.extend(
+            line.split('`')
+                .skip(1)
+                .step_by(2)
+                .skip(skip)
+                .map(str::to_owned),
+        );
+    }
+    paths
+}
+
+/// Every advice item's source path, which must exist, and its destination,
+/// which must be the move's own destination.
+fn advice_path_violations(name: &str, parsed: &serde_json::Value) -> Vec<String> {
+    let mut violations = Vec::new();
+    let items = ["recommended", "reviewCandidates"]
+        .iter()
+        .filter_map(|group| parsed.pointer(&format!("/advice/{group}")))
+        .flat_map(json_list_of);
+    for item in items {
+        let proposal = item.get("proposal").cloned().unwrap_or_default();
+        let relocation = proposal.get("relocation").cloned().unwrap_or_default();
+        let destination = json_text(&item, "destination");
+        let (source, expected) = if json_text(&proposal, "kind") == "symbol" {
+            (
+                json_text(&relocation, "fromPath"),
+                json_text(&relocation, "toPath"),
+            )
+        } else {
+            let file = json_list(&relocation, "files")
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+            (json_text(&file, "path"), json_text(&relocation, "to"))
+        };
+        if !on_disk(name, &source).is_file() {
+            violations.push(format!("advice source {source} does not exist"));
+        }
+        if destination != expected {
+            violations.push(format!(
+                "advice destination {destination} differs from its move's {expected}"
+            ));
+        }
+    }
+    violations
+}
+
+/// Every finding of one analyze result: shared, then each profile's own.
+fn all_findings(parsed: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut findings = parsed
+        .pointer("/current/sharedFindings")
+        .map(json_list_of)
+        .unwrap_or_default();
+    for profile in ["anchored", "greenfield"] {
+        findings.extend(
+            parsed
+                .pointer(&format!("/profiles/{profile}/current/uniqueFindings"))
+                .map(json_list_of)
+                .unwrap_or_default(),
+        );
+    }
+    findings
+}
+
+/// The path-valued entries of a finding's `location`: every entry for a cycle,
+/// polarity or capacity finding (each a whole real path), and the file for a
+/// visibility or test-only finding (its second entry is a symbol name).
+fn finding_paths(finding: &serde_json::Value) -> Vec<String> {
+    let location: Vec<String> = json_list(finding, "location")
+        .iter()
+        .filter_map(|entry| entry.as_str().map(str::to_owned))
+        .collect();
+    match json_text(finding, "kind").as_str() {
+        "visibility" | "testOnly" => location.into_iter().take(1).collect(),
+        _ => location,
+    }
+}
+
+#[test]
+fn should_locate_every_finding_at_a_path_that_exists_on_disk_for_a_same_name_nested_root() {
+    let mut kinds = std::collections::BTreeSet::new();
+    for name in SAME_NAME_FIXTURES {
+        let parsed = analyze_json(name, &["--mode", "both"]);
+        for finding in all_findings(&parsed) {
+            kinds.insert(json_text(&finding, "kind"));
+            if json_text(&finding, "kind") == "capacity" {
+                // one whole real path: the first `realPaths` entry.
+                let first = finding
+                    .pointer("/capacity/realPaths/0")
+                    .cloned()
+                    .unwrap_or_default();
+                assert_eq!(
+                    json_list(&finding, "location"),
+                    vec![first],
+                    "{name} capacity location is its first real path"
+                );
+                let real_paths = finding
+                    .pointer("/capacity/realPaths")
+                    .map(json_list_of)
+                    .unwrap_or_default();
+                for real_path in real_paths.iter().filter_map(serde_json::Value::as_str) {
+                    assert!(
+                        on_disk(name, real_path).exists(),
+                        "{name} capacity real path {real_path} does not exist: {finding}"
+                    );
+                }
+            }
+            for path in finding_paths(&finding) {
+                assert!(
+                    on_disk(name, &path).exists(),
+                    "{name} {} finding is located at {path}, which does not exist: {finding}",
+                    json_text(&finding, "kind")
+                );
+            }
+        }
+    }
+    // the fixtures between them exercise every finding kind a flat layout yields.
+    assert_eq!(
+        kinds.into_iter().collect::<Vec<_>>(),
+        vec!["capacity", "cycle", "polarity", "testOnly"]
+    );
+}
+
+#[test]
+fn should_narrate_real_paths_that_exist_on_disk_for_a_same_name_nested_root() {
+    let mut narrated = Vec::new();
+    for name in SAME_NAME_FIXTURES {
+        let parsed = analyze_json(name, &["--mode", "both"]);
+
+        assert_real_move_paths(name, &parsed);
+
+        if !json_move_paths(&parsed).is_empty() {
+            narrated.push(name);
+        }
+        assert_eq!(
+            advice_path_violations(name, &parsed),
+            Vec::<String>::new(),
+            "{name} advice names real paths"
+        );
+    }
+    // the file-move, symbol-move and nested-workspace fixtures narrate moves.
+    assert_eq!(
+        narrated,
+        vec![
+            "dup-hub-py",
+            "dup-geo-py",
+            "dup-ws-ts",
+            "dup-pkg-ts",
+            "dup-mix-ts",
+            "dup-split-ts"
+        ]
+    );
+}
+
+/// The `realPaths` of every capacity finding counted against `config_key`.
+fn capacity_real_paths(parsed: &serde_json::Value, config_key: &str) -> Vec<Vec<String>> {
+    all_findings(parsed)
+        .iter()
+        .filter(|finding| {
+            finding
+                .pointer("/capacity/configKey")
+                .and_then(serde_json::Value::as_str)
+                == Some(config_key)
+        })
+        .map(|finding| {
+            finding
+                .pointer("/capacity/realPaths")
+                .map(json_list_of)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|path| path.as_str().map(str::to_owned))
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn should_name_the_real_directories_of_a_workspace_nested_under_its_own_name() {
+    let name = "dup-ws-ts";
+    let parsed = analyze_json(name, &["--mode", "both"]);
+
+    // `atlas` breaches the package cap with its two domains; `widget` breaches
+    // the domain cap with its two folders. Both directories begin with the
+    // root's own name, which is a real directory and stays.
+    assert_eq!(
+        capacity_real_paths(&parsed, "capacity.package"),
+        vec![vec!["dup-ws-ts/atlas".to_owned()]]
+    );
+    assert_eq!(
+        capacity_real_paths(&parsed, "capacity.domain"),
+        vec![vec!["dup-ws-ts/beacon/src/widget".to_owned()]]
+    );
+
+    // the greenfield move and the advice built on it name the same real folders.
+    let relocation: Vec<(String, String, String)> = all_candidates(&parsed)
+        .iter()
+        .flat_map(|candidate| json_list(candidate, "deltaNarration"))
+        .flat_map(|relocation| {
+            let to = json_text(&relocation, "to");
+            json_list(&relocation, "files")
+                .iter()
+                .map(|file| (json_text(file, "path"), json_text(file, "from"), to.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(
+        relocation,
+        vec![
+            (
+                "dup-ws-ts/atlas/src/agent/loop.ts".to_owned(),
+                "dup-ws-ts/atlas/src/agent".to_owned(),
+                "dup-ws-ts/atlas/src/core".to_owned(),
+            ),
+            (
+                "dup-ws-ts/atlas/src/agent/plan.ts".to_owned(),
+                "dup-ws-ts/atlas/src/agent".to_owned(),
+                "dup-ws-ts/atlas/src/core".to_owned(),
+            ),
+        ]
+    );
+    let destinations: Vec<String> = ["recommended", "reviewCandidates"]
+        .iter()
+        .filter_map(|group| parsed.pointer(&format!("/advice/{group}")))
+        .flat_map(json_list_of)
+        .map(|item| json_text(&item, "destination"))
+        .collect();
+    assert!(!destinations.is_empty(), "the move is offered as advice");
+    for destination in destinations {
+        assert!(
+            on_disk(name, &destination).is_dir(),
+            "advice destination {destination} is a real directory"
+        );
+    }
+}
+
+#[test]
+fn should_print_the_same_paths_in_text_and_json_for_a_same_name_nested_root() {
+    for name in SAME_NAME_FIXTURES {
+        let parsed = analyze_json(name, &["--mode", "both"]);
+        let root = fixture(name);
+        let (code, out) = run_unlace(&[
+            "analyze",
+            "--root",
+            root.to_str().unwrap_or_default(),
+            "--config",
+            config_for(name),
+            "--mode",
+            "both",
+            "--format",
+            "summary",
+            "--full",
+        ]);
+        assert_eq!(code, 0, "analyze summary exits 0 for {name}");
+        let text = String::from_utf8_lossy(&out);
+
+        assert_eq!(
+            text_move_paths(&text),
+            json_move_paths(&parsed),
+            "{name} text moves name the JSON's paths"
+        );
+        let (table_code, table) = run_unlace(&[
+            "violations",
+            "--root",
+            root.to_str().unwrap_or_default(),
+            "--config",
+            config_for(name),
+            "--format",
+            "table",
+        ]);
+        assert_eq!(table_code, 0, "violations exits 0 for {name}");
+        let table = String::from_utf8_lossy(&table);
+        for finding in all_findings(&parsed) {
+            let kind = json_text(&finding, "kind");
+            let location: Vec<String> = json_list(&finding, "location")
+                .iter()
+                .filter_map(|entry| entry.as_str().map(str::to_owned))
+                .collect();
+            // the table prints the JSON location as it is, then the detail.
+            assert!(
+                table.contains(&format!(
+                    "{} :: {}",
+                    location.join(", "),
+                    json_text(&finding, "detail")
+                )),
+                "{name} table names the JSON location of the {kind} finding: {table}"
+            );
+            // the summary names each path of the finding in backticks.
+            let named = if kind == "capacity" {
+                vec![format!("in `{}`", finding_paths(&finding).join(""))]
+            } else {
+                location.iter().map(|entry| format!("`{entry}`")).collect()
+            };
+            for expected in named {
+                assert!(
+                    text.contains(&expected),
+                    "{name} summary names {expected} for the {kind} finding: {text}"
+                );
+            }
+        }
+    }
+}
+
+/// A package whose directory has the repository folder's name (`tokio/tokio`,
+/// `serde/serde`) has a package key equal to the package-group label. The key
+/// is a real directory, so its finding names that directory and not the
+/// repository root `.`.
+#[test]
+fn should_name_a_package_directory_that_has_the_repository_folders_name() {
+    let ts = analyze_json("dup-pkg-ts", &["--mode", "both"]);
+    let rs = analyze_json("dup-pkg-rs", &["--mode", "both"]);
+
+    assert_eq!(
+        capacity_real_paths(&ts, "capacity.package"),
+        vec![vec!["dup-pkg-ts".to_owned()]],
+        "the TypeScript package finding names its package directory"
+    );
+    assert_eq!(
+        capacity_real_paths(&ts, "capacity.domain"),
+        vec![vec!["beacon/src/widget".to_owned()]]
+    );
+    assert_eq!(
+        capacity_real_paths(&rs, "capacity.package"),
+        vec![vec!["dup-pkg-rs".to_owned()]],
+        "the Rust crate finding names its crate directory"
+    );
+    for finding in all_findings(&rs) {
+        for path in finding_paths(&finding) {
+            assert!(
+                on_disk("dup-pkg-rs", &path).exists(),
+                "dup-pkg-rs finding is located at {path}, which does not exist"
+            );
+        }
+    }
+    assert_real_move_paths("dup-pkg-rs", &rs);
+}
+
+/// A loose directory (`atlas/`, outside every manifest) that shares its name
+/// with a real package (`dup-mix-ts/atlas`) is keyed under the group label, so
+/// its finding names the loose directory and not the package beside it.
+#[test]
+fn should_tell_a_loose_directory_from_a_real_package_of_the_same_name() {
+    let parsed = analyze_json("dup-mix-ts", &["--mode", "both"]);
+
+    assert_eq!(
+        capacity_real_paths(&parsed, "capacity.domain"),
+        vec![vec!["atlas".to_owned()]],
+        "the loose directory's domain finding names that directory"
+    );
+    assert_eq!(
+        capacity_real_paths(&parsed, "capacity.package"),
+        vec![vec!["dup-mix-ts/atlas".to_owned()]],
+        "the real package keeps its own directory"
+    );
+}
+
+/// The `(capacity remainder, capacity score term)` of each profile's first
+/// candidate in one analyze result.
+fn first_candidate_capacity(parsed: &serde_json::Value) -> Vec<(serde_json::Value, f64)> {
+    ["anchored", "greenfield"]
+        .iter()
+        .filter_map(|profile| {
+            let candidate = parsed
+                .pointer(&format!("/profiles/{profile}/candidates/0"))?
+                .clone();
+            let remainder = candidate.get("capacityRemainder").cloned()?;
+            let term = candidate.pointer("/scoreBreakdown/capacity")?.as_f64()?;
+            Some((remainder, term))
+        })
+        .collect()
+}
+
+/// Analyzes `name` under an explicit config, in both modes.
+fn analyze_json_under(name: &str, config: &str) -> serde_json::Value {
+    let root = fixture(name);
+    let (code, stdout) = run_unlace(&[
+        "analyze",
+        "--root",
+        root.to_str().unwrap_or_default(),
+        "--config",
+        config,
+        "--mode",
+        "both",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(code, 0, "analyze exits 0 for {name}");
+    serde_json::from_slice(&stdout).unwrap_or_default()
+}
+
+/// Candidate pricing sees the same directories the disk has: loose folders
+/// beside a real package price like the same folders under another name, because
+/// a made-up `<root>/<root>` directory must never merge or split their counts.
+#[test]
+fn should_price_loose_folders_beside_a_same_named_package_like_renamed_ones() {
+    let mixed = first_candidate_capacity(&analyze_json_under("dup-mix-ts", FOLDER_CAP_2));
+    let control = first_candidate_capacity(&analyze_json_under("dup-mix-ctl-ts", FOLDER_CAP_2));
+
+    assert_eq!(mixed.len(), 2, "both profiles produce a candidate");
+    assert_eq!(
+        mixed, control,
+        "renaming the loose `atlas` folders to `zeta` must not change the pricing"
+    );
+}
+
+/// Loose top-level folders and root files beside packages stay in the
+/// candidate's capacity count: the root still holds five entries after a move
+/// that only touches `atlas/src/core`.
+#[test]
+fn should_keep_a_root_breach_priced_when_loose_folders_sit_beside_packages() {
+    let parsed = analyze_json("mixed-root-ts", &["--mode", "both"]);
+
+    let capacity = first_candidate_capacity(&parsed);
+    assert_eq!(capacity.len(), 2, "both profiles produce a candidate");
+    for (remainder, term) in capacity {
+        assert_eq!(
+            remainder
+                .get("remaining")
+                .and_then(serde_json::Value::as_u64),
+            Some(1),
+            "the root breach survives the candidate: {remainder}"
+        );
+        assert!(
+            (term - 8.0 / 3.0).abs() < 1e-6,
+            "the candidate's capacity term prices that breach, got {term}"
+        );
+    }
+}
+
+/// A folder the candidate splits out of a loose directory is named by its real
+/// path: `atlas/foo/b`, never `dup-split-ts/atlas/foo/b` (the package beside it).
+#[test]
+fn should_name_a_split_inside_a_loose_directory_by_its_real_path() {
+    let name = "dup-split-ts";
+    let parsed = analyze_json(name, &["--mode", "both"]);
+
+    let split_targets: std::collections::BTreeSet<String> = all_candidates(&parsed)
+        .iter()
+        .flat_map(|candidate| json_list(candidate, "deltaNarration"))
+        .filter(|relocation| {
+            json_list(relocation, "files")
+                .iter()
+                .any(|file| json_text(file, "from") == "atlas/foo")
+        })
+        .map(|relocation| json_text(&relocation, "to"))
+        .collect();
+    assert_eq!(
+        split_targets.into_iter().collect::<Vec<_>>(),
+        vec!["atlas/foo/b".to_owned()]
+    );
+    let destinations: Vec<String> = ["recommended", "reviewCandidates"]
+        .iter()
+        .filter_map(|group| parsed.pointer(&format!("/advice/{group}")))
+        .flat_map(json_list_of)
+        .map(|item| json_text(&item, "destination"))
+        .collect();
+    assert!(
+        destinations.iter().any(|path| path == "atlas/foo/b"),
+        "the advice offers the split: {destinations:?}"
+    );
+    assert!(
+        destinations
+            .iter()
+            .all(|path| !path.starts_with("dup-split-ts/atlas/foo")),
+        "no advice destination names the package beside the loose directory: {destinations:?}"
+    );
+}
+
+/// A loose folder in an import cycle with a package file is still a loose
+/// folder: the cluster is named after the cycle's heaviest file, and the folder
+/// it stands for keeps its provenance. Its candidate prices and names the real
+/// `a/` directory, the same as the pre-change binary did (score and capacity
+/// term 4.0, a split into `a/m`), and no move is a no-op.
+#[test]
+fn should_price_a_loose_folder_in_a_cycle_with_a_package_file_by_its_real_path() {
+    let name = "cycle-loose-ts";
+    let parsed = analyze_json(name, &["--mode", "both"]);
+
+    let capacity = first_candidate_capacity(&parsed);
+    assert_eq!(capacity.len(), 2, "both profiles produce a candidate");
+    for (remainder, term) in capacity {
+        assert_eq!(
+            remainder
+                .get("remaining")
+                .and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert!((term - 4.0).abs() < 1e-9, "capacity term {term}");
+    }
+    let moves: Vec<(String, String)> = all_candidates(&parsed)
+        .iter()
+        .flat_map(|candidate| json_list(candidate, "deltaNarration"))
+        .flat_map(|relocation| {
+            let to = json_text(&relocation, "to");
+            json_list(&relocation, "files")
+                .iter()
+                .map(|file| (json_text(file, "from"), to.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(!moves.is_empty(), "the loose folder is split");
+    for (from, to) in &moves {
+        assert_ne!(from, to, "a move to its own folder is no move");
+        assert_eq!(to, "a/m", "the split names the real directory");
+    }
+    assert_real_move_paths(name, &parsed);
+}
+
+/// A file that lands in another package's folder is printed at that folder's
+/// real directory, `beacon/src/widget`: the source root belongs to the package
+/// that owns the folder, never to the package the file leaves.
+#[test]
+fn should_name_a_cross_package_destination_by_the_package_that_owns_the_folder() {
+    let name = "cross-package-ts";
+    let parsed = analyze_json(name, &["--mode", "both"]);
+
+    let targets: std::collections::BTreeSet<String> = all_candidates(&parsed)
+        .iter()
+        .flat_map(|candidate| json_list(candidate, "deltaNarration"))
+        .filter(|relocation| {
+            json_list(relocation, "files")
+                .iter()
+                .any(|file| json_text(file, "path") == "atlas/src/core/use.ts")
+        })
+        .map(|relocation| json_text(&relocation, "to"))
+        .collect();
+    assert_eq!(
+        targets.into_iter().collect::<Vec<_>>(),
+        vec!["beacon/src/widget".to_owned()]
+    );
+    assert_real_move_paths(name, &parsed);
+}
+
+#[test]
+fn should_match_the_library_result_for_the_mixed_root_fixture() {
+    assert_parity("mixed-root-ts");
+}
+
+/// The golden pins the candidate's score and capacity remainder, which match the
+/// pre-change binary's for this layout (3.0994 anchored, 2.9851 greenfield).
+#[test]
+fn should_match_the_goldens_for_the_mixed_root_fixture() {
+    assert_goldens("mixed-root-ts");
+}
+
+#[test]
+fn should_match_the_library_result_for_the_same_name_nested_fixtures() {
+    for name in SAME_NAME_FIXTURES {
+        assert_parity(name);
+    }
+}
+
+#[test]
+fn should_match_the_goldens_for_the_same_name_nested_fixtures() {
+    for name in SAME_NAME_FIXTURES {
+        assert_goldens(name);
+    }
 }
 
 #[test]

@@ -672,15 +672,15 @@ fn should_deliver_a_greenfield_diff_for_a_fixture_with_a_candidate() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("→ constellation-ts/src/model]"),
+        outcome.stdout.contains("→ src/model]"),
         "the regrouped file lands in the model cluster: {}",
         outcome.stdout
     );
     assert!(
         outcome
             .stdout
-            .contains("constellation-ts/src/util/hash.ts [constellation-ts/src/util → constellation-ts/src/model]"),
-        "the move names its dataset-qualified physical source and destination: {}",
+            .contains("src/util/hash.ts [src/util → src/model]"),
+        "the move names its real repo-relative source and destination: {}",
         outcome.stdout
     );
 }
@@ -1319,7 +1319,7 @@ fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("→ constellation-ts/src/model]"),
+        outcome.stdout.contains("→ src/model]"),
         "the pulled files merge into the real `model` cluster of the package: {}",
         outcome.stdout
     );
@@ -1866,9 +1866,9 @@ fn should_flag_an_oversized_single_symbol_file_per_d38() {
 
     assert_eq!(outcome.code, 2, "the oversized file gates (no exemption)");
     assert!(
-        outcome
-            .stdout
-            .contains("file `module.py` holds 300 against a cap of 250"),
+        outcome.stdout.contains(
+            "in `module.py`: 300 production lines; the file cap is 250 (`capacity.file`)."
+        ),
         "the finding reports the uncapped size: {}",
         outcome.stdout
     );
@@ -2348,9 +2348,9 @@ fn should_flip_a_borderline_finding_to_a_gating_violation_via_a_config_cap() {
         "the lowered cap turns borderline into a gate"
     );
     assert!(
-        outcome
-            .stdout
-            .contains("file `module.py` holds 250 against a cap of 150"),
+        outcome.stdout.contains(
+            "in `module.py`: 250 production lines; the file cap is 150 (`capacity.file`)."
+        ),
         "the finding reports the configured cap: {}",
         outcome.stdout
     );
@@ -3279,4 +3279,81 @@ fn should_reject_a_missing_analysis_root_with_input_unreadable() {
         "the missing-root error carries its stable code: {}",
         outcome.stderr
     );
+}
+
+/// Collects every path-valued string of a move, advice or symbol-move record.
+fn collect_path_values(value: &serde_json::Value, found: &mut Vec<String>) {
+    const PATH_KEYS: [&str; 10] = [
+        "path",
+        "from",
+        "to",
+        "container",
+        "fromPath",
+        "toPath",
+        "sourcePath",
+        "destination",
+        "partner",
+        "subject",
+    ];
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map {
+                match child {
+                    serde_json::Value::String(text) if PATH_KEYS.contains(&key.as_str()) => {
+                        found.push(text.clone());
+                    }
+                    _ => collect_path_values(child, found),
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_path_values(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn should_emit_real_repo_relative_paths_in_every_move_and_advice_record() {
+    for name in [
+        "relief-nest-py",
+        "workspace-move-rust",
+        "workspace-ts-leak",
+        "constellation-ts",
+        "nested-python",
+    ] {
+        let result = analyze_to_file(name);
+        let text = std::fs::read_to_string(&result).unwrap_or_default();
+        let json: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+        let group = json
+            .pointer("/current/tree/name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let mut paths = Vec::new();
+        collect_path_values(
+            json.get("profiles").unwrap_or(&serde_json::Value::Null),
+            &mut paths,
+        );
+        collect_path_values(
+            json.get("advice").unwrap_or(&serde_json::Value::Null),
+            &mut paths,
+        );
+
+        assert!(!group.is_empty(), "{name} names its package group");
+        assert!(!paths.is_empty(), "{name} records at least one move path");
+        let prefixed: Vec<&String> = paths
+            .iter()
+            .filter(|path| **path == group || path.starts_with(&format!("{group}/")))
+            .take(5)
+            .collect();
+        assert!(
+            prefixed.is_empty(),
+            "{name}: paths still carry the group-name prefix `{group}`: {prefixed:?}"
+        );
+        let _ = std::fs::remove_file(&result);
+    }
 }

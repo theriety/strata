@@ -19,6 +19,7 @@ fn container(id: u32, name: &str, level: ScopeLevel, parent: Option<u32>) -> Con
         level,
         parent: parent.map(ContainerId),
         synthetic: false,
+        label_keyed: false,
     }
 }
 
@@ -197,8 +198,8 @@ fn should_apply_adapter_pair_facts_for_all_discovered_typescript_extensions() {
             .rules
             .clear();
         let json = serialized_analysis(&snapshot, &config);
-        let source = format!("workspace/source/module/task.{extension}");
-        let mirror = format!("workspace/spec/module/task.spec.{extension}");
+        let source = format!("source/module/task.{extension}");
+        let mirror = format!("spec/module/task.spec.{extension}");
         let primary = source_move(&json, &source);
         assert!(
             primary
@@ -226,7 +227,7 @@ fn should_apply_an_adapter_stated_python_pair() {
         .rules
         .clear();
     let json = serialized_analysis(&snapshot, &config);
-    let primary = source_move(&json, "workspace/source/module/task.py");
+    let primary = source_move(&json, "source/module/task.py");
     assert!(
         primary
             .and_then(|entry| entry.get("mirrors"))
@@ -234,7 +235,7 @@ fn should_apply_an_adapter_stated_python_pair() {
             .into_iter()
             .flatten()
             .any(|entry| entry.get("path").and_then(Value::as_str)
-                == Some("workspace/tests/module/test_task.py")),
+                == Some("tests/module/test_task.py")),
         "the Python built-in catalog must be shared with runtime: {json}"
     );
 }
@@ -282,7 +283,7 @@ fn source_move<'json>(json: &'json Value, source: &str) -> Option<&'json Value> 
 fn should_link_an_exact_nested_mirror_despite_a_colliding_basename() {
     let snapshot = exact_mirror_snapshot(true, false);
     let json = serialized_analysis(&snapshot, &mirror_config());
-    let primary = source_move(&json, "workspace/source/module/task.ts");
+    let primary = source_move(&json, "source/module/task.ts");
     assert!(
         primary
             .and_then(|entry| entry.get("mirrors"))
@@ -290,9 +291,8 @@ fn should_link_an_exact_nested_mirror_despite_a_colliding_basename() {
             .into_iter()
             .flatten()
             .any(|mirror| {
-                mirror.get("path").and_then(Value::as_str)
-                    == Some("workspace/spec/module/task.spec.ts")
-                    && mirror.get("to").and_then(Value::as_str) == Some("workspace/spec/target")
+                mirror.get("path").and_then(Value::as_str) == Some("spec/module/task.spec.ts")
+                    && mirror.get("to").and_then(Value::as_str) == Some("spec/target")
             }),
         "the exact nested mirror must follow the matching source: {json}"
     );
@@ -304,8 +304,7 @@ fn should_link_an_exact_nested_mirror_despite_a_colliding_basename() {
                 .into_iter()
                 .flatten()
                 .all(|file| {
-                    file.get("path").and_then(Value::as_str)
-                        != Some("workspace/spec/module/task.spec.ts")
+                    file.get("path").and_then(Value::as_str) != Some("spec/module/task.spec.ts")
                 })
         }),
         "a mirror is linked once, never narrated independently: {json}"
@@ -325,11 +324,11 @@ fn should_drop_the_whole_move_when_its_mirror_is_blocked_by_capacity() {
     let json = serialized_analysis(&snapshot, &mirror_config());
 
     assert!(
-        source_move(&json, "workspace/source/module/task.ts").is_none(),
+        source_move(&json, "source/module/task.ts").is_none(),
         "a source whose paired test cannot follow does not move at all (ADR-26): {json}"
     );
     assert!(
-        source_move(&json, "workspace/spec/module/task.spec.ts").is_none(),
+        source_move(&json, "spec/module/task.spec.ts").is_none(),
         "the refused test is never narrated on its own: {json}"
     );
     assert!(
@@ -346,7 +345,7 @@ fn should_never_move_a_file_the_adapter_marks_as_an_entry() {
     let json = serialized_analysis(&assemble(ir), &mirror_config());
 
     assert!(
-        source_move(&json, "workspace/source/module/task.ts").is_none(),
+        source_move(&json, "source/module/task.ts").is_none(),
         "an entry file is pinned: {json}"
     );
 }
@@ -355,7 +354,7 @@ fn should_never_move_a_file_the_adapter_marks_as_an_entry() {
 fn should_not_change_a_source_move_when_no_mirror_exists() {
     let snapshot = exact_mirror_snapshot(false, false);
     let json = serialized_analysis(&snapshot, &mirror_config());
-    let primary = source_move(&json, "workspace/source/module/task.ts");
+    let primary = source_move(&json, "source/module/task.ts");
 
     assert!(
         primary.is_some(),
@@ -380,7 +379,7 @@ fn should_not_follow_a_same_basename_test_when_mirroring_is_disabled() {
     let mut config = mirror_config();
     config.profiles.anchored.relocation.test_mirroring.enabled = false;
     let json = serialized_analysis(&snapshot, &config);
-    let primary = source_move(&json, "workspace/source/module/task.ts");
+    let primary = source_move(&json, "source/module/task.ts");
 
     assert!(
         primary.is_some(),
@@ -399,8 +398,9 @@ fn should_not_follow_a_same_basename_test_when_mirroring_is_disabled() {
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .all(|file| file.get("path").and_then(Value::as_str)
-                != Some("workspace/spec/module/task.spec.ts"))),
+            .all(
+                |file| file.get("path").and_then(Value::as_str) != Some("spec/module/task.spec.ts")
+            )),
         "a test cannot independently follow through the legacy basename fallback: {json}"
     );
 }
@@ -415,11 +415,11 @@ fn should_pin_a_forbidden_file_without_removing_its_graph_evidence() {
     let pinned = serialized_analysis(&snapshot, &pinned_config);
 
     assert!(
-        source_move(&baseline, "workspace/source/module/task.ts").is_some(),
+        source_move(&baseline, "source/module/task.ts").is_some(),
         "setup: the weighted source is normally eligible: {baseline}"
     );
     assert!(
-        source_move(&pinned, "workspace/source/module/task.ts").is_none(),
+        source_move(&pinned, "source/module/task.ts").is_none(),
         "the exact forbidden file cannot relocate: {pinned}"
     );
     assert_eq!(
@@ -445,7 +445,7 @@ fn should_apply_file_pinning_to_only_the_configured_profile() {
         .builtins = false;
     let json = serialized_analysis(&snapshot, &config);
 
-    assert!(source_move(&json, "workspace/source/module/task.ts").is_none());
+    assert!(source_move(&json, "source/module/task.ts").is_none());
     let greenfield_moves = json
         .pointer("/profiles/greenfield/candidates/0/deltaNarration")
         .and_then(Value::as_array)
@@ -459,8 +459,7 @@ fn should_apply_file_pinning_to_only_the_configured_profile() {
                 .into_iter()
                 .flatten()
                 .any(|file| {
-                    file.get("path").and_then(Value::as_str)
-                        == Some("workspace/source/module/task.ts")
+                    file.get("path").and_then(Value::as_str) == Some("source/module/task.ts")
                 })
         }),
         "anchored pinning must not leak into greenfield: {json}"
@@ -478,7 +477,7 @@ fn mirrors_of_task(snapshot: &Snapshot, builtins: bool) -> usize {
         .rules
         .clear();
     let json = serialized_analysis(snapshot, &config);
-    source_move(&json, "workspace/source/module/task.ts")
+    source_move(&json, "source/module/task.ts")
         .and_then(|entry| entry.get("mirrors"))
         .and_then(Value::as_array)
         .map_or(0, Vec::len)
@@ -543,7 +542,7 @@ fn should_let_an_adapter_pair_win_over_a_user_rule_naming_another_source() {
     config.profiles.anchored.relocation.test_mirroring.builtins = true;
     let json = serialized_analysis(&snapshot, &config);
     assert_eq!(
-        mirror_owners(&json, "workspace/spec/module/task.spec.ts"),
+        mirror_owners(&json, "spec/module/task.spec.ts"),
         Vec::<String>::new()
     );
 }
@@ -562,8 +561,8 @@ fn should_pair_a_test_with_no_source_when_user_rules_disagree_about_it() {
     )];
     // one rule alone links the moving source/module/task.ts
     assert_eq!(
-        mirror_owners(&snapshot(&config), &format!("workspace/{test}")),
-        ["workspace/source/module/task.ts"]
+        mirror_owners(&snapshot(&config), test),
+        ["source/module/task.ts"]
     );
     // a second rule names the same test for source/other/task.ts: unsure, so no pair
     config
@@ -577,10 +576,7 @@ fn should_pair_a_test_with_no_source_when_user_rules_disagree_about_it() {
             "spec/{dir}/module/{stem}.spec.ts",
         ));
     let json = snapshot(&config);
-    assert_eq!(
-        mirror_owners(&json, &format!("workspace/{test}")),
-        Vec::<String>::new()
-    );
+    assert_eq!(mirror_owners(&json, test), Vec::<String>::new());
     // no pair at all, so not even a blocked "ambiguous mapping" report
     let blocked = moves(&json)
         .into_iter()

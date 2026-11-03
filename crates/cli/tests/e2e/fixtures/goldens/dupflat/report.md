@@ -1,0 +1,37 @@
+# Unlace report — dupflat
+
+7 files · 6 symbols · 4 edges
+Snapshot `aa6f2f53758be9945d633a33bb72dca465f2b4b508039368e8ea839f10aa283f`
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.
+
+## Structural findings
+
+```text
+Shared findings (3)
+  - cycle [violation] `dupflat/alpha.py`/`dupflat/beta.py` — 2-symbol cycle; unlace keeps a
+    dependency cycle in one file; to split it, break `beta_step` -> `alpha_step` (w=1.0, exact)
+  - polarity [violation] at `dupflat/service.py`, `dupflat/conftest.py`: production symbol `serve`
+    (dupflat/service.py) depends on test code `sample_fixture` (dupflat/conftest.py)
+  - testOnly [violation] at `dupflat/only_tests.py`, `helper`: Only tests in this repo use
+    `helper`. It is public, so code outside this repo may use it too; check before moving or
+    deleting it.
+
+anchored profile-specific findings (0)
+  None.
+
+greenfield profile-specific findings (0)
+  None.
+```
+
+## Candidate layouts
+
+```text
+anchored — 0 candidates (baseline 0.1562; search converged; current layout already optimal)
+greenfield — 0 candidates (baseline 0.3563; search converged; current layout already optimal)
+```
+
+## Advice
+
+```text
+  None.
+```

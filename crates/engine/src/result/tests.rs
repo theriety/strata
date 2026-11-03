@@ -106,6 +106,9 @@ fn should_serialize_a_capacity_breach_as_camel_case() {
     let breach = CapacityBreach {
         measured: 412,
         cap: 300,
+        unit: CapacityUnit::Lines,
+        config_key: "capacity.file".to_owned(),
+        real_paths: vec!["src/core/huge.ts".to_owned()],
         path: Some("src/core/huge.ts".to_owned()),
     };
 
@@ -113,17 +116,93 @@ fn should_serialize_a_capacity_breach_as_camel_case() {
 
     assert_eq!(
         json,
-        "{\"measured\":412,\"cap\":300,\"path\":\"src/core/huge.ts\"}"
+        "{\"measured\":412,\"cap\":300,\"unit\":\"lines\",\"configKey\":\"capacity.file\",\"realPaths\":[\"src/core/huge.ts\"],\"path\":\"src/core/huge.ts\"}"
     );
     let folder = CapacityBreach {
         measured: 20,
         cap: 15,
+        unit: CapacityUnit::Entries,
+        config_key: "capacity.folder".to_owned(),
+        real_paths: vec!["src/batch/adapters".to_owned()],
         path: None,
     };
     assert_eq!(
         serde_json::to_string(&folder).unwrap_or_default(),
-        "{\"measured\":20,\"cap\":15}"
+        "{\"measured\":20,\"cap\":15,\"unit\":\"entries\",\"configKey\":\"capacity.folder\",\"realPaths\":[\"src/batch/adapters\"]}"
     );
+    let domain = CapacityBreach {
+        measured: 21,
+        cap: 16,
+        unit: CapacityUnit::Folders,
+        config_key: "capacity.domain".to_owned(),
+        real_paths: vec!["spec/generators".to_owned(), "src/generators".to_owned()],
+        path: None,
+    };
+    assert_eq!(
+        serde_json::to_string(&domain).unwrap_or_default(),
+        "{\"measured\":21,\"cap\":16,\"unit\":\"folders\",\"configKey\":\"capacity.domain\",\"realPaths\":[\"spec/generators\",\"src/generators\"]}"
+    );
+}
+
+#[test]
+fn should_describe_capacity_breaches_from_structured_fields() {
+    let domain = CapacityBreach {
+        measured: 21,
+        cap: 16,
+        unit: CapacityUnit::Folders,
+        config_key: "capacity.domain".to_owned(),
+        real_paths: vec!["src/generators".to_owned(), "spec/generators".to_owned()],
+        path: None,
+    };
+    let package = CapacityBreach {
+        measured: 14,
+        cap: 12,
+        unit: CapacityUnit::Domains,
+        config_key: "capacity.package".to_owned(),
+        real_paths: vec!["crates/core".to_owned()],
+        path: None,
+    };
+    let group = CapacityBreach {
+        measured: 13,
+        cap: 12,
+        unit: CapacityUnit::Packages,
+        config_key: "capacity.package-group".to_owned(),
+        real_paths: vec![".".to_owned()],
+        path: None,
+    };
+
+    assert_eq!(
+        domain.describe(&[]),
+        "in `src/generators` + `spec/generators`: 21 folders holding files; the domain cap is 16 (`capacity.domain`). src/ and spec/ count together."
+    );
+    assert_eq!(
+        package.describe(&[]),
+        "in `crates/core`: 14 domains holding files; the package cap is 12 (`capacity.package`)."
+    );
+    assert_eq!(
+        group.describe(&[]),
+        "in `.`: 13 packages holding files; the package group cap is 12 (`capacity.package-group`)."
+    );
+}
+
+#[test]
+fn should_describe_a_breach_without_real_paths_at_one_fallback_path() {
+    let folder = CapacityBreach {
+        measured: 24,
+        cap: 20,
+        unit: CapacityUnit::Entries,
+        config_key: "capacity.folder".to_owned(),
+        real_paths: Vec::new(),
+        path: None,
+    };
+
+    let text = folder.describe(&["proj".to_owned(), "hub".to_owned()]);
+
+    assert_eq!(
+        text,
+        "in `proj/hub`: 24 entries (files and subfolders); the folder cap is 20 (`capacity.folder`)."
+    );
+    assert!(!text.contains(" + "), "{text}");
 }
 
 #[test]
@@ -147,9 +226,11 @@ fn should_serialize_a_move_reason_with_its_kind_tag() {
             container: "app/src/core".to_owned(),
             count: 4,
             cap: 3,
+            unit: CapacityUnit::Entries,
+            config_key: "capacity.folder".to_owned(),
         })
         .unwrap_or_default(),
-        "{\"kind\":\"relievesOverCap\",\"container\":\"app/src/core\",\"count\":4,\"cap\":3}"
+        "{\"kind\":\"relievesOverCap\",\"container\":\"app/src/core\",\"count\":4,\"cap\":3,\"unit\":\"entries\",\"configKey\":\"capacity.folder\"}"
     );
 }
 
@@ -167,8 +248,20 @@ fn should_display_every_reason_as_its_prose() {
                 container: "app/src/core".to_owned(),
                 count: 4,
                 cap: 3,
+                unit: CapacityUnit::Entries,
+                config_key: "capacity.folder".to_owned(),
             },
-            "relieves over-cap folder app/src/core (4/3 entries)",
+            "relieves app/src/core, which has 4 entries (files and subfolders) against the folder cap of 3 (`capacity.folder`)",
+        ),
+        (
+            MoveReason::RelievesOverCap {
+                container: "app/src".to_owned(),
+                count: 21,
+                cap: 20,
+                unit: CapacityUnit::Folders,
+                config_key: "capacity.domain".to_owned(),
+            },
+            "relieves app/src, which has 21 folders holding files against the domain cap of 20 (`capacity.domain`)",
         ),
         (
             MoveReason::PulledBy {

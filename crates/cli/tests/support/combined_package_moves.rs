@@ -86,20 +86,20 @@ pub fn configure(result: &mut AnalyzeResult) -> Result<(), &'static str> {
     candidate.delta_narration = vec![Move {
         kind: MoveKind::Move,
         files: vec![FileMove {
-            path: "workspace/right/destination.ts".into(),
-            from: "workspace/right".into(),
+            path: "right/destination.ts".into(),
+            from: "right".into(),
         }],
-        to: "workspace/right/nested".into(),
+        to: "right/nested".into(),
         reason: MoveReason::Clustering,
         mirrors: vec![],
     }];
     candidate.delta_narration.push(Move {
         kind: MoveKind::Move,
         files: vec![FileMove {
-            path: "workspace/left/source.ts".into(),
-            from: "workspace/left".into(),
+            path: "left/source.ts".into(),
+            from: "left".into(),
         }],
-        to: "workspace/left/relocated".into(),
+        to: "left/relocated".into(),
         reason: MoveReason::Clustering,
         mirrors: vec![],
     });

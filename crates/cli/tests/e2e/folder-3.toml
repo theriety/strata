@@ -1,0 +1,8 @@
+# Pins the folder cap at 3 so the mixed-root fixtures keep the folder
+# breaches their candidate pricing is measured on. It lives beside the fixtures
+# rather than inside one so the analyzer never scans it as source.
+[profiles.anchored.capacity]
+folder = 3
+
+[profiles.greenfield.capacity]
+folder = 3

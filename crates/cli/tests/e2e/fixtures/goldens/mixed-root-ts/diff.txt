@@ -1,0 +1,6 @@
+moves (1 group(s), 3 file(s); gain +1.1044):
+move — relieves atlas/src/core, which has 4 entries (files and subfolders) against the folder cap of 3 (`capacity.folder`)
+  1. atlas/src/core/beta.ts [atlas/src/core → atlas/src/core/beta]
+  2. atlas/src/core/delta.ts [atlas/src/core → atlas/src/core/beta]
+  3. atlas/src/core/gamma.ts [atlas/src/core → atlas/src/core/beta]
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

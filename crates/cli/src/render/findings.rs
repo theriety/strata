@@ -38,14 +38,8 @@ fn finding_lines(violation: &Violation) -> Vec<String> {
         .join(", ");
     let detail = if violation.kind == ViolationKind::Cycle {
         cycle_finding_text(violation)
-    } else if violation
-        .capacity
-        .as_ref()
-        .is_some_and(|capacity| capacity.path.is_some())
-    {
-        violation.detail.clone()
-    } else if violation.capacity.is_some() {
-        format!("at container ancestry {location}: {}", violation.detail)
+    } else if let Some(capacity) = &violation.capacity {
+        capacity.describe(&violation.location)
     } else {
         format!("at {location}: {}", violation.detail)
     };
@@ -58,25 +52,6 @@ fn finding_lines(violation: &Violation) -> Vec<String> {
         2,
         4,
     ));
-    if let Some(capacity) = &violation.capacity
-        && !violation.detail.contains(&format!(
-            "holds {} against a cap of {}",
-            capacity.measured, capacity.cap
-        ))
-    {
-        let capacity_location = capacity
-            .path
-            .as_ref()
-            .map_or(String::new(), |path| format!(" at `{path}`"));
-        lines.extend(wrap(
-            &format!(
-                "Measured {} against cap {}{capacity_location}.",
-                capacity.measured, capacity.cap
-            ),
-            4,
-            4,
-        ));
-    }
     for edge in violation.break_suggestions.iter().flatten().skip(1) {
         lines.extend(wrap(&format!("Also cut: {}", cut_text(edge)), 4, 4));
     }

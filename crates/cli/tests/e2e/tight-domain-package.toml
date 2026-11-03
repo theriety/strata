@@ -1,0 +1,11 @@
+# Pins the domain and package caps at 1 so the `dup-ws-ts` workspace breaches
+# both, while the folder cap stays at its default and the greenfield search can
+# still propose its file move. It lives beside the fixtures rather than inside
+# one so the analyzer never scans it as source.
+[profiles.anchored.capacity]
+domain = 1
+package = 1
+
+[profiles.greenfield.capacity]
+domain = 1
+package = 1

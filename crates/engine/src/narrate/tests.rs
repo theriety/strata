@@ -4,7 +4,7 @@ use smol_str::SmolStr;
 use unlace_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
 
 use super::*;
-use crate::result::MoveReason;
+use crate::result::{CapacityUnit, MoveReason};
 
 #[test]
 fn should_retain_a_real_directory_that_repeats_the_repository_root() {
@@ -39,6 +39,15 @@ fn container(id: u32, name: &str, level: ScopeLevel, parent: Option<u32>) -> Con
         level,
         parent: parent.map(ContainerId),
         synthetic: false,
+        label_keyed: false,
+    }
+}
+
+/// Marks `container` as keyed under the package-group label.
+fn label_keyed(container: Container) -> Container {
+    Container {
+        label_keyed: true,
+        ..container
     }
 }
 
@@ -96,18 +105,21 @@ fn should_compose_a_destination_from_the_folder_key_not_a_decorated_domain_label
     // the move destination is the folder's own key, the real directory the
     // file lands in. The old fold treated the decorated label as a path
     // ancestor and re-embedded the whole folder key beneath it.
+    // a repository with no manifest package keys every container under the
+    // group label `cts`, which names no directory.
     let current = ContainerTree::new(vec![
         container(0, "cts", ScopeLevel::PackageGroup, None),
-        container(1, "cts", ScopeLevel::Package, Some(0)),
-        container(2, "cts/util", ScopeLevel::Domain, Some(1)),
-        container(3, "cts/util", ScopeLevel::Folder, Some(2)),
+        label_keyed(container(1, "cts", ScopeLevel::Package, Some(0))),
+        label_keyed(container(2, "cts/util", ScopeLevel::Domain, Some(1))),
+        label_keyed(container(3, "cts/util", ScopeLevel::Folder, Some(2))),
         container(4, "src/util/clamp.ts", ScopeLevel::File, Some(3)),
     ]);
+    // the candidate's folder carries the provenance of the folder it stands for.
     let candidate = ContainerTree::new(vec![
         container(0, "cts", ScopeLevel::PackageGroup, None),
-        container(1, "cts", ScopeLevel::Package, Some(0)),
-        container(2, "cts (cts.core)", ScopeLevel::Domain, Some(1)),
-        container(3, "cts/core", ScopeLevel::Folder, Some(2)),
+        label_keyed(container(1, "cts", ScopeLevel::Package, Some(0))),
+        label_keyed(container(2, "cts (cts.core)", ScopeLevel::Domain, Some(1))),
+        label_keyed(container(3, "cts/core", ScopeLevel::Folder, Some(2))),
         container(4, "src/util/clamp.ts", ScopeLevel::File, Some(3)),
     ]);
 
@@ -471,6 +483,55 @@ fn should_keep_a_lone_file_in_its_package_when_upper_levels_merge_packages() {
     );
 }
 
+/// A workspace whose manifest package lives at `ws/atlas` below a root `ws`
+/// that holds a directory of its own name; `loop.ts` sits in the given folder
+/// of `atlas`.
+fn same_name_workspace_tree(loop_folder: u32) -> ContainerTree {
+    ContainerTree::new(vec![
+        container(0, "ws", ScopeLevel::PackageGroup, None),
+        container(1, "ws/atlas", ScopeLevel::Package, Some(0)),
+        container(2, "ws/atlas/agent", ScopeLevel::Domain, Some(1)),
+        container(3, "ws/atlas/core", ScopeLevel::Domain, Some(1)),
+        container(4, "ws/atlas/agent", ScopeLevel::Folder, Some(2)),
+        container(5, "ws/atlas/core", ScopeLevel::Folder, Some(3)),
+        container(
+            6,
+            "ws/atlas/src/agent/loop.ts",
+            ScopeLevel::File,
+            Some(loop_folder),
+        ),
+        container(7, "ws/atlas/src/core/alpha.ts", ScopeLevel::File, Some(5)),
+    ])
+}
+
+#[test]
+fn should_narrate_a_package_directory_that_shares_the_root_name_whole() {
+    // `ws/atlas` is the real package directory, so the group-keyed move below
+    // is the real path `ws/atlas/src/...` behind exactly one root label.
+    let current = same_name_workspace_tree(4);
+    let candidate = same_name_workspace_tree(5);
+
+    let moves = narrate_repository_relative(&current, &candidate, &plain_facts());
+    let narrated: Vec<(String, String, String)> = moves
+        .iter()
+        .flat_map(|entry| {
+            entry
+                .files
+                .iter()
+                .map(|file| (file.path.clone(), file.from.clone(), entry.to.clone()))
+        })
+        .collect();
+
+    assert_eq!(
+        narrated,
+        vec![(
+            "ws/ws/atlas/src/agent/loop.ts".to_owned(),
+            "ws/ws/atlas/src/agent".to_owned(),
+            "ws/ws/atlas/src/core".to_owned(),
+        )]
+    );
+}
+
 #[test]
 fn should_order_nested_package_and_transparent_roots_once_in_narration() {
     let current = ContainerTree::new(vec![
@@ -768,11 +829,13 @@ fn should_explain_a_move_out_of_an_over_cap_folder() {
             container: "src/core".to_owned(),
             count: 4,
             cap: 3,
+            unit: CapacityUnit::Entries,
+            config_key: "capacity.folder".to_owned(),
         })
     );
     assert_eq!(
         moves.first().map(|m| m.reason.to_string()),
-        Some("relieves over-cap folder src/core (4/3 entries)".to_owned())
+        Some("relieves src/core, which has 4 entries (files and subfolders) against the folder cap of 3 (`capacity.folder`)".to_owned())
     );
 }
 
@@ -824,6 +887,8 @@ fn should_attribute_cap_relief_to_the_dominant_over_cap_origin() {
             container: "src/zebra".to_owned(),
             count: 4,
             cap: 3,
+            unit: CapacityUnit::Entries,
+            config_key: "capacity.folder".to_owned(),
         })
     );
 }

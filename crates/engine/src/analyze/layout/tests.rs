@@ -219,7 +219,7 @@ fn should_relocate_a_misplaced_file_despite_a_cyclic_folder_base() {
             entry
                 .files
                 .iter()
-                .any(|file| file.path == "app/src/core/a/m.ts")
+                .any(|file| file.path == "src/core/a/m.ts")
         })
         .map(|entry| entry.to.clone());
 
@@ -401,7 +401,7 @@ fn transparent_namespace_file_snapshot(crosses_namespace: bool) -> Snapshot {
 #[test]
 fn should_veto_a_file_move_across_transparent_namespaces() {
     let snapshot = transparent_namespace_file_snapshot(true);
-    let destination = greenfield_file_destination(&snapshot, "app/left/area/origin/record.ts");
+    let destination = greenfield_file_destination(&snapshot, "left/area/origin/record.ts");
 
     assert!(
         destination
@@ -415,7 +415,7 @@ fn should_veto_a_file_move_across_transparent_namespaces() {
 #[test]
 fn should_allow_a_unique_file_move_within_its_transparent_namespace() {
     let snapshot = transparent_namespace_file_snapshot(false);
-    let destination = greenfield_file_destination(&snapshot, "app/left/area/origin/record.ts");
+    let destination = greenfield_file_destination(&snapshot, "left/area/origin/record.ts");
 
     assert!(
         destination
@@ -429,7 +429,7 @@ fn should_allow_a_unique_file_move_within_its_transparent_namespace() {
 #[test]
 fn should_veto_a_file_move_that_duplicates_an_existing_rendered_leaf() {
     let snapshot = rendered_leaf_collision_snapshot(false, false);
-    let destination = greenfield_file_destination(&snapshot, "app/src/area/origin/record.ts");
+    let destination = greenfield_file_destination(&snapshot, "src/area/origin/record.ts");
 
     assert!(
         destination
@@ -443,8 +443,8 @@ fn should_veto_a_file_move_that_duplicates_an_existing_rendered_leaf() {
 #[test]
 fn should_veto_a_sequential_sibling_move_after_the_first_claims_the_rendered_leaf() {
     let snapshot = rendered_leaf_collision_snapshot(true, false);
-    let first = greenfield_file_destination(&snapshot, "app/src/area/origin/record.ts");
-    let second = greenfield_file_destination(&snapshot, "app/src/area/second-origin/record.ts");
+    let first = greenfield_file_destination(&snapshot, "src/area/origin/record.ts");
+    let second = greenfield_file_destination(&snapshot, "src/area/second-origin/record.ts");
     let arrivals = [first.as_deref(), second.as_deref()]
         .into_iter()
         .flatten()
@@ -734,7 +734,7 @@ fn should_keep_a_package_spanning_cycle_in_its_pass_start_cluster() {
 fn should_move_a_file_body_only_with_its_whole_file() {
     let snapshot = rendered_leaf_collision_snapshot(true, true);
 
-    let destination = greenfield_file_destination(&snapshot, "app/src/area/origin/record.ts");
+    let destination = greenfield_file_destination(&snapshot, "src/area/origin/record.ts");
 
     assert!(
         destination
@@ -2530,6 +2530,7 @@ fn relief_file(index: usize, stem: &str) -> FileInfo {
             domain: SmolStr::new("hub"),
             package: SmolStr::new("app"),
             synthetic: false,
+            label_keyed: false,
         },
     }
 }
@@ -2614,13 +2615,8 @@ fn should_count_binding_folders_through_an_intermediate_domain() {
     assert_eq!(
         domains,
         vec![
-            vec!["root".to_owned(), "pkg".to_owned(), "dom".to_owned()],
-            vec![
-                "root".to_owned(),
-                "pkg".to_owned(),
-                "dom".to_owned(),
-                "sub".to_owned()
-            ],
+            vec!["root/pkg/dom".to_owned()],
+            vec!["root/pkg/dom/sub".to_owned()],
         ]
     );
 }

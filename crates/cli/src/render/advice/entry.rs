@@ -5,7 +5,6 @@ use unlace_engine::{
     ProfileName, RelocationAdvice, RelocationProposal, ReviewReason, SymbolKind, SymbolMove,
 };
 
-use super::super::changes::Changes;
 use super::super::{RenderOptions, nq, wrap};
 
 /// The symbol-specific part of an entry's subject.
@@ -71,20 +70,16 @@ impl<'a> Entry<'a> {
 }
 
 /// Groups `items` into entries, keeping first-appearance order.
-pub(super) fn group<'a>(
-    items: &'a [RelocationAdvice],
-    paths: &Changes,
-    options: RenderOptions,
-) -> Vec<Entry<'a>> {
+pub(super) fn group<'a>(items: &'a [RelocationAdvice], options: RenderOptions) -> Vec<Entry<'a>> {
     let mut entries: Vec<Entry<'a>> = Vec::new();
     for item in items {
-        let tail = tail_text(item, paths);
-        let detail = detail_lines(item, paths, options);
+        let tail = tail_text(item);
+        let detail = detail_lines(item, options);
         let (subject, named, from) = match &item.proposal {
             RelocationProposal::File { relocation } => (
                 relocation.files.first().map_or_else(
                     || "file `(unknown)`".to_owned(),
-                    |file| format!("file `{}`", paths.path(&file.path)),
+                    |file| format!("file `{}`", file.path),
                 ),
                 None,
                 None,
@@ -140,10 +135,10 @@ fn symbol_subject(relocation: &SymbolMove) -> String {
 }
 
 /// The destination and profile summary that follows the subject.
-fn tail_text(item: &RelocationAdvice, paths: &Changes) -> String {
+fn tail_text(item: &RelocationAdvice) -> String {
     format!(
         "→ `{}` · supporting [{}] · qualified [{}] · absent [{}] · conflicts [{}]",
-        advice_path(&item.proposal, &item.destination, paths),
+        item.destination,
         profile_names(&item.supporting_profiles),
         profile_names(&item.qualified_profiles),
         profile_names(&item.absent_profiles),
@@ -152,7 +147,7 @@ fn tail_text(item: &RelocationAdvice, paths: &Changes) -> String {
             .map(|conflict| format!(
                 "{}→{}",
                 profile_name(conflict.profile),
-                nq(&advice_path(&item.proposal, &conflict.destination, paths))
+                nq(&conflict.destination)
             ))
             .collect::<Vec<_>>()
             .join(", "),
@@ -160,14 +155,14 @@ fn tail_text(item: &RelocationAdvice, paths: &Changes) -> String {
 }
 
 /// The verbose evidence lines and review reasons that follow the entry head.
-fn detail_lines(item: &RelocationAdvice, paths: &Changes, options: RenderOptions) -> Vec<String> {
+fn detail_lines(item: &RelocationAdvice, options: RenderOptions) -> Vec<String> {
     let mut lines = Vec::new();
     for assessment in item.assessments.iter().filter(|_| options.verbose) {
         let evidence = assessment.evidence;
-        let best_alternative = assessment.best_alternative.as_deref().map_or_else(
-            || "none".to_owned(),
-            |path| nq(&advice_path(&item.proposal, path, paths)),
-        );
+        let best_alternative = assessment
+            .best_alternative
+            .as_deref()
+            .map_or_else(|| "none".to_owned(), nq);
         lines.extend(wrap(&format!(
             "{}: owner {:.2} · role {:.2} · source {:.2} · destination {:.2} · producer {:.2} · reach {:.2} · margin {:.2}; weighted {:.2}/{:.2} · structural {:.2}/{:.2} · margin threshold {:.2} · qualified {} · best alternative {}",
             profile_name(assessment.profile), evidence.unique_owner, evidence.role_affinity,
@@ -214,13 +209,6 @@ fn profile_name(profile: ProfileName) -> &'static str {
     match profile {
         ProfileName::Anchored => "anchored",
         ProfileName::Greenfield => "greenfield",
-    }
-}
-
-fn advice_path(proposal: &RelocationProposal, path: &str, paths: &Changes) -> String {
-    match proposal {
-        RelocationProposal::File { .. } => paths.path(path),
-        RelocationProposal::Symbol { .. } => path.to_owned(),
     }
 }
 

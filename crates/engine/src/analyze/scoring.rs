@@ -54,4 +54,10 @@ pub(in crate::analyze) struct ContainerSpec<'name> {
     /// True for the synthetic `workspace` folder bucket the render collapses.
     /// Only a root-file folder is ever synthetic; every upper level is false.
     pub(in crate::analyze) synthetic: bool,
+    /// True when the container's key is keyed under the package-group label
+    /// (`Container::label_keyed`). A candidate folder takes the flag of the real
+    /// folder it stands for; a package or domain is flagged when every folder
+    /// beneath it is, so the provenance is stated once per real folder and
+    /// derived upward.
+    pub(in crate::analyze) label_keyed: bool,
 }

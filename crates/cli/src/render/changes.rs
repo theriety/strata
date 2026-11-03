@@ -8,7 +8,8 @@ use super::wrap;
 
 /// Before/after physical files, annotated only with relocated symbols.
 pub(super) struct Changes {
-    root: Option<String>,
+    /// The label over the Before/After trees: the analyzed project's root, or `.`.
+    heading: String,
     relocations: BTreeMap<String, String>,
     before: BTreeMap<String, Vec<String>>,
     after: BTreeMap<String, Vec<String>>,
@@ -16,7 +17,7 @@ pub(super) struct Changes {
 
 impl Changes {
     pub(super) fn build(result: &AnalyzeResult, candidate: &Candidate) -> Self {
-        let mut changes = Self::paths(result);
+        let mut changes = Self::new(result);
         for entry in &candidate.delta_narration {
             for file in &entry.files {
                 changes.add_file(&file.path, &entry.to);
@@ -50,7 +51,7 @@ impl Changes {
         changes
     }
 
-    pub(super) fn paths(result: &AnalyzeResult) -> Self {
+    fn new(result: &AnalyzeResult) -> Self {
         let mut dataset_roots = BTreeSet::new();
         let mut package_roots = BTreeSet::new();
         collect_roots(&result.current.tree, &mut dataset_roots, &mut package_roots);
@@ -59,45 +60,24 @@ impl Changes {
         } else {
             dataset_roots
         };
-        let root = if roots.len() == 1 {
-            roots.first().cloned()
-        } else {
-            None
+        let heading = match roots.iter().collect::<Vec<_>>().as_slice() {
+            [only] => (*only).clone(),
+            _ => ".".to_owned(),
         };
         Self {
-            root,
+            heading,
             relocations: BTreeMap::new(),
             before: BTreeMap::new(),
             after: BTreeMap::new(),
         }
     }
 
-    fn add_file(&mut self, path: &str, destination: &str) {
-        let before = self.path(path);
-        let after = self.destination(path, destination);
-        if before != after {
-            self.before.entry(before.clone()).or_default();
+    fn add_file(&mut self, path: &str, destination_folder: &str) {
+        let after = destination(path, destination_folder);
+        if path != after {
+            self.before.entry(path.to_owned()).or_default();
             self.after.entry(after.clone()).or_default();
-            self.relocations.insert(before, after);
-        }
-    }
-
-    pub(super) fn path(&self, path: &str) -> String {
-        self.root
-            .as_ref()
-            .and_then(|root| path.strip_prefix(&format!("{root}/")))
-            .unwrap_or(path)
-            .to_owned()
-    }
-
-    pub(super) fn destination(&self, path: &str, folder: &str) -> String {
-        let leaf = path.rsplit('/').next().unwrap_or(path);
-        let is_root = self.root.as_deref() == Some(folder);
-        let folder = self.path(folder);
-        if folder.is_empty() || folder == "." || is_root {
-            leaf.to_owned()
-        } else {
-            format!("{folder}/{leaf}")
+            self.relocations.insert(path.to_owned(), after);
         }
     }
 
@@ -144,7 +124,7 @@ impl Changes {
             for (path, symbols) in files {
                 tree.insert(path, symbols);
             }
-            lines.push(format!("    {}/", self.root.as_deref().unwrap_or(".")));
+            lines.push(format!("    {}/", self.heading));
             tree.draw("    ", &mut lines);
         }
         lines.push("  * File moved or its symbol contents changed.".to_owned());
@@ -152,6 +132,17 @@ impl Changes {
             "  Unchanged branches and symbols omitted; excluded files are not shown.".to_owned(),
         );
         lines
+    }
+}
+
+/// Where a file lands when moved into `folder`; `.` or an empty folder is the
+/// repository root, so the file keeps only its own name.
+pub(super) fn destination(path: &str, folder: &str) -> String {
+    let leaf = path.rsplit('/').next().unwrap_or(path);
+    if folder.is_empty() || folder == "." {
+        leaf.to_owned()
+    } else {
+        format!("{folder}/{leaf}")
     }
 }
 

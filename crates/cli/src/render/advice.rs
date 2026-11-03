@@ -5,7 +5,6 @@ use std::cmp::Reverse;
 use unlace_engine::{AnalyzeResult, MoveReason};
 
 use self::entry::group;
-use super::changes::Changes;
 use super::limit::{more_line, take_worst};
 use super::{RenderOptions, nq, weight, wrap};
 
@@ -33,9 +32,12 @@ pub(super) fn caption_for(reason: &MoveReason) -> String {
             container,
             count,
             cap,
+            unit,
+            config_key,
         } => format!(
-            "Why: relieves {}, which holds {count} against a cap of {cap}.",
-            nq(container)
+            "Why: relieves {}, which has {}.",
+            nq(container),
+            unit.against_cap(*count, *cap, config_key),
         ),
         MoveReason::Follows { subject } => {
             format!(
@@ -53,7 +55,6 @@ pub(super) fn caption_for(reason: &MoveReason) -> String {
 }
 
 pub(super) fn advice_with_options(result: &AnalyzeResult, options: RenderOptions) -> Vec<String> {
-    let paths = Changes::paths(result);
     let mut lines = Vec::new();
     let has_assessments = result
         .advice
@@ -93,7 +94,7 @@ pub(super) fn advice_with_options(result: &AnalyzeResult, options: RenderOptions
         ),
     ] {
         lines.push(format!(" {heading} ({}):", items.len()));
-        let entries = group(items, &paths, options);
+        let entries = group(items, options);
         let (shown, _) = take_worst(&entries, options, |entry| {
             entry
                 .members()

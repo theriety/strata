@@ -77,6 +77,7 @@ mod tests {
                 domain: SmolStr::default(),
                 package: SmolStr::new(package),
                 synthetic: false,
+                label_keyed: false,
             },
         }
     }

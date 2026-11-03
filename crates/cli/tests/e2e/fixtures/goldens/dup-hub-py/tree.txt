@@ -1,0 +1,53 @@
+dup-hub-py [packageGroup]
+  dup-hub-py [package]
+    dup-hub-py [domain]
+      hub [folder]
+        dup-hub-py/hub/emit_00.py [file] 1 sloc
+          - emit_seed (file)
+        dup-hub-py/hub/emit_01.py [file] 1 sloc
+          - emit_stage (file)
+        dup-hub-py/hub/emit_02.py [file] 1 sloc
+          - emit_stage (file)
+        dup-hub-py/hub/emit_03.py [file] 1 sloc
+          - emit_stage (file)
+        dup-hub-py/hub/emit_04.py [file] 1 sloc
+          - emit_stage (file)
+        dup-hub-py/hub/emit_05.py [file] 1 sloc
+          - emit_stage (file)
+        dup-hub-py/hub/emit_06.py [file] 1 sloc
+          - emit_stage (file)
+        dup-hub-py/hub/emit_07.py [file] 1 sloc
+          - emit_stage (file)
+        dup-hub-py/hub/emit_08.py [file] 1 sloc
+          - emit_stage (file)
+        dup-hub-py/hub/emit_09.py [file] 1 sloc
+          - emit_stage (file)
+        dup-hub-py/hub/emit_10.py [file] 1 sloc
+          - emit_stage (file)
+        dup-hub-py/hub/emit_11.py [file] 1 sloc
+          - emit_stage (file)
+        dup-hub-py/hub/ingest_00.py [file] 1 sloc
+          - ingest_seed (file)
+        dup-hub-py/hub/ingest_01.py [file] 1 sloc
+          - ingest_stage (file)
+        dup-hub-py/hub/ingest_02.py [file] 1 sloc
+          - ingest_stage (file)
+        dup-hub-py/hub/ingest_03.py [file] 1 sloc
+          - ingest_stage (file)
+        dup-hub-py/hub/ingest_04.py [file] 1 sloc
+          - ingest_stage (file)
+        dup-hub-py/hub/ingest_05.py [file] 1 sloc
+          - ingest_stage (file)
+        dup-hub-py/hub/ingest_06.py [file] 1 sloc
+          - ingest_stage (file)
+        dup-hub-py/hub/ingest_07.py [file] 1 sloc
+          - ingest_stage (file)
+        dup-hub-py/hub/ingest_08.py [file] 1 sloc
+          - ingest_stage (file)
+        dup-hub-py/hub/ingest_09.py [file] 1 sloc
+          - ingest_stage (file)
+        dup-hub-py/hub/ingest_10.py [file] 1 sloc
+          - ingest_stage (file)
+        dup-hub-py/hub/ingest_11.py [file] 1 sloc
+          - ingest_stage (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

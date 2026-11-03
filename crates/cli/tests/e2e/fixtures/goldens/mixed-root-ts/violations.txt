@@ -1,0 +1,3 @@
+capacity [violation] . :: in `.`: 5 entries (files and subfolders); the folder cap is 3 (`capacity.folder`).
+capacity [violation] atlas/src/core :: in `atlas/src/core`: 4 entries (files and subfolders); the folder cap is 3 (`capacity.folder`).
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

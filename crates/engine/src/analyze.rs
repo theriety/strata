@@ -24,6 +24,7 @@ pub const BORDERLINE_CAPACITY_MARGIN: f64 = 0.1;
 mod advice;
 mod findings;
 mod layout;
+mod real_paths;
 mod relocation;
 mod rendering;
 mod scoring;
@@ -139,7 +140,7 @@ fn analyze_inner(
         greenfield,
     };
     let advice = build_advice(snapshot, config, &profiles);
-    Ok(AnalyzeResult {
+    let mut result = AnalyzeResult {
         schema_version: RESULT_SCHEMA_VERSION,
         snapshot_hash: snapshot.hash().to_hex().to_string(),
         summary: summarize(snapshot),
@@ -150,5 +151,9 @@ fn analyze_inner(
         },
         profiles,
         advice,
-    })
+    };
+    // the analysis keys paths under the package-group label; the serialized
+    // result carries real repo-relative paths only.
+    real_paths::strip_group_prefix(&mut result);
+    Ok(result)
 }

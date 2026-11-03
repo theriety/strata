@@ -53,6 +53,7 @@ pub(in crate::analyze) fn real_dir_partition(
         domain: SmolStr::new("workspace"),
         package: SmolStr::new("workspace"),
         synthetic: false,
+        label_keyed: true,
     };
     let keys: Vec<LaminarHome> = condensation
         .members
@@ -81,4 +82,38 @@ pub(in crate::analyze) fn real_dir_partition(
         names,
         synthetic,
     )
+}
+
+/// Whether each folder cluster of `partitions` stands for a folder keyed under
+/// the package-group label, indexed by cluster id.
+///
+/// A cluster takes its provenance from the file it is named after: the heaviest
+/// member of its SCCs ([`dominant_member`]), the same file [`real_dir_partition`]
+/// places the SCC by. An import cycle can span folders of both provenances, but
+/// it lands in the dominant member's folder, so only that folder's provenance
+/// describes the cluster. The search only ever relieves or rebuilds a real
+/// folder into places that path-extend it, so every SCC of a cluster shares one
+/// dominant home and the answer is the same for the whole cluster. Computing it
+/// from the final partitions, rather than carrying a table through each rebuild,
+/// leaves no second table to drift.
+pub(in crate::analyze) fn label_keyed_folders(
+    files: &[FileInfo],
+    condensation: &Condensation,
+    partitions: &[&Partition],
+    cluster_count: usize,
+) -> Vec<bool> {
+    let mut label_keyed = vec![false; cluster_count];
+    for partition in partitions {
+        for (scc, members) in condensation.members.iter().enumerate() {
+            let Some(cluster) = partition.cluster_of(u32::try_from(scc).unwrap_or(u32::MAX)) else {
+                continue;
+            };
+            let slot = label_keyed.get_mut(cluster.0 as usize);
+            let dominant = dominant_member(files, members);
+            if let (Some(slot), Some(file)) = (slot, dominant) {
+                *slot = file.home.label_keyed;
+            }
+        }
+    }
+    label_keyed
 }

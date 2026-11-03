@@ -47,6 +47,18 @@ impl PipelineSolver<'_> {
             anchor_min(&mut package_anchor, package, &name);
             anchor_min(&mut domain_anchor, domain, &name);
         }
+        let package_label_keyed = anchored_label_keyed(
+            chain_of,
+            &self.real_folder_names,
+            &self.real_folder_label_keyed,
+            |(_, package, _)| package,
+        );
+        let domain_label_keyed = anchored_label_keyed(
+            chain_of,
+            &self.real_folder_names,
+            &self.real_folder_label_keyed,
+            |(domain, _, _)| domain,
+        );
 
         let groups: BTreeSet<u32> = chain_of.values().map(|&(_, _, group)| group).collect();
         let group_raw: BTreeMap<u32, (u32, SmolStr)> = groups
@@ -61,6 +73,7 @@ impl PipelineSolver<'_> {
                 level: ScopeLevel::PackageGroup,
                 parent: None,
                 synthetic: false,
+                label_keyed: false,
             });
             if let Some((_, raw)) = group_raw.get(&group) {
                 record_undecorated_key(key_by_id, id, raw, name);
@@ -99,6 +112,7 @@ impl PipelineSolver<'_> {
                 level: ScopeLevel::Package,
                 parent: group_ids.get(&group).copied(),
                 synthetic: false,
+                label_keyed: package_label_keyed.get(&package).copied().unwrap_or(false),
             });
             if let Some((_, raw)) = package_raw.get(&package) {
                 record_undecorated_key(key_by_id, id, raw, &name);
@@ -113,6 +127,7 @@ impl PipelineSolver<'_> {
             domain_tally,
             &domain_anchor,
             &package_ids,
+            &domain_label_keyed,
         )
     }
 
@@ -130,6 +145,7 @@ impl PipelineSolver<'_> {
         domain_tally: &NameTally,
         domain_anchor: &BTreeMap<u32, SmolStr>,
         package_ids: &BTreeMap<u32, ContainerId>,
+        domain_label_keyed: &BTreeMap<u32, bool>,
     ) -> BTreeMap<u32, ContainerId> {
         let domains: BTreeMap<u32, u32> = chain_of
             .values()
@@ -162,6 +178,7 @@ impl PipelineSolver<'_> {
                 level: ScopeLevel::Domain,
                 parent: package_ids.get(&package).copied(),
                 synthetic: false,
+                label_keyed: domain_label_keyed.get(&domain).copied().unwrap_or(false),
             });
             if let Some((_, raw)) = domain_raw.get(&domain) {
                 record_undecorated_key(key_by_id, id, raw, &name);
@@ -170,5 +187,109 @@ impl PipelineSolver<'_> {
         }
 
         domain_ids
+    }
+}
+
+/// Whether each upper cluster `level` picks out of `chain_of` is keyed under the
+/// package-group label, as the folder it anchors on is.
+///
+/// A cluster anchors on the smallest real folder name it holds (ties to the
+/// lowest folder cluster id), the same folder that qualifies its name, so the
+/// provenance and the name come from one place. A cluster holding folders of
+/// both provenances, such as loose files beside a same-named package, takes the
+/// anchor's rather than a blend of the two.
+fn anchored_label_keyed(
+    chain_of: &BTreeMap<u32, (u32, u32, u32)>,
+    folder_names: &[SmolStr],
+    folder_label_keyed: &[bool],
+    level: fn((u32, u32, u32)) -> u32,
+) -> BTreeMap<u32, bool> {
+    let mut anchored: BTreeMap<u32, (&SmolStr, bool)> = BTreeMap::new();
+    for (&folder, &chain) in chain_of {
+        let Some(name) = folder_names.get(folder as usize) else {
+            continue;
+        };
+        let keyed = folder_label_keyed
+            .get(folder as usize)
+            .copied()
+            .unwrap_or(false);
+        anchored
+            .entry(level(chain))
+            .and_modify(|held| {
+                if name < held.0 {
+                    *held = (name, keyed);
+                }
+            })
+            .or_insert((name, keyed));
+    }
+    anchored
+        .into_iter()
+        .map(|(cluster, (_, keyed))| (cluster, keyed))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(values: &[&str]) -> Vec<SmolStr> {
+        values.iter().map(|value| SmolStr::new(*value)).collect()
+    }
+
+    /// Folders 0 and 1 share package 7; folder 2 sits alone in package 8.
+    fn chain() -> BTreeMap<u32, (u32, u32, u32)> {
+        BTreeMap::from([(0, (10, 7, 1)), (1, (11, 7, 1)), (2, (12, 8, 1))])
+    }
+
+    #[test]
+    fn should_take_a_packages_provenance_from_its_anchor_folder_not_a_blend() {
+        // the package holds a real folder `ws/core` and a loose `ws/aaa`; the
+        // loose one is the smallest name, so it anchors and the package follows it.
+        let flags = anchored_label_keyed(
+            &chain(),
+            &names(&["ws/core", "ws/aaa", "ws/other"]),
+            &[false, true, false],
+            |(_, package, _)| package,
+        );
+
+        assert_eq!(flags.get(&7), Some(&true));
+        assert_eq!(flags.get(&8), Some(&false));
+    }
+
+    #[test]
+    fn should_follow_a_real_anchor_when_a_loose_folder_sorts_after_it() {
+        let flags = anchored_label_keyed(
+            &chain(),
+            &names(&["ws/core", "ws/zzz", "ws/other"]),
+            &[false, true, false],
+            |(_, package, _)| package,
+        );
+
+        assert_eq!(flags.get(&7), Some(&false));
+    }
+
+    #[test]
+    fn should_anchor_a_tie_on_the_lowest_folder_cluster() {
+        let flags = anchored_label_keyed(
+            &chain(),
+            &names(&["ws/same", "ws/same", "ws/other"]),
+            &[true, false, false],
+            |(_, package, _)| package,
+        );
+
+        assert_eq!(flags.get(&7), Some(&true));
+    }
+
+    #[test]
+    fn should_key_each_domain_by_its_own_anchor() {
+        let flags = anchored_label_keyed(
+            &chain(),
+            &names(&["ws/core", "ws/aaa", "ws/other"]),
+            &[false, true, false],
+            |(domain, _, _)| domain,
+        );
+
+        assert_eq!(flags.get(&10), Some(&false));
+        assert_eq!(flags.get(&11), Some(&true));
     }
 }

@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use super::FileFacts;
 use super::placements::FilePlacements;
 use super::tokens::{jaccard, tokenize};
-use crate::result::MoveReason;
+use crate::result::{CapacityUnit, MoveReason};
 
 /// Everything a group's reason computation reads.
 pub(super) struct GroupContext<'a> {
@@ -72,6 +72,8 @@ pub(super) fn group_reason(ctx: &GroupContext<'_>) -> MoveReason {
             container: origin.join("/"),
             count: size,
             cap: ctx.facts.folder_cap,
+            unit: CapacityUnit::Entries,
+            config_key: "capacity.folder".to_owned(),
         };
     }
 

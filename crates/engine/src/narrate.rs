@@ -36,8 +36,8 @@ use crate::result::{FileMove, Move, MoveKind};
 
 pub(crate) use self::namespaces::physical_relocation_folders;
 pub(crate) use self::paths::{
-    drain_dataset, normalize_physical_path, path_segments, physical_directory, physical_namespace,
-    project_package_rooted_path, project_physical_path,
+    normalize_physical_path, path_segments, physical_directory, physical_namespace,
+    project_package_rooted_path, project_physical_path, real_key,
 };
 #[cfg(test)]
 pub(crate) use self::placements::physical_file_folders;

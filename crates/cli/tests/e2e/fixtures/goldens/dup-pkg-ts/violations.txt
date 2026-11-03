@@ -1,0 +1,3 @@
+capacity [violation] beacon/src/widget :: in `beacon/src/widget`: 2 folders holding files; the domain cap is 1 (`capacity.domain`).
+capacity [violation] dup-pkg-ts :: in `dup-pkg-ts`: 2 domains holding files; the package cap is 1 (`capacity.package`).
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.
