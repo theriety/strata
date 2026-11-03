@@ -18,6 +18,9 @@ pub(super) struct References {
     pub(super) called: Vec<SmolStr>,
     pub(super) dynamic_imports: Vec<SmolStr>,
     pub(super) requires: Vec<SmolStr>,
+    /// Whether an `import()` or `require()` takes a target that is not a string
+    /// literal.
+    pub(super) opaque_loads: bool,
 }
 
 /// Collects references from a class body.

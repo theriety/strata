@@ -12,6 +12,7 @@
 
 mod containers;
 mod emission;
+mod public_api;
 mod resolution;
 
 use std::collections::{BTreeMap, HashMap};
@@ -27,6 +28,7 @@ use emission::{
     apply_polarity, assign_re_export_nodes, classify_polarity, emit_companion_affinities,
     emit_edges, emit_re_exports, exempt_module_objects, mark_test_source,
 };
+use public_api::PublicApiInputs;
 use resolution::Resolver;
 
 use crate::test_paths::package_roots;
@@ -117,10 +119,16 @@ pub(super) fn bind(
     exempt_module_objects(modules, &resolver, &exports, &mut nodes, &package_roots);
     let polarity = classify_polarity(modules, &nodes, &local, &exported, &edges, &package_roots);
     apply_polarity(&mut nodes, &polarity);
-    // an `export`ed item is importable from outside the analysed tree, so it is public API
-    // whatever the in-tree users are (exact entry-point detection is deferred).
-    for (node, &importable) in nodes.iter_mut().zip(&exported) {
-        node.public_api = importable;
+    let public_api = public_api::resolve(&PublicApiInputs {
+        root,
+        package_dirs: &package_roots,
+        modules,
+        resolver: &resolver,
+        exports: &exports,
+        local: &local,
+    });
+    for (node, &is_exported) in nodes.iter_mut().zip(&exported) {
+        node.public_api = public_api.admits(node.id, is_exported);
     }
 
     IrFragment {
@@ -152,6 +160,8 @@ mod tests {
             declarations: Vec::new(),
             imports: Vec::new(),
             re_exports: Vec::new(),
+            export_clauses: Vec::new(),
+            export_loads: Vec::new(),
         }
     }
 
@@ -179,6 +189,7 @@ mod tests {
             names: vec![SmolStr::new("target")],
             type_only: false,
             namespace: false,
+            bindings: Vec::new(),
         });
         consumer.declarations.push(caller("run", &["target"]));
         let mut provider = module_at("src/target.ts");
@@ -533,6 +544,7 @@ mod tests {
             names: vec![SmolStr::new("executeSubject")],
             type_only: false,
             namespace: false,
+            bindings: Vec::new(),
         });
         spec.declarations.push(crate::parse::Declaration {
             name: SmolStr::new("<module>"),
