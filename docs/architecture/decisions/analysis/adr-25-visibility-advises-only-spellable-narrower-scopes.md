@@ -4,7 +4,7 @@
 
 A visibility finding is emitted only when the language can write a scope strictly narrower than the declared one that still holds the home file and every user, signature exposure included. Otherwise unlace stays silent. Rungs are compared by file set, not by level label.
 
-- Status: `Accepted`, partly superseded by [ADR-30](adr-30-one-test-policy-decides-what-is-test-code.md)
+- Status: `Accepted`, partly superseded by [ADR-29](adr-29-public-api-follows-each-languages-export-surface.md) and [ADR-30](adr-30-one-test-policy-decides-what-is-test-code.md)
 - Date: `2026-10-02`
 - Supersedes: ADR-24 in part (the level floor and per-rung consumer filter are replaced by the rung comparison below)
 

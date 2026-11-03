@@ -350,6 +350,103 @@ fn should_flag_python_names_used_only_by_a_test_with_wording_by_publicity() -> R
     Ok(())
 }
 
+#[test]
+fn should_flag_a_python_item_of_an_underscore_module_with_the_plain_wording() -> Result<(), String>
+{
+    let found = advice(&[
+        ("pkg/__init__.py", ""),
+        ("pkg/_helpers.py", "def assist() -> int:\n    return 1\n"),
+        ("pkg/api.py", "def serve() -> int:\n    return 2\n"),
+        (
+            "pkg/test_api.py",
+            "from pkg._helpers import assist\nfrom pkg.api import serve\n\n\ndef test_it() -> None:\n    assert assist() + serve() == 3\n",
+        ),
+    ])?;
+
+    let assist = line_naming(&found.test_only, "assist");
+    assert!(assist.contains("used only by tests"), "{assist}");
+    assert!(!assist.contains(PUBLIC_WORDING), "{assist}");
+    let serve = line_naming(&found.test_only, "serve");
+    assert!(serve.contains(PUBLIC_WORDING), "{serve}");
+    Ok(())
+}
+
+#[test]
+fn should_use_the_python_all_list_for_the_wording_unless_it_is_built_dynamically()
+-> Result<(), String> {
+    let closed = advice(&[
+        ("pkg/__init__.py", ""),
+        (
+            "pkg/api.py",
+            "__all__ = [\"listed\"]\n\n\ndef listed() -> int:\n    return 1\n\n\ndef omitted() -> int:\n    return 2\n",
+        ),
+        (
+            "pkg/test_api.py",
+            "from pkg.api import listed, omitted\n\n\ndef test_it() -> None:\n    assert listed() + omitted() == 3\n",
+        ),
+    ])?;
+    let listed = line_naming(&closed.test_only, "listed");
+    assert!(listed.contains(PUBLIC_WORDING), "{listed}");
+    let omitted = line_naming(&closed.test_only, "omitted");
+    assert!(omitted.contains("used only by tests"), "{omitted}");
+    assert!(!omitted.contains(PUBLIC_WORDING), "{omitted}");
+
+    let open = advice(&[
+        ("pkg/__init__.py", ""),
+        (
+            "pkg/api.py",
+            "__all__ = [\"listed\"]\n__all__ += [\"omitted\"]\n\n\ndef listed() -> int:\n    return 1\n\n\ndef omitted() -> int:\n    return 2\n",
+        ),
+        (
+            "pkg/test_api.py",
+            "from pkg.api import listed, omitted\n\n\ndef test_it() -> None:\n    assert listed() + omitted() == 3\n",
+        ),
+    ])?;
+    let kept = line_naming(&open.test_only, "omitted");
+    assert!(kept.contains(PUBLIC_WORDING), "{kept}");
+    Ok(())
+}
+
+#[test]
+fn should_use_the_public_wording_for_a_python_item_that_a_public_module_re_exports()
+-> Result<(), String> {
+    let found = advice(&[
+        ("pkg/__init__.py", ""),
+        (
+            "pkg/api.py",
+            "from pkg._impl import Widget\n\n__all__ = [\"Widget\"]\n",
+        ),
+        ("pkg/_impl.py", "class Widget:\n    pass\n"),
+        (
+            "pkg/test_impl.py",
+            "from pkg._impl import Widget\n\n\ndef test_it() -> None:\n    assert Widget()\n",
+        ),
+    ])?;
+
+    let widget = line_naming(&found.test_only, "Widget");
+    assert!(widget.contains(PUBLIC_WORDING), "{widget}");
+    Ok(())
+}
+
+#[test]
+fn should_use_the_public_wording_for_a_python_dunder_that_the_module_all_leaves_out()
+-> Result<(), String> {
+    let found = advice(&[
+        (
+            "pkg/__init__.py",
+            "__version__ = \"1\"\n__all__ = [\"Foo\"]\n\n\nclass Foo:\n    pass\n",
+        ),
+        (
+            "pkg/test_version.py",
+            "from pkg import __version__\n\n\ndef test_it() -> None:\n    assert __version__\n",
+        ),
+    ])?;
+
+    let version = line_naming(&found.test_only, "__version__");
+    assert!(version.contains(PUBLIC_WORDING), "{version}");
+    Ok(())
+}
+
 /// `foo` lives in `a`, a production file reaches it through `prod`, and a test
 /// reaches it directly: a bound production use means no testOnly finding.
 fn silent_for(files: &[(&str, &str)], item: &str) -> Result<(), String> {
@@ -904,5 +1001,101 @@ fn should_flag_a_helper_used_only_by_a_spec_with_an_mts_or_cts_extension() -> Re
             found.test_only
         );
     }
+    Ok(())
+}
+
+#[test]
+fn should_not_call_a_re_exported_item_test_only_when_the_analysed_root_is_a_python_package()
+-> Result<(), String> {
+    let found = advice(&[
+        ("__init__.py", "from ._impl import Widget\n"),
+        ("_impl.py", "class Widget:\n    pass\n"),
+        ("tests/__init__.py", ""),
+        (
+            "tests/test_widget.py",
+            "from .._impl import Widget\n\n\ndef test_it() -> None:\n    assert Widget()\n",
+        ),
+    ])?;
+
+    let widget = line_naming(&found.test_only, "Widget");
+    assert!(
+        widget.is_empty() || widget.contains(PUBLIC_WORDING),
+        "the package re-exports it: {widget}"
+    );
+    Ok(())
+}
+
+#[test]
+fn should_use_the_public_wording_below_a_python_package_that_imports_a_getattr_hook()
+-> Result<(), String> {
+    let found = advice(&[
+        ("pkg/__init__.py", "from ._lazy import __getattr__\n"),
+        (
+            "pkg/_lazy.py",
+            "def __getattr__(name: str) -> object:\n    raise AttributeError(name)\n",
+        ),
+        ("pkg/_heavy.py", "class Heavy:\n    pass\n"),
+        (
+            "pkg/test_heavy.py",
+            "from pkg._heavy import Heavy\n\n\ndef test_it() -> None:\n    assert Heavy()\n",
+        ),
+    ])?;
+
+    let heavy = line_naming(&found.test_only, "Heavy");
+    assert!(heavy.contains(PUBLIC_WORDING), "{heavy}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_python_stub_declaration_that_only_tests_import() -> Result<(), String> {
+    let found = advice(&[
+        ("pkg/__init__.py", ""),
+        ("pkg/_native.pyi", "def fast() -> None: ...\n"),
+        (
+            "tests/test_fast.py",
+            "from pkg._native import fast\n\n\ndef test_it() -> None:\n    fast()\n",
+        ),
+    ])?;
+
+    assert!(!names(&found.test_only, "fast"), "{:?}", found.test_only);
+    Ok(())
+}
+
+#[test]
+fn should_use_the_public_wording_below_a_lazy_python_root_package() -> Result<(), String> {
+    let found = advice(&[
+        (
+            "__init__.py",
+            "def __getattr__(name):\n    import importlib\n\n    return importlib.import_module(\"._heavy\", __name__)\n",
+        ),
+        ("_heavy.py", "class Heavy:\n    pass\n"),
+        (
+            "tests/test_h.py",
+            "from _heavy import Heavy\n\n\ndef test_it() -> None:\n    assert Heavy()\n",
+        ),
+    ])?;
+
+    let heavy = line_naming(&found.test_only, "Heavy");
+    assert!(heavy.contains(PUBLIC_WORDING), "{heavy}");
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_class_re_exported_through_a_chain_of_package_barrels() -> Result<(), String> {
+    let found = advice(&[
+        ("pkg/__init__.py", "from .sub import Widget\n"),
+        ("pkg/sub/__init__.py", "from ._w import Widget\n"),
+        ("pkg/sub/_w.py", "class Widget:\n    pass\n"),
+        (
+            "app.py",
+            "from pkg import Widget\n\n\ndef main() -> None:\n    Widget()\n",
+        ),
+        (
+            "tests/test_w.py",
+            "from pkg.sub._w import Widget\n\n\ndef test_it() -> None:\n    assert Widget()\n",
+        ),
+    ])?;
+
+    assert!(!names(&found.test_only, "Widget"), "{:?}", found.test_only);
     Ok(())
 }

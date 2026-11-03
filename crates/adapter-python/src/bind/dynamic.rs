@@ -6,7 +6,7 @@ use smol_str::SmolStr;
 use unlace_ir::{Edge, EdgeKind, Hardness, NodeId};
 
 use super::resolver::Resolver;
-use super::{CONFIDENCE_DYNAMIC, ExportTable, is_public, push_edge};
+use super::{CONFIDENCE_DYNAMIC, ExportTable, push_edge};
 use crate::parse::{Declaration, DynamicRef};
 
 /// Emits low-confidence edges for dynamic constructs and star imports.
@@ -71,8 +71,8 @@ pub(super) fn emit_dynamic(
 ///
 /// The dotted argument is matched against the known module set; an unknown
 /// module yields no edge (the import is genuinely unresolvable). A resolved
-/// module fans out over its declared `__all__` surface when present, else every
-/// non-underscore export — the same surface a star import would pull in.
+/// module fans out over its star-import surface: its closed `__all__`, else the
+/// non-underscore exports plus any names an open `__all__` lists — the same surface a star import would pull in.
 fn import_module_targets(
     dotted: &SmolStr,
     resolver: &Resolver,
@@ -84,14 +84,9 @@ fn import_module_targets(
     let Some(target_exports) = exports.get(module) else {
         return Vec::new();
     };
-    let surface = resolver.public_surface(module);
     let mut targets: Vec<NodeId> = target_exports
         .iter()
-        .filter(|(name, _)| {
-            surface
-                .as_ref()
-                .map_or_else(|| is_public(name), |all| all.contains(*name))
-        })
+        .filter(|(name, _)| resolver.star_includes(module, name))
         .map(|(_, &node)| node)
         .collect();
     targets.sort_unstable();
