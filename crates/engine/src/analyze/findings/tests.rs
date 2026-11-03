@@ -8,10 +8,11 @@ use unlace_ir::{
     ScopeLevel, Snapshot, build_laminar_tree,
 };
 
-use crate::config::{AnalyzeConfig, ProfileName};
+use crate::config::{AnalyzeConfig, ProfileName, TestsConfig};
 use crate::result::{CapacityBreach, Level, Severity, Violation, ViolationKind};
 
 use super::*;
+use crate::analyze::test_policy::TestPolicy;
 use crate::analyze::test_support::*;
 use crate::analyze::*;
 use crate::analyze::{rendering::*, scoring::*};
@@ -995,7 +996,10 @@ fn ladder_fixture(
 #[test]
 fn should_not_flag_a_crate_root_sibling_that_no_narrower_spelling_reaches() -> Result<(), String> {
     let snapshot = ladder_fixture(2, Some(3), Some(verdict(None, None)))?;
-    assert_eq!(visibility_violations(&snapshot), []);
+    assert_eq!(
+        visibility_violations(&snapshot, &TestPolicy::defaults()),
+        []
+    );
     Ok(())
 }
 
@@ -1006,14 +1010,20 @@ fn should_stay_silent_for_a_laddered_item_the_adapter_could_not_judge() -> Resul
         ..verdict(None, None)
     };
     let snapshot = ladder_fixture(2, None, Some(silent))?;
-    assert_eq!(visibility_violations(&snapshot), []);
+    assert_eq!(
+        visibility_violations(&snapshot, &TestPolicy::defaults()),
+        []
+    );
     Ok(())
 }
 
 #[test]
 fn should_flag_an_item_with_a_narrower_needed_rung_and_name_its_spelling() -> Result<(), String> {
     let ladder = verdict(Some(ScopeLevel::File), Some("private (no `pub`)"));
-    let found = visibility_violations(&ladder_fixture(2, None, Some(ladder))?);
+    let found = visibility_violations(
+        &ladder_fixture(2, None, Some(ladder))?,
+        &TestPolicy::defaults(),
+    );
     let finding = found.first().ok_or("missing finding")?;
     assert_eq!(
         finding.detail,
@@ -1026,11 +1036,11 @@ fn should_flag_an_item_with_a_narrower_needed_rung_and_name_its_spelling() -> Re
 fn should_stay_silent_without_a_ladder_unless_the_need_is_its_own_file() -> Result<(), String> {
     // no ladder: a cross-file consumer gives no spellable scope, silence.
     assert_eq!(
-        visibility_violations(&ladder_fixture(2, Some(3), None)?),
+        visibility_violations(&ladder_fixture(2, Some(3), None)?, &TestPolicy::defaults()),
         []
     );
     // no ladder and no outside user: the need is File, so it is flagged.
-    let found = visibility_violations(&ladder_fixture(2, None, None)?);
+    let found = visibility_violations(&ladder_fixture(2, None, None)?, &TestPolicy::defaults());
     assert_eq!(found.len(), 1, "{found:?}");
     Ok(())
 }
@@ -1038,7 +1048,10 @@ fn should_stay_silent_without_a_ladder_unless_the_need_is_its_own_file() -> Resu
 #[test]
 fn should_flag_a_nested_item_when_the_ladder_names_a_narrower_folder() -> Result<(), String> {
     let ladder = verdict(Some(ScopeLevel::Folder), None);
-    let found = visibility_violations(&ladder_fixture(5, Some(6), Some(ladder))?);
+    let found = visibility_violations(
+        &ladder_fixture(5, Some(6), Some(ladder))?,
+        &TestPolicy::defaults(),
+    );
     let finding = found.first().ok_or("missing finding")?;
     assert!(
         finding.detail.contains("Package but needed only at Folder"),
@@ -1071,8 +1084,8 @@ fn test_only_fixture(
 /// Counts the test-only and visibility findings of `snapshot`.
 fn test_only_and_visibility(snapshot: &Snapshot) -> (usize, usize) {
     (
-        test_only::test_only_violations(snapshot).len(),
-        visibility_violations(snapshot).len(),
+        test_only::test_only_violations(snapshot, &TestPolicy::defaults()).len(),
+        visibility_violations(snapshot, &TestPolicy::defaults()).len(),
     )
 }
 
@@ -1081,7 +1094,7 @@ fn should_report_an_item_used_only_by_test_sources_once_and_not_as_visibility() 
 {
     let snapshot = test_only_fixture(|_, _| {})?;
     assert_eq!(test_only_and_visibility(&snapshot), (1, 0));
-    let found = test_only::test_only_violations(&snapshot);
+    let found = test_only::test_only_violations(&snapshot, &TestPolicy::defaults());
     assert_eq!(
         found
             .iter()
@@ -1105,7 +1118,7 @@ fn should_never_report_test_only_for_a_node_advice_must_not_touch() -> Result<()
     for (label, flag) in flags {
         let snapshot = test_only_fixture(|item, _| flag(item))?;
         assert_eq!(
-            test_only::test_only_violations(&snapshot),
+            test_only::test_only_violations(&snapshot, &TestPolicy::defaults()),
             [],
             "{label} is exempt from test-only advice"
         );
@@ -1118,7 +1131,7 @@ fn should_report_a_public_api_item_used_only_by_tests_with_the_public_wording() 
 {
     let snapshot = test_only_fixture(|item, _| item.public_api = true)?;
     assert_eq!(test_only_and_visibility(&snapshot), (1, 0));
-    let found = test_only::test_only_violations(&snapshot);
+    let found = test_only::test_only_violations(&snapshot, &TestPolicy::defaults());
     assert_eq!(
         found.iter().map(|v| v.detail.as_str()).collect::<Vec<_>>(),
         [
@@ -1133,10 +1146,16 @@ fn should_not_report_test_only_for_test_code_or_a_user_the_source_does_not_call_
 -> Result<(), String> {
     // the item itself is declared as test code.
     let test_item = test_only_fixture(|item, _| item.test_source = true)?;
-    assert_eq!(test_only::test_only_violations(&test_item), []);
+    assert_eq!(
+        test_only::test_only_violations(&test_item, &TestPolicy::defaults()),
+        []
+    );
     // a user demoted to test support by reachability is not a test in source.
     let demoted_user = test_only_fixture(|_, user| user.test_source = false)?;
-    assert_eq!(test_only::test_only_violations(&demoted_user), []);
+    assert_eq!(
+        test_only::test_only_violations(&demoted_user, &TestPolicy::defaults()),
+        []
+    );
     Ok(())
 }
 
@@ -1148,7 +1167,10 @@ fn should_not_report_test_only_for_a_self_loop_alone_or_an_advisory_use() -> Res
         ContainerTree::new(vec![container(0, "src/a.rs", ScopeLevel::File, None)]),
     );
     let loop_only = Snapshot::assemble(ir.clone()).map_err(|error| error.to_string())?;
-    assert_eq!(test_only::test_only_violations(&loop_only), []);
+    assert_eq!(
+        test_only::test_only_violations(&loop_only, &TestPolicy::defaults()),
+        []
+    );
     ir.nodes.push({
         let mut user = node(1, "check", 0, Polarity::TestCase);
         user.test_source = true;
@@ -1161,7 +1183,10 @@ fn should_not_report_test_only_for_a_self_loop_alone_or_an_advisory_use() -> Res
         from_test: false,
     }];
     let advised = Snapshot::assemble(ir).map_err(|error| error.to_string())?;
-    assert_eq!(test_only::test_only_violations(&advised), []);
+    assert_eq!(
+        test_only::test_only_violations(&advised, &TestPolicy::defaults()),
+        []
+    );
     Ok(())
 }
 
@@ -1182,7 +1207,144 @@ fn should_not_let_an_advisory_use_from_test_code_silence_test_only() -> Result<(
         from_test: true,
     }];
     let snapshot = Snapshot::assemble(ir).map_err(|error| error.to_string())?;
-    assert_eq!(test_only::test_only_violations(&snapshot).len(), 1);
+    assert_eq!(
+        test_only::test_only_violations(&snapshot, &TestPolicy::defaults()).len(),
+        1
+    );
+    Ok(())
+}
+
+/// The policy a `[tests]` section with these `patterns` compiles to.
+fn policy_of(patterns: &[&str]) -> Result<TestPolicy, String> {
+    TestPolicy::new(&TestsConfig {
+        patterns: patterns.iter().map(|&pattern| pattern.to_owned()).collect(),
+        ..TestsConfig::default()
+    })
+    .map_err(|error| error.to_string())
+}
+
+#[test]
+fn should_let_a_negated_file_make_an_advisory_use_from_test_code_count_again() -> Result<(), String>
+{
+    let mut test = node(1, "check", 0, Polarity::TestCase);
+    test.test_source = true;
+    let mut ir = IntermediateRepresentation::new(
+        vec![
+            node(0, "item", 0, Polarity::Production),
+            test,
+            node(2, "caller", 1, Polarity::Production),
+        ],
+        vec![edge(1, 0)],
+        ContainerTree::new(vec![
+            container(0, "src/a.rs", ScopeLevel::File, None),
+            container(1, "src/b.rs", ScopeLevel::File, None),
+        ]),
+    );
+    ir.advisory_uses = vec![unlace_ir::AdvisoryUse {
+        user: NodeId(2),
+        used: NodeId(0),
+        from_test: true,
+    }];
+    let snapshot = Snapshot::assemble(ir).map_err(|error| error.to_string())?;
+
+    assert_eq!(
+        test_only::test_only_nodes(&snapshot, &policy_of(&[])?).len(),
+        1,
+        "a use that sits in test code never silences the finding"
+    );
+    assert_eq!(
+        test_only::test_only_nodes(&snapshot, &policy_of(&["!src/b.rs"])?).len(),
+        0,
+        "a negated file is production: its advisory use counts"
+    );
+    Ok(())
+}
+
+/// Writes `files` under a throwaway root named after `name`.
+fn write_files(name: &str, files: &[(&str, &str)]) -> Result<std::path::PathBuf, String> {
+    let root = std::env::temp_dir().join(format!("unlace-findings-{name}-{}", std::process::id()));
+    for (path, contents) in files {
+        let target = root.join(path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::write(&target, contents).map_err(|error| error.to_string())?;
+    }
+    Ok(root)
+}
+
+/// Whether the solver puts `helper` in a test zone, and whether the test-only
+/// finding reports `makeBatch` (declared in `helper`), for the project `files`.
+fn solver_and_finding(
+    name: &str,
+    files: &[(&str, &str)],
+    helper: &str,
+) -> Result<(bool, bool), String> {
+    let root = write_files(name, files)?;
+    let config = AnalyzeConfig::default();
+    let snapshot = crate::snapshot_from_root(&root, &config);
+    let _ = std::fs::remove_dir_all(&root);
+    let snapshot = snapshot.map_err(|error| error.to_string())?;
+    let ir = snapshot.ir();
+    let tests = TestPolicy::defaults();
+
+    let (inventory, _) = crate::analyze::relocation::file_inventory(ir);
+    let marks = tests.zone_marks(&inventory, &ir.nodes, &ir.file_facts);
+    let in_zone = inventory
+        .iter()
+        .zip(marks)
+        .find(|(file, _)| file.name == helper)
+        .map(|(_, mark)| mark)
+        .ok_or("the helper file is in the inventory")?;
+    let reported = ir
+        .nodes
+        .iter()
+        .filter(|node| node.name == "makeBatch")
+        .any(|node| test_only::test_only_nodes(&snapshot, &tests).contains(&node.id.0));
+    Ok((in_zone, reported))
+}
+
+const BATCH_HELPER: &str = "export function makeBatch(): number {\n  return 1;\n}\n";
+const BATCH_SPEC: &str =
+    "import { makeBatch } from \"./h\";\nexport const batch: number = makeBatch();\n";
+
+#[test]
+fn should_agree_for_a_cargo_only_directory_under_a_root_package_json() -> Result<(), String> {
+    let (in_zone, reported) = solver_and_finding(
+        "cargo-only",
+        &[
+            ("package.json", "{}"),
+            ("crates/wasm/Cargo.toml", "[package]\nname = \"wasm\"\n"),
+            ("crates/wasm/test/h.ts", BATCH_HELPER),
+            ("crates/wasm/test/x.spec.ts", BATCH_SPEC),
+        ],
+        "crates/wasm/test/h.ts",
+    )?;
+    assert_eq!(
+        (in_zone, reported),
+        (false, true),
+        "no `package.json` roots `test/` here: production for the solver and the finding alike"
+    );
+    Ok(())
+}
+
+#[test]
+fn should_agree_for_a_directory_with_its_own_package_json() -> Result<(), String> {
+    let (in_zone, reported) = solver_and_finding(
+        "package-json",
+        &[
+            ("package.json", "{}"),
+            ("crates/wasm/package.json", "{}"),
+            ("crates/wasm/test/h.ts", BATCH_HELPER),
+            ("crates/wasm/test/x.spec.ts", BATCH_SPEC),
+        ],
+        "crates/wasm/test/h.ts",
+    )?;
+    assert_eq!(
+        (in_zone, reported),
+        (true, false),
+        "its own `package.json` roots `test/`: test code for the solver and the finding alike"
+    );
     Ok(())
 }
 
@@ -1212,18 +1374,20 @@ fn owner_fixture(production_caller: bool) -> Result<Snapshot, String> {
 
 #[test]
 fn should_report_a_type_whose_only_other_user_is_its_own_test_only_member() -> Result<(), String> {
-    let names: Vec<u32> = test_only::test_only_nodes(&owner_fixture(false)?)
-        .into_iter()
-        .collect();
+    let names: Vec<u32> =
+        test_only::test_only_nodes(&owner_fixture(false)?, &TestPolicy::defaults())
+            .into_iter()
+            .collect();
     assert_eq!(names, [0, 1]);
     Ok(())
 }
 
 #[test]
 fn should_not_report_a_type_whose_member_has_a_production_caller() -> Result<(), String> {
-    let found: Vec<u32> = test_only::test_only_nodes(&owner_fixture(true)?)
-        .into_iter()
-        .collect();
+    let found: Vec<u32> =
+        test_only::test_only_nodes(&owner_fixture(true)?, &TestPolicy::defaults())
+            .into_iter()
+            .collect();
     assert_eq!(found, Vec::<u32>::new());
     Ok(())
 }

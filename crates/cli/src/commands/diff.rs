@@ -157,6 +157,7 @@ mod tests {
     fn sample() -> AnalyzeResult {
         AnalyzeResult {
             schema_version: unlace_engine::RESULT_SCHEMA_VERSION,
+            tests: unlace_engine::TestSettings::default(),
             snapshot_hash: "h".to_owned(),
             summary: Summary {
                 symbols: 1,

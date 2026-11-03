@@ -9,9 +9,10 @@ use unlace_core::shatter::{BreakSet, EdgeRef, EdgeWeights, SccView, shatter};
 use unlace_ir::{Hardness, Node, NodeId, NodeKind, Polarity, Snapshot};
 
 use crate::analyze::findings::{conditional_splits, hard_capacity_breaks};
+use crate::analyze::relocation::PipelineSolver;
 use crate::analyze::relocation::mirror::PolishEvidence;
-use crate::analyze::relocation::{PipelineSolver, TestPolicy};
 use crate::analyze::scoring::{ProfileSource, score_current_with_affinity};
+use crate::analyze::test_policy::TestPolicy;
 use crate::config::ProfileConfig;
 use crate::error::UnlaceError;
 use crate::result::{CurrentStanding, ProfileCurrent, ProfileResult, Violation};
@@ -36,15 +37,15 @@ pub(in crate::analyze) fn build_profile_result(
     snapshot: &Snapshot,
     profile: &ProfileConfig,
     findings: &[Violation],
+    tests: &TestPolicy,
 ) -> Result<ProfileResult, UnlaceError> {
     let coefficients = profile.objective.coefficients();
-    let tests = TestPolicy::new(&profile.tests)?;
     let capacity_breaks = hard_capacity_breaks(findings);
     let capacity_clean = capacity_breaks == 0;
     let cycles = solve_cycles(snapshot, profile, &profile.weights.kind_weights());
     let splits = conditional_splits(&cycles, snapshot, profile.capacity.file);
     let seed_identity = capacity_clean;
-    let solver = PipelineSolver::new(snapshot, profile, coefficients, seed_identity, &tests);
+    let solver = PipelineSolver::new(snapshot, profile, coefficients, seed_identity, tests);
     let mode_config = mode_config(profile);
     let CoreModeResult {
         candidates,

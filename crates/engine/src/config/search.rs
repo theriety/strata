@@ -94,7 +94,9 @@ impl Default for DiversityConfig {
     }
 }
 
-/// Settings governing how test files are detected and capped.
+/// The `[tests]` section: one policy for what counts as test code, shared by
+/// every profile and every consumer (the test-only finding, relocation, symbol
+/// pinning, polarity findings and scoring).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct TestsConfig {
@@ -102,18 +104,23 @@ pub struct TestsConfig {
     /// exempt.
     #[serde(rename = "helper-cap")]
     pub helper_cap: u32,
-    /// Extra glob patterns marking test files beyond the built-in detection.
+    /// Extra glob patterns deciding test files on top of the built-in detection.
     ///
     /// Patterns use [`glob::Pattern`] syntax against repo-relative paths; a
     /// pattern containing `/` matches the whole path while a bare pattern
     /// matches the file name alone, so `*.spec.*` applies repo-wide and
-    /// `apps/web/__tests__/**` stays scoped. A file matching any pattern is
-    /// treated as a test file for the clustering tie-cut and subject-following
-    /// passes regardless of its language's own detection.
+    /// `apps/web/__tests__/**` stays scoped. A file matching any pattern is test
+    /// code for every consumer, regardless of its language's own detection. A
+    /// pattern starting with `!` does the opposite: matching files are never test
+    /// code, and negation wins over every other signal (the built-in detection,
+    /// adapter test pairs, test-support crates, advisory uses from tests and the
+    /// positive patterns). A bare `!` is invalid.
     pub patterns: Vec<String>,
-    /// Whether the built-in per-language detection participates alongside
-    /// `patterns`. Disabling it makes only `patterns` decide; with an empty
-    /// pattern list the tie-cut becomes fully inert.
+    /// Whether the adapters' built-in detection participates alongside
+    /// `patterns`: their per-language test conventions, their test polarity, the
+    /// test pairs they state and the test-support crates they find. Disabling it
+    /// makes only `patterns` decide; with an empty pattern list nothing is test
+    /// code.
     pub builtins: bool,
 }
 

@@ -10,13 +10,14 @@ use unlace_ir::{ScopeLevel, Snapshot};
 
 use crate::analyze::layout::{real_dir_partition, relieve_over_capacity, synthesize_roof_rebuild};
 use crate::analyze::relocation::mirror::{adapter_pairs, exact_links, mirror_rules};
-use crate::analyze::relocation::solver::{build_file_graph, test_zone_marks};
+use crate::analyze::relocation::solver::build_file_graph;
 use crate::analyze::relocation::zone_keys;
 use crate::analyze::relocation::{
-    PipelineSolver, RelocationIdentityGuard, TestPolicy, cycle_homes,
-    file_facts_repository_relative, file_inventory,
+    PipelineSolver, RelocationIdentityGuard, cycle_homes, file_facts_repository_relative,
+    file_inventory,
 };
 use crate::analyze::scoring::{ProfileSource, SnapshotScoring, level_caps};
+use crate::analyze::test_policy::TestPolicy;
 
 impl<'a> PipelineSolver<'a> {
     /// Builds the solver, computing every seed-independent pipeline input once.
@@ -33,7 +34,7 @@ impl<'a> PipelineSolver<'a> {
         let weights = profile.weights.kind_weights();
         let (files, index_of) = file_inventory(ir);
 
-        let test_zone = test_zone_marks(tests, &files, &ir.nodes, &ir.file_facts);
+        let test_zone = tests.zone_marks(&files, &ir.nodes, &ir.file_facts);
         let adapter_pairs = adapter_pairs(ir, profile);
         let mirror_rules = mirror_rules(profile);
         // a paired test follows its source and an entry file never moves: both

@@ -2,8 +2,9 @@ use unlace_core::cluster::{ClusterId, Partition};
 use unlace_ir::{Polarity, ScopeLevel, Snapshot};
 
 use super::*;
+use crate::analyze::relocation::PipelineSolver;
 use crate::analyze::relocation::mirror::PolishEvidence;
-use crate::analyze::relocation::{PipelineSolver, TestPolicy};
+use crate::analyze::test_policy::TestPolicy;
 use crate::analyze::test_support::*;
 use crate::config::AnalyzeConfig;
 
@@ -34,11 +35,17 @@ fn flat_snapshot(files: &[(&str, &str)], packages: &[&str]) -> Snapshot {
             next - 1
         };
         containers.push(container(next, file, ScopeLevel::File, Some(folder_id)));
+        // the TypeScript adapter, not the engine, declares a spec file test code.
+        let polarity = if file.contains(".spec.") {
+            Polarity::TestCase
+        } else {
+            Polarity::Production
+        };
         nodes.push(node(
             u32::try_from(nodes.len()).unwrap_or(u32::MAX),
             file,
             next,
-            Polarity::Production,
+            polarity,
         ));
         next += 1;
     }

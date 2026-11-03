@@ -58,6 +58,7 @@ impl AnalyzeConfig {
 
         Self::validate_profile("profiles.anchored", &self.profiles.anchored)?;
         Self::validate_profile("profiles.greenfield", &self.profiles.greenfield)?;
+        self.validate_tests()?;
 
         if self.adapters.languages.is_empty() {
             return Err(UnlaceError::ConfigInvalid {
@@ -79,6 +80,33 @@ impl AnalyzeConfig {
         Ok(())
     }
 
+    /// Range-checks the `[tests]` section: the helper cap is positive and every
+    /// pattern is a non-empty glob, optionally negated with a leading `!`.
+    fn validate_tests(&self) -> Result<(), UnlaceError> {
+        positive("tests.helper-cap", self.tests.helper_cap)?;
+        for (index, pattern) in self.tests.patterns.iter().enumerate() {
+            let key = || Some(format!("tests.patterns[{index}]"));
+            if pattern.is_empty() {
+                return Err(UnlaceError::ConfigInvalid {
+                    key: key(),
+                    reason: "a pattern must not be empty".to_owned(),
+                });
+            }
+            let glob = pattern.strip_prefix('!').unwrap_or(pattern);
+            if glob.is_empty() {
+                return Err(UnlaceError::ConfigInvalid {
+                    key: key(),
+                    reason: "a negation must name a pattern after `!`".to_owned(),
+                });
+            }
+            glob::Pattern::new(glob).map_err(|error| UnlaceError::ConfigInvalid {
+                key: key(),
+                reason: error.to_string(),
+            })?;
+        }
+        Ok(())
+    }
+
     fn validate_profile(prefix: &str, profile: &ProfileConfig) -> Result<(), UnlaceError> {
         let key = |suffix: &str| format!("{prefix}.{suffix}");
         positive(&key("capacity.file"), profile.capacity.file)?;
@@ -92,19 +120,6 @@ impl AnalyzeConfig {
         within_ceiling(&key("capacity.folder"), profile.capacity.folder)?;
         within_ceiling(&key("capacity.domain"), profile.capacity.domain)?;
         within_ceiling(&key("capacity.package"), profile.capacity.package)?;
-        positive(&key("tests.helper-cap"), profile.tests.helper_cap)?;
-        for (index, pattern) in profile.tests.patterns.iter().enumerate() {
-            if pattern.is_empty() {
-                return Err(UnlaceError::ConfigInvalid {
-                    key: Some(format!("{prefix}.tests.patterns[{index}]")),
-                    reason: "a pattern must not be empty".to_owned(),
-                });
-            }
-            glob::Pattern::new(pattern).map_err(|error| UnlaceError::ConfigInvalid {
-                key: Some(format!("{prefix}.tests.patterns[{index}]")),
-                reason: error.to_string(),
-            })?;
-        }
         Self::validate_relocation(prefix, &profile.relocation)?;
         Self::validate_qualification(prefix, &profile.qualification)?;
         positive(&key("solver.ilp-threshold"), profile.solver.ilp_threshold)?;

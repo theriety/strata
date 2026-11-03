@@ -43,14 +43,7 @@ pub fn load_config(path: impl AsRef<Path>) -> Result<AnalyzeConfig, UnlaceError>
 /// diagnostic retains the complete offending TOML key.
 fn reject_legacy_keys(document: &toml::Value) -> Result<(), UnlaceError> {
     const ANALYSIS_KEYS: [&str; 3] = ["mode", "candidates", "seed"];
-    const TOP_LEVEL_KEYS: [&str; 6] = [
-        "capacity",
-        "objective",
-        "weights",
-        "solver",
-        "diversity",
-        "tests",
-    ];
+    const TOP_LEVEL_KEYS: [&str; 5] = ["capacity", "objective", "weights", "solver", "diversity"];
 
     if let Some(analysis) = document.get("analysis").and_then(toml::Value::as_table) {
         for field in ANALYSIS_KEYS {

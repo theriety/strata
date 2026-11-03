@@ -15,7 +15,7 @@ use unlace_ir::Snapshot;
 
 use crate::config::{AnalyzeConfig, ProfileName};
 use crate::error::UnlaceError;
-use crate::result::{AnalyzeResult, CurrentTree, Profiles, RESULT_SCHEMA_VERSION};
+use crate::result::{AnalyzeResult, CurrentTree, Profiles, RESULT_SCHEMA_VERSION, TestSettings};
 
 /// The capacity borderline band: a finding within ±10% of a cap is borderline
 /// and never gates CI (reference `BORDERLINE_CAPACITY_MARGIN`).
@@ -28,11 +28,13 @@ mod relocation;
 mod rendering;
 mod scoring;
 mod search;
+pub(crate) mod test_policy;
 
 use advice::build_advice;
 use findings::{profile_findings, summarize};
 use rendering::render_tree;
 use search::build_profile_result;
+use test_policy::TestPolicy;
 
 #[cfg(test)]
 mod test_support;
@@ -83,6 +85,7 @@ fn analyze_inner(
         &BTreeMap::new(),
     )?;
     let selected = &config.analysis.profiles;
+    let tests = TestPolicy::new(&config.tests)?;
     let mut anchored_findings = Vec::new();
     let mut greenfield_findings = Vec::new();
     let mut anchored = None;
@@ -90,16 +93,22 @@ fn analyze_inner(
 
     if selected.contains(&ProfileName::Anchored) {
         let profile = &config.profiles.anchored;
-        anchored_findings = profile_findings(snapshot, &current_node, profile);
-        anchored = Some(build_profile_result(snapshot, profile, &anchored_findings)?);
+        anchored_findings = profile_findings(snapshot, &current_node, profile, &tests);
+        anchored = Some(build_profile_result(
+            snapshot,
+            profile,
+            &anchored_findings,
+            &tests,
+        )?);
     }
     if selected.contains(&ProfileName::Greenfield) {
         let profile = &config.profiles.greenfield;
-        greenfield_findings = profile_findings(snapshot, &current_node, profile);
+        greenfield_findings = profile_findings(snapshot, &current_node, profile, &tests);
         greenfield = Some(build_profile_result(
             snapshot,
             profile,
             &greenfield_findings,
+            &tests,
         )?);
     }
 
@@ -134,6 +143,7 @@ fn analyze_inner(
         schema_version: RESULT_SCHEMA_VERSION,
         snapshot_hash: snapshot.hash().to_hex().to_string(),
         summary: summarize(snapshot),
+        tests: TestSettings::from(&config.tests),
         current: CurrentTree {
             tree: current_node,
             shared_findings,

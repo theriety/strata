@@ -12,6 +12,7 @@ use crate::narrate::physical_file_folders;
 
 use super::*;
 use crate::analyze::relocation::*;
+use crate::analyze::test_policy::TestPolicy;
 use crate::analyze::test_support::*;
 
 #[test]

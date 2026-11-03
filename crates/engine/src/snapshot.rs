@@ -30,6 +30,7 @@ use self::discovery::discover_sources;
 use self::dispatch::{enabled_languages, group_by_language, run_adapter};
 use self::merge::merge_fragments;
 use self::reexport::flatten_re_exports;
+use crate::analyze::test_policy::TestPolicy;
 use crate::config::AnalyzeConfig;
 use crate::error::UnlaceError;
 
@@ -43,7 +44,9 @@ pub(crate) use self::language::Language;
 /// to `root`, plus any `.gitignore` files under `root`; `.git` and
 /// `node_modules` directories are always skipped. Files are grouped by language
 /// and the adapters run in parallel. Merging re-interns each fragment's node and
-/// container ids into one dense namespace before assembly.
+/// container ids into one dense namespace before assembly. The `[tests]` policy
+/// then re-labels the adapters' test polarity, so a snapshot is a function of
+/// the sources and of `config.tests`.
 ///
 /// [`Snapshot`]: unlace_ir::Snapshot
 ///
@@ -51,7 +54,8 @@ pub(crate) use self::language::Language;
 ///
 /// Returns [`UnlaceError::InputUnreadable`] when discovery cannot read the tree,
 /// [`UnlaceError::AdapterParseFailure`] / [`UnlaceError::AdapterBindFailure`] on
-/// adapter failure, [`UnlaceError::ReExportDepthExceeded`] on a pathological
+/// adapter failure, [`UnlaceError::ConfigInvalid`] for an uncompilable
+/// `tests.patterns` entry, [`UnlaceError::ReExportDepthExceeded`] on a pathological
 /// barrel chain, and [`UnlaceError::SnapshotInvalid`] when assembly rejects the
 /// merged IR.
 pub fn snapshot_from_root(
@@ -96,7 +100,10 @@ pub fn snapshot_from_root(
             .collect(),
     };
     let merged = merge_fragments(fragments, root_name, &layout);
-    let flattened = flatten_re_exports(merged)?;
+    let mut flattened = flatten_re_exports(merged)?;
+    // the one test policy has the last word on what is test code: re-label the
+    // adapters' polarity before anything reads it.
+    TestPolicy::new(&config.tests)?.relabel(&mut flattened);
 
     unlace_ir::Snapshot::assemble(flattened).map_err(UnlaceError::from)
 }

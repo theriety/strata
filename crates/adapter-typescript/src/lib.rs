@@ -15,6 +15,7 @@ mod package_json;
 mod pairs;
 mod parse;
 mod sloc;
+mod test_paths;
 mod tsconfig;
 
 use std::collections::BTreeMap;
@@ -938,5 +939,130 @@ mod tests {
                 .any(|node| node.name == "BuildArtifactParams" && node.kind == NodeKind::Symbol)
         );
         assert_eq!(companion_pairs(&fragment), []);
+    }
+
+    fn test_source_files(fragment: &IrFragment) -> Vec<String> {
+        let files: BTreeMap<u32, &str> = fragment
+            .containers
+            .iter()
+            .map(|container| (container.id.0, container.name.as_str()))
+            .collect();
+        let mut found: Vec<String> = fragment
+            .nodes
+            .iter()
+            .filter(|node| node.test_source)
+            .filter_map(|node| files.get(&node.container.0))
+            .map(|name| (*name).to_owned())
+            .collect();
+        found.dedup();
+        found
+    }
+
+    #[test]
+    fn should_mark_a_spec_root_helper_as_test_source_and_test_support() {
+        let fragment = bind_sources(&[
+            (
+                "spec/batch/utilities.ts",
+                "export function makeBatch(): number { return 1 }",
+            ),
+            ("src/app.ts", "export function run(): number { return 1 }"),
+        ]);
+
+        assert_eq!(test_source_files(&fragment), ["spec/batch/utilities.ts"]);
+        assert_eq!(
+            polarity_of(&fragment, "makeBatch"),
+            Some(unlace_ir::Polarity::TestSupport),
+            "a helper is support: only test-named files carry test cases"
+        );
+    }
+
+    #[test]
+    fn should_give_test_case_polarity_to_test_named_files_in_every_extension() {
+        let source = "export function check(): number { return 1 }";
+        let fragment = bind_sources(&[
+            ("src/a.spec.ts", source),
+            ("src/b.test.mts", source),
+            ("src/c.spec.cts", source),
+            ("src/__tests__/support.ts", source),
+        ]);
+
+        let polarities: Vec<_> = fragment
+            .nodes
+            .iter()
+            .filter(|node| node.name == "check")
+            .map(|node| node.polarity)
+            .collect();
+        assert_eq!(polarities, [unlace_ir::Polarity::TestCase; 4]);
+        assert_eq!(test_source_files(&fragment).len(), 4);
+    }
+
+    /// The polarity of the first node named `name`.
+    fn polarity_of(fragment: &IrFragment, name: &str) -> Option<unlace_ir::Polarity> {
+        fragment
+            .nodes
+            .iter()
+            .find(|node| node.name == name)
+            .map(|node| node.polarity)
+    }
+
+    /// Binds `sources` under a throwaway root that holds a `package.json` in
+    /// each of the `manifest_dirs`.
+    fn bind_under_manifests(
+        name: &str,
+        manifest_dirs: &[&str],
+        sources: &[&str],
+    ) -> Result<IrFragment, std::io::Error> {
+        let root = std::env::temp_dir().join(format!("unlace-ts-{name}-{}", std::process::id()));
+        for dir in manifest_dirs {
+            std::fs::create_dir_all(root.join(dir))?;
+            std::fs::write(root.join(dir).join("package.json"), "{}")?;
+        }
+        let adapter = TypeScriptAdapter::new(&root);
+        let files: Vec<SourceFile> = sources
+            .iter()
+            .map(|path| SourceFile {
+                path: SmolStr::new(*path),
+                contents: "export function helper(): number { return 1 }".to_owned(),
+            })
+            .collect();
+        let bound = adapter.parse(&files).and_then(|trees| adapter.bind(trees));
+        std::fs::remove_dir_all(&root)?;
+        Ok(bound.unwrap_or_default())
+    }
+
+    #[test]
+    fn should_measure_the_test_root_from_an_enclosing_package_manifest()
+    -> Result<(), std::io::Error> {
+        let fragment = bind_under_manifests(
+            "monorepo",
+            &["packages/foo"],
+            &[
+                "packages/foo/spec/h.ts",
+                "packages/foo/src/spec/not_a_root.ts",
+            ],
+        )?;
+
+        assert_eq!(test_source_files(&fragment), ["packages/foo/spec/h.ts"]);
+        Ok(())
+    }
+
+    #[test]
+    fn should_let_a_fixture_package_inherit_test_status_from_the_outer_test_root()
+    -> Result<(), std::io::Error> {
+        let fragment = bind_under_manifests(
+            "fixture",
+            &["spec/fixtures/pkg", "fixtures/pkg"],
+            &["spec/fixtures/pkg/h.ts", "fixtures/pkg/h.ts"],
+        )?;
+
+        assert_eq!(test_source_files(&fragment), ["spec/fixtures/pkg/h.ts"]);
+        assert!(
+            fragment
+                .nodes
+                .iter()
+                .filter(|node| node.test_source)
+                .all(|node| node.polarity == unlace_ir::Polarity::TestSupport)
+        );
+        Ok(())
     }
 }

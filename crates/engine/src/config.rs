@@ -54,6 +54,8 @@ pub struct AnalyzeConfig {
     pub analysis: AnalysisConfig,
     /// Complete independently configurable analysis parameter profiles.
     pub profiles: ProfilesConfig,
+    /// Test-file detection shared by every profile.
+    pub tests: TestsConfig,
 }
 
 impl AnalyzeConfig {

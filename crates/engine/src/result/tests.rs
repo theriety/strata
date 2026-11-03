@@ -7,7 +7,7 @@ use unlace_ir::ScopeLevel;
 use super::*;
 
 #[test]
-fn should_serialize_schema_version_ten_with_two_advice_groups() {
+fn should_serialize_schema_version_eleven_with_two_advice_groups() {
     let result = AnalyzeResult {
         schema_version: RESULT_SCHEMA_VERSION,
         snapshot_hash: "snapshot".to_owned(),
@@ -27,6 +27,7 @@ fn should_serialize_schema_version_ten_with_two_advice_groups() {
             },
             shared_findings: Vec::new(),
         },
+        tests: TestSettings::default(),
         profiles: Profiles::default(),
         advice: Advice::default(),
     };
@@ -36,7 +37,7 @@ fn should_serialize_schema_version_ten_with_two_advice_groups() {
     assert_eq!(
         json.pointer("/schemaVersion")
             .and_then(serde_json::Value::as_u64),
-        Some(10)
+        Some(11)
     );
     assert!(json.get("profiles").is_some());
     assert!(json.get("modes").is_none());

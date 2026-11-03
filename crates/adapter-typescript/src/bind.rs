@@ -29,6 +29,8 @@ use emission::{
 };
 use resolution::Resolver;
 
+use crate::test_paths::package_roots;
+
 /// Per-module, per-name lookup of the node a declaration was assigned.
 type ExportTable = HashMap<SmolStr, HashMap<SmolStr, NodeId>>;
 
@@ -110,9 +112,10 @@ pub(super) fn bind(
         &re_export_links,
     );
     emit_re_exports(&re_export_links, &mut edges);
-    mark_test_source(modules, &mut nodes, &local);
-    exempt_module_objects(modules, &resolver, &exports, &mut nodes);
-    let polarity = classify_polarity(modules, &nodes, &local, &exported, &edges);
+    let package_roots = package_roots(root, modules);
+    mark_test_source(modules, &mut nodes, &local, &package_roots);
+    exempt_module_objects(modules, &resolver, &exports, &mut nodes, &package_roots);
+    let polarity = classify_polarity(modules, &nodes, &local, &exported, &edges, &package_roots);
     apply_polarity(&mut nodes, &polarity);
     // an `export`ed item is importable from outside the analysed tree, so it is public API
     // whatever the in-tree users are (exact entry-point detection is deferred).

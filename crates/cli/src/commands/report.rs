@@ -80,6 +80,7 @@ mod tests {
     fn sample() -> AnalyzeResult {
         AnalyzeResult {
             schema_version: unlace_engine::RESULT_SCHEMA_VERSION,
+            tests: unlace_engine::TestSettings::default(),
             snapshot_hash: "abc123".to_owned(),
             summary: Summary {
                 symbols: 3,
@@ -194,7 +195,7 @@ mod tests {
         assert!(markdown.contains("same-file-symbol 1.0 · same-file-type 3.0"));
         assert!(markdown.contains("solver    ilp-threshold 300"));
         assert!(markdown.contains("diversity seeds-per-candidate 10"));
-        assert!(markdown.contains("tests     helper-cap 600"));
+        assert!(markdown.contains("tests     helper-cap 600 · patterns 0 · builtins true"));
         assert!(markdown.contains("Score: 2.0000 → 1.0000; improvement +1.0000"));
         assert!(markdown.contains("Conditional split"));
         assert!(markdown.contains("solution space converged"));
