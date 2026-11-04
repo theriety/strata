@@ -287,6 +287,7 @@ mod tests {
             level: ScopeLevel::File,
             parent: None,
             synthetic: false,
+            label_keyed: false,
         }]);
         let ir = IntermediateRepresentation::new(nodes, edges, tree);
 

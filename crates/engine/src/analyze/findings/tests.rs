@@ -9,7 +9,7 @@ use unlace_ir::{
 };
 
 use crate::config::{AnalyzeConfig, ProfileName, TestsConfig};
-use crate::result::{CapacityBreach, Level, Severity, Violation, ViolationKind};
+use crate::result::{CapacityBreach, CapacityUnit, Level, Severity, Violation, ViolationKind};
 
 use super::*;
 use crate::analyze::test_policy::TestPolicy;
@@ -320,9 +320,9 @@ fn should_locate_a_same_file_polarity_breach_by_one_path() {
 }
 
 #[test]
-fn should_locate_a_nested_over_cap_file_by_ancestors_and_basename() {
-    // interior DTO names are incremental; the file keeps its full path but
-    // its location contributes only the basename (detail has the path).
+fn should_locate_a_nested_over_cap_file_by_its_real_path() {
+    // interior DTO names are incremental and may carry a group name, so the
+    // location is the file's real repo-relative path, never the ancestry.
     let tree = folder(
         "app",
         vec![folder(
@@ -344,13 +344,13 @@ fn should_locate_a_nested_over_cap_file_by_ancestors_and_basename() {
         .find(|f| f.severity == Severity::Violation)
         .map(|f| f.location.clone())
         .unwrap_or_default();
-    assert_eq!(location, vec!["app", "spec", "agent", "mocks", "gen.ts"]);
+    assert_eq!(location, vec!["spec/agent/mocks/google/gen.ts"]);
 }
 
 #[test]
-fn should_collapse_repeated_synthetic_levels_in_capacity_locations() {
-    // a root-level file hangs under the synthetic workspace chain, whose
-    // levels all render the same segment; the location keeps it once.
+fn should_locate_a_root_level_file_without_synthetic_levels() {
+    // a root-level file hangs under the synthetic workspace chain, which names
+    // no real directory; the location is just the file.
     let tree = folder(
         "over-capacity",
         vec![folder(
@@ -369,7 +369,7 @@ fn should_collapse_repeated_synthetic_levels_in_capacity_locations() {
         .find(|f| f.severity == Severity::Violation)
         .map(|f| f.location.clone())
         .unwrap_or_default();
-    assert_eq!(location, vec!["over-capacity", "workspace", "huge.py"]);
+    assert_eq!(location, vec!["huge.py"]);
 }
 
 #[test]
@@ -402,15 +402,7 @@ fn should_measure_folder_capacity_by_immediate_membership() {
         .collect();
     assert_eq!(
         folder_findings,
-        vec![(
-            vec![
-                "shared".to_owned(),
-                "a".to_owned(),
-                "b".to_owned(),
-                "c".to_owned(),
-            ],
-            Severity::Violation
-        )]
+        vec![(vec!["shared/a/b/c".to_owned()], Severity::Violation)]
     );
 }
 
@@ -443,11 +435,7 @@ fn should_measure_folder_capacity_by_immediate_entries() {
     assert_eq!(
         folder_findings,
         vec![(
-            vec![
-                "workspace".to_owned(),
-                "section".to_owned(),
-                "nested".to_owned(),
-            ],
+            vec!["workspace/section/nested".to_owned()],
             Severity::Violation,
         )]
     );
@@ -633,7 +621,7 @@ fn should_count_a_nested_package_file_and_direct_child_folder_as_two_entries() {
     );
     let findings = physical_folder_findings(&entries, 1);
     assert!(findings.iter().any(|finding| {
-        finding.location == ["workspace", "packages", "unit"]
+        finding.location == ["workspace/packages/unit"]
             && finding.capacity.as_ref().map(|breach| breach.measured) == Some(2)
     }));
     let pressure = physical_binding_pressure(&tree, &BTreeMap::new(), 1);
@@ -837,6 +825,9 @@ fn should_deduplicate_findings_by_complete_serialized_identity() {
         capacity: Some(CapacityBreach {
             measured: 3,
             cap: 1,
+            unit: CapacityUnit::Entries,
+            config_key: "capacity.folder".to_owned(),
+            real_paths: Vec::new(),
             path: None,
         }),
     };
@@ -844,6 +835,9 @@ fn should_deduplicate_findings_by_complete_serialized_identity() {
         capacity: Some(CapacityBreach {
             measured: 3,
             cap: 2,
+            unit: CapacityUnit::Entries,
+            config_key: "capacity.folder".to_owned(),
+            real_paths: Vec::new(),
             path: None,
         }),
         ..duplicate.clone()

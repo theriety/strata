@@ -39,6 +39,10 @@ pub(in crate::analyze) struct LaminarHome {
     /// distinct clusters; it carries the current tree's collapse marker across to
     /// the candidate folder so a greenfield render drops the bucket too.
     pub(in crate::analyze) synthetic: bool,
+    /// True when the folder-level container is keyed under the package-group
+    /// label (`Container::label_keyed`): its key is `label/scope` and the label
+    /// names no directory. Functionally determined by `folder`, like `synthetic`.
+    pub(in crate::analyze) label_keyed: bool,
 }
 
 /// Reads the laminar folder/domain/package name keys for the file container
@@ -57,13 +61,14 @@ pub(in crate::analyze) fn laminar_home(
     file_container: u32,
 ) -> LaminarHome {
     let (mut folder, mut domain, mut package) = (None, None, None);
-    let mut synthetic = false;
+    let (mut synthetic, mut label_keyed) = (false, false);
     let mut current = by_id.get(&file_container).copied();
     while let Some(container) = current {
         match container.level {
             ScopeLevel::Folder if folder.is_none() => {
                 folder = Some(container.name.clone());
                 synthetic = container.synthetic;
+                label_keyed = container.label_keyed;
             }
             ScopeLevel::Domain if domain.is_none() => domain = Some(container.name.clone()),
             ScopeLevel::Package if package.is_none() => package = Some(container.name.clone()),
@@ -73,6 +78,9 @@ pub(in crate::analyze) fn laminar_home(
             .parent
             .and_then(|parent| by_id.get(&parent.0).copied());
     }
+    // a chain with no container at all falls back to an invented `workspace`
+    // stand-in, which names no real directory: it is keyed under the group label.
+    label_keyed |= folder.is_none() && domain.is_none() && package.is_none();
     let package = package.unwrap_or_else(|| SmolStr::new("workspace"));
     let domain = domain.unwrap_or_else(|| package.clone());
     let folder = folder.unwrap_or_else(|| domain.clone());
@@ -81,6 +89,7 @@ pub(in crate::analyze) fn laminar_home(
         domain,
         package,
         synthetic,
+        label_keyed,
     }
 }
 

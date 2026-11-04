@@ -19,9 +19,12 @@ mod cycles;
 mod ordering;
 mod physical;
 mod polarity;
+mod real_roots;
 mod test_only;
 mod visibility;
 
+#[cfg(test)]
+mod capacity_wording_tests;
 #[cfg(test)]
 mod tests;
 

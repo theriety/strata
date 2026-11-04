@@ -447,6 +447,7 @@ fn file_info(container: u32, path: &str, sloc: u32) -> FileInfo {
             domain: SmolStr::new(""),
             package: SmolStr::new(""),
             synthetic: false,
+            label_keyed: false,
         },
     }
 }

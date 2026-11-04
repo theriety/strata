@@ -1,0 +1,2 @@
+capacity [violation] dup-hub-py/hub :: in `dup-hub-py/hub`: 24 entries (files and subfolders); the folder cap is 20 (`capacity.folder`).
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

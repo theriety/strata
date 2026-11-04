@@ -81,6 +81,7 @@ impl PipelineSolver<'_> {
                         level: container.level,
                         parent,
                         synthetic: container.synthetic,
+                        label_keyed: container.label_keyed,
                     })
                 });
             restored_ids.insert(container.id, id);

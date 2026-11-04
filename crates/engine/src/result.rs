@@ -9,6 +9,7 @@
 mod advice;
 mod candidate;
 mod finding;
+mod group_keyed;
 mod movement;
 mod profile;
 mod settings;
@@ -24,8 +25,9 @@ pub use self::advice::{
 };
 pub use self::candidate::{Candidate, ContainerNode, Level, ScoreBreakdown, SymbolPlacement};
 pub use self::finding::{
-    CapacityBreach, ConditionalSplit, EdgeBreak, Severity, Violation, ViolationKind,
+    CapacityBreach, CapacityUnit, ConditionalSplit, EdgeBreak, Severity, Violation, ViolationKind,
 };
+pub(crate) use self::group_keyed::GroupKeyed;
 pub use self::movement::{
     FileMove, MirrorMove, Move, MoveKind, MoveReason, SymbolKind, SymbolMove,
 };

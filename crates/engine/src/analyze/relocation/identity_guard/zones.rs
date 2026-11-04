@@ -43,6 +43,7 @@ mod tests {
                 domain: SmolStr::default(),
                 package: SmolStr::new("p"),
                 synthetic: false,
+                label_keyed: false,
             },
         }
     }

@@ -126,6 +126,7 @@ fn intern(
         level,
         parent,
         synthetic: false,
+        label_keyed: false,
     });
     by_key.insert((level, key), id);
     id

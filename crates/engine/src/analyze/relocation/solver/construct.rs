@@ -8,7 +8,9 @@ use unlace_core::condense::condense;
 use unlace_core::score::Coefficients;
 use unlace_ir::{ScopeLevel, Snapshot};
 
-use crate::analyze::layout::{real_dir_partition, relieve_over_capacity, synthesize_roof_rebuild};
+use crate::analyze::layout::{
+    label_keyed_folders, real_dir_partition, relieve_over_capacity, synthesize_roof_rebuild,
+};
 use crate::analyze::relocation::mirror::{adapter_pairs, exact_links, mirror_rules};
 use crate::analyze::relocation::solver::build_file_graph;
 use crate::analyze::relocation::zone_keys;
@@ -157,6 +159,15 @@ impl<'a> PipelineSolver<'a> {
             &mut folder_names,
             &mut folder_synthetic,
         );
+        let folder_label_keyed = label_keyed_folders(
+            &relieved_files,
+            &condensation,
+            &[&search_partition, &identity_partition]
+                .into_iter()
+                .chain(roof_rebuild.as_ref())
+                .collect::<Vec<_>>(),
+            folder_names.len(),
+        );
         let relocation_identity = RelocationIdentityGuard::new_with_zones(
             &relieved_files,
             &condensation,
@@ -217,6 +228,7 @@ impl<'a> PipelineSolver<'a> {
             real_partition: search_partition,
             real_folder_names: folder_names,
             real_folder_synthetic: folder_synthetic,
+            real_folder_label_keyed: folder_label_keyed,
             base_seed: profile.seed,
             root_name,
             facts,

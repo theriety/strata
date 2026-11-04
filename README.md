@@ -520,7 +520,21 @@ When a source moves, every exact mirror must follow it; if any mirror is blocked
 
 The former `analysis.mode`, `analysis.candidates`, `analysis.seed`, and top-level analysis-policy sections are invalid. `--mode` remains a CLI compatibility selector: it chooses which parameter profiles execute but does not define their parameters.
 
-Saved analysis JSON uses result schema version 11; version 11 records the resolved `[tests]` section once as a top-level `tests` object (`helperCap`, `patterns`, `builtins`) and drops it from each profile's `parameters`, version 10 added the `testOnly` violation kind (a production item whose every user is test code), version 9 added each profile's `allow-cross-package-moves` relocation parameter, and readers reject version 10 and earlier results. The top-level `advice` object contains `recommended` and `reviewCandidates`; raw per-profile candidates remain available for inspection. Each advice item records `destination`, `supportingProfiles`, `qualifiedProfiles`, `absentProfiles`, `conflictingDestinations`, `assessments`, and `reviewReasons`. An assessment includes all six raw evidence signals, the weighted and structural scores, the ambiguity margin and best alternative, the effective thresholds, and the qualification result. There is no serialized rejected group.
+Saved analysis JSON uses result schema version 11, and readers reject version 10 and earlier results. Version 11 makes three changes:
+
+- It records the resolved `[tests]` section once, as a top-level `tests` object (`helperCap`, `patterns`, `builtins`), and drops it from each profile's `parameters`.
+- It adds `unit` (`lines`, `entries`, `folders`, `domains` or `packages`), `configKey` (for example `capacity.domain`) and `realPaths` (repo-relative real directories, or the file path) to each violation's `capacity` object, so a capacity finding states what it counted, the cap and where. A `relievesOverCap` move reason also carries `unit` and `configKey`. For a file-level breach the existing `path` field is kept and always equals `realPaths[0]`; it is absent for folder, domain, package and package-group breaches.
+- Every violation `location` is made of real repo-relative paths:
+  - a cycle lists the files of its members;
+  - a polarity finding lists the source and target files (one when both share a file);
+  - a visibility or test-only finding lists its file and then the symbol's name;
+  - a capacity violation lists one whole real path, its first `realPaths` entry. For a domain that merges several real folders, this is the lexicographically first. The repository root is `.`.
+
+Every path in the moves, symbol moves, move reasons and advice resolves on disk as written, relative to the analyzed root, with `.` for the repository root. This covers `path`, `from`, `to`, `fromPath`, `toPath`, `sourcePath`, `container`, `subject`, `partner` and the advice `destination` fields. A destination path names the folder or file the plan would create. The package-group label is a name, not a directory, so it is never added to a path. A real directory that happens to share the root's name is kept like any other segment, whether it is the Python flat layout (`proj/proj/`) or a manifest package (`tokio/tokio`).
+
+Earlier versions: version 10 added the `testOnly` violation kind (a production item whose every user is test code), and version 9 added each profile's `allow-cross-package-moves` relocation parameter.
+
+The top-level `advice` object contains `recommended` and `reviewCandidates`; raw per-profile candidates remain available for inspection. Each advice item records `destination`, `supportingProfiles`, `qualifiedProfiles`, `absentProfiles`, `conflictingDestinations`, `assessments`, and `reviewReasons`. An assessment includes all six raw evidence signals, the weighted and structural scores, the ambiguity margin and best alternative, the effective thresholds, and the qualification result. There is no serialized rejected group.
 
 Each score breakdown includes `dependencyOnly` and `companionSeparation`. The latter is the directional charge for keeping a conservatively matched signature type away from its immutable owner file. Each primary file `Move` also has `mirrors`, whose entries contain `sourcePath`, `path`, `from`, and `to`. Earlier saved result versions are not accepted by `report`, `tree`, or `diff`.
 

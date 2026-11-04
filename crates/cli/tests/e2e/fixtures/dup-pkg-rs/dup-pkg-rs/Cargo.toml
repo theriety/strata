@@ -1,0 +1,11 @@
+[package]
+name = "fixture-dup-pkg-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fixture_dup_pkg_core"
+path = "src/lib.rs"
+
+[dependencies]
+fixture-move-util = { path = "../util" }

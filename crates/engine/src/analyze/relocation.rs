@@ -190,6 +190,11 @@ pub(in crate::analyze) struct PipelineSolver<'a> {
     /// Carries the current tree's collapse marker onto the candidate folder it
     /// induces; split halves are always real places, so they carry `false`.
     real_folder_synthetic: Vec<bool>,
+    /// Whether each relieved folder cluster stands for a folder keyed under the
+    /// package-group label, indexed by cluster id in lockstep with
+    /// `real_folder_names`. Carries the current tree's provenance onto the
+    /// candidate folder it induces, split halves included.
+    real_folder_label_keyed: Vec<bool>,
     /// The configured base seed; seed offset 0 selects the identity entry.
     base_seed: u64,
     /// The current root's name, reused for candidate package groups.

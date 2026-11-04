@@ -52,6 +52,7 @@ fn container(id: u32, path: &str) -> Container {
         level: ScopeLevel::File,
         parent: None,
         synthetic: false,
+        label_keyed: false,
     }
 }
 

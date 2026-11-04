@@ -1,0 +1,9 @@
+moves (2 group(s), 5 file(s); gain +2.2222):
+move — relieves atlas/foo, which has 4 entries (files and subfolders) against the folder cap of 3 (`capacity.folder`)
+  1. atlas/foo/b1.ts [atlas/foo → atlas/foo/b]
+  2. atlas/foo/b2.ts [atlas/foo → atlas/foo/b]
+move — relieves dup-split-ts/atlas/src/core, which has 4 entries (files and subfolders) against the folder cap of 3 (`capacity.folder`)
+  3. dup-split-ts/atlas/src/core/beta.ts [dup-split-ts/atlas/src/core → dup-split-ts/atlas/src/core/beta]
+  4. dup-split-ts/atlas/src/core/delta.ts [dup-split-ts/atlas/src/core → dup-split-ts/atlas/src/core/beta]
+  5. dup-split-ts/atlas/src/core/gamma.ts [dup-split-ts/atlas/src/core → dup-split-ts/atlas/src/core/beta]
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

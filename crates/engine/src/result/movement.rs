@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::finding::CapacityUnit;
+use super::group_keyed::GroupKeyed;
+
 /// What kind of program entity a [`SymbolMove`] relocates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -117,7 +120,11 @@ pub struct MirrorMove {
 /// `subject` and `partner` carry full repo-relative file paths; the `Display`
 /// impl basenames them, reproducing the prose the CLI faces print.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum MoveReason {
     /// A spec file trails its subject under test projection.
     Follows {
@@ -132,6 +139,10 @@ pub enum MoveReason {
         count: u32,
         /// The folder member cap.
         cap: u32,
+        /// What `count` counts.
+        unit: CapacityUnit,
+        /// The configuration key of the breached cap, e.g. `capacity.folder`.
+        config_key: String,
     },
     /// The move is pulled by its strongest dependency partner at the destination.
     PulledBy {
@@ -149,6 +160,60 @@ pub enum MoveReason {
     Clustering,
 }
 
+impl FileMove {
+    /// The group-keyed paths: the file and the folder it leaves.
+    pub(crate) fn group_keyed(&mut self) -> [GroupKeyed<'_>; 2] {
+        [
+            GroupKeyed::new(&mut self.path),
+            GroupKeyed::new(&mut self.from),
+        ]
+    }
+}
+
+impl MirrorMove {
+    /// The group-keyed paths: the source, the test, and its two folders.
+    pub(crate) fn group_keyed(&mut self) -> [GroupKeyed<'_>; 4] {
+        [
+            GroupKeyed::new(&mut self.source_path),
+            GroupKeyed::new(&mut self.path),
+            GroupKeyed::new(&mut self.from),
+            GroupKeyed::new(&mut self.to),
+        ]
+    }
+}
+
+impl MoveReason {
+    /// The group-keyed path the reason names, when it names one.
+    pub(crate) fn group_keyed(&mut self) -> Option<GroupKeyed<'_>> {
+        match self {
+            Self::Follows { subject } => Some(GroupKeyed::new(subject)),
+            Self::PulledBy { partner, .. } => Some(GroupKeyed::new(partner)),
+            Self::RelievesOverCap { container, .. } => Some(GroupKeyed::new(container)),
+            Self::NamingCohesion { .. } | Self::Clustering => None,
+        }
+    }
+}
+
+impl Move {
+    /// Every group-keyed path of the move: its files, destination, reason and
+    /// mirrored tests.
+    pub(crate) fn group_keyed(&mut self) -> Vec<GroupKeyed<'_>> {
+        let Self {
+            files,
+            to,
+            reason,
+            mirrors,
+            ..
+        } = self;
+        let mut keyed: Vec<GroupKeyed<'_>> =
+            files.iter_mut().flat_map(FileMove::group_keyed).collect();
+        keyed.push(GroupKeyed::new(to));
+        keyed.extend(reason.group_keyed());
+        keyed.extend(mirrors.iter_mut().flat_map(MirrorMove::group_keyed));
+        keyed
+    }
+}
+
 impl std::fmt::Display for MoveReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -157,9 +222,12 @@ impl std::fmt::Display for MoveReason {
                 container,
                 count,
                 cap,
+                unit,
+                config_key,
             } => write!(
                 f,
-                "relieves over-cap folder {container} ({count}/{cap} entries)"
+                "relieves {container}, which has {}",
+                unit.against_cap(*count, *cap, config_key),
             ),
             Self::PulledBy { partner, weight } => write!(
                 f,

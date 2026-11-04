@@ -3,7 +3,7 @@
 use unlace_engine::{AnalyzeResult, Candidate};
 
 use crate::render::advice::caption_for;
-use crate::render::changes::Changes;
+use crate::render::changes::{Changes, destination};
 use crate::render::limit::{more_line, take_worst};
 use crate::render::{RenderOptions, nq, sf, wrap};
 
@@ -17,7 +17,7 @@ pub(super) fn candidate_lines(
     if changes.is_empty() {
         lines.push("  No moves versus the current layout.".to_owned());
     }
-    let mut moves = file_move_items(candidate, &changes);
+    let mut moves = file_move_items(candidate);
     for entry in &candidate.symbol_moves {
         let kind = if entry.kind == unlace_engine::SymbolKind::Type {
             "type"
@@ -130,7 +130,7 @@ impl MoveList {
 }
 
 /// One item per file move and per mirrored test file, in plan order.
-fn file_move_items(candidate: &Candidate, changes: &Changes) -> MoveList {
+fn file_move_items(candidate: &Candidate) -> MoveList {
     let mut list = MoveList {
         items: Vec::new(),
         captions: Vec::new(),
@@ -138,33 +138,7 @@ fn file_move_items(candidate: &Candidate, changes: &Changes) -> MoveList {
     for entry in &candidate.delta_narration {
         let group = list.captions.len();
         let last = entry.files.len().saturating_sub(1);
-        let reason = match &entry.reason {
-            unlace_engine::MoveReason::PulledBy { partner, weight } => {
-                unlace_engine::MoveReason::PulledBy {
-                    partner: changes.path(partner),
-                    weight: *weight,
-                }
-            }
-            unlace_engine::MoveReason::RelievesOverCap {
-                container,
-                count,
-                cap,
-            } => unlace_engine::MoveReason::RelievesOverCap {
-                container: changes.path(container),
-                count: *count,
-                cap: *cap,
-            },
-            unlace_engine::MoveReason::Follows { subject } => unlace_engine::MoveReason::Follows {
-                subject: changes.path(subject),
-            },
-            unlace_engine::MoveReason::Clustering => unlace_engine::MoveReason::Clustering,
-            unlace_engine::MoveReason::NamingCohesion { cohesion } => {
-                unlace_engine::MoveReason::NamingCohesion {
-                    cohesion: *cohesion,
-                }
-            }
-        };
-        let caption = wrap(&caption_for(&reason), 6, 6);
+        let caption = wrap(&caption_for(&entry.reason), 6, 6);
         // an entry with no files emits its caption as a standalone item.
         if entry.files.is_empty() {
             list.items.push(MoveItem {
@@ -180,8 +154,8 @@ fn file_move_items(candidate: &Candidate, changes: &Changes) -> MoveList {
                 lines: wrap(
                     &format!(
                         "- Move file `{}` → `{}`",
-                        changes.path(&file.path),
-                        changes.destination(&file.path, &entry.to)
+                        file.path,
+                        destination(&file.path, &entry.to)
                     ),
                     4,
                     6,
@@ -195,9 +169,9 @@ fn file_move_items(candidate: &Candidate, changes: &Changes) -> MoveList {
                 lines: wrap(
                     &format!(
                         "- Move mirrored test file `{}` → `{}`; follows `{}`",
-                        changes.path(&mirror.path),
-                        changes.destination(&mirror.path, &mirror.to),
-                        changes.path(&mirror.source_path)
+                        mirror.path,
+                        destination(&mirror.path, &mirror.to),
+                        mirror.source_path
                     ),
                     4,
                     6,

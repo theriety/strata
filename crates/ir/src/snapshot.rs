@@ -284,6 +284,7 @@ mod tests {
             level: ScopeLevel::File,
             parent: None,
             synthetic: false,
+            label_keyed: false,
         }
     }
 
@@ -528,6 +529,7 @@ mod tests {
             level: ScopeLevel::File,
             parent: Some(ContainerId(9)),
             synthetic: false,
+            label_keyed: false,
         }]);
         let ir = IntermediateRepresentation::new(vec![node(0, "a")], vec![], bad_tree);
 

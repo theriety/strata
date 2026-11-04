@@ -35,11 +35,12 @@ pub use crate::config::{
 };
 pub use crate::error::UnlaceError;
 pub use crate::result::{
-    Advice, AnalyzeResult, Candidate, CapacityBreach, CapacityRemainder, ConditionalSplit,
-    ContainerNode, CurrentStanding, CurrentTree, EdgeBreak, EvidenceSignals, FileMove, Level,
-    MirrorMove, ModeResult, Modes, Move, MoveKind, MoveReason, ProfileAssessment, ProfileConflict,
-    ProfileCurrent, ProfileResult, Profiles, QualificationThresholds, RESULT_SCHEMA_VERSION,
-    RelocationAdvice, RelocationProposal, ReviewReason, ScoreBreakdown, Severity, Summary,
-    SymbolKind, SymbolMove, SymbolPlacement, TestSettings, Violation, ViolationKind,
+    Advice, AnalyzeResult, Candidate, CapacityBreach, CapacityRemainder, CapacityUnit,
+    ConditionalSplit, ContainerNode, CurrentStanding, CurrentTree, EdgeBreak, EvidenceSignals,
+    FileMove, Level, MirrorMove, ModeResult, Modes, Move, MoveKind, MoveReason, ProfileAssessment,
+    ProfileConflict, ProfileCurrent, ProfileResult, Profiles, QualificationThresholds,
+    RESULT_SCHEMA_VERSION, RelocationAdvice, RelocationProposal, ReviewReason, ScoreBreakdown,
+    Severity, Summary, SymbolKind, SymbolMove, SymbolPlacement, TestSettings, Violation,
+    ViolationKind,
 };
 pub use crate::snapshot::snapshot_from_root;

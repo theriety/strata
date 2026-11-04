@@ -310,10 +310,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use unlace_engine::{
-        Candidate, CapacityRemainder, ContainerNode, CurrentStanding, CurrentTree, EdgeBreak,
-        FileMove, Level, Modes, Move, MoveKind, MoveReason, ProfileConfig, ProfileCurrent,
-        ScoreBreakdown, Severity, Summary, SymbolKind, SymbolMove, SymbolPlacement, Violation,
-        ViolationKind,
+        Candidate, CapacityBreach, CapacityRemainder, CapacityUnit, ContainerNode, CurrentStanding,
+        CurrentTree, EdgeBreak, FileMove, Level, Modes, Move, MoveKind, MoveReason, ProfileConfig,
+        ProfileCurrent, ScoreBreakdown, Severity, Summary, SymbolKind, SymbolMove, SymbolPlacement,
+        Violation, ViolationKind,
     };
 
     use super::*;
@@ -644,8 +644,10 @@ mod tests {
                 container: "ai/adapters".to_owned(),
                 count: 33,
                 cap: 20,
+                unit: CapacityUnit::Entries,
+                config_key: "capacity.folder".to_owned(),
             }),
-            "Why: relieves `ai/adapters`, which holds 33 against a cap of 20."
+            "Why: relieves `ai/adapters`, which has 33 entries (files and subfolders) against the folder cap of 20 (`capacity.folder`)."
         );
         assert_eq!(
             caption_for(&MoveReason::Follows {
@@ -657,6 +659,75 @@ mod tests {
             caption_for(&MoveReason::Clustering),
             "Why: clusters files that already import each other heavily."
         );
+    }
+
+    fn breach_violation(
+        severity: Severity,
+        measured: u32,
+        cap: u32,
+        unit: CapacityUnit,
+        key: &str,
+        real_paths: &[&str],
+    ) -> Violation {
+        Violation {
+            kind: ViolationKind::Capacity,
+            severity,
+            location: vec!["ai/generators".to_owned()],
+            detail: "stale preformatted detail".to_owned(),
+            break_suggestions: None,
+            capacity: Some(CapacityBreach {
+                measured,
+                cap,
+                unit,
+                config_key: key.to_owned(),
+                real_paths: real_paths.iter().map(|path| (*path).to_owned()).collect(),
+                path: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn should_render_capacity_findings_from_structured_fields() {
+        let render = |violation: Violation| {
+            findings::findings_lines("Shared", &[violation], RenderOptions::default())
+                .join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+
+        let file = render(breach_violation(
+            Severity::Violation,
+            288,
+            250,
+            CapacityUnit::Lines,
+            "capacity.file",
+            &["spec/debug/doctor.ts"],
+        ));
+        let folder = render(breach_violation(
+            Severity::Violation,
+            25,
+            20,
+            CapacityUnit::Entries,
+            "capacity.folder",
+            &["src/batch/adapters"],
+        ));
+        let domain = render(breach_violation(
+            Severity::Borderline,
+            21,
+            20,
+            CapacityUnit::Folders,
+            "capacity.domain",
+            &["src/generators", "spec/generators"],
+        ));
+
+        assert!(file.contains("- capacity [violation] in `spec/debug/doctor.ts`: 288 production lines; the file cap is 250 (`capacity.file`)."), "{file}");
+        assert!(folder.contains("in `src/batch/adapters`: 25 entries (files and subfolders); the folder cap is 20 (`capacity.folder`)."), "{folder}");
+        assert!(domain.contains("[borderline] in `src/generators` + `spec/generators`: 21 folders holding files; the domain cap is 20 (`capacity.domain`). src/ and spec/ count together."), "{domain}");
+        for text in [&file, &folder, &domain] {
+            assert!(!text.contains("container ancestry"), "{text}");
+            assert!(!text.contains("stale preformatted"), "{text}");
+        }
     }
 
     #[test]
@@ -1703,6 +1774,64 @@ mod tests {
         assert!(text.contains("file `dataset/src/origin/unit.ts` → `dataset/src/chosen`"));
         assert!(text.contains("best alternative `dataset/src/alternative`"));
         assert!(!text.contains("best alternative `dataset/spec/alternative`"));
+    }
+
+    #[test]
+    fn should_print_real_move_paths_as_the_result_carries_them() {
+        // a flat layout (`proj/proj/hub`): the group label `proj` is also a real
+        // top-level directory, so the paths the engine emits keep that segment.
+        let mut result = result_with_candidate();
+        result.current.tree = ContainerNode {
+            name: "proj".to_owned(),
+            level: Level::PackageGroup,
+            children: Some(vec![file_node("proj/hub/a.py", 1)]),
+            symbols: None,
+            production_sloc: None,
+        };
+        if let Some(candidate) = result
+            .profiles
+            .anchored
+            .as_mut()
+            .and_then(|mode| mode.candidates.first_mut())
+        {
+            candidate.delta_narration = vec![
+                move_of(
+                    MoveKind::Move,
+                    &["proj/hub/a.py"],
+                    "proj/hub",
+                    "proj/hub/ingest",
+                    MoveReason::RelievesOverCap {
+                        container: "proj/hub".to_owned(),
+                        count: 24,
+                        cap: 20,
+                        unit: CapacityUnit::Entries,
+                        config_key: "capacity.folder".to_owned(),
+                    },
+                ),
+                move_of(
+                    MoveKind::Move,
+                    &["proj/b.py"],
+                    "proj",
+                    ".",
+                    MoveReason::Clustering,
+                ),
+            ];
+        }
+
+        let text = report::Report::build(&result, "proj", RenderOptions::default())
+            .lines()
+            .join("\n");
+
+        assert!(
+            text.contains("Move file `proj/hub/a.py` → `proj/hub/ingest/a.py`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("relieves `proj/hub`, which has 24 entries"),
+            "{text}"
+        );
+        assert!(text.contains("`proj/hub`: 1 file(s) leaving"), "{text}");
+        assert!(text.contains("Move file `proj/b.py` → `b.py`"), "{text}");
     }
 
     #[test]

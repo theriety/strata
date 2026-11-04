@@ -5,8 +5,9 @@ All findings and moves are suggestions. Applying them may break the build; use y
 
 Structural findings
 Shared findings (2)
-  - capacity [violation] file `huge.py` holds 300 against a cap of 250
-  - capacity [violation] file `pkg/nested/deep/huge_nested.py` holds 300 against a cap of 250
+  - capacity [violation] in `huge.py`: 300 production lines; the file cap is 250 (`capacity.file`).
+  - capacity [violation] in `pkg/nested/deep/huge_nested.py`: 300 production lines; the file cap
+    is 250 (`capacity.file`).
 
 anchored profile-specific findings (0)
   None.

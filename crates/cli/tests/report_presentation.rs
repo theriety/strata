@@ -365,16 +365,16 @@ fn should_follow_relocated_symbol_destination_and_mirrored_test_in_paired_trees(
     candidate.delta_narration = vec![Move {
         kind: MoveKind::Move,
         files: vec![FileMove {
-            path: "project/destination.ts".into(),
-            from: "project".into(),
+            path: "destination.ts".into(),
+            from: ".".into(),
         }],
-        to: "project/nested".into(),
+        to: "nested".into(),
         reason: MoveReason::Clustering,
         mirrors: vec![MirrorMove {
-            source_path: "project/destination.ts".into(),
-            path: "project/tests/destination.spec.ts".into(),
-            from: "project/tests".into(),
-            to: "project/tests/nested".into(),
+            source_path: "destination.ts".into(),
+            path: "tests/destination.spec.ts".into(),
+            from: "tests".into(),
+            to: "tests/nested".into(),
         }],
     }];
     candidate.symbol_moves = vec![SymbolMove {
@@ -589,10 +589,10 @@ fn should_preserve_same_name_destination_folder_for_whole_file_move() -> TestRes
     candidate.delta_narration = vec![Move {
         kind: MoveKind::Move,
         files: vec![FileMove {
-            path: "project/source.ts".into(),
-            from: "project".into(),
+            path: "source.ts".into(),
+            from: ".".into(),
         }],
-        to: "project/project".into(),
+        to: "project".into(),
         reason: MoveReason::Clustering,
         mirrors: vec![],
     }];

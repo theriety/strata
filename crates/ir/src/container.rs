@@ -29,6 +29,15 @@ pub struct Container {
     /// result carries the collapsed engine `ContainerNode` DTO, not this tree.
     #[serde(skip)]
     pub synthetic: bool,
+    /// True for a package, domain or folder minted for files outside every
+    /// manifest package. Its name is keyed under the package-group label
+    /// (`label/scope`), which names no directory, so a path built from the key
+    /// must drop the label once. A container under a real package root, even one
+    /// whose directory shares the label's name, is false. The flag records
+    /// where the key came from, so no reader has to guess it from the name. A
+    /// transient hint like `synthetic`, never serialized.
+    #[serde(skip)]
+    pub label_keyed: bool,
 }
 
 /// A laminar (forest-shaped) tree over [`Container`]s.
@@ -174,6 +183,7 @@ mod tests {
             level,
             parent: parent.map(ContainerId),
             synthetic: false,
+            label_keyed: false,
         }
     }
 

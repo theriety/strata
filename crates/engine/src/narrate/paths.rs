@@ -1,6 +1,8 @@
 //! Physical path algebra: package-relative namespaces and package-group
 //! root projection (ADR-18).
 
+use unlace_ir::Container;
+
 /// Splits a file's real directory into its package-relative namespace
 /// (ADR-18): the see-through source-root segments that the laminar folder
 /// key omits.
@@ -59,10 +61,22 @@ pub(crate) fn path_segments(path: &str) -> Vec<String> {
         .collect()
 }
 
-/// Drops a leading package-group (`dataset`) prefix from a laminar key.
-pub(crate) fn drain_dataset(mut segments: Vec<String>, dataset: &[String]) -> Vec<String> {
-    if segments.starts_with(dataset) {
-        segments.drain(..dataset.len());
+/// Reads the key of `container` as real repo-relative segments, given the
+/// package-group label `dataset`.
+///
+/// A key is `label/scope` when its file sits outside every manifest package
+/// (`ws/core` for the directory `core`), and a plain package-rooted path
+/// (`ws/atlas/core`) otherwise. The label names no directory, so it is dropped
+/// once from the first form and never from the second, even when a real
+/// directory shares the label's name. The container records which form it was
+/// minted in (`Container::label_keyed`), in the current tree from the laminar
+/// builder and in a candidate tree from the folder it stands for, so nothing
+/// here compares names.
+pub(crate) fn real_key(container: &Container, dataset: &str) -> Vec<String> {
+    let mut segments = path_segments(&container.name);
+    let label = path_segments(dataset);
+    if container.label_keyed && segments.starts_with(&label) {
+        segments.drain(..label.len());
     }
     segments
 }

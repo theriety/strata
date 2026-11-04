@@ -1,0 +1,11 @@
+# Pins the folder cap at 3 and allows cross-package moves, so `cross-package-ts`
+# proposes a file that lands in another package's folder. It lives beside the
+# fixtures rather than inside one so the analyzer never scans it as source.
+[profiles.anchored.capacity]
+folder = 3
+[profiles.greenfield.capacity]
+folder = 3
+[profiles.anchored.relocation]
+allow-cross-package-moves = true
+[profiles.greenfield.relocation]
+allow-cross-package-moves = true

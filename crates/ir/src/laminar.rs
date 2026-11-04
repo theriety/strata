@@ -93,6 +93,7 @@ pub fn build_laminar_tree(paths: &[SmolStr], root_name: &str, layout: &Layout) -
         SmolStr::new(root_name),
         None,
         false,
+        false,
     );
 
     let mut sorted: Vec<&SmolStr> = paths.iter().collect();
@@ -100,40 +101,19 @@ pub fn build_laminar_tree(paths: &[SmolStr], root_name: &str, layout: &Layout) -
     sorted.dedup();
 
     for path in sorted {
-        let all: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
-        // the trailing segment is the filename, not a directory.
-        let dir = all.get(..all.len().saturating_sub(1)).unwrap_or(&[]);
-
-        let package_root = package_roots
-            .iter()
-            .copied()
-            .find(|root| is_ancestor_dir(root, &all))
-            .unwrap_or("");
-        let package_depth = if package_root.is_empty() {
-            0
-        } else {
-            segment_count(package_root)
-        };
+        let (package_root, scope) = locate(path, &package_roots, &layout.source_roots);
         let package_key: SmolStr = if package_root.is_empty() {
             SmolStr::new(root_name)
         } else {
             SmolStr::new(package_root)
         };
 
-        // directory segments below the package root, with one transparent
-        // source-root segment stripped.
-        let within = dir.get(package_depth.min(dir.len())..).unwrap_or(&[]);
-        let scope = match within.first() {
-            Some(first) if layout.source_roots.iter().any(|root| root == first) => {
-                within.get(1..).unwrap_or(&[])
-            }
-            _ => within,
-        };
-
         // an empty scope means the file sits at the package/source root with no
         // real directory of its own, so both the domain and the folder minted
         // for it are the synthetic `workspace` bucket the render later collapses.
         let synthetic = scope.is_empty();
+        // a file outside every manifest package is keyed under the group label.
+        let label_keyed = package_root.is_empty();
         let package = intern(
             &mut containers,
             &mut by_key,
@@ -141,22 +121,25 @@ pub fn build_laminar_tree(paths: &[SmolStr], root_name: &str, layout: &Layout) -
             package_key.clone(),
             Some(group),
             false,
+            label_keyed,
         );
         let domain = intern(
             &mut containers,
             &mut by_key,
             ScopeLevel::Domain,
-            scoped_key(&package_key, scope, 1),
+            scoped_key(&package_key, &scope, 1),
             Some(package),
             synthetic,
+            label_keyed,
         );
         let folder = intern(
             &mut containers,
             &mut by_key,
             ScopeLevel::Folder,
-            scoped_key(&package_key, scope, scope.len()),
+            scoped_key(&package_key, &scope, scope.len()),
             Some(domain),
             synthetic,
+            label_keyed,
         );
         let file = intern(
             &mut containers,
@@ -164,6 +147,7 @@ pub fn build_laminar_tree(paths: &[SmolStr], root_name: &str, layout: &Layout) -
             ScopeLevel::File,
             path.clone(),
             Some(folder),
+            false,
             false,
         );
         files.insert(path.clone(), file);
@@ -173,6 +157,37 @@ pub fn build_laminar_tree(paths: &[SmolStr], root_name: &str, layout: &Layout) -
         tree: ContainerTree::new(containers),
         files,
     }
+}
+
+/// Resolves the package root a file belongs to (the empty root when no
+/// manifest package encloses it) and the directory segments below that root,
+/// with one transparent source-root segment stripped.
+fn locate<'path>(
+    path: &'path str,
+    package_roots: &[&'path str],
+    source_roots: &[SmolStr],
+) -> (&'path str, Vec<&'path str>) {
+    let all: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    // the trailing segment is the filename, not a directory.
+    let dir = all.get(..all.len().saturating_sub(1)).unwrap_or(&[]);
+    let package_root = package_roots
+        .iter()
+        .copied()
+        .find(|root| is_ancestor_dir(root, &all))
+        .unwrap_or("");
+    let package_depth = if package_root.is_empty() {
+        0
+    } else {
+        segment_count(package_root)
+    };
+    let within = dir.get(package_depth.min(dir.len())..).unwrap_or(&[]);
+    let scope = match within.first() {
+        Some(first) if source_roots.iter().any(|root| root == first) => {
+            within.get(1..).unwrap_or(&[])
+        }
+        _ => within,
+    };
+    (package_root, scope.to_vec())
 }
 
 /// Counts the non-empty slash-separated segments of a path.
@@ -209,6 +224,8 @@ fn scoped_key(package_key: &str, scope: &[&str], take: usize) -> SmolStr {
 /// A bucket is synthetic only when *every* mint of its key was synthetic: if a
 /// real directory ever shares the key (a genuine `workspace/` folder), the
 /// non-synthetic mint clears the flag so the render never hides a real path.
+/// The same holds for `label_keyed`: a key a real package root also mints is a
+/// real directory, so the label is never dropped from it.
 fn intern(
     containers: &mut Vec<Container>,
     by_key: &mut BTreeMap<(ScopeLevel, SmolStr), ContainerId>,
@@ -216,10 +233,12 @@ fn intern(
     key: SmolStr,
     parent: Option<ContainerId>,
     synthetic: bool,
+    label_keyed: bool,
 ) -> ContainerId {
     if let Some(&id) = by_key.get(&(level, key.clone())) {
-        if !synthetic && let Some(existing) = containers.get_mut(id.0 as usize) {
-            existing.synthetic = false;
+        if let Some(existing) = containers.get_mut(id.0 as usize) {
+            existing.synthetic &= synthetic;
+            existing.label_keyed &= label_keyed;
         }
         return id;
     }
@@ -230,6 +249,7 @@ fn intern(
         level,
         parent,
         synthetic,
+        label_keyed,
     });
     by_key.insert((level, key), id);
     id
@@ -446,5 +466,71 @@ mod tests {
             chain(&built, "src/google/y.ts"),
             vec!["ai", "ai", "ai/google", "ai/google", "src/google/y.ts"]
         );
+    }
+
+    /// The names of the containers at `level` flagged label-keyed, sorted.
+    fn label_keyed(built: &LaminarTree, level: ScopeLevel) -> Vec<String> {
+        let mut names: Vec<String> = built
+            .tree
+            .containers()
+            .iter()
+            .filter(|c| c.level == level && c.label_keyed)
+            .map(|c| c.name.to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn should_flag_only_the_containers_minted_outside_every_manifest_package() {
+        let paths = [
+            SmolStr::new("atlas/src/agent/loop.ts"),
+            SmolStr::new("loose/y.ts"),
+        ];
+        let built = build_laminar_tree(&paths, "ws", &layout(&["atlas"], &["src"]));
+
+        assert_eq!(label_keyed(&built, ScopeLevel::Package), vec!["ws"]);
+        assert_eq!(label_keyed(&built, ScopeLevel::Domain), vec!["ws/loose"]);
+        assert_eq!(label_keyed(&built, ScopeLevel::Folder), vec!["ws/loose"]);
+    }
+
+    #[test]
+    fn should_not_flag_a_manifest_package_named_like_the_package_group() {
+        // `ws/ws` holds the manifest: its key equals the label but is a real
+        // directory, so nothing under it is label-keyed.
+        let paths = [SmolStr::new("ws/src/agent/loop.ts")];
+        let built = build_laminar_tree(&paths, "ws", &layout(&["ws"], &["src"]));
+
+        assert_eq!(
+            label_keyed(&built, ScopeLevel::Package),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            label_keyed(&built, ScopeLevel::Domain),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            label_keyed(&built, ScopeLevel::Folder),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn should_keep_the_real_mint_when_loose_files_share_a_package_key() {
+        // loose files and a manifest package directory named like the group
+        // intern one `(Package, ws)` container: a real mint always wins, the
+        // way it does for a synthetic bucket, while the loose files' own
+        // domain and folder stay flagged.
+        let paths = [
+            SmolStr::new("ws/src/agent/loop.ts"),
+            SmolStr::new("loose/y.ts"),
+        ];
+        let built = build_laminar_tree(&paths, "ws", &layout(&["ws"], &["src"]));
+
+        assert_eq!(
+            label_keyed(&built, ScopeLevel::Package),
+            Vec::<String>::new()
+        );
+        assert_eq!(label_keyed(&built, ScopeLevel::Domain), vec!["ws/loose"]);
     }
 }

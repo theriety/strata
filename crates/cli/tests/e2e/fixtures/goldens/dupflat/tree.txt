@@ -1,0 +1,19 @@
+dupflat [packageGroup]
+  dupflat [package]
+    dupflat [domain]
+      dupflat [folder]
+        dupflat/__init__.py [file] 0 sloc
+        dupflat/alpha.py [file] 3 sloc
+          - alpha_step (file)
+        dupflat/beta.py [file] 1 sloc
+          - beta_step (file)
+        dupflat/conftest.py [file] 0 sloc
+          - sample_fixture (file)
+        dupflat/only_tests.py [file] 1 sloc
+          - helper (file)
+        dupflat/service.py [file] 1 sloc
+          - serve (file)
+      tests [folder]
+        dupflat/tests/test_only_tests.py [file] 0 sloc
+          - test_helper (file)
+All findings and moves are suggestions. Applying them may break the build; use your own judgement.

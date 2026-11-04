@@ -140,6 +140,7 @@ impl PipelineSolver<'_> {
             level: ScopeLevel::PackageGroup,
             parent: None,
             synthetic: false,
+            label_keyed: false,
         };
         CandidateTree {
             tree: ContainerTree::new(vec![root]),

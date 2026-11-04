@@ -4,13 +4,16 @@ use unlace_ir::Snapshot;
 
 use crate::analyze::BORDERLINE_CAPACITY_MARGIN;
 use crate::analyze::findings::physical::{
-    physical_folder_entries_repository_relative, physical_folder_findings,
+    physical_folder_findings_with_real, physical_folders_repository_relative,
 };
+use crate::analyze::findings::real_roots::RealRoots;
 use crate::analyze::scoring::CapacitySource;
 #[cfg(test)]
 use crate::config::AnalyzeConfig;
 use crate::config::CapacityConfig;
-use crate::result::{CapacityBreach, ContainerNode, Level, Severity, Violation, ViolationKind};
+use crate::result::{
+    CapacityBreach, CapacityUnit, ContainerNode, Level, Severity, Violation, ViolationKind,
+};
 
 /// Derives capacity violations from the current tree against the configured caps.
 ///
@@ -25,13 +28,16 @@ pub(in crate::analyze) fn snapshot_capacity_violations(
     tree: &ContainerNode,
     capacity: &CapacityConfig,
 ) -> Vec<Violation> {
-    let mut findings: Vec<Violation> = walk_all_capacity(tree, capacity)
+    let roots = RealRoots::from_tree(&snapshot.ir().containers);
+    let mut findings: Vec<Violation> = walk_capacity_from(tree, capacity, Some(&roots))
         .into_iter()
         .filter(|(level, _)| *level != Level::Folder)
         .map(|(_, violation)| violation)
         .collect();
-    findings.extend(physical_folder_findings(
-        &physical_folder_entries_repository_relative(&snapshot.ir().containers, None),
+    let (entries, real_folders) = physical_folders_repository_relative(&snapshot.ir().containers);
+    findings.extend(physical_folder_findings_with_real(
+        &entries,
+        &real_folders,
         capacity.folder,
     ));
     findings
@@ -52,11 +58,19 @@ pub(in crate::analyze) fn walk_all_capacity(
     tree: &ContainerNode,
     source: &impl CapacitySource,
 ) -> Vec<(Level, Violation)> {
-    let capacity = source.capacity();
+    walk_capacity_from(tree, source.capacity(), None)
+}
+
+/// Walks the DTO tree; `roots` names the real directories of domains and above.
+fn walk_capacity_from(
+    tree: &ContainerNode,
+    capacity: &CapacityConfig,
+    roots: Option<&RealRoots>,
+) -> Vec<(Level, Violation)> {
     let mut findings = Vec::new();
     let mut path = Vec::new();
     append_display_segments(&mut path, tree);
-    walk_capacity(tree, &path, capacity, &mut findings);
+    walk_capacity(tree, &path, capacity, roots, &mut findings);
     findings
 }
 
@@ -65,6 +79,7 @@ fn walk_capacity(
     node: &ContainerNode,
     path: &[String],
     capacity: &CapacityConfig,
+    roots: Option<&RealRoots>,
     findings: &mut Vec<(Level, Violation)>,
 ) {
     let (measure, cap) = match node.level {
@@ -86,7 +101,7 @@ fn walk_capacity(
         ),
     };
 
-    if let Some(finding) = capacity_finding(node, path, measure, cap) {
+    if let Some(finding) = capacity_finding(node, path, measure, cap, roots) {
         findings.push((node.level, finding));
     }
 
@@ -94,7 +109,7 @@ fn walk_capacity(
         for child in children {
             let mut child_path = path.to_vec();
             append_display_segments(&mut child_path, child);
-            walk_capacity(child, &child_path, capacity, findings);
+            walk_capacity(child, &child_path, capacity, roots, findings);
         }
     }
 }
@@ -169,6 +184,7 @@ fn capacity_finding(
     path: &[String],
     measure: u32,
     cap: u32,
+    roots: Option<&RealRoots>,
 ) -> Option<Violation> {
     if measure <= cap {
         return None;
@@ -182,33 +198,41 @@ fn capacity_finding(
         Severity::Borderline
     };
 
+    let (unit, config_key) = unit_and_key(node.level);
+    let real_paths = match node.level {
+        Level::File => vec![node.name.clone()],
+        Level::Folder => Vec::new(),
+        level => roots.map_or_else(Vec::new, |roots| roots.paths(node, level)),
+    };
+    let breach = CapacityBreach {
+        measured: measure,
+        cap,
+        unit,
+        config_key: config_key.to_owned(),
+        real_paths,
+        // for files the container name IS the full repo-relative path; folder
+        // and higher paths are carried by `real_paths`.
+        path: (node.level == Level::File).then(|| node.name.clone()),
+    };
     Some(Violation {
         kind: ViolationKind::Capacity,
         severity,
-        location: path.to_vec(),
-        detail: format!(
-            "{} `{}` holds {measure} against a cap of {cap}",
-            level_word(node.level),
-            node.name
-        ),
+        location: breach
+            .real_location()
+            .unwrap_or_else(|| vec![path.join("/")]),
+        detail: breach.describe(path),
         break_suggestions: None,
-        // for files the container name IS the full repo-relative path; folder
-        // and higher paths are already carried by `location`.
-        capacity: Some(CapacityBreach {
-            measured: measure,
-            cap,
-            path: (node.level == Level::File).then(|| node.name.clone()),
-        }),
+        capacity: Some(breach),
     })
 }
 
-/// Returns the noun for a container level used in a capacity message.
-fn level_word(level: Level) -> &'static str {
+/// Returns what a level's measure counts and the config key of its cap.
+fn unit_and_key(level: Level) -> (CapacityUnit, &'static str) {
     match level {
-        Level::File => "file",
-        Level::Folder => "folder",
-        Level::Domain => "domain",
-        Level::Package => "package",
-        Level::PackageGroup => "package group",
+        Level::File => (CapacityUnit::Lines, "capacity.file"),
+        Level::Folder => (CapacityUnit::Entries, "capacity.folder"),
+        Level::Domain => (CapacityUnit::Folders, "capacity.domain"),
+        Level::Package => (CapacityUnit::Domains, "capacity.package"),
+        Level::PackageGroup => (CapacityUnit::Packages, "capacity.package-group"),
     }
 }

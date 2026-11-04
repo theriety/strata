@@ -134,6 +134,7 @@ pub(in crate::analyze) fn container(
         level,
         parent: parent.map(ContainerId),
         synthetic: false,
+        label_keyed: false,
     }
 }
 

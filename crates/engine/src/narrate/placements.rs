@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use unlace_ir::{ContainerTree, ScopeLevel};
 
 use super::paths::{
-    drain_dataset, path_segments, physical_directory, physical_namespace,
-    project_package_rooted_path, project_physical_path,
+    path_segments, physical_directory, physical_namespace, project_package_rooted_path,
+    project_physical_path, real_key,
 };
 
 /// Every file's placement within one tree, folded for display.
@@ -88,7 +88,7 @@ pub(super) fn index_files(tree: &ContainerTree, package_rooted: bool) -> FilePla
         while let Some(current) = ancestor {
             match current.level {
                 ScopeLevel::PackageGroup => dataset = Some(current.name.as_str()),
-                ScopeLevel::Package if package.is_none() => package = Some(current.name.as_str()),
+                ScopeLevel::Package if package.is_none() => package = Some(current),
                 _ => {}
             }
             ancestor = current
@@ -97,17 +97,14 @@ pub(super) fn index_files(tree: &ContainerTree, package_rooted: bool) -> FilePla
         }
         let dataset = dataset.unwrap_or("");
         let dataset_segments = path_segments(dataset);
-        let package = drain_dataset(path_segments(package.unwrap_or("")), &dataset_segments);
+        let package = package.map_or_else(Vec::new, |package| real_key(package, dataset));
         // the synthetic `workspace` bucket names no real directory, so a
         // root-level file's move target is its package, not an invented
         // `.../workspace` path: the bucket stands for the package itself.
         let logical = if folder.is_some_and(|folder| folder.synthetic) {
             package.clone()
         } else {
-            drain_dataset(
-                path_segments(folder.map_or("", |folder| folder.name.as_str())),
-                &dataset_segments,
-            )
+            folder.map_or_else(Vec::new, |folder| real_key(folder, dataset))
         };
         let raw_segments = path_segments(&container.name);
         let physical_file_segments = if package_rooted {

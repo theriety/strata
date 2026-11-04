@@ -68,8 +68,10 @@ pub(super) fn preserve_pass_start_namespaces(before: &FilePlacements, after: &mu
 
 /// Chooses the real pass-start package one file is drawn under and its logical
 /// scope expressed below that package's key. The candidate's package is kept
-/// unless every file of the file's cluster comes from one other package
-/// (`unanimous`), in which case the scope is re-rooted below the deepest
+/// while the destination folder is rooted at it; a folder rooted at another real
+/// package (a file landing in that package's folder) is that package's, whose
+/// source root sits below it. When every file of the file's cluster comes from
+/// one other package (`unanimous`), the scope is re-rooted below the deepest
 /// package key (elected or real) the logical destination is expressed under.
 fn package_and_scope<'a>(
     namespaces_of: &BTreeMap<&'a [String], BTreeSet<&'a [String]>>,
@@ -77,15 +79,20 @@ fn package_and_scope<'a>(
     logical: &'a [String],
     unanimous: Option<&'a [String]>,
 ) -> (&'a [String], Vec<String>) {
-    let candidate_package = if namespaces_of.contains_key(elected) {
-        elected
-    } else {
-        namespaces_of
-            .keys()
-            .filter(|package| logical.starts_with(package))
-            .max_by_key(|package| package.len())
-            .copied()
-            .unwrap_or(&[])
+    let owning_package = namespaces_of
+        .keys()
+        .filter(|package| logical.starts_with(package))
+        .max_by_key(|package| package.len())
+        .copied();
+    // a destination folder belongs to the package its key is rooted at, and a
+    // source root sits below that package; the elected package stands in only
+    // when the folder is rooted at no real package.
+    let candidate_package = match owning_package {
+        Some(package) if !logical.starts_with(elected) || !namespaces_of.contains_key(elected) => {
+            package
+        }
+        _ if namespaces_of.contains_key(elected) => elected,
+        _ => &[],
     };
     match unanimous {
         Some(own_package) if own_package != candidate_package => {
