@@ -393,7 +393,11 @@ fn should_measure_folder_capacity_by_immediate_membership() {
     let mut config = AnalyzeConfig::default();
     config.profiles.anchored.capacity.folder = 1;
 
-    let findings = walk_all_capacity(&tree, &config.profiles.anchored.capacity);
+    let findings = walk_all_capacity(
+        &tree,
+        &config.profiles.anchored.capacity,
+        &RealRoots::empty(),
+    );
 
     let folder_findings: Vec<(Vec<String>, Severity)> = findings
         .iter()
@@ -425,7 +429,11 @@ fn should_measure_folder_capacity_by_immediate_entries() {
     let mut config = AnalyzeConfig::default();
     config.profiles.anchored.capacity.folder = 2;
 
-    let findings = walk_all_capacity(&tree, &config.profiles.anchored.capacity);
+    let findings = walk_all_capacity(
+        &tree,
+        &config.profiles.anchored.capacity,
+        &RealRoots::empty(),
+    );
 
     let folder_findings: Vec<(Vec<String>, Severity)> = findings
         .iter()
@@ -644,7 +652,13 @@ fn should_count_domain_capacity_by_top_level_directory_subtrees() {
 
     let rendered = render_tree(&tree, &[], &|_| None, &BTreeMap::new()).ok();
     let findings = rendered
-        .map(|dto| walk_all_capacity(&dto, &config.profiles.anchored.capacity))
+        .map(|dto| {
+            walk_all_capacity(
+                &dto,
+                &config.profiles.anchored.capacity,
+                &RealRoots::from_tree(&tree),
+            )
+        })
         .unwrap_or_default();
 
     let domain_findings: Vec<Severity> = findings

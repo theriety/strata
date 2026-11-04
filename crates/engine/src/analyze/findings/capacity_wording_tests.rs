@@ -159,7 +159,7 @@ fn should_list_both_real_folders_of_a_domain_spanning_src_and_spec() {
     assert_eq!(
         first_detail(&findings),
         Some(
-            "in `spec/generators` + `src/generators`: 4 folders holding files; the domain cap is 3 (`capacity.domain`). spec/ and src/ count together."
+            "in `spec/generators` + `src/generators`: 4 sub-folders directly inside; the domain cap is 3 (`capacity.domain`). spec/ and src/ count together."
         )
     );
 }
@@ -172,7 +172,9 @@ fn should_omit_the_merge_note_when_a_domain_has_one_real_folder() {
 
     assert_eq!(
         first_detail(&findings),
-        Some("in `src/gen`: 2 folders holding files; the domain cap is 1 (`capacity.domain`).")
+        Some(
+            "in `src/gen`: 2 sub-folders directly inside; the domain cap is 1 (`capacity.domain`)."
+        )
     );
 }
 
@@ -258,12 +260,9 @@ fn should_keep_a_leading_directory_named_like_the_group_in_every_capacity_locati
         10,
         |config| config.profiles.anchored.capacity.folder = 2,
     );
-    let domain = capacity_findings_in(
-        "proj",
-        &["proj/gen/a/x.ts", "proj/gen/b/y.ts"],
-        10,
-        |config| config.profiles.anchored.capacity.domain = 1,
-    );
+    let domain = capacity_findings_in("proj", &["proj/gen/x.ts", "proj/lib/y.ts"], 10, |config| {
+        config.profiles.anchored.capacity.domain = 1;
+    });
     let file = capacity_findings_in("proj", &["proj/big.ts"], 288, |config| {
         config.profiles.anchored.capacity.file = 250;
     });
@@ -278,4 +277,87 @@ fn should_keep_a_leading_directory_named_like_the_group_in_every_capacity_locati
     // the laminar domain is the top directory `proj` itself, which really exists.
     assert_eq!(location_of(&domain), Some(path("proj")));
     assert_eq!(location_of(&file), Some(path("proj/big.ts")));
+}
+
+#[test]
+fn should_count_a_same_named_src_and_spec_child_of_a_domain_once() {
+    let findings = capacity_findings_over(
+        &[
+            "src/generators/analysts/a.ts",
+            "spec/generators/analysts/b.ts",
+            "src/generators/embedders/c.ts",
+            "spec/generators/navigators/d.ts",
+        ],
+        10,
+        |config| config.profiles.anchored.capacity.domain = 2,
+    );
+
+    assert_eq!(
+        first_breach(&findings).map(|breach| breach.measured),
+        Some(3)
+    );
+    assert_eq!(
+        first_detail(&findings),
+        Some(
+            "in `spec/generators` + `src/generators`: 3 sub-folders directly inside; the domain cap is 2 (`capacity.domain`). spec/ and src/ count together."
+        )
+    );
+}
+
+#[test]
+fn should_count_only_direct_subfolders_of_a_domain_not_deeper_folders() {
+    // two direct children; the eight folders beneath them do not count.
+    let findings = capacity_findings_over(
+        &[
+            "src/gen/a/b1/x.ts",
+            "src/gen/a/b2/x.ts",
+            "src/gen/a/b3/x.ts",
+            "src/gen/a/b4/x.ts",
+            "src/gen/c/d1/x.ts",
+            "src/gen/c/d2/x.ts",
+            "src/gen/c/d3/x.ts",
+            "src/gen/c/d4/x.ts",
+        ],
+        10,
+        |config| config.profiles.anchored.capacity.domain = 1,
+    );
+
+    assert_eq!(
+        first_breach(&findings).map(|breach| breach.measured),
+        Some(2)
+    );
+}
+
+#[test]
+fn should_count_a_real_same_named_subfolder_but_not_the_domains_own_directory() {
+    // `gen/gen/` is a real sub-folder of the domain `gen`; `gen/top.ts` sits in
+    // the domain's own directory and is no sub-folder.
+    let findings = capacity_findings_over(
+        &["src/gen/gen/g.ts", "src/gen/top.ts", "src/gen/a/x.ts"],
+        10,
+        |config| config.profiles.anchored.capacity.domain = 1,
+    );
+    assert_eq!(
+        first_breach(&findings).map(|breach| breach.measured),
+        Some(2)
+    );
+
+    let own_only = capacity_findings_over(&["src/gen/top.ts", "src/gen/other.ts"], 10, |config| {
+        config.profiles.anchored.capacity.domain = 0;
+    });
+    assert!(own_only.is_empty(), "{own_only:?}");
+}
+
+#[test]
+fn should_count_an_interior_chain_under_a_domain_as_one_subfolder() {
+    let findings = capacity_findings_over(
+        &["src/gen/a/b/c/x.ts", "src/gen/d/y.ts", "src/gen/d/e/z.ts"],
+        10,
+        |config| config.profiles.anchored.capacity.domain = 1,
+    );
+
+    assert_eq!(
+        first_breach(&findings).map(|breach| breach.measured),
+        Some(2)
+    );
 }

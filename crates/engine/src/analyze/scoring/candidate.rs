@@ -81,7 +81,14 @@ pub(in crate::analyze) fn score_candidate(
 
     let containers = container_sizes(snapshot, placement, tree);
     let (cohesion_groups, path_cohesion) = cohesion_inputs(snapshot, placement, tree);
-    let capacity_pressure = capacity_pressure(snapshot, placement, tree, namespaces, capacity);
+    let capacity_pressure = capacity_pressure(
+        snapshot,
+        placement,
+        tree,
+        namespaces,
+        &BTreeMap::new(),
+        capacity,
+    );
     let dependency_only_relocations =
         dependency_only_relocations(snapshot, placement, pass_start_file_by_candidate);
     let companion_separations =

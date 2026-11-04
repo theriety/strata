@@ -61,3 +61,5 @@ Move reports expose the physical source and destination a maintainer would edit,
 Normalized clustering can still relate code across transparent roots without granting permission to cross their namespace boundary or conflating their capacity. Pass-start namespace permissions and non-relocatable `FileBody` content remain structural invariants.
 
 Some symbol moves that improve the objective are no longer candidates when they place a declaration deeper in the physical tree. Folder capacity scores and candidate ordering can change because the Folder pressure term now prices immediate physical entries. The capacity coefficient, non-Folder capacity semantics, and public interfaces remain unchanged.
+
+**Amendment (2026-11-05):** a domain is now measured by its direct sub-folders: the distinct immediate child folders whose subtree holds a file, with a same-named `src/` and `spec/` child counted once and the domain's own directory excluded (D-44). A real folder whose key does not extend the domain's key counts once per distinct real folder. Package and package-group measures keep their deep definitions.

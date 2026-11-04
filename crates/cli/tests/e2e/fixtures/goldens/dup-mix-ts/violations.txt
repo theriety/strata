@@ -1,3 +1,3 @@
-capacity [violation] atlas :: in `atlas`: 2 folders holding files; the domain cap is 1 (`capacity.domain`).
+capacity [violation] atlas :: in `atlas`: 2 sub-folders directly inside; the domain cap is 1 (`capacity.domain`).
 capacity [violation] dup-mix-ts/atlas :: in `dup-mix-ts/atlas`: 2 domains holding files; the package cap is 1 (`capacity.package`).
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.

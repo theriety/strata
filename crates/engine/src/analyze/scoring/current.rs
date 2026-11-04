@@ -82,6 +82,7 @@ pub(in crate::analyze) fn score_current_with_overlay(
         &lookups,
         &ir.containers,
         &namespaces,
+        &BTreeMap::new(),
         &pass_start_file_by_candidate,
         capacity,
     );

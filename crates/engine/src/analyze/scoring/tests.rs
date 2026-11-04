@@ -262,6 +262,7 @@ fn should_score_a_placement_exactly_as_the_free_standing_terms_do() {
         &lookups,
         &fixture.tree,
         &fixture.namespaces,
+        &BTreeMap::new(),
         &fixture.pass_start,
         &capacity,
     );
@@ -338,6 +339,7 @@ fn should_price_an_overlay_set_on_a_dense_placement_like_a_fresh_one() {
         &lookups,
         &fixture.tree,
         &fixture.namespaces,
+        &BTreeMap::new(),
         &fixture.pass_start,
         &capacity,
     );

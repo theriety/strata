@@ -60,7 +60,7 @@ pub enum CapacityUnit {
     Lines,
     /// Files plus distinct subfolders directly inside a folder.
     Entries,
-    /// Folders holding files beneath a domain.
+    /// Direct sub-folders of a domain that hold files.
     Folders,
     /// Domains holding files beneath a package.
     Domains,
@@ -108,7 +108,7 @@ impl CapacityUnit {
         match self {
             Self::Lines => format!("{count} production lines"),
             Self::Entries => format!("{count} entries (files and subfolders)"),
-            Self::Folders => format!("{count} folders holding files"),
+            Self::Folders => format!("{count} sub-folders directly inside"),
             Self::Domains => format!("{count} domains holding files"),
             Self::Packages => format!("{count} packages holding files"),
         }

@@ -58,11 +58,20 @@ const PURE_DEFAULTS: &str = "/nonexistent/unlace-parity.toml";
 const PINNED_CAP_250: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/e2e/cap-250.toml");
 
 /// A config pinning the domain and package caps at 1, so the nested
-/// `dup-ws-ts` workspace breaches both while its folder cap keeps the default
-/// and the greenfield search still proposes its move.
+/// `dup-mix-ts` and `dup-pkg-rs` fixtures breach both while their folder cap keeps the default
+/// and the greenfield search still proposes their move.
 const TIGHT_DOMAIN_PACKAGE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/e2e/tight-domain-package.toml"
+);
+
+/// A config pinning the domain cap at 2 and the package cap at 1 for the
+/// `dup-ws-ts` and `dup-pkg-ts` widgets (three direct sub-folders), so the
+/// domain and package caps both breach and the greenfield search still proposes
+/// a move whose improvement includes a capacity term.
+const TIGHT_DOMAIN_2_PACKAGE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/e2e/tight-domain-2-package.toml"
 );
 
 /// Configs pinning the folder cap at 2 and 3, so the mixed-root fixtures keep
@@ -89,10 +98,9 @@ fn config_for(name: &str) -> &'static str {
         CROSS_PACKAGE_FOLDER_3
     } else if name == "dup-mix-ctl-ts" {
         FOLDER_CAP_2
-    } else if matches!(
-        name,
-        "dup-ws-ts" | "dup-pkg-ts" | "dup-pkg-rs" | "dup-mix-ts"
-    ) {
+    } else if matches!(name, "dup-ws-ts" | "dup-pkg-ts") {
+        TIGHT_DOMAIN_2_PACKAGE
+    } else if matches!(name, "dup-pkg-rs" | "dup-mix-ts") {
         TIGHT_DOMAIN_PACKAGE
     } else {
         PURE_DEFAULTS
@@ -1215,8 +1223,9 @@ fn should_name_the_real_directories_of_a_workspace_nested_under_its_own_name() {
     let parsed = analyze_json(name, &["--mode", "both"]);
 
     // `atlas` breaches the package cap with its two domains; `widget` breaches
-    // the domain cap with its two folders. Both directories begin with the
-    // root's own name, which is a real directory and stays.
+    // the domain cap with its three direct sub-folders (`parts`, `dials`, `gears`). Both
+    // directories begin with the root's own name, which is a real directory
+    // and stays.
     assert_eq!(
         capacity_real_paths(&parsed, "capacity.package"),
         vec![vec!["dup-ws-ts/atlas".to_owned()]]

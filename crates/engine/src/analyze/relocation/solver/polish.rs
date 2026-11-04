@@ -37,6 +37,7 @@ impl PipelineSolver<'_> {
             &self.scoring,
             &assembled.tree,
             &assembled.namespace_by_file,
+            &assembled.key_by_id,
             &assembled.pass_start_file_by_candidate,
             &self.capacity,
         )

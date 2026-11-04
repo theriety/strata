@@ -18,11 +18,17 @@ dup-ws-ts [packageGroup]
           - gamma (file)
   beacon [package]
     widget [domain]
+      dials [folder]
+        dup-ws-ts/beacon/src/widget/dials/dial.ts [file] 1 sloc
+          - dial (file)
       widget [folder]
         dup-ws-ts/beacon/src/widget/frame.ts [file] 3 sloc
           - frame (file)
         dup-ws-ts/beacon/src/widget/panel.ts [file] 3 sloc
           - panel (file)
+      gears [folder]
+        dup-ws-ts/beacon/src/widget/gears/gear.ts [file] 1 sloc
+          - gear (file)
       parts [folder]
         dup-ws-ts/beacon/src/widget/parts/knob.ts [file] 1 sloc
           - knob (file)

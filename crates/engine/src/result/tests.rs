@@ -173,7 +173,7 @@ fn should_describe_capacity_breaches_from_structured_fields() {
 
     assert_eq!(
         domain.describe(&[]),
-        "in `src/generators` + `spec/generators`: 21 folders holding files; the domain cap is 16 (`capacity.domain`). src/ and spec/ count together."
+        "in `src/generators` + `spec/generators`: 21 sub-folders directly inside; the domain cap is 16 (`capacity.domain`). src/ and spec/ count together."
     );
     assert_eq!(
         package.describe(&[]),
@@ -261,7 +261,7 @@ fn should_display_every_reason_as_its_prose() {
                 unit: CapacityUnit::Folders,
                 config_key: "capacity.domain".to_owned(),
             },
-            "relieves app/src, which has 21 folders holding files against the domain cap of 20 (`capacity.domain`)",
+            "relieves app/src, which has 21 sub-folders directly inside against the domain cap of 20 (`capacity.domain`)",
         ),
         (
             MoveReason::PulledBy {

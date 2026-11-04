@@ -347,10 +347,14 @@ fn should_keep_structural_capacity_findings_and_scores_in_lockstep_at_every_leve
             Level::PackageGroup => capacity.package_group = 1,
             Level::File => unreachable!("file capacity has its own parity regression"),
         }
-        let finding_levels: Vec<_> = walk_all_capacity(&rendered, &capacity)
-            .into_iter()
-            .map(|(finding_level, _)| finding_level)
-            .collect();
+        let finding_levels: Vec<_> = walk_all_capacity(
+            &rendered,
+            &capacity,
+            &RealRoots::from_tree(&snapshot.ir().containers),
+        )
+        .into_iter()
+        .map(|(finding_level, _)| finding_level)
+        .collect();
         let score = score_current_with_affinity(
             &snapshot,
             &ObjectiveConfig::default().coefficients(),

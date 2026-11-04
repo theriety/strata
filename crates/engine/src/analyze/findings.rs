@@ -42,6 +42,7 @@ pub(in crate::analyze) use physical::{
     physical_folder_entries_repository_relative, physical_folder_findings,
 };
 use polarity::polarity_violations;
+pub(in crate::analyze) use real_roots::RealRoots;
 use test_only::test_only_violations;
 use visibility::visibility_violations;
 

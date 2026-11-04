@@ -1,0 +1,12 @@
+# Pins the domain cap at 2 and the package cap at 1 for the TypeScript widget
+# fixtures: `widget` holds three direct sub-folders, so it breaches the domain
+# cap, `dup-pkg-ts`/`atlas` breach the package cap, and the greenfield search
+# still proposes a move that relieves a cap. It lives beside the fixtures rather
+# than inside one so the analyzer never scans it as source.
+[profiles.anchored.capacity]
+domain = 2
+package = 1
+
+[profiles.greenfield.capacity]
+domain = 2
+package = 1

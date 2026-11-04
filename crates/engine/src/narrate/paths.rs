@@ -73,7 +73,13 @@ pub(crate) fn path_segments(path: &str) -> Vec<String> {
 /// builder and in a candidate tree from the folder it stands for, so nothing
 /// here compares names.
 pub(crate) fn real_key(container: &Container, dataset: &str) -> Vec<String> {
-    let mut segments = path_segments(&container.name);
+    real_key_named(container, &container.name, dataset)
+}
+
+/// [`real_key`] reading `key` as the container's name: the undecorated key of
+/// an upper container whose display name was disambiguated.
+pub(crate) fn real_key_named(container: &Container, key: &str, dataset: &str) -> Vec<String> {
+    let mut segments = path_segments(key);
     let label = path_segments(dataset);
     if container.label_keyed && segments.starts_with(&label) {
         segments.drain(..label.len());

@@ -70,11 +70,13 @@ impl<'a> ScoringContext<'a> {
     /// Resolves the facts of `tree` on top of `lookups`.
     ///
     /// `namespaces` and `pass_start_file_by_candidate` describe the candidate
-    /// files of `tree`; `capacity` carries the caps the pressure term reads.
+    /// files of `tree`; `key_by_id` holds the undecorated key of each upper
+    /// container whose display name was disambiguated; `capacity` carries the caps the pressure term reads.
     pub(in crate::analyze) fn new(
         lookups: &'a SnapshotScoring,
         tree: &ContainerTree,
         namespaces: &BTreeMap<ContainerId, SmolStr>,
+        key_by_id: &BTreeMap<u32, SmolStr>,
         pass_start_file_by_candidate: &BTreeMap<ContainerId, ContainerId>,
         capacity: &CapacityConfig,
     ) -> Self {
@@ -125,7 +127,7 @@ impl<'a> ScoringContext<'a> {
             cohesion_files,
             group_cohesions,
             distance: Self::distance_facts(lookups, tree, slots),
-            pressure: TreePressure::new(tree, namespaces, capacity),
+            pressure: TreePressure::new(tree, namespaces, key_by_id, capacity),
         }
     }
 }

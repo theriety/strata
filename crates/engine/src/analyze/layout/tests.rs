@@ -2577,48 +2577,57 @@ fn should_score_folder_pressure_from_immediate_entries_only() {
 }
 
 #[test]
-fn should_count_binding_folders_through_an_intermediate_domain() {
-    // QUAL-P3-2 witness: `dom` directly holds only one child (the nested
-    // `sub`), but three file-binding folders live beneath it. Direct-child
-    // counting stayed silent at cap 2; deep counting fires on both levels.
-    let tree = interior(
-        "root",
-        Level::PackageGroup,
-        vec![interior(
-            "pkg",
-            Level::Package,
-            vec![interior(
-                "dom",
-                Level::Domain,
-                vec![interior(
-                    "sub",
-                    Level::Domain,
-                    vec![
-                        folder("x", vec![file("f1", 10)]),
-                        folder("y", vec![file("f2", 10)]),
-                        folder("z", vec![file("f3", 10)]),
-                    ],
-                )],
-            )],
-        )],
-    );
+fn should_count_only_direct_folders_of_a_domain_not_those_of_a_sibling_domain() {
+    // D-44 (2026-11-05): `wide` directly holds three file-binding folders and
+    // fires at cap 2; `deep` holds one folder with nested ones beneath it and
+    // stays silent although three file-binding folders live under it.
+    let tree = ContainerTree::new(vec![
+        container(0, "root", ScopeLevel::PackageGroup, None),
+        container(1, "pkg", ScopeLevel::Package, Some(0)),
+        container(2, "pkg/wide", ScopeLevel::Domain, Some(1)),
+        container(3, "pkg/wide/x", ScopeLevel::Folder, Some(2)),
+        container(4, "pkg/wide/x/f1.ts", ScopeLevel::File, Some(3)),
+        container(5, "pkg/wide/y", ScopeLevel::Folder, Some(2)),
+        container(6, "pkg/wide/y/f2.ts", ScopeLevel::File, Some(5)),
+        container(7, "pkg/wide/z", ScopeLevel::Folder, Some(2)),
+        container(8, "pkg/wide/z/f3.ts", ScopeLevel::File, Some(7)),
+        container(9, "pkg/deep", ScopeLevel::Domain, Some(1)),
+        container(10, "pkg/deep/a/x", ScopeLevel::Folder, Some(9)),
+        container(11, "pkg/deep/a/x/g1.ts", ScopeLevel::File, Some(10)),
+        container(12, "pkg/deep/a/y", ScopeLevel::Folder, Some(9)),
+        container(13, "pkg/deep/a/y/g2.ts", ScopeLevel::File, Some(12)),
+        container(14, "pkg/deep/a/z", ScopeLevel::Folder, Some(9)),
+        container(15, "pkg/deep/a/z/g3.ts", ScopeLevel::File, Some(14)),
+    ]);
     let mut config = AnalyzeConfig::default();
     config.profiles.anchored.capacity.domain = 2;
 
-    let findings = walk_all_capacity(&tree, &config);
+    let findings = render_tree(&tree, &[], &|_| None, &BTreeMap::new())
+        .ok()
+        .map(|dto| {
+            walk_all_capacity(
+                &dto,
+                &config.profiles.anchored.capacity,
+                &RealRoots::from_tree(&tree),
+            )
+        })
+        .unwrap_or_default();
 
-    let domains: Vec<Vec<String>> = findings
+    let domains: Vec<(Vec<String>, u32)> = findings
         .iter()
         .filter(|(level, _)| *level == Level::Domain)
-        .map(|(_, violation)| violation.location.clone())
+        .map(|(_, violation)| {
+            (
+                violation.location.clone(),
+                violation
+                    .capacity
+                    .as_ref()
+                    .map_or(0, |breach| breach.measured),
+            )
+        })
         .collect();
-    assert_eq!(
-        domains,
-        vec![
-            vec!["root/pkg/dom".to_owned()],
-            vec!["root/pkg/dom/sub".to_owned()],
-        ]
-    );
+    assert_eq!(domains.len(), 1, "{domains:?}");
+    assert_eq!(domains.first().map(|(_, measured)| *measured), Some(3));
 }
 
 #[test]
