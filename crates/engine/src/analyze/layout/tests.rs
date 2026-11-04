@@ -16,6 +16,7 @@ use crate::config::{AnalyzeConfig, ObjectiveConfig};
 use crate::result::{ContainerNode, Level, Profiles};
 
 use super::*;
+use crate::analyze::test_policy::TestPolicy;
 use crate::analyze::test_support::*;
 use crate::analyze::*;
 use crate::analyze::{findings::*, relocation::*, scoring::*};

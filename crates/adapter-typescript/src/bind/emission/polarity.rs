@@ -5,32 +5,44 @@ use std::collections::HashMap;
 use smol_str::SmolStr;
 use unlace_ir::{Edge, Node, NodeId, Polarity};
 
+use std::collections::BTreeSet;
+
 use crate::parse::ParsedModule;
+use crate::test_paths::{is_test_case_path, is_test_path};
 
 /// Classifies every node's polarity.
 ///
-/// A module whose path matches a test convention contributes [`Polarity::TestCase`]
-/// nodes. Production helpers reachable (over edges) only from test nodes become
-/// [`Polarity::TestSupport`]; everything else stays [`Polarity::Production`].
+/// A test-named module (or one in a `__tests__` folder) contributes
+/// [`Polarity::TestCase`] nodes; any other module under a test root contributes
+/// [`Polarity::TestSupport`] nodes. Production helpers reachable (over edges)
+/// only from test nodes become [`Polarity::TestSupport`] too; everything else
+/// stays [`Polarity::Production`].
 pub(in crate::bind) fn classify_polarity(
     modules: &[ParsedModule],
     nodes: &[Node],
     local: &HashMap<SmolStr, HashMap<SmolStr, NodeId>>,
     exported: &[bool],
     edges: &[Edge],
+    package_roots: &BTreeSet<SmolStr>,
 ) -> Vec<Polarity> {
     let mut polarity = vec![Polarity::Production; nodes.len()];
 
-    // Test cases: every node declared in a test file.
+    // Test code: every node declared in a test file, a case when the file is
+    // test-named and support otherwise.
     let mut is_test_node = vec![false; nodes.len()];
     for module in modules {
-        if !is_test_path(&module.path) {
+        if !is_test_path(&module.path, package_roots) {
             continue;
         }
+        let role = if is_test_case_path(&module.path) {
+            Polarity::TestCase
+        } else {
+            Polarity::TestSupport
+        };
         if let Some(table) = local.get(&module.path) {
             for &id in table.values() {
                 if let Some(slot) = polarity.get_mut(id.0 as usize) {
-                    *slot = Polarity::TestCase;
+                    *slot = role;
                 }
                 if let Some(slot) = is_test_node.get_mut(id.0 as usize) {
                     *slot = true;
@@ -61,7 +73,7 @@ pub(in crate::bind) fn classify_polarity(
     }
 
     for (index, slot) in polarity.iter_mut().enumerate() {
-        if *slot == Polarity::TestCase {
+        if *slot != Polarity::Production {
             continue;
         }
         // An exported symbol is part of the production API surface; only a
@@ -85,8 +97,12 @@ pub(in crate::bind) fn mark_test_source(
     modules: &[ParsedModule],
     nodes: &mut [Node],
     local: &HashMap<SmolStr, HashMap<SmolStr, NodeId>>,
+    package_roots: &BTreeSet<SmolStr>,
 ) {
-    for module in modules.iter().filter(|module| is_test_path(&module.path)) {
+    for module in modules
+        .iter()
+        .filter(|module| is_test_path(&module.path, package_roots))
+    {
         for id in local
             .get(&module.path)
             .into_iter()
@@ -108,8 +124,12 @@ pub(in crate::bind) fn exempt_module_objects(
     resolver: &crate::bind::resolution::Resolver,
     exports: &crate::bind::ExportTable,
     nodes: &mut [Node],
+    package_roots: &BTreeSet<SmolStr>,
 ) {
-    for module in modules.iter().filter(|module| !is_test_path(&module.path)) {
+    for module in modules
+        .iter()
+        .filter(|module| !is_test_path(&module.path, package_roots))
+    {
         let namespaces = module
             .imports
             .iter()
@@ -136,47 +156,5 @@ pub(in crate::bind) fn exempt_module_objects(
 pub(in crate::bind) fn apply_polarity(nodes: &mut [Node], polarity: &[Polarity]) {
     for (node, &class) in nodes.iter_mut().zip(polarity) {
         node.polarity = class;
-    }
-}
-
-/// Returns `true` if `path` is a test file by convention.
-fn is_test_path(path: &str) -> bool {
-    if path.split('/').any(|segment| segment == "__tests__") {
-        return true;
-    }
-
-    let Some(stem) = path
-        .strip_suffix(".tsx")
-        .or_else(|| path.strip_suffix(".ts"))
-    else {
-        return false;
-    };
-    let file_name = stem.rsplit('/').next().unwrap_or(stem);
-
-    file_name
-        .split('.')
-        .skip(1)
-        .any(|segment| matches!(segment, "spec" | "test"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_test_path;
-
-    #[test]
-    fn should_recognise_test_paths_by_convention() {
-        assert!(is_test_path("src/__tests__/app.spec.ts"));
-        assert!(is_test_path("src/app.test.ts"));
-        assert!(is_test_path("src/__tests__/support.ts"));
-        assert!(!is_test_path("src/app.ts"));
-    }
-
-    #[test]
-    fn should_recognize_qualified_test_paths_without_matching_words() {
-        assert!(is_test_path("src/worker.spec.int.ts"));
-        assert!(is_test_path("src/worker.test.integration.ts"));
-        assert!(is_test_path("src/worker.spec.browser.tsx"));
-        assert!(!is_test_path("src/specification.ts"));
-        assert!(!is_test_path("src/worker.testable.tsx"));
     }
 }

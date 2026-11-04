@@ -29,7 +29,39 @@ fn should_be_deterministic_in_its_hash() {
 }
 
 #[test]
-fn should_serialize_profile_results_as_schema_version_nine_without_modes() {
+fn should_serialize_the_resolved_tests_section_once_at_the_top_level() {
+    let snapshot = snapshot(
+        vec![node(0, "item", 0, Polarity::Production)],
+        vec![],
+        vec![container(0, "src/item.rs", ScopeLevel::File, None)],
+    );
+    let mut config = AnalyzeConfig::default();
+    config.tests.patterns = vec!["checks/**".to_owned(), "!checks/keep.ts".to_owned()];
+    config.tests.builtins = false;
+
+    let serialized = analyze(&snapshot, &config)
+        .ok()
+        .and_then(|result| serde_json::to_value(result).ok())
+        .unwrap_or(serde_json::Value::Null);
+
+    assert_eq!(
+        serialized.get("tests"),
+        Some(&serde_json::json!({
+            "helperCap": 600,
+            "patterns": ["checks/**", "!checks/keep.ts"],
+            "builtins": false
+        }))
+    );
+    assert!(
+        serialized
+            .pointer("/profiles/anchored/parameters/tests")
+            .is_none(),
+        "no per-profile copy"
+    );
+}
+
+#[test]
+fn should_serialize_profile_results_as_schema_version_eleven_without_modes() {
     let snapshot = snapshot(
         vec![node(0, "item", 0, Polarity::Production)],
         vec![],
@@ -45,7 +77,7 @@ fn should_serialize_profile_results_as_schema_version_nine_without_modes() {
         serialized
             .get("schemaVersion")
             .and_then(serde_json::Value::as_u64),
-        Some(10)
+        Some(11)
     );
     // version 9 carries the per-profile package-wall parameter (ADR-17).
     assert_eq!(

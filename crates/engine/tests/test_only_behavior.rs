@@ -25,21 +25,27 @@ fn write_project(files: &[(&str, &str)]) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-/// The advice lines of one analysis: test-only and visibility.
+/// The advice lines of one analysis: test-only, visibility and polarity.
 struct Advice {
     /// Detail lines of `testOnly` findings.
     test_only: Vec<String>,
     /// Detail lines of visibility findings.
     visibility: Vec<String>,
+    /// Detail lines of polarity findings: production depending on test code.
+    polarity: Vec<String>,
 }
 
 /// Analyzes a throwaway project and returns its test-only and visibility advice.
 fn advice(files: &[(&str, &str)]) -> Result<Advice, String> {
+    advice_with(files, &AnalyzeConfig::default())
+}
+
+/// Like [`advice`], under an explicit `config`.
+fn advice_with(files: &[(&str, &str)], config: &AnalyzeConfig) -> Result<Advice, String> {
     let root = write_project(files)?;
-    let config = AnalyzeConfig::default();
-    let outcome = snapshot_from_root(&root, &config)
+    let outcome = snapshot_from_root(&root, config)
         .map_err(|error| error.to_string())
-        .and_then(|snapshot| analyze(&snapshot, &config).map_err(|error| error.to_string()))
+        .and_then(|snapshot| analyze(&snapshot, config).map_err(|error| error.to_string()))
         .and_then(|result| serde_json::to_string_pretty(&result).map_err(|e| e.to_string()));
     let _ = fs::remove_dir_all(&root);
     let json = outcome?;
@@ -58,6 +64,7 @@ fn advice(files: &[(&str, &str)]) -> Result<Advice, String> {
             .map(str::to_owned)
             .collect(),
         visibility: lines("exported at"),
+        polarity: lines("depends on test"),
     })
 }
 
@@ -484,5 +491,356 @@ fn should_flag_a_published_crates_items_even_when_it_looks_like_a_harness() -> R
         "{:?}",
         found.test_only
     );
+    Ok(())
+}
+
+/// A TypeScript repo whose `spec/batch/utilities.ts` helper is used only by a spec.
+const SPEC_HELPER: &str = "export function makeBatch(): number {\n  return 1;\n}\n";
+const SPEC_USER: &str =
+    "import { makeBatch } from \"./utilities\";\nexport const batch: number = makeBatch();\n";
+
+/// The config with `patterns` as its test patterns.
+fn with_patterns(patterns: &[&str]) -> AnalyzeConfig {
+    let mut config = AnalyzeConfig::default();
+    config.tests.patterns = patterns.iter().map(|&pattern| pattern.to_owned()).collect();
+    config
+}
+
+#[test]
+fn should_not_flag_a_typescript_helper_under_a_spec_root_used_only_by_a_spec() -> Result<(), String>
+{
+    let found = advice(&[
+        ("spec/batch/utilities.ts", SPEC_HELPER),
+        ("spec/batch/x.spec.ts", SPEC_USER),
+    ])?;
+    assert_eq!(found.test_only, Vec::<String>::new());
+    Ok(())
+}
+
+#[test]
+fn should_still_flag_a_src_item_used_only_by_a_spec_under_a_spec_root() -> Result<(), String> {
+    let found = advice(&[
+        ("src/batch.ts", SPEC_HELPER),
+        (
+            "spec/batch/x.spec.ts",
+            "import { makeBatch } from \"../../src/batch\";\nexport const batch: number = makeBatch();\n",
+        ),
+    ])?;
+    assert!(
+        names(&found.test_only, "makeBatch"),
+        "{:?}",
+        found.test_only
+    );
+    Ok(())
+}
+
+#[test]
+fn should_measure_the_spec_root_from_the_package_manifest_in_a_monorepo() -> Result<(), String> {
+    let found = advice(&[
+        ("packages/foo/package.json", "{}"),
+        ("packages/foo/spec/h.ts", SPEC_HELPER),
+        (
+            "packages/foo/spec/x.spec.ts",
+            &SPEC_USER.replace("./utilities", "./h"),
+        ),
+    ])?;
+    assert_eq!(found.test_only, Vec::<String>::new());
+    Ok(())
+}
+
+#[test]
+fn should_report_a_helper_a_negated_pattern_takes_back_from_test_code() -> Result<(), String> {
+    let files = [
+        ("spec/fixtures/utilities.ts", SPEC_HELPER),
+        ("spec/fixtures/x.spec.ts", SPEC_USER),
+    ];
+    let kept = advice_with(&files, &with_patterns(&[]))?;
+    assert_eq!(kept.test_only, Vec::<String>::new());
+
+    let found = advice_with(&files, &with_patterns(&["!spec/fixtures/utilities.ts"]))?;
+    assert!(
+        names(&found.test_only, "makeBatch"),
+        "{:?}",
+        found.test_only
+    );
+    Ok(())
+}
+
+#[test]
+fn should_let_a_positive_pattern_mark_a_production_path_as_test_code() -> Result<(), String> {
+    let files = [
+        ("src/batch.ts", SPEC_HELPER),
+        (
+            "checks/batch.ts",
+            &SPEC_USER.replace("./utilities", "../src/batch"),
+        ),
+    ];
+    let plain = advice_with(&files, &with_patterns(&[]))?;
+    assert!(!names(&plain.test_only, "makeBatch"));
+    let found = advice_with(&files, &with_patterns(&["checks/**"]))?;
+    assert!(
+        names(&found.test_only, "makeBatch"),
+        "{:?}",
+        found.test_only
+    );
+    Ok(())
+}
+
+/// The config with `patterns` and `builtins` set.
+fn with_tests(patterns: &[&str], builtins: bool) -> AnalyzeConfig {
+    let mut config = with_patterns(patterns);
+    config.tests.builtins = builtins;
+    config
+}
+
+#[test]
+fn should_let_only_patterns_decide_the_test_only_finding_when_builtins_are_off()
+-> Result<(), String> {
+    let files = [
+        ("spec/batch/utilities.ts", SPEC_HELPER),
+        ("spec/batch/x.spec.ts", SPEC_USER),
+    ];
+    // nothing is test code: the spec is a production user of the helper.
+    let none = advice_with(&files, &with_tests(&[], false))?;
+    assert_eq!(none.test_only, Vec::<String>::new());
+
+    // the pattern marks the spec but not its helper: the helper is reported.
+    let found = advice_with(&files, &with_tests(&["*.spec.ts"], false))?;
+    assert!(
+        names(&found.test_only, "makeBatch"),
+        "{:?}",
+        found.test_only
+    );
+
+    // a pattern that also marks the helper takes it out again.
+    let both = advice_with(&files, &with_tests(&["*.spec.ts", "spec/**"], false))?;
+    assert_eq!(both.test_only, Vec::<String>::new());
+
+    // with builtins on, the spec root already covers the helper.
+    let builtin = advice_with(&files, &with_tests(&[], true))?;
+    assert_eq!(builtin.test_only, Vec::<String>::new());
+    Ok(())
+}
+
+#[test]
+fn should_report_a_helper_under_a_nested_spec_folder_of_src_as_production() -> Result<(), String> {
+    let found = advice(&[
+        ("src/spec/h.ts", SPEC_HELPER),
+        (
+            "src/spec/x.spec.ts",
+            &SPEC_USER.replace("./utilities", "./h"),
+        ),
+    ])?;
+    assert!(
+        names(&found.test_only, "makeBatch"),
+        "{:?}",
+        found.test_only
+    );
+    Ok(())
+}
+
+/// A production module that imports the `makeBatch` helper from `path`.
+fn production_user_of(path: &str) -> String {
+    format!("import {{ makeBatch }} from \"{path}\";\nexport const run: number = makeBatch();\n")
+}
+
+#[test]
+fn should_not_flag_a_helper_when_its_only_spec_user_is_negated() -> Result<(), String> {
+    let files = [
+        ("src/batch.ts", SPEC_HELPER),
+        (
+            "spec/batch/x.spec.ts",
+            "import { makeBatch } from \"../../src/batch\";\nexport const batch: number = makeBatch();\n",
+        ),
+    ];
+    let kept = advice_with(&files, &with_patterns(&[]))?;
+    assert!(names(&kept.test_only, "makeBatch"), "{:?}", kept.test_only);
+
+    let found = advice_with(&files, &with_patterns(&["!spec/batch/x.spec.ts"]))?;
+    assert_eq!(
+        found.test_only,
+        Vec::<String>::new(),
+        "a negated spec is a production user"
+    );
+    Ok(())
+}
+
+#[test]
+fn should_let_a_negated_pattern_beat_a_positive_one_for_the_user() -> Result<(), String> {
+    let files = [
+        ("src/batch.ts", SPEC_HELPER),
+        (
+            "checks/batch.ts",
+            &SPEC_USER.replace("./utilities", "../src/batch"),
+        ),
+    ];
+    let positive = advice_with(&files, &with_patterns(&["checks/**"]))?;
+    assert!(names(&positive.test_only, "makeBatch"));
+
+    let negated = advice_with(&files, &with_patterns(&["checks/**", "!checks/batch.ts"]))?;
+    assert_eq!(negated.test_only, Vec::<String>::new());
+    Ok(())
+}
+
+#[test]
+fn should_report_the_items_of_a_test_support_crate_a_negated_pattern_takes_back()
+-> Result<(), String> {
+    let owned = workspace("publish = false");
+    let files: Vec<(&str, &str)> = owned.iter().map(|(p, c)| (*p, c.as_str())).collect();
+    let skipped = advice_with(&files, &with_patterns(&[]))?;
+    assert!(!names(&skipped.test_only, "harness_item"));
+
+    let found = advice_with(&files, &with_patterns(&["!harness/src/**"]))?;
+    assert!(
+        names(&found.test_only, "harness_item"),
+        "{:?}",
+        found.test_only
+    );
+    Ok(())
+}
+
+#[test]
+fn should_stop_skipping_test_support_crates_when_builtins_are_off() -> Result<(), String> {
+    let owned = workspace("publish = false");
+    let files: Vec<(&str, &str)> = owned.iter().map(|(p, c)| (*p, c.as_str())).collect();
+    let found = advice_with(&files, &with_tests(&["**/tests/**"], false))?;
+    assert!(
+        names(&found.test_only, "harness_item"),
+        "{:?}",
+        found.test_only
+    );
+    Ok(())
+}
+
+#[test]
+fn should_stop_calling_a_production_import_of_a_negated_helper_a_polarity_breach()
+-> Result<(), String> {
+    let user = production_user_of("../spec/fixtures/utilities");
+    let files = [
+        ("spec/fixtures/utilities.ts", SPEC_HELPER),
+        ("src/app.ts", user.as_str()),
+    ];
+    let kept = advice_with(&files, &with_patterns(&[]))?;
+    assert!(!kept.polarity.is_empty(), "the spec root is test code");
+
+    let found = advice_with(&files, &with_patterns(&["!spec/fixtures/**"]))?;
+    assert_eq!(found.polarity, Vec::<String>::new());
+    Ok(())
+}
+
+#[test]
+fn should_call_a_production_import_of_a_pattern_marked_file_a_polarity_breach() -> Result<(), String>
+{
+    let user = production_user_of("../checks/batch");
+    let files = [
+        ("checks/batch.ts", SPEC_HELPER),
+        ("src/app.ts", user.as_str()),
+    ];
+    let plain = advice_with(&files, &with_patterns(&[]))?;
+    assert_eq!(plain.polarity, Vec::<String>::new());
+
+    let found = advice_with(&files, &with_patterns(&["checks/**"]))?;
+    assert!(!found.polarity.is_empty(), "{:?}", found.polarity);
+    Ok(())
+}
+
+#[test]
+fn should_drop_adapter_polarity_breaches_when_builtins_are_off() -> Result<(), String> {
+    let user = production_user_of("../spec/fixtures/utilities");
+    let files = [
+        ("spec/fixtures/utilities.ts", SPEC_HELPER),
+        ("src/app.ts", user.as_str()),
+    ];
+    let found = advice_with(&files, &with_tests(&[], false))?;
+    assert_eq!(found.polarity, Vec::<String>::new());
+    Ok(())
+}
+
+/// The layout where a pattern-marked folder meets a built-in test root.
+fn pattern_meets_test_root(helper_imports_util: bool) -> Vec<(&'static str, String)> {
+    let util = if helper_imports_util {
+        SPEC_HELPER.to_owned()
+    } else {
+        "import { checkIt } from \"../checks/helper\";\nexport function makeBatch(): number {\n  return checkIt();\n}\n"
+            .to_owned()
+    };
+    let helper = if helper_imports_util {
+        "import { makeBatch } from \"../spec/util\";\nexport function checkIt(): number {\n  return makeBatch();\n}\n"
+            .to_owned()
+    } else {
+        "export function checkIt(): number {\n  return 1;\n}\n".to_owned()
+    };
+    vec![
+        ("package.json", "{}".to_owned()),
+        ("spec/util.ts", util),
+        ("checks/helper.ts", helper),
+        (
+            "checks/run.spec.ts",
+            "import { checkIt } from \"./helper\";\nexport const run: number = checkIt();\n"
+                .to_owned(),
+        ),
+    ]
+}
+
+/// Runs [`advice_with`] over owned file contents.
+fn advice_owned_with(files: &[(&str, String)], config: &AnalyzeConfig) -> Result<Advice, String> {
+    let borrowed: Vec<(&str, &str)> = files.iter().map(|(p, c)| (*p, c.as_str())).collect();
+    advice_with(&borrowed, config)
+}
+
+#[test]
+fn should_not_flag_a_pattern_marked_helper_that_imports_a_built_in_test_helper()
+-> Result<(), String> {
+    let found = advice_owned_with(
+        &pattern_meets_test_root(true),
+        &with_patterns(&["checks/**"]),
+    )?;
+    assert_eq!(found.polarity, Vec::<String>::new());
+    Ok(())
+}
+
+#[test]
+fn should_not_flag_a_built_in_test_helper_that_imports_a_pattern_marked_helper()
+-> Result<(), String> {
+    let found = advice_owned_with(
+        &pattern_meets_test_root(false),
+        &with_patterns(&["checks/**"]),
+    )?;
+    assert_eq!(found.polarity, Vec::<String>::new());
+    Ok(())
+}
+
+#[test]
+fn should_still_flag_a_test_support_helper_that_imports_a_spec_file() -> Result<(), String> {
+    let found = advice(&[
+        ("package.json", "{}"),
+        (
+            "spec/util.ts",
+            "import { batch } from \"./x.spec\";\nexport function makeBatch(): number {\n  return batch;\n}\n",
+        ),
+        ("spec/x.spec.ts", "export const batch: number = 1;\n"),
+    ])?;
+    assert!(
+        found
+            .polarity
+            .iter()
+            .any(|line| line.contains("test support") && line.contains("test case")),
+        "{:?}",
+        found.polarity
+    );
+    Ok(())
+}
+
+#[test]
+fn should_flag_a_helper_used_only_by_a_spec_with_an_mts_or_cts_extension() -> Result<(), String> {
+    for (spec, import) in [("src/flow.spec.mts", "./h"), ("src/flow.test.cts", "./h")] {
+        let user = SPEC_USER.replace("./utilities", import);
+        let found = advice(&[("src/h.ts", SPEC_HELPER), (spec, user.as_str())])?;
+        assert!(
+            names(&found.test_only, "makeBatch"),
+            "{spec}: {:?}",
+            found.test_only
+        );
+    }
     Ok(())
 }

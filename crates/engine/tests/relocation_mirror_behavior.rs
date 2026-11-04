@@ -313,10 +313,10 @@ fn should_link_an_exact_nested_mirror_despite_a_colliding_basename() {
 }
 
 #[test]
-fn should_serialize_linked_relocations_as_schema_version_ten() {
+fn should_serialize_linked_relocations_as_schema_version_eleven() {
     let json = serialized_analysis(&exact_mirror_snapshot(true, false), &mirror_config());
 
-    assert_eq!(json.get("schemaVersion").and_then(Value::as_u64), Some(10));
+    assert_eq!(json.get("schemaVersion").and_then(Value::as_u64), Some(11));
 }
 
 #[test]

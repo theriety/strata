@@ -6,7 +6,7 @@ use unlace_engine::AnalyzeResult;
 
 use super::advice::advice_with_options;
 use super::findings::findings_lines;
-use super::{RenderOptions, effective_parameter_lines, present_modes, wrap};
+use super::{RenderOptions, effective_parameter_lines, effective_tests_line, present_modes, wrap};
 
 mod candidate;
 mod fit;
@@ -98,7 +98,7 @@ impl Report {
             },
         ];
         if options.verbose {
-            let mut lines = Vec::new();
+            let mut lines = vec![effective_tests_line(&result.tests)];
             for (name, profile) in present_modes(result) {
                 lines.extend(effective_parameter_lines(name, &profile.parameters));
                 // retain structured rule values as well as the readable numeric summary.

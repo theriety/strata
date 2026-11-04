@@ -12,9 +12,10 @@ use crate::error::UnlaceError;
 use crate::result::{CurrentStanding, Level};
 
 use super::*;
+use crate::analyze::test_policy::TestPolicy;
 use crate::analyze::test_support::*;
 use crate::analyze::*;
-use crate::analyze::{findings::*, relocation::*, rendering::*, scoring::*};
+use crate::analyze::{findings::*, rendering::*, scoring::*};
 
 #[test]
 fn should_produce_both_modes_when_requested() {

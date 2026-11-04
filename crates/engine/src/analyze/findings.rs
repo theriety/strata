@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use unlace_ir::{ScopeLevel, Snapshot};
 
 use crate::analyze::search::{SccSolution, solve_cycles};
+use crate::analyze::test_policy::TestPolicy;
 use crate::config::{CapacityConfig, ProfileConfig};
 use crate::result::{ContainerNode, Severity, Summary, Violation, ViolationKind};
 use crate::snapshot::Language;
@@ -45,10 +46,11 @@ pub(in crate::analyze) fn profile_findings(
     snapshot: &Snapshot,
     tree: &ContainerNode,
     profile: &ProfileConfig,
+    tests: &TestPolicy,
 ) -> Vec<Violation> {
     let weights = profile.weights.kind_weights();
     let cycles = solve_cycles(snapshot, profile, &weights);
-    collect_violations(snapshot, &profile.capacity, tree, &cycles)
+    collect_violations(snapshot, &profile.capacity, tree, &cycles, tests)
 }
 
 /// Counts the capacity findings that hard-breach their caps: `Severity::Violation`
@@ -105,12 +107,13 @@ fn collect_violations(
     capacity: &CapacityConfig,
     tree: &ContainerNode,
     cycles: &[SccSolution],
+    tests: &TestPolicy,
 ) -> Vec<Violation> {
     let mut violations = Vec::new();
     violations.extend(cycle_violations(snapshot, cycles));
     violations.extend(polarity_violations(snapshot));
-    violations.extend(visibility_violations(snapshot));
-    violations.extend(test_only_violations(snapshot));
+    violations.extend(visibility_violations(snapshot, tests));
+    violations.extend(test_only_violations(snapshot, tests));
     violations.extend(snapshot_capacity_violations(snapshot, tree, capacity));
     sort_and_dedup_violations(&mut violations);
     violations

@@ -347,17 +347,23 @@ Every command reads `unlace.toml` from the analysis root (override with `--confi
 |---------|----------|
 | `[adapters]` | Which `languages` to run, `include`/`exclude` source globs, and `source-roots` — directory names (default `src`, `spec`, `test`, `tests`, `lib`, `dist`, `__tests__`) treated as transparent below each package root so a source file and its test share a folder. The legacy `source_roots` spelling is still accepted. |
 | `[analysis]` | Selected parameter profiles and process-wide `jobs`. |
-| `[profiles.anchored]` | Anchored candidate count, seed, capacities, objective, evidence qualification, dependency weights, solver, diversity, test policy, and relocation policy. |
+| `[tests]` | What counts as test code: `helper-cap`, extra `patterns` (with `!` negation), and `builtins`. One policy for every profile. |
+| `[profiles.anchored]` | Anchored candidate count, seed, capacities, objective, evidence qualification, dependency weights, solver, diversity, and relocation policy. |
 | `[profiles.greenfield]` | The same complete parameter set for greenfield, independently configurable. |
 
 The checked-in [`unlace.toml`](unlace.toml) documents every key alongside its default value.
 
-Each profile owns the complete analysis policy. Both run against the same discovered snapshot; only adapter discovery and process-wide parallelism are global. The built-in defaults differ only in greenfield's `path = 0.0` and `anchor = 0.0`. Explicit nonzero greenfield values are honored.
+Each profile owns the complete analysis policy. Both run against the same discovered snapshot; only adapter discovery, process-wide parallelism and the test policy are global. The built-in defaults differ only in greenfield's `path = 0.0` and `anchor = 0.0`. Explicit nonzero greenfield values are honored.
 
 ```toml
 [analysis]
 profiles = ["anchored", "greenfield"]
 jobs = 0
+
+[tests]
+helper-cap = 600
+patterns = []
+builtins = true
 
 [profiles.anchored]
 candidates = 3
@@ -409,11 +415,6 @@ timeout-seconds = 60
 seeds-per-candidate = 10
 score-tolerance = 0.05
 min-distance = 0.05
-
-[profiles.anchored.tests]
-helper-cap = 600
-patterns = []
-builtins = true
 
 [profiles.anchored.relocation]
 pin-detected-test-symbols = true
@@ -476,11 +477,6 @@ seeds-per-candidate = 10
 score-tolerance = 0.05
 min-distance = 0.05
 
-[profiles.greenfield.tests]
-helper-cap = 600
-patterns = []
-builtins = true
-
 [profiles.greenfield.relocation]
 pin-detected-test-symbols = true
 allow-cross-package-moves = false
@@ -491,6 +487,14 @@ forbid-symbol-moves = []
 enabled = true
 builtins = true
 ```
+
+`[tests]` is one policy for every profile and every consumer: the test-only finding, relocation (test zones and the tie-cut, test-symbol pinning), polarity findings, and capacity and scoring. Three inputs decide, in this order of precedence:
+
+- **A `!` pattern.** Matching files are never test code. Negation beats everything else: the built-in detection, adapter test pairs, test-support crates, advisory uses from tests, and positive patterns. `patterns = ["!spec/fixtures/**"]` makes helpers there production code, so they are reported when only tests use them. A bare `!` is rejected.
+- **A positive pattern.** Matching files are test code whatever their language says, and their declarations count as test support. A pattern with `/` matches the whole repo-relative path; a bare pattern matches the file name alone.
+- **`builtins = true`.** The language adapters' own conventions count: names (`*.spec.*` and `*.test.*` in any TypeScript-family extension such as `.ts`, `.mts` or `.cts`, a `__tests__` folder), the test polarity they compute, the source–test pairs they state (`spec`/`test`/`tests` mirrors), and test-support crates. In TypeScript a file is also test code when the first path segment below any enclosing package root (a `package.json` directory, or the analysed root) is `spec`, `test` or `tests`, so `spec/batch/utilities.ts` is test code, a fixture package under `spec/` inherits that status, `src/spec/h.ts` is production code, and a module named `spec.ts` is not a test. Only a test-named file (or one in a `__tests__` folder) is a test case; every other TypeScript test file, such as `spec/util.ts` or a pattern-marked helper, is test support, so a helper never counts as depending on a test case it shares a role with. Python and Rust keep their own conventions.
+
+With `builtins = false` only `patterns` decide: no adapter-stated signal counts, pairing and polarity included, so spec files and Rust `#[cfg(test)]` code are production code unless a pattern marks them. A production item that only tests use is still reported either way.
 
 Relocation patterns are repo-relative globs. `forbid-file-moves` pins matching files against independent folder moves while leaving them in dependency, scoring, capacity, cycle, and finding calculations. `forbid-symbol-moves` prevents a symbol move when either its analysis-start source file or proposed destination file matches. Detected tests and their symbols are pinned independently by default, but a test can still follow an accepted source move as a mirror.
 
@@ -516,7 +520,7 @@ When a source moves, every exact mirror must follow it; if any mirror is blocked
 
 The former `analysis.mode`, `analysis.candidates`, `analysis.seed`, and top-level analysis-policy sections are invalid. `--mode` remains a CLI compatibility selector: it chooses which parameter profiles execute but does not define their parameters.
 
-Saved analysis JSON uses result schema version 10; version 10 adds the `testOnly` violation kind (a production item whose every user is test code), version 9 added each profile's `allow-cross-package-moves` relocation parameter, and readers reject version 9 and earlier results. The top-level `advice` object contains `recommended` and `reviewCandidates`; raw per-profile candidates remain available for inspection. Each advice item records `destination`, `supportingProfiles`, `qualifiedProfiles`, `absentProfiles`, `conflictingDestinations`, `assessments`, and `reviewReasons`. An assessment includes all six raw evidence signals, the weighted and structural scores, the ambiguity margin and best alternative, the effective thresholds, and the qualification result. There is no serialized rejected group.
+Saved analysis JSON uses result schema version 11; version 11 records the resolved `[tests]` section once as a top-level `tests` object (`helperCap`, `patterns`, `builtins`) and drops it from each profile's `parameters`, version 10 added the `testOnly` violation kind (a production item whose every user is test code), version 9 added each profile's `allow-cross-package-moves` relocation parameter, and readers reject version 10 and earlier results. The top-level `advice` object contains `recommended` and `reviewCandidates`; raw per-profile candidates remain available for inspection. Each advice item records `destination`, `supportingProfiles`, `qualifiedProfiles`, `absentProfiles`, `conflictingDestinations`, `assessments`, and `reviewReasons`. An assessment includes all six raw evidence signals, the weighted and structural scores, the ambiguity margin and best alternative, the effective thresholds, and the qualification result. There is no serialized rejected group.
 
 Each score breakdown includes `dependencyOnly` and `companionSeparation`. The latter is the directional charge for keeping a conservatively matched signature type away from its immutable owner file. Each primary file `Move` also has `mirrors`, whose entries contain `sourcePath`, `path`, `from`, and `to`. Earlier saved result versions are not accepted by `report`, `tree`, or `diff`.
 

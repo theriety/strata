@@ -7,12 +7,13 @@ use unlace_ir::{Node, ScopeLadder, ScopeLevel, Snapshot};
 
 use super::test_only::test_only_nodes;
 use crate::analyze::search::node_names;
+use crate::analyze::test_policy::TestPolicy;
 use crate::result::{Severity, Violation, ViolationKind};
 
 /// Reports symbols whose declared visibility is wider than their derived scope.
-pub(super) fn visibility_violations(snapshot: &Snapshot) -> Vec<Violation> {
+pub(super) fn visibility_violations(snapshot: &Snapshot, tests: &TestPolicy) -> Vec<Violation> {
     // one finding per node: a test-only item is advised once, as test-only.
-    let test_only = test_only_nodes(snapshot);
+    let test_only = test_only_nodes(snapshot, tests);
     let ir = snapshot.ir();
     let result = derive_visibility(&ir.containers, &ir.nodes, &ir.edges);
     let names = node_names(snapshot);

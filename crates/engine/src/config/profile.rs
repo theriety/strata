@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     CapacityConfig, DiversityConfig, ObjectiveConfig, QualificationConfig, RelocationConfig,
-    SolverConfig, TestsConfig, WeightsConfig,
+    SolverConfig, WeightsConfig,
 };
 
 /// One complete, independently configurable analysis parameter profile.
@@ -25,8 +25,6 @@ pub struct ProfileConfig {
     pub solver: SolverConfig,
     /// Diversification parameters.
     pub diversity: DiversityConfig,
-    /// Test-file detection and capping policy.
-    pub tests: TestsConfig,
     /// Rules controlling which graph participants may relocate and how tests follow sources.
     pub relocation: RelocationConfig,
     /// Evidence required before safe relocation advice is recommended.
@@ -43,7 +41,6 @@ impl Default for ProfileConfig {
             weights: WeightsConfig::default(),
             solver: SolverConfig::default(),
             diversity: DiversityConfig::default(),
-            tests: TestsConfig::default(),
             relocation: RelocationConfig::default(),
             qualification: QualificationConfig::default(),
         }

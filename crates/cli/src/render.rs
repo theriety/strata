@@ -18,7 +18,7 @@ mod tree;
 
 use std::io::{self, Write};
 
-use unlace_engine::{AnalyzeResult, ModeResult, ProfileConfig, ScoreBreakdown};
+use unlace_engine::{AnalyzeResult, ModeResult, ProfileConfig, ScoreBreakdown, TestSettings};
 
 /// The one honesty line every human-readable output carries: unlace proposes,
 /// it does not guarantee. JSON output is a data contract and omits it.
@@ -191,6 +191,16 @@ fn present_modes(result: &AnalyzeResult) -> Vec<(&'static str, &ModeResult)> {
     modes
 }
 
+/// Renders the effective `[tests]` section, which every profile shares.
+pub(crate) fn effective_tests_line(tests: &TestSettings) -> String {
+    format!(
+        "   tests     helper-cap {} · patterns {} · builtins {}",
+        tests.helper_cap,
+        tests.patterns.len(),
+        tests.builtins
+    )
+}
+
 /// Renders every effective value in one selected parameter profile.
 pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<String> {
     vec![
@@ -239,12 +249,6 @@ pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<St
             p.diversity.seeds_per_candidate,
             weight(p.diversity.score_tolerance),
             weight(p.diversity.min_distance)
-        ),
-        format!(
-            "   tests     helper-cap {} · patterns {} · builtins {}",
-            p.tests.helper_cap,
-            p.tests.patterns.len(),
-            p.tests.builtins
         ),
         format!(
             "   relocation pin-test-symbols {} · cross-package {} · file patterns {} · symbol patterns {}",
@@ -328,6 +332,7 @@ mod tests {
         let capacity_breaks = u32::try_from(hard).unwrap_or(u32::MAX);
         AnalyzeResult {
             schema_version: 1,
+            tests: unlace_engine::TestSettings::default(),
             snapshot_hash: "deadbeef".to_owned(),
             summary: Summary {
                 symbols: 2,
@@ -800,6 +805,26 @@ mod tests {
     }
 
     #[test]
+    fn should_render_the_shared_tests_settings_once() {
+        let tests = TestSettings {
+            helper_cap: 250,
+            patterns: vec!["checks/**".to_owned(), "!checks/keep.ts".to_owned()],
+            builtins: false,
+        };
+
+        assert_eq!(
+            effective_tests_line(&tests),
+            "   tests     helper-cap 250 · patterns 2 · builtins false"
+        );
+        assert!(
+            !effective_parameter_lines("anchored", &ProfileConfig::default())
+                .join("\n")
+                .contains("tests     helper-cap"),
+            "a profile carries no test settings of its own"
+        );
+    }
+
+    #[test]
     fn should_render_every_effective_parameter_group_for_a_profile() {
         let rendered = effective_parameter_lines("anchored", &ProfileConfig::default()).join("\n");
 
@@ -813,7 +838,6 @@ mod tests {
             "same-file-type",
             "solver    ilp-threshold",
             "diversity seeds-per-candidate",
-            "tests     helper-cap",
         ] {
             assert!(
                 rendered.contains(expected),

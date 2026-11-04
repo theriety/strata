@@ -11,6 +11,7 @@ mod candidate;
 mod finding;
 mod movement;
 mod profile;
+mod settings;
 
 #[cfg(test)]
 mod tests;
@@ -32,12 +33,13 @@ pub use self::profile::{
     CapacityRemainder, CurrentStanding, CurrentTree, ModeResult, Modes, ProfileCurrent,
     ProfileResult, Profiles, Summary,
 };
+pub use self::settings::TestSettings;
 
 /// The schema version stamped into every [`AnalyzeResult`] this crate produces.
 ///
 /// Readers of a saved result reject any other version rather than misreading a
 /// future shape.
-pub const RESULT_SCHEMA_VERSION: u32 = 10;
+pub const RESULT_SCHEMA_VERSION: u32 = 11;
 
 /// The top-level analysis result: the snapshot hash, the current tree with its
 /// violations, and the per-profile candidate sets.
@@ -57,6 +59,8 @@ pub struct AnalyzeResult {
     pub snapshot_hash: String,
     /// A coarse census of the analyzed graph.
     pub summary: Summary,
+    /// The resolved `[tests]` section every profile ran under.
+    pub tests: TestSettings,
     /// The shared current layout and findings identical across executed profiles.
     pub current: CurrentTree,
     /// The independently configured parameter-profile results.

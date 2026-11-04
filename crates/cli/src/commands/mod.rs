@@ -326,6 +326,7 @@ mod tests {
         let result = AnalyzeResult {
             schema_version: RESULT_SCHEMA_VERSION,
             snapshot_hash: "h".to_owned(),
+            tests: unlace_engine::TestSettings::default(),
             summary: unlace_engine::Summary {
                 symbols: 0,
                 edges: 0,

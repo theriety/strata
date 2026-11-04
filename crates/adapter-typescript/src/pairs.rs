@@ -18,11 +18,10 @@ use smol_str::SmolStr;
 use unlace_ir::{FileFact, unique_test_pairs};
 
 use crate::parse::ParsedModule;
+use crate::test_paths::{EXTENSIONS, TEST_ROOTS};
 
 const SOURCE_ROOTS: [&str; 2] = ["src", "source"];
-const TEST_ROOTS: [&str; 3] = ["spec", "test", "tests"];
 const MARKERS: [&str; 2] = ["spec", "test"];
-const EXTENSIONS: [&str; 8] = ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
 
 /// The test-pair facts for `modules`, sorted by test path.
 pub(super) fn file_facts(modules: &[ParsedModule]) -> Vec<FileFact> {

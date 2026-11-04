@@ -6,8 +6,8 @@ use smol_str::SmolStr;
 use unlace_core::cluster::{ClusterId, Partition};
 use unlace_core::graph::csr::Csr;
 use unlace_ir::{
-    Affinity, AffinityKind, Container, ContainerId, ContainerTree, Edge, EdgeKind, Hardness,
-    IntermediateRepresentation, Layout, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
+    Affinity, AffinityKind, Container, ContainerId, ContainerTree, Edge, EdgeKind, FileFact,
+    Hardness, IntermediateRepresentation, Layout, NodeId, NodeKind, Polarity, ScopeLevel, Snapshot,
     build_laminar_tree,
 };
 
@@ -17,7 +17,8 @@ use crate::result::{ContainerNode, CurrentStanding, Level, SymbolKind, SymbolMov
 use super::*;
 use crate::analyze::relocation::collision::CollisionFold;
 use crate::analyze::relocation::mirror::PolishEvidence;
-use crate::analyze::relocation::solver::{build_file_graph, test_zone_marks};
+use crate::analyze::relocation::solver::build_file_graph;
+use crate::analyze::test_policy::TestPolicy;
 use crate::analyze::test_support::*;
 use crate::analyze::*;
 use crate::analyze::{layout::*, relocation::*, scoring::*};
@@ -691,7 +692,7 @@ fn should_mark_a_polarity_detected_spec_as_the_test_zone() {
     ];
 
     assert_eq!(
-        test_zone_marks(&TestPolicy::defaults(), &files, &nodes, &[]),
+        TestPolicy::defaults().zone_marks(&files, &nodes, &[]),
         vec![false, true]
     );
 }
@@ -705,7 +706,7 @@ fn should_not_mark_a_file_holding_any_production_symbol() {
     let files = [file_info(1, "src/mixed.ts", 1)];
 
     assert_eq!(
-        test_zone_marks(&TestPolicy::defaults(), &files, &nodes, &[]),
+        TestPolicy::defaults().zone_marks(&files, &nodes, &[]),
         vec![false]
     );
 }
@@ -723,7 +724,7 @@ fn should_mark_a_pattern_matched_file_even_when_production_polarity() {
     ];
 
     assert_eq!(
-        test_zone_marks(&policy(&tests), &files, &nodes, &[]),
+        policy(&tests).zone_marks(&files, &nodes, &[]),
         vec![false, true]
     );
 }
@@ -731,12 +732,153 @@ fn should_mark_a_pattern_matched_file_even_when_production_polarity() {
 #[test]
 fn should_mark_production_polarity_support_under_a_builtin_test_root() {
     let nodes = vec![node(0, "shared_fixture", 1, Polarity::Production)];
-    let files = [file_info(1, "tests/support/fixtures.ts", 1)];
+    let files = [file_info(1, "tests/support/fixtures.rs", 1)];
 
     assert_eq!(
-        test_zone_marks(&TestPolicy::defaults(), &files, &nodes, &[]),
+        TestPolicy::defaults().zone_marks(&files, &nodes, &[]),
         vec![true],
         "test-support declarations inherit the conventional test root"
+    );
+}
+
+#[test]
+fn should_let_a_negated_pattern_win_over_builtin_and_positive_test_detection() {
+    let tests = TestsConfig {
+        patterns: vec!["fixtures/**".to_owned(), "!**/fixtures/**".to_owned()],
+        ..TestsConfig::default()
+    };
+    let nodes = vec![
+        node(0, "kept", 1, Polarity::TestCase),
+        node(1, "plain", 2, Polarity::Production),
+        node(2, "positive", 3, Polarity::Production),
+    ];
+    let files = [
+        file_info(1, "spec/fixtures/kept.spec.py", 1),
+        file_info(2, "spec/helpers/plain.py", 1),
+        file_info(3, "fixtures/positive.py", 1),
+    ];
+
+    assert_eq!(
+        policy(&tests).zone_marks(&files, &nodes, &[]),
+        vec![false, true, false],
+        "negation beats the spec root, polarity and a positive pattern"
+    );
+}
+
+#[test]
+fn should_let_a_negated_pattern_win_over_an_adapter_test_pair() {
+    let tests = TestsConfig {
+        patterns: vec!["!src/paired.ts".to_owned()],
+        ..TestsConfig::default()
+    };
+    let nodes = vec![
+        node(0, "paired", 1, Polarity::Production),
+        node(1, "other", 2, Polarity::Production),
+    ];
+    let files = [
+        file_info(1, "src/paired.ts", 1),
+        file_info(2, "src/other.ts", 1),
+    ];
+    let facts = [
+        FileFact::test_pair("src/paired.ts", "src/a.ts"),
+        FileFact::test_pair("src/other.ts", "src/b.ts"),
+    ];
+
+    assert_eq!(
+        policy(&tests).zone_marks(&files, &nodes, &facts),
+        vec![false, true],
+        "negation beats the pair; an unnegated pair still marks"
+    );
+}
+
+#[test]
+fn should_stop_reading_adapter_test_pairs_when_builtins_are_off() {
+    let nodes = vec![node(0, "paired", 1, Polarity::Production)];
+    let files = [file_info(1, "src/paired.ts", 1)];
+    let facts = [FileFact::test_pair("src/paired.ts", "src/a.ts")];
+    let off = |patterns: &[&str]| {
+        policy(&TestsConfig {
+            patterns: patterns.iter().map(|&pattern| pattern.to_owned()).collect(),
+            builtins: false,
+            ..TestsConfig::default()
+        })
+    };
+
+    assert_eq!(
+        TestPolicy::defaults().zone_marks(&files, &nodes, &facts),
+        vec![true]
+    );
+    assert_eq!(
+        off(&[]).zone_marks(&files, &nodes, &facts),
+        vec![false],
+        "a pair is a built-in signal"
+    );
+    assert_eq!(
+        off(&["src/*.ts"]).zone_marks(&files, &nodes, &facts),
+        vec![true],
+        "a pattern still marks"
+    );
+}
+
+/// A file in package `package`, whose key is the package-root path.
+fn packaged_file(container: u32, path: &str, package: &str) -> FileInfo {
+    let mut file = file_info(container, path, 1);
+    file.home.package = SmolStr::new(package);
+    file
+}
+
+#[test]
+fn should_leave_a_typescript_test_root_to_the_adapters_polarity() {
+    let production = vec![node(0, "helper", 1, Polarity::Production)];
+    let files = [
+        file_info(1, "spec/h.ts", 1),
+        file_info(2, "src/spec/h.ts", 1),
+        file_info(3, "src/spec.ts", 1),
+    ];
+    assert_eq!(
+        TestPolicy::defaults().zone_marks(&files, &production, &[]),
+        vec![false, false, false],
+        "the engine holds no TypeScript path rule: production polarity is not a test"
+    );
+
+    let case = vec![node(0, "helper", 1, Polarity::TestCase)];
+    assert_eq!(
+        TestPolicy::defaults().zone_marks(&files[..1], &case, &[]),
+        vec![true],
+        "a file the adapter declared test code is a test zone"
+    );
+}
+
+#[test]
+fn should_not_read_a_typescript_test_root_from_the_package_container() {
+    let nodes = vec![node(0, "helper", 1, Polarity::Production)];
+    let files = [
+        // a Cargo-only directory under a root `package.json`: the adapter says production.
+        packaged_file(1, "crates/wasm/test/h.ts", "crates/wasm"),
+        // a repo whose top folder shares the analysed root's name.
+        packaged_file(2, "app/test/h.ts", "app"),
+    ];
+
+    assert_eq!(
+        TestPolicy::defaults().zone_marks(&files, &nodes, &[]),
+        vec![false, false]
+    );
+}
+
+#[test]
+fn should_keep_the_python_and_rust_builtin_path_rules_unchanged() {
+    let nodes = vec![node(0, "helper", 1, Polarity::Production)];
+    let files = [
+        file_info(1, "pkg/tests/support.py", 1),
+        file_info(2, "src/tests/support.rs", 1),
+        file_info(3, "pkg/conftest.py", 1),
+        file_info(4, "pkg/support.py", 1),
+    ];
+
+    assert_eq!(
+        TestPolicy::defaults().zone_marks(&files, &nodes, &[]),
+        vec![true, true, false, false],
+        "non-TS languages keep their any-depth test root; this slice changes TS/JS only"
     );
 }
 
@@ -753,7 +895,7 @@ fn should_pin_symbols_in_production_polarity_test_support_by_default() {
             container(0, "workspace", ScopeLevel::PackageGroup, None),
             container(1, "tests/support", ScopeLevel::Folder, Some(0)),
             container(2, "src", ScopeLevel::Folder, Some(0)),
-            container(3, "tests/support/fixtures.ts", ScopeLevel::File, Some(1)),
+            container(3, "tests/support/fixtures.rs", ScopeLevel::File, Some(1)),
             container(4, "src/consumer.ts", ScopeLevel::File, Some(2)),
         ],
     );
@@ -980,7 +1122,7 @@ fn should_leave_the_zone_inert_when_builtins_are_off_and_no_patterns_given() {
     let files = [file_info(1, "src/x.spec.ts", 0)];
 
     assert_eq!(
-        test_zone_marks(&TestPolicy::disabled(), &files, &nodes, &[]),
+        TestPolicy::disabled().zone_marks(&files, &nodes, &[]),
         vec![false]
     );
 }

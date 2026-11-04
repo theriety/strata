@@ -6,6 +6,7 @@ use unlace_core::score::KindWeights;
 use crate::narrate::narrate;
 
 use super::*;
+use crate::analyze::test_policy::TestPolicy;
 use crate::analyze::test_support::*;
 use crate::config::AnalyzeConfig;
 

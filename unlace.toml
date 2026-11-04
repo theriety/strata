@@ -27,6 +27,23 @@ profiles = ["anchored", "greenfield"]
 # Parallelism hint; 0 = all logical cores and never affects results.
 jobs = 0
 
+[tests]
+# File cap (in production SLOC) for test-support files; test-case files exempt.
+helper-cap = 600
+# Glob patterns deciding test files on top of the built-in detection. A pattern
+# containing '/' matches against the repo-relative path; a bare pattern matches
+# against the basename. A leading '!' marks matching files as NOT test code and
+# wins over every other signal. Invalid or empty patterns are rejected with a
+# `tests.patterns[i]` error.
+# patterns = ["*.spec.*", "apps/web/__tests__/**", "!spec/fixtures/**"]
+patterns = []
+# Keep the adapters' built-in detection (names such as `.spec.` / `.test.` /
+# `__tests__`, TypeScript `spec`/`test`/`tests` roots below a package root, Rust
+# `tests/` + `#[cfg(test)]`, Python mirrors, adapter test pairs and test-support
+# crates). Disabling it makes only `patterns` decide; with an empty list nothing
+# is a test file.
+builtins = true
+
 [profiles.anchored]
 candidates = 3
 seed = 42
@@ -84,20 +101,6 @@ seeds-per-candidate = 10
 score-tolerance = 0.05
 # Minimum pairwise variation-of-information between returned candidates.
 min-distance = 0.05
-
-[profiles.anchored.tests]
-# File cap (in production SLOC) for test-support files; test-case files exempt.
-helper-cap = 600
-# Extra glob patterns marking test files beyond the built-in detection.
-# A pattern containing '/' matches against the repo-relative path; a bare
-# pattern matches against the basename. Invalid or empty patterns are
-# rejected with a `tests.patterns[i]` error.
-# patterns = ["*.spec.*", "apps/web/__tests__/**"]
-patterns = []
-# Keep the built-in per-language detection (TS `.spec.` / `.test.` / `__tests__`,
-# Rust `tests/` + `#[cfg(test)]`, Python mirrors). Disabling it makes only
-# `patterns` decide; with an empty list nothing is a test file.
-builtins = true
 
 [profiles.anchored.relocation]
 pin-detected-test-symbols = true
@@ -161,11 +164,6 @@ timeout-seconds = 60
 seeds-per-candidate = 10
 score-tolerance = 0.05
 min-distance = 0.05
-
-[profiles.greenfield.tests]
-helper-cap = 600
-patterns = []
-builtins = true
 
 [profiles.greenfield.relocation]
 pin-detected-test-symbols = true

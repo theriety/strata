@@ -19,8 +19,9 @@ fn should_default_to_the_config_less_baseline() {
     assert_eq!(config.profiles.anchored.seed, 42);
     assert_eq!(config.profiles.anchored.capacity.file, 600);
     assert_eq!(config.profiles.greenfield.capacity.file, 600);
-    assert_eq!(config.profiles.anchored.tests.helper_cap, 600);
-    assert_eq!(config.profiles.greenfield.tests.helper_cap, 600);
+    assert_eq!(config.tests.helper_cap, 600);
+    assert!(config.tests.builtins);
+    assert_eq!(config.tests.patterns, Vec::<String>::new());
     assert_eq!(config.profiles.anchored.capacity.folder, 20);
     assert_eq!(config.profiles.anchored.capacity.domain, 16);
     assert_eq!(config.profiles.anchored.capacity.package, 15);
@@ -284,10 +285,6 @@ timeout-seconds = 60
 seeds-per-candidate = 10
 score-tolerance = 0.05
 min-distance = 0.05
-[profiles.anchored.tests]
-helper-cap = 250
-patterns = []
-builtins = true
 
 [profiles.greenfield]
 candidates = 5
@@ -330,8 +327,8 @@ timeout-seconds = 61
 seeds-per-candidate = 11
 score-tolerance = 0.06
 min-distance = 0.06
-[profiles.greenfield.tests]
-helper-cap = 240
+[tests]
+helper-cap = 250
 patterns = ["checks/**"]
 builtins = false
 "#
@@ -599,7 +596,6 @@ fn should_name_every_removed_legacy_key_in_its_diagnostic() {
             "diversity",
             "diversity",
         ),
-        ("[tests]\nhelper-cap = 250\n", "tests", "tests"),
     ];
     let path = std::env::temp_dir().join(format!(
         "unlace-legacy-profile-config-{}.toml",
@@ -649,61 +645,113 @@ fn should_reject_a_zero_cap_with_its_key_path() {
 }
 
 #[test]
-fn should_parse_tests_patterns_and_builtins_from_toml() {
-    let toml = "[profiles.anchored.tests]\npatterns = [\"*.spec.*\", \"apps/web/__tests__/**\"]\nbuiltins = false\n";
+fn should_parse_the_tests_section_from_toml() {
+    let toml = "[tests]\npatterns = [\"*.spec.*\", \"apps/web/__tests__/**\"]\nbuiltins = false\n";
 
     let config: AnalyzeConfig = toml::from_str(toml).unwrap_or_else(|_| AnalyzeConfig::default());
 
     assert_eq!(
-        config.profiles.anchored.tests.patterns,
+        config.tests.patterns,
         vec!["*.spec.*", "apps/web/__tests__/**"]
     );
-    assert!(!config.profiles.anchored.tests.builtins);
+    assert!(!config.tests.builtins);
     // an omitted key keeps its default.
-    assert_eq!(config.profiles.anchored.tests.helper_cap, 600);
+    assert_eq!(config.tests.helper_cap, 600);
+}
+
+#[test]
+fn should_read_one_tests_section_for_every_profile_from_a_complete_document() {
+    let config = toml::from_str::<AnalyzeConfig>(complete_profiles_toml()).unwrap_or_default();
+
+    assert_eq!(config.tests.helper_cap, 250);
+    assert_eq!(config.tests.patterns, vec!["checks/**"]);
+    assert!(!config.tests.builtins);
+}
+
+#[test]
+fn should_reject_a_tests_block_inside_a_profile_as_an_unknown_field() {
+    let parsed = toml::from_str::<AnalyzeConfig>("[profiles.anchored.tests]\nbuiltins = false\n");
+
+    assert!(
+        matches!(&parsed, Err(error) if error.message().contains("unknown field `tests`")),
+        "{parsed:?}"
+    );
 }
 
 #[test]
 fn should_reject_an_empty_tests_pattern_with_its_index() {
     let config = AnalyzeConfig {
-        profiles: ProfilesConfig {
-            anchored: ProfileConfig {
-                tests: TestsConfig {
-                    patterns: vec!["*.spec.*".to_owned(), String::new()],
-                    ..TestsConfig::default()
-                },
-                ..ProfileConfig::default()
-            },
-            ..ProfilesConfig::default()
+        tests: TestsConfig {
+            patterns: vec!["*.spec.*".to_owned(), String::new()],
+            ..TestsConfig::default()
         },
         ..AnalyzeConfig::default()
     };
 
     assert!(matches!(
         config.validate(),
-        Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.tests.patterns[1]"
+        Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "tests.patterns[1]"
     ));
+}
+
+#[test]
+fn should_reject_a_zero_tests_helper_cap_with_its_key_path() {
+    let config = AnalyzeConfig {
+        tests: TestsConfig {
+            helper_cap: 0,
+            ..TestsConfig::default()
+        },
+        ..AnalyzeConfig::default()
+    };
+
+    assert!(matches!(
+        config.validate(),
+        Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "tests.helper-cap"
+    ));
+}
+
+#[test]
+fn should_reject_a_bare_negation_in_tests_patterns_with_its_index() {
+    let config = AnalyzeConfig {
+        tests: TestsConfig {
+            patterns: vec!["!spec/fixtures/**".to_owned(), "!".to_owned()],
+            ..TestsConfig::default()
+        },
+        ..AnalyzeConfig::default()
+    };
+
+    assert!(matches!(
+        config.validate(),
+        Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "tests.patterns[1]"
+    ));
+}
+
+#[test]
+fn should_accept_a_negated_tests_pattern() {
+    let config = AnalyzeConfig {
+        tests: TestsConfig {
+            patterns: vec!["!spec/fixtures/**".to_owned()],
+            ..TestsConfig::default()
+        },
+        ..AnalyzeConfig::default()
+    };
+
+    assert!(config.validate().is_ok());
 }
 
 #[test]
 fn should_reject_an_invalid_tests_glob_with_its_index() {
     let config = AnalyzeConfig {
-        profiles: ProfilesConfig {
-            anchored: ProfileConfig {
-                tests: TestsConfig {
-                    patterns: vec!["[".to_owned()],
-                    ..TestsConfig::default()
-                },
-                ..ProfileConfig::default()
-            },
-            ..ProfilesConfig::default()
+        tests: TestsConfig {
+            patterns: vec!["[".to_owned()],
+            ..TestsConfig::default()
         },
         ..AnalyzeConfig::default()
     };
 
     assert!(matches!(
         config.validate(),
-        Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "profiles.anchored.tests.patterns[0]"
+        Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == "tests.patterns[0]"
     ));
 }
 

@@ -40,6 +40,6 @@ pub use crate::result::{
     MirrorMove, ModeResult, Modes, Move, MoveKind, MoveReason, ProfileAssessment, ProfileConflict,
     ProfileCurrent, ProfileResult, Profiles, QualificationThresholds, RESULT_SCHEMA_VERSION,
     RelocationAdvice, RelocationProposal, ReviewReason, ScoreBreakdown, Severity, Summary,
-    SymbolKind, SymbolMove, SymbolPlacement, Violation, ViolationKind,
+    SymbolKind, SymbolMove, SymbolPlacement, TestSettings, Violation, ViolationKind,
 };
 pub use crate::snapshot::snapshot_from_root;
