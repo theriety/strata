@@ -502,6 +502,12 @@ How a test-only finding is worded depends on whether code outside the repository
   - the package has no `exports` field, so deep imports work;
   - an entry cannot be mapped to a source file;
   - a re-export cannot be followed, for example an unresolved specifier, a computed `import()` or an unreadable file type such as `.vue`.
+- **Python.** An item is public unless any of these holds:
+  - its name starts with `_`;
+  - a module or package on its import path starts with `_` (`pkg/_internal/x.py`, `pkg/_helpers.py`), counting from the outermost folder with an `__init__.py`, so `src/` and folders above it don't count;
+  - its module's `__all__` leaves it out.
+
+  Dunder names such as `__version__` always stay public. A name that a public module imports, including with `from x import *` or as a module alias (`from . import _impl as impl`), is public together with the item it points to. A stub and its source count as one module. Imports inside `if`, `try` and `TYPE_CHECKING` blocks count; imports in test code don't. An `__all__` that unlace cannot read (`+=`, `.append()`, a comprehension, a change inside a function) excludes nothing. A package that sets up lazy loading, by defining or importing a module-level `__getattr__` or by replacing itself in `sys.modules`, keeps everything below it public. This includes the analysed folder itself when it is that package.
 - **Rust.** Public paths come from rust-analyzer for each library crate.
 
 Relocation patterns are repo-relative globs. `forbid-file-moves` pins matching files against independent folder moves while leaving them in dependency, scoring, capacity, cycle, and finding calculations. `forbid-symbol-moves` prevents a symbol move when either its analysis-start source file or proposed destination file matches. Detected tests and their symbols are pinned independently by default, but a test can still follow an accepted source move as a mirror.

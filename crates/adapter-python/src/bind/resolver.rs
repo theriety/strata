@@ -5,10 +5,12 @@ use std::collections::{HashMap, HashSet};
 use smol_str::SmolStr;
 use unlace_ir::NodeId;
 
-use super::{ExportTable, is_public};
-use crate::parse::{Import, ParsedModule};
+use super::{ExportTable, is_star_importable};
+use crate::parse::{DunderAllForm, Import, ParsedModule};
 
 /// Returns `true` if `path` is a package initializer (`__init__.py`).
+///
+/// Stubs take no part in dependency edges, so `__init__.pyi` is not one.
 pub(super) fn is_package_init(path: &str) -> bool {
     path.rsplit('/').next().unwrap_or(path) == "__init__.py"
 }
@@ -19,8 +21,17 @@ pub(super) struct Resolver {
     by_dotted: HashMap<SmolStr, SmolStr>,
     /// Source file path -> its dotted module name.
     dotted_of: HashMap<SmolStr, SmolStr>,
-    /// Source file path -> its `__all__` public surface, when declared.
-    surfaces: HashMap<SmolStr, HashSet<SmolStr>>,
+    /// Source file path -> the names its `__all__` lists, when it lists any.
+    surfaces: HashMap<SmolStr, Surface>,
+}
+
+/// The names a module lists in `__all__`.
+struct Surface {
+    /// The names read from the module's `__all__` assignments.
+    listed: HashSet<SmolStr>,
+    /// Whether they are the whole list; a partial or computed `__all__` closes
+    /// nothing.
+    closed: bool,
 }
 
 impl Resolver {
@@ -33,10 +44,14 @@ impl Resolver {
             let dotted = dotted_name(&module.path);
             by_dotted.insert(dotted.clone(), module.path.clone());
             dotted_of.insert(module.path.clone(), dotted);
-            if !module.dunder_all.is_empty() {
+            let closed = module.dunder_all_form == DunderAllForm::Literal;
+            if closed || !module.dunder_all.is_empty() {
                 surfaces.insert(
                     module.path.clone(),
-                    module.dunder_all.iter().cloned().collect(),
+                    Surface {
+                        listed: module.dunder_all.iter().cloned().collect(),
+                        closed,
+                    },
                 );
             }
         }
@@ -57,7 +72,9 @@ impl Resolver {
         } else {
             self.relative_dotted(importer, import)?
         };
-        if dotted.is_empty() {
+        // an empty relative name is the root package (the analysed folder holds
+        // an `__init__.py`); an empty absolute name names nothing.
+        if dotted.is_empty() && import.level == 0 {
             return None;
         }
         self.by_dotted.get(dotted.as_str()).cloned()
@@ -69,7 +86,10 @@ impl Resolver {
     /// ascends one package. The `module` suffix, when present, is appended.
     fn relative_dotted(&self, importer: &str, import: &Import) -> Option<String> {
         let importer_dotted = self.dotted_of.get(importer)?;
-        let mut segments: Vec<&str> = importer_dotted.split('.').collect();
+        let mut segments: Vec<&str> = importer_dotted
+            .split('.')
+            .filter(|segment| !segment.is_empty())
+            .collect();
         // A non-package module drops its own final segment to reach its package;
         // an `__init__.py` already names its package, so it keeps every segment.
         if !is_package_init(importer) {
@@ -85,9 +105,17 @@ impl Resolver {
         Some(segments.join("."))
     }
 
-    /// Returns the declared `__all__` surface of a module, if any.
-    pub(super) fn public_surface(&self, module: &SmolStr) -> Option<&HashSet<SmolStr>> {
-        self.surfaces.get(module)
+    /// Whether `from module import *` pulls `name` in.
+    ///
+    /// A closed `__all__` is the whole surface. An open one (built or changed in
+    /// a way the parser cannot read) adds its listed names to the non-underscore
+    /// names; with no `__all__` the surface is the non-underscore names.
+    pub(super) fn star_includes(&self, module: &SmolStr, name: &str) -> bool {
+        match self.surfaces.get(module) {
+            Some(surface) if surface.closed => surface.listed.contains(name),
+            Some(surface) => surface.listed.contains(name) || is_star_importable(name),
+            None => is_star_importable(name),
+        }
     }
 
     /// Resolves a dotted module name to its source file path, if known.
@@ -99,12 +127,18 @@ impl Resolver {
 /// Converts a source file path to its dotted Python module name.
 ///
 /// `pkg/sub/mod.py` becomes `pkg.sub.mod`; `pkg/sub/__init__.py` becomes
-/// `pkg.sub` (the package the initializer represents).
+/// `pkg.sub` (the package the initializer represents); a root `__init__.py` is
+/// the unnamed root package, `""`. A stub keeps its extension, so no import
+/// resolves to it.
 fn dotted_name(path: &str) -> SmolStr {
     let without_extension = path.strip_suffix(".py").unwrap_or(path);
-    let trimmed = without_extension
-        .strip_suffix("/__init__")
-        .unwrap_or(without_extension);
+    let trimmed = if path == "__init__.py" {
+        ""
+    } else {
+        without_extension
+            .strip_suffix("/__init__")
+            .unwrap_or(without_extension)
+    };
     SmolStr::new(trimmed.replace('/', "."))
 }
 
@@ -154,12 +188,8 @@ pub(super) fn resolve_star_imports(
         let Some(target_exports) = exports.get(&target_module) else {
             continue;
         };
-        let surface = resolver.public_surface(&target_module);
         for (name, &node) in target_exports {
-            let included = surface
-                .as_ref()
-                .map_or_else(|| is_public(name), |all| all.contains(name));
-            if included {
+            if resolver.star_includes(&target_module, name) {
                 targets.push(node);
             }
         }
@@ -171,12 +201,81 @@ pub(super) fn resolve_star_imports(
 mod tests {
     use smol_str::SmolStr;
 
-    use super::dotted_name;
+    use super::{Resolver, dotted_name, is_package_init};
+    use crate::parse::{DunderAllForm, Import, ParsedModule};
+
+    /// Builds an empty module summary at `path`.
+    fn module_at(path: &str) -> ParsedModule {
+        ParsedModule {
+            path: SmolStr::new(path),
+            declarations: Vec::new(),
+            imports: Vec::new(),
+            conditional_imports: Vec::new(),
+            lazy_loading: false,
+            dunder_all: Vec::new(),
+            dunder_all_form: DunderAllForm::Absent,
+        }
+    }
+
+    /// Builds an absolute `from <module> import x` statement.
+    fn absolute(module: &str) -> Import {
+        Import {
+            module: SmolStr::new(module),
+            level: 0,
+            names: vec![SmolStr::new("x")],
+            targets: vec![SmolStr::new("x")],
+            star: false,
+            aliases: Vec::new(),
+        }
+    }
+
+    /// Builds a relative `from <dots><module> import x` statement.
+    fn relative(level: u32, module: &str) -> Import {
+        Import {
+            level,
+            ..absolute(module)
+        }
+    }
 
     #[test]
     fn should_convert_a_module_path_to_a_dotted_name() {
         assert_eq!(dotted_name("pkg/sub/mod.py"), SmolStr::new("pkg.sub.mod"));
         assert_eq!(dotted_name("pkg/sub/__init__.py"), SmolStr::new("pkg.sub"));
         assert_eq!(dotted_name("mod.py"), SmolStr::new("mod"));
+    }
+
+    #[test]
+    fn should_name_a_root_package_initializer_after_the_unnamed_root() {
+        assert_eq!(dotted_name("__init__.py"), SmolStr::new(""));
+        assert_eq!(dotted_name("pkg/__init__.py"), SmolStr::new("pkg"));
+    }
+
+    #[test]
+    fn should_leave_stubs_out_of_the_dependency_edge_rules() {
+        // dependency edges treat a stub as an unrelated file, as they always
+        // did: it takes no part in dotted names and is no package initializer.
+        assert_eq!(dotted_name("pkg/mod.pyi"), SmolStr::new("pkg.mod.pyi"));
+        assert_eq!(dotted_name("__init__.pyi"), SmolStr::new("__init__.pyi"));
+        assert_eq!(
+            dotted_name("pkg/__init__.pyi"),
+            SmolStr::new("pkg.__init__.pyi")
+        );
+        assert!(!is_package_init("pkg/__init__.pyi"));
+        let resolver = Resolver::new(&[module_at("pkg/_native.pyi")]);
+        assert_eq!(resolver.resolve("app.py", &absolute("pkg._native")), None);
+    }
+
+    #[test]
+    fn should_resolve_a_relative_import_of_a_root_package_initializer() {
+        let resolver = Resolver::new(&[module_at("__init__.py"), module_at("_impl.py")]);
+
+        assert_eq!(
+            resolver.resolve("__init__.py", &relative(1, "_impl")),
+            Some(SmolStr::new("_impl.py"))
+        );
+        assert_eq!(
+            resolver.resolve("_impl.py", &relative(1, "")),
+            Some(SmolStr::new("__init__.py"))
+        );
     }
 }

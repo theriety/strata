@@ -13,8 +13,10 @@
 
 mod collector;
 mod declaration;
+mod dunder_all;
 mod expressions;
 mod imports;
+mod lazy_loading;
 mod statements;
 
 use rayon::prelude::*;
@@ -27,7 +29,9 @@ use unlace_ir::{AdapterError, SourceFile};
 use self::declaration::{
     async_function_declaration, class_declaration, constant_declarations, function_declaration,
 };
-use self::imports::{collect_dunder_all, from_import, plain_import};
+use self::dunder_all::scan as scan_dunder_all;
+use self::imports::{conditional_imports, from_import, plain_import};
+use self::lazy_loading::sets_up_lazy_loading;
 
 /// A dynamic-resolution construct that yields a confidence below `1.0`.
 ///
@@ -82,6 +86,9 @@ pub struct Import {
     pub targets: Vec<SmolStr>,
     /// `true` for `from module import *`.
     pub star: bool,
+    /// The bound names of a plain `import a.b as x` that name the whole module
+    /// `a.b`; `import a.b` binds the top package `a` and is not listed.
+    pub aliases: Vec<SmolStr>,
 }
 
 /// A serializable, language-agnostic summary of one parsed module.
@@ -96,9 +103,32 @@ pub struct ParsedModule {
     pub declarations: Vec<Declaration>,
     /// Module-level import statements.
     pub imports: Vec<Import>,
+    /// Imports nested in a module-level `if`, `try`, `with`, loop or `match`
+    /// block (the `TYPE_CHECKING` and accelerator-fallback idioms). They feed
+    /// public-API detection only, never the dependency edges.
+    pub conditional_imports: Vec<Import>,
+    /// Whether the module sets up lazy loading: it defines, assigns or imports
+    /// a module-level `__getattr__` (PEP 562), or replaces itself in
+    /// `sys.modules`, also inside a conditional block.
+    pub lazy_loading: bool,
     /// Names listed in a module-level `__all__` assignment (drives the public
     /// surface a star import re-exports).
     pub dunder_all: Vec<SmolStr>,
+    /// How the module states `__all__`: whether `dunder_all` is the whole list.
+    pub dunder_all_form: DunderAllForm,
+}
+
+/// How a module states its `__all__`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DunderAllForm {
+    /// The module never mentions `__all__`.
+    Absent,
+    /// Every statement that sets `__all__` assigns a list or tuple of string
+    /// literals, so `dunder_all` is the whole list.
+    Literal,
+    /// `__all__` is built or changed in a way the parser cannot read (`+=`, a
+    /// comprehension, a method call, a conditional block).
+    Dynamic,
 }
 
 /// Parses Python sources into [`ParsedModule`]s, one rayon task per file.
@@ -138,7 +168,6 @@ fn format_parse_error(error: &rustpython_parser::ParseError, source: &str) -> St
 fn extract(path: &SmolStr, suite: &[Stmt], source: &str) -> ParsedModule {
     let mut declarations = Vec::new();
     let mut imports = Vec::new();
-    let mut dunder_all = Vec::new();
 
     for statement in suite {
         match statement {
@@ -152,7 +181,6 @@ fn extract(path: &SmolStr, suite: &[Stmt], source: &str) -> ParsedModule {
             Stmt::Import(import) => imports.push(plain_import(&import.names)),
             Stmt::ImportFrom(from) => imports.push(from_import(from)),
             Stmt::Assign(assign) => {
-                collect_dunder_all(&assign.targets, &assign.value, &mut dunder_all);
                 declarations.extend(constant_declarations(
                     &assign.targets,
                     Some(&assign.value),
@@ -174,11 +202,15 @@ fn extract(path: &SmolStr, suite: &[Stmt], source: &str) -> ParsedModule {
         }
     }
 
+    let dunder_all = scan_dunder_all(suite, source);
     ParsedModule {
         path: path.clone(),
         declarations,
         imports,
-        dunder_all,
+        conditional_imports: conditional_imports(suite),
+        lazy_loading: sets_up_lazy_loading(suite),
+        dunder_all: dunder_all.names,
+        dunder_all_form: dunder_all.form,
     }
 }
 
@@ -297,6 +329,167 @@ mod tests {
             module.dunder_all,
             vec![SmolStr::new("a"), SmolStr::new("b")]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn should_record_no_dunder_all_form_for_a_module_without_one() -> Result<(), AdapterError> {
+        let module = parse_source("pkg/mod.py", "def alpha():\n    return 1\n")?;
+
+        assert_eq!(module.dunder_all_form, DunderAllForm::Absent);
+        Ok(())
+    }
+
+    #[test]
+    fn should_record_a_literal_dunder_all_for_a_list_or_a_tuple_of_strings()
+    -> Result<(), AdapterError> {
+        for source in [
+            "__all__ = [\"a\", \"b\"]\n",
+            "__all__ = (\"a\", \"b\")\n",
+            "__all__ = []\n",
+        ] {
+            let module = parse_source("pkg/mod.py", source)?;
+
+            assert_eq!(module.dunder_all_form, DunderAllForm::Literal, "{source}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn should_record_a_dynamic_dunder_all_for_every_form_the_parser_cannot_read()
+    -> Result<(), AdapterError> {
+        for source in [
+            "__all__ = [\"a\"]\n__all__ += [\"b\"]\n",
+            "__all__ = [name for name in dir()]\n",
+            "__all__ = [\"a\"] + other.__all__\n",
+            "__all__ = [\"a\", *other.__all__]\n",
+            "__all__ = [name]\n",
+            "__all__ = build()\n",
+            "__all__ = [\"a\"]\n__all__.extend([\"b\"])\n",
+            "__all__ = [\"a\"]\nif flag:\n    __all__.append(\"b\")\n",
+            "__all__ = [\"a\"]\ntry:\n    import fast\nexcept ImportError:\n    __all__ += [\"b\"]\n",
+            "__all__ = [\"a\"]\nwith guard:\n    __all__ += [\"b\"]\n",
+            "__all__ = [\"a\"]\nwhile pending:\n    __all__ += [\"b\"]\n",
+            "__all__ = [\"a\"]\nfor name in names:\n    __all__ += [name]\n",
+        ] {
+            let module = parse_source("pkg/mod.py", source)?;
+
+            assert_eq!(module.dunder_all_form, DunderAllForm::Dynamic, "{source}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn should_record_a_dynamic_dunder_all_when_a_nested_body_changes_it() -> Result<(), AdapterError>
+    {
+        for source in [
+            "__all__ = []\n\n\ndef export(fn):\n    __all__.append(fn.__name__)\n    return fn\n",
+            "__all__ = [\"a\"]\n__all__[:] = [\"b\"]\n",
+            "__all__ = [\"a\"]\nglobals()[\"__all__\"] = [\"b\"]\n",
+            "__all__ = [\"a\"]\n\n\nclass Registry:\n    __all__.append(\"b\")\n",
+            "__all__ = [\"a\"]\n\n\ndef rebuild():\n    global __all__\n    __all__ = [\"b\"]\n",
+            "__all__ = [\"a\"]\nsetattr(this, \"__all__\", [\"b\"])\n",
+            "__all__ = [\"a\"]\ndel __all__[0]\n",
+            "from other import __all__\n",
+        ] {
+            let module = parse_source("pkg/mod.py", source)?;
+
+            assert_eq!(module.dunder_all_form, DunderAllForm::Dynamic, "{source}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn should_keep_a_literal_dunder_all_when_only_prose_mentions_it() -> Result<(), AdapterError> {
+        let module = parse_source(
+            "pkg/mod.py",
+            "\"\"\"Names live in __all__.\"\"\"\n# __all__ is closed\n__all__ = [\"a\"]\n\n\ndef a():\n    \"\"\"Listed in __all__.\"\"\"\n",
+        )?;
+
+        assert_eq!(module.dunder_all_form, DunderAllForm::Literal);
+        Ok(())
+    }
+
+    #[test]
+    fn should_collect_imports_nested_in_module_level_blocks_apart_from_the_plain_ones()
+    -> Result<(), AdapterError> {
+        let module = parse_source(
+            "pkg/__init__.py",
+            "from .top import plain\n\ntry:\n    from ._speedups import fast\nexcept ImportError:\n    from ._pure import fast\n\nif TYPE_CHECKING:\n    from ._types import Alias\nelse:\n    from ._stub import Alias\n\nwith guard:\n    from ._with import w\n\nfor item in items:\n    from ._loop import l\n\nwhile pending:\n    from ._while import k\n\nmatch mode:\n    case 1:\n        from ._case import c\n\n\ndef lazy():\n    from ._inner import hidden\n",
+        )?;
+
+        let plain: Vec<&str> = module
+            .imports
+            .iter()
+            .map(|import| import.module.as_str())
+            .collect();
+        assert_eq!(plain, ["top"]);
+        let nested: Vec<&str> = module
+            .conditional_imports
+            .iter()
+            .map(|import| import.module.as_str())
+            .collect();
+        assert_eq!(
+            nested,
+            [
+                "_speedups",
+                "_pure",
+                "_types",
+                "_stub",
+                "_with",
+                "_loop",
+                "_while",
+                "_case"
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn should_record_lazy_loading_for_every_way_a_module_sets_it_up() -> Result<(), AdapterError> {
+        for source in [
+            "def __getattr__(name):\n    raise AttributeError(name)\n",
+            "from ._lazy import __getattr__\n",
+            "__getattr__, __dir__ = lazy.attach(__name__)\n",
+            "import sys\nsys.modules[__name__] = Lazy(__name__)\n",
+            "import sys\nsys.modules[__name__].__class__ = Lazy\n",
+            "from sys import modules\nmodules[__name__] = Lazy(__name__)\n",
+            "globals()[\"__getattr__\"] = hook\n",
+            "setattr(this, \"__getattr__\", hook)\n",
+            "try:\n    from ._lazy import __getattr__\nexcept ImportError:\n    import sys\n    sys.modules[__name__] = Lazy()\n",
+        ] {
+            let module = parse_source("pkg/__init__.py", source)?;
+
+            assert!(module.lazy_loading, "{source}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn should_not_record_lazy_loading_for_plain_module_code() -> Result<(), AdapterError> {
+        for source in [
+            "import sys\n\n\ndef main():\n    return sys.modules[\"other\"]\n",
+            "import sys\nlookup = sys.modules[\"pkg.other\"]\n",
+            "from ._impl import Widget\n",
+            "def __dir__():\n    return []\n",
+        ] {
+            let module = parse_source("pkg/__init__.py", source)?;
+
+            assert!(!module.lazy_loading, "{source}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn should_list_the_names_a_plain_import_binds_to_a_whole_module() -> Result<(), AdapterError> {
+        let module = parse_source("pkg/mod.py", "import a.b as a\nimport c.d\nimport e as f\n")?;
+
+        let listed: Vec<Vec<&str>> = module
+            .imports
+            .iter()
+            .map(|import| import.aliases.iter().map(SmolStr::as_str).collect())
+            .collect();
+        assert_eq!(listed, [vec!["a"], vec![], vec!["f"]]);
         Ok(())
     }
 

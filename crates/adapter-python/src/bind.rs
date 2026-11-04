@@ -19,6 +19,7 @@ mod dynamic;
 mod edges;
 mod module_objects;
 mod polarity;
+mod public_api;
 mod reexport;
 mod resolver;
 
@@ -34,6 +35,7 @@ use self::containers::ContainerBuilder;
 use self::edges::emit_edges;
 use self::module_objects::exempt_module_objects;
 use self::polarity::{apply_polarity, classify_polarity, mark_test_source};
+use self::public_api::mark_public_api;
 use self::reexport::{assign_re_export_nodes, emit_re_exports};
 use self::resolver::Resolver;
 use crate::parse::ParsedModule;
@@ -87,7 +89,7 @@ pub(super) fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
             });
             // Python has no `export` keyword: a module-level definition not
             // prefixed with `_` is part of the importable surface.
-            exported.push(is_public(&declaration.name));
+            exported.push(is_star_importable(&declaration.name));
             module_local.insert(declaration.name.clone(), id);
             module_exports.insert(declaration.name.clone(), id);
         }
@@ -112,11 +114,7 @@ pub(super) fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
     exempt_module_objects(modules, &resolver, &local, &mut nodes);
     let polarity = classify_polarity(modules, &nodes, &local, &exported, &edges);
     apply_polarity(&mut nodes, &polarity);
-    // a public module-level name (no leading `_`) or a re-export is importable from outside the analysed tree, so it is public API
-    // whatever the in-tree users are (exact entry-point detection is deferred).
-    for (node, &importable) in nodes.iter_mut().zip(&exported) {
-        node.public_api = importable;
-    }
+    mark_public_api(&mut nodes, modules, &local);
 
     IrFragment {
         nodes,
@@ -152,8 +150,10 @@ fn push_edge(
     });
 }
 
-/// Returns `true` if a name is part of the importable surface (no `_` prefix).
-fn is_public(name: &str) -> bool {
+/// Returns `true` if `from module import *` pulls the name in when the module
+/// states no closed `__all__`: Python skips every name that starts with `_`,
+/// dunders included.
+fn is_star_importable(name: &str) -> bool {
     !name.starts_with('_')
 }
 
@@ -162,7 +162,7 @@ mod tests {
     use unlace_ir::{Edge, EdgeKind, Hardness};
 
     use super::*;
-    use crate::parse::{Declaration, DynamicRef, Import};
+    use crate::parse::{Declaration, DunderAllForm, DynamicRef, Import};
 
     /// Builds an empty module summary at `path`.
     fn module_at(path: &str) -> ParsedModule {
@@ -170,7 +170,10 @@ mod tests {
             path: SmolStr::new(path),
             declarations: Vec::new(),
             imports: Vec::new(),
+            conditional_imports: Vec::new(),
+            lazy_loading: false,
             dunder_all: Vec::new(),
+            dunder_all_form: DunderAllForm::Absent,
         }
     }
 
@@ -226,6 +229,7 @@ mod tests {
             names: vec![SmolStr::new("run_target")],
             targets: vec![SmolStr::new("run_target")],
             star: false,
+            aliases: Vec::new(),
         });
         consumer.declarations.push(caller("run", &["run_target"]));
         let mut provider = module_at("pkg/target.py");
@@ -303,6 +307,7 @@ mod tests {
             names: vec![SmolStr::new("_ledger")],
             targets: vec![SmolStr::new("_ledger")],
             star: false,
+            aliases: Vec::new(),
         });
         consumer.declarations.push(reader("refund", &["_ledger"]));
 
@@ -331,6 +336,7 @@ mod tests {
             names: vec![SmolStr::new("build")],
             targets: vec![SmolStr::new("build")],
             star: false,
+            aliases: Vec::new(),
         });
         let mut cache = leaf("_cache");
         cache.called = vec![SmolStr::new("build")];
@@ -357,6 +363,7 @@ mod tests {
             names: vec![SmolStr::new("helper")],
             targets: vec![SmolStr::new("helper")],
             star: false,
+            aliases: Vec::new(),
         });
         consumer.declarations.push(caller("run", &["helper"]));
         let mut provider = module_at("pkg/util.py");
@@ -372,6 +379,218 @@ mod tests {
         assert_eq!(calls.len(), 1, "the relative `..util` import resolves");
     }
 
+    /// Builds `from <dots><module> import <names>`.
+    fn from_import(level: u32, module: &str, names: &[&str]) -> Import {
+        Import {
+            module: SmolStr::new(module),
+            level,
+            names: names.iter().copied().map(SmolStr::new).collect(),
+            targets: names.iter().copied().map(SmolStr::new).collect(),
+            star: false,
+            aliases: Vec::new(),
+        }
+    }
+
+    /// Builds `from <dots><module> import *`.
+    fn star_import(level: u32, module: &str) -> Import {
+        Import {
+            star: true,
+            ..from_import(level, module, &[])
+        }
+    }
+
+    #[test]
+    fn should_bind_a_chain_of_package_barrels_whatever_their_file_order() {
+        // the outer barrel comes first, yet it binds from the inner one: both
+        // are true edges, and `main` reaches the class through the outer barrel.
+        let mut outer = module_at("pkg/__init__.py");
+        outer.imports.push(from_import(1, "sub", &["Widget"]));
+        let mut inner = module_at("pkg/sub/__init__.py");
+        inner.imports.push(from_import(1, "_w", &["Widget"]));
+        let mut origin = module_at("pkg/sub/_w.py");
+        let mut widget = leaf("Widget");
+        widget.is_class = true;
+        origin.declarations.push(widget);
+        let mut app = module_at("app.py");
+        app.imports.push(from_import(0, "pkg", &["Widget"]));
+        app.declarations.push(caller("main", &["Widget"]));
+
+        let fragment = bind(&[outer, inner, origin, app], Path::new("repo"));
+
+        let barrels = fragment.nodes.iter().filter(|node| node.re_export).count();
+        assert_eq!(barrels, 2, "one binding per barrel");
+        let re_exports = fragment
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::ReExport)
+            .count();
+        assert_eq!(re_exports, 2, "outer to inner, inner to the class");
+        let calls: Vec<&Edge> = fragment
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Call)
+            .collect();
+        assert_eq!(calls.len(), 1);
+        let target_is_barrel = calls.first().is_some_and(|edge| {
+            fragment
+                .nodes
+                .iter()
+                .any(|node| node.id == edge.target && node.re_export)
+        });
+        assert!(target_is_barrel, "main calls through the outer barrel");
+    }
+
+    #[test]
+    fn should_pull_nothing_through_a_star_import_of_an_empty_all() {
+        let mut barrel = module_at("pkg/__init__.py");
+        barrel.imports.push(star_import(1, "mod"));
+        let mut provider = module_at("pkg/mod.py");
+        provider.dunder_all_form = DunderAllForm::Literal;
+        provider.declarations.push(leaf("helper"));
+        let mut app = module_at("pkg/app.py");
+        app.imports.push(star_import(1, "mod"));
+        app.declarations.push(caller("run", &["helper"]));
+
+        let fragment = bind(&[barrel, provider, app], Path::new("repo"));
+
+        assert!(fragment.edges.is_empty(), "{:?}", fragment.edges);
+        assert!(fragment.nodes.iter().all(|node| !node.re_export));
+    }
+
+    #[test]
+    fn should_pull_the_listed_names_and_every_public_name_through_a_star_import_of_an_open_all() {
+        let mut provider = module_at("pkg/mod.py");
+        provider.dunder_all = vec![SmolStr::new("a"), SmolStr::new("_x")];
+        provider.dunder_all_form = DunderAllForm::Dynamic;
+        for name in ["a", "b", "_x", "_y"] {
+            provider.declarations.push(leaf(name));
+        }
+        let mut app = module_at("pkg/app.py");
+        app.imports.push(star_import(1, "mod"));
+        app.declarations
+            .push(caller("run", &["a", "b", "_x", "_y"]));
+
+        let fragment = bind(&[provider, app], Path::new("repo"));
+
+        let pulled = fragment
+            .edges
+            .iter()
+            .filter(|edge| edge.confidence.to_bits() == CONFIDENCE_DYNAMIC.to_bits())
+            .count();
+        assert_eq!(pulled, 3, "`a`, `b` and the listed `_x`, not `_y`");
+    }
+
+    #[test]
+    fn should_not_bind_an_import_into_a_stub_only_module() {
+        let mut consumer = module_at("pkg/app.py");
+        consumer.imports.push(Import {
+            module: SmolStr::new("pkg._native"),
+            level: 0,
+            names: vec![SmolStr::new("fast")],
+            targets: vec![SmolStr::new("fast")],
+            star: false,
+            aliases: Vec::new(),
+        });
+        consumer.declarations.push(caller("run", &["fast"]));
+        let mut stub = module_at("pkg/_native.pyi");
+        stub.declarations.push(leaf("fast"));
+
+        let fragment = bind(&[consumer, stub], Path::new("repo"));
+
+        assert!(
+            fragment.edges.is_empty(),
+            "a stub takes no dependency edge: {:?}",
+            fragment.edges
+        );
+    }
+
+    #[test]
+    fn should_not_bind_a_relative_import_out_of_a_stub() {
+        let mut stub = module_at("pkg/_native.pyi");
+        stub.imports.push(Import {
+            module: SmolStr::new("api"),
+            level: 1,
+            names: vec![SmolStr::new("Opts")],
+            targets: vec![SmolStr::new("Opts")],
+            star: false,
+            aliases: Vec::new(),
+        });
+        stub.declarations.push(reader("fast", &["Opts"]));
+        let mut api = module_at("pkg/api.py");
+        let mut opts = leaf("Opts");
+        opts.is_class = true;
+        api.declarations.push(opts);
+
+        let fragment = bind(&[stub, api], Path::new("repo"));
+
+        assert!(
+            fragment.edges.is_empty(),
+            "a stub takes no dependency edge: {:?}",
+            fragment.edges
+        );
+    }
+
+    #[test]
+    fn should_bind_exactly_the_re_export_edge_of_a_root_package() {
+        let mut barrel = module_at("__init__.py");
+        barrel.imports.push(Import {
+            module: SmolStr::new("_impl"),
+            level: 1,
+            names: vec![SmolStr::new("Widget")],
+            targets: vec![SmolStr::new("Widget")],
+            star: false,
+            aliases: Vec::new(),
+        });
+        let mut util = module_at("util.py");
+        util.imports.push(Import {
+            module: SmolStr::new("os"),
+            level: 0,
+            names: vec![SmolStr::new("path")],
+            targets: vec![SmolStr::new("path")],
+            star: false,
+            aliases: Vec::new(),
+        });
+        util.declarations.push(caller("join", &["path"]));
+        let mut implementation = module_at("_impl.py");
+        let mut widget = leaf("Widget");
+        widget.is_class = true;
+        implementation.declarations.push(widget);
+
+        let fragment = bind(&[barrel, util, implementation], Path::new("repo"));
+
+        let kinds: Vec<EdgeKind> = fragment.edges.iter().map(|edge| edge.kind).collect();
+        assert_eq!(
+            kinds,
+            [EdgeKind::ReExport],
+            "only the barrel re-export binds; `os` resolves to nothing: {:?}",
+            fragment.edges
+        );
+    }
+
+    #[test]
+    fn should_not_emit_a_dependency_edge_for_a_conditional_import() {
+        let mut barrel = module_at("pkg/__init__.py");
+        barrel.conditional_imports.push(Import {
+            module: SmolStr::new("widget"),
+            level: 1,
+            names: vec![SmolStr::new("Widget")],
+            targets: vec![SmolStr::new("Widget")],
+            star: false,
+            aliases: Vec::new(),
+        });
+        barrel.declarations.push(caller("run", &["Widget"]));
+        let mut provider = module_at("pkg/widget.py");
+        provider.declarations.push(leaf("Widget"));
+
+        let fragment = bind(&[barrel, provider], Path::new("repo"));
+
+        assert!(
+            fragment.edges.is_empty(),
+            "a conditional import marks public API only: {:?}",
+            fragment.edges
+        );
+    }
+
     #[test]
     fn should_emit_a_soft_re_export_edge_from_a_package_init() {
         let mut barrel = module_at("pkg/__init__.py");
@@ -381,6 +600,7 @@ mod tests {
             names: vec![SmolStr::new("Widget")],
             targets: vec![SmolStr::new("Widget")],
             star: false,
+            aliases: Vec::new(),
         });
         let mut provider = module_at("pkg/widget.py");
         let mut widget = leaf("Widget");
@@ -419,10 +639,12 @@ mod tests {
             names: Vec::new(),
             targets: Vec::new(),
             star: true,
+            aliases: Vec::new(),
         });
         consumer.declarations.push(leaf("run"));
         let mut provider = module_at("pkg/api.py");
         provider.dunder_all = vec![SmolStr::new("public")];
+        provider.dunder_all_form = DunderAllForm::Literal;
         provider.declarations.push(leaf("public"));
         provider.declarations.push(leaf("hidden"));
 
@@ -438,6 +660,35 @@ mod tests {
     }
 
     #[test]
+    fn should_pull_every_public_name_through_a_star_import_when_all_is_dynamic() {
+        let mut consumer = module_at("pkg/app.py");
+        consumer.imports.push(Import {
+            module: SmolStr::new("pkg.api"),
+            level: 0,
+            names: Vec::new(),
+            targets: Vec::new(),
+            star: true,
+            aliases: Vec::new(),
+        });
+        consumer.declarations.push(leaf("run"));
+        let mut provider = module_at("pkg/api.py");
+        provider.dunder_all = vec![SmolStr::new("public")];
+        provider.dunder_all_form = DunderAllForm::Dynamic;
+        provider.declarations.push(leaf("public"));
+        provider.declarations.push(leaf("grown"));
+        provider.declarations.push(leaf("_private"));
+
+        let fragment = bind(&[consumer, provider], Path::new("repo"));
+
+        let dynamic = fragment
+            .edges
+            .iter()
+            .filter(|edge| edge.confidence.to_bits() == CONFIDENCE_DYNAMIC.to_bits())
+            .count();
+        assert_eq!(dynamic, 2, "a partial __all__ closes nothing");
+    }
+
+    #[test]
     fn should_emit_a_low_confidence_edge_for_getattr_on_an_import() {
         let mut consumer = module_at("pkg/app.py");
         consumer.imports.push(Import {
@@ -446,6 +697,7 @@ mod tests {
             names: vec![SmolStr::new("plugins")],
             targets: vec![SmolStr::new("registry")],
             star: false,
+            aliases: Vec::new(),
         });
         let mut runner = leaf("run");
         runner.dynamic = vec![DynamicRef::GetAttr(SmolStr::new("plugins"))];
@@ -471,6 +723,7 @@ mod tests {
         consumer.declarations.push(loader);
         let mut provider = module_at("pkg/plugin.py");
         provider.dunder_all = vec![SmolStr::new("entry")];
+        provider.dunder_all_form = DunderAllForm::Literal;
         provider.declarations.push(leaf("entry"));
         provider.declarations.push(leaf("hidden"));
 
