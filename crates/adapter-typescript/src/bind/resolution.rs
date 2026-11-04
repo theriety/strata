@@ -81,6 +81,14 @@ impl Resolver {
         self.with_extensions(&joined)
     }
 
+    /// Whether `specifier` starts with a configured `tsconfig` `paths` alias, so
+    /// it names something in the tree even when it does not resolve to a module.
+    pub(super) fn names_an_alias(&self, specifier: &str) -> bool {
+        self.aliases
+            .keys()
+            .any(|alias| specifier.starts_with(alias.as_str()))
+    }
+
     /// Resolves a specifier through the `tsconfig` `paths` aliases.
     fn resolve_alias(&self, specifier: &str) -> Option<SmolStr> {
         for (alias, target) in &self.aliases {

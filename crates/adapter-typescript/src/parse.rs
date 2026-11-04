@@ -66,6 +66,31 @@ pub struct StaticImport {
     /// members are reached by property access.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub namespace: bool,
+    /// What each local name stands for in the imported module, for the public
+    /// API pass that follows an imported name through an `export { name }`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<ImportBinding>,
+}
+
+/// One local name an import binds, with the export of the source module it
+/// stands for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportBinding {
+    /// The name bound in the importing module.
+    pub local: SmolStr,
+    /// The export of the source module the name stands for.
+    pub imported: ImportedName,
+}
+
+/// The export of a module that an import specifier picks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImportedName {
+    /// A named export (`import { imported as local }`).
+    Named(SmolStr),
+    /// The default export (`import local from`).
+    Default,
+    /// The whole module object (`import * as local from`).
+    Namespace,
 }
 
 /// A re-export (`export { x } from '...'`) emitted verbatim for the engine.
@@ -153,6 +178,42 @@ pub struct ParsedModule {
     pub imports: Vec<StaticImport>,
     /// `export ... from '...'` re-exports, emitted as-is.
     pub re_exports: Vec<ReExport>,
+    /// Local names the module publishes through a clause of their own:
+    /// `export { name as alias }`, `export default ...` and `export = ...`. Only
+    /// the public API pass reads them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub export_clauses: Vec<ExportClause>,
+    /// Modules an export hands out wholesale: `export import x = require('./a')`
+    /// and a `require()` or `import()` inside `export default` or `export =`.
+    /// Only the public API pass reads them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub export_loads: Vec<ExportLoad>,
+}
+
+/// A module an export loads and hands out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportLoad {
+    /// The name importers see: the alias of `export import alias = ...`,
+    /// `default` for a default export, `=` for `export =`.
+    pub exported: SmolStr,
+    /// The literal specifier of the loaded module; `None` when the target is
+    /// computed or is not a module, so the export cannot be followed.
+    pub source: Option<SmolStr>,
+}
+
+/// One local name a module publishes under an export name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportClause {
+    /// The name bound in the module.
+    pub local: SmolStr,
+    /// The name importers see: the alias of `export { local as alias }`,
+    /// `default` for a default export, `=` for `export =`.
+    pub exported: SmolStr,
+    /// `true` when the clause comes from an expression that only mentions the
+    /// name (`export default { local }`), which may be a global or a parameter
+    /// rather than a binding of the module.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mentioned: bool,
 }
 
 /// Parses TypeScript / TSX sources into [`ParsedModule`]s, one rayon task per file.

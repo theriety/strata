@@ -496,6 +496,14 @@ builtins = true
 
 With `builtins = false` only `patterns` decide: no adapter-stated signal counts, pairing and polarity included, so spec files and Rust `#[cfg(test)]` code are production code unless a pattern marks them. A production item that only tests use is still reported either way.
 
+How a test-only finding is worded depends on whether code outside the repository can import the item. A public API item reads "Only tests in this repo use `X`. It is public, so code outside this repo may use it too; check before moving or deleting it." Any other item reads "`X` is used only by tests; move it under test-only code or delete it." Each language decides public API from what it really exposes. When unlace cannot be sure, the item stays public.
+
+- **TypeScript and JavaScript.** If a package's `package.json` has an `exports` field, only what its entries reach is public. Each entry is mapped back to a source file: a build-output path such as `./dist/index.js` is mapped through the package's `tsconfig.json` `outDir` and `rootDir`. Re-exports are then followed from each entry file: `export * from`, `export { x } from`, re-exported imports, `export default`, `export =` and `export import x = require()`. Every export of the package stays public in each of these cases:
+  - the package has no `exports` field, so deep imports work;
+  - an entry cannot be mapped to a source file;
+  - a re-export cannot be followed, for example an unresolved specifier, a computed `import()` or an unreadable file type such as `.vue`.
+- **Rust.** Public paths come from rust-analyzer for each library crate.
+
 Relocation patterns are repo-relative globs. `forbid-file-moves` pins matching files against independent folder moves while leaving them in dependency, scoring, capacity, cycle, and finding calculations. `forbid-symbol-moves` prevents a symbol move when either its analysis-start source file or proposed destination file matches. Detected tests and their symbols are pinned independently by default, but a test can still follow an accepted source move as a mirror.
 
 By default no relocation crosses a package: a file move, symbol move, test-mirror follower, or new group folder must stay inside the manifest package (the detected `Package` container) its files started in. Set `allow-cross-package-moves = true` in a profile's relocation policy, or pass `--allow-cross-package-moves` to `analyze` for every profile at once, to lift that wall for deliberate monorepo refactors. Every other admission rule still applies, and cross-crate Rust trait-impl moves are then not checked against the orphan rule.

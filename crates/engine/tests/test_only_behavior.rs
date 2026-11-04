@@ -257,6 +257,68 @@ fn should_flag_a_typescript_export_used_only_by_a_spec_with_the_public_wording()
     Ok(())
 }
 
+/// The first line of `lines` that names `item` in backticks, or an empty string.
+fn line_naming(lines: &[String], item: &str) -> String {
+    lines
+        .iter()
+        .find(|line| line.contains(&format!("`{item}`")))
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[test]
+fn should_flag_a_typescript_export_outside_the_exports_map_with_the_plain_wording()
+-> Result<(), String> {
+    // only `shown` is importable from outside; `hidden` is exported from its
+    // file, but the package's `exports` map never reaches it.
+    let found = advice(&[
+        (
+            "package.json",
+            "{\"name\":\"pkg\",\"exports\":{\".\":\"./src/index.ts\"}}",
+        ),
+        (
+            "src/index.ts",
+            "export function shown(): number {\n  return 1;\n}\n",
+        ),
+        (
+            "src/hidden.ts",
+            "export function hidden(): number {\n  return 2;\n}\n",
+        ),
+        (
+            "src/all.spec.ts",
+            "import { shown } from \"./index\";\nimport { hidden } from \"./hidden\";\nexport const value: number = shown() + hidden();\n",
+        ),
+    ])?;
+    let shown = line_naming(&found.test_only, "shown");
+    let hidden = line_naming(&found.test_only, "hidden");
+    assert!(shown.contains(PUBLIC_WORDING), "{shown}");
+    assert!(
+        hidden.contains("move it under test-only code or delete it"),
+        "{hidden}"
+    );
+    assert!(!hidden.contains(PUBLIC_WORDING), "{hidden}");
+    Ok(())
+}
+
+#[test]
+fn should_keep_the_public_wording_for_every_typescript_export_without_an_exports_map()
+-> Result<(), String> {
+    let found = advice(&[
+        ("package.json", "{\"name\":\"pkg\"}"),
+        (
+            "src/hidden.ts",
+            "export function hidden(): number {\n  return 2;\n}\n",
+        ),
+        (
+            "src/all.spec.ts",
+            "import { hidden } from \"./hidden\";\nexport const value: number = hidden();\n",
+        ),
+    ])?;
+    let hidden = line_naming(&found.test_only, "hidden");
+    assert!(hidden.contains(PUBLIC_WORDING), "{hidden}");
+    Ok(())
+}
+
 const PY_UTIL: &str =
     "def helper() -> int:\n    return 1\n\n\ndef _internal() -> int:\n    return 2\n";
 const PY_TEST: &str = "from pkg.util import _internal, helper\n\n\ndef test_it() -> None:\n    assert helper() + _internal() == 3\n";
