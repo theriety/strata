@@ -1,14 +1,14 @@
 Unlace report — dup-ws-ts
-9 files · 9 symbols · 11 edges
-Snapshot `a3b98c858b287276b9296a39a60538966bf9a3971cbbf53f4455b920a8d38da9`
+11 files · 11 symbols · 11 edges
+Snapshot `08769e57555ec5b5f27c885492e423d60ce2d316c4ce8cfb9bb35ca3b591f120`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 Structural findings
 Shared findings (2)
   - capacity [violation] in `dup-ws-ts/atlas`: 2 domains holding files; the package cap is 1
     (`capacity.package`).
-  - capacity [violation] in `dup-ws-ts/beacon/src/widget`: 2 folders holding files; the domain cap
-    is 1 (`capacity.domain`).
+  - capacity [violation] in `dup-ws-ts/beacon/src/widget`: 3 sub-folders directly inside; the
+    domain cap is 2 (`capacity.domain`).
 
 anchored profile-specific findings (0)
   None.
@@ -22,18 +22,18 @@ candidate is a proposed layout; inclusion does not make a move Recommended. Part
 rescored.
 
 anchored — 0 candidate(s)
-Baseline score: 8.1769
+Baseline score: 6.2103
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 No candidates were produced.
 
 greenfield — 1 candidate(s)
-Baseline score: 8.3769
+Baseline score: 6.4103
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 
 greenfield — candidate 1
-  Score: 8.3769 → 4.1954; improvement +4.1816
+  Score: 6.4103 → 4.2180; improvement +2.1923
   Capacity remaining: 1 (0 at file level).
   Proposed moves
     - Move file `dup-ws-ts/atlas/src/agent/loop.ts` → `dup-ws-ts/atlas/src/core/loop.ts`

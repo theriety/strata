@@ -1,12 +1,12 @@
 Unlace report — dup-pkg-ts
-9 files · 9 symbols · 11 edges
-Snapshot `4127375dddc56d4d6d22ca289e7a858aee85fa551c87d57bc2acc29e6811b9de`
+11 files · 11 symbols · 11 edges
+Snapshot `53567d8884bf39711e1ac08a615576771323d3d1f5d90b01392bb9050882a0f8`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 Structural findings
 Shared findings (2)
-  - capacity [violation] in `beacon/src/widget`: 2 folders holding files; the domain cap is 1
-    (`capacity.domain`).
+  - capacity [violation] in `beacon/src/widget`: 3 sub-folders directly inside; the domain cap is
+    2 (`capacity.domain`).
   - capacity [violation] in `dup-pkg-ts`: 2 domains holding files; the package cap is 1
     (`capacity.package`).
 
@@ -22,18 +22,18 @@ candidate is a proposed layout; inclusion does not make a move Recommended. Part
 rescored.
 
 anchored — 0 candidate(s)
-Baseline score: 8.1769
+Baseline score: 6.2103
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 No candidates were produced.
 
 greenfield — 1 candidate(s)
-Baseline score: 8.3769
+Baseline score: 6.4103
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 
 greenfield — candidate 1
-  Score: 8.3769 → 4.1954; improvement +4.1816
+  Score: 6.4103 → 4.2180; improvement +2.1923
   Capacity remaining: 1 (0 at file level).
   Proposed moves
     - Move file `dup-pkg-ts/src/agent/loop.ts` → `dup-pkg-ts/src/core/loop.ts`

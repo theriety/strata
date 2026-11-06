@@ -154,6 +154,7 @@ impl<'a> Pricing<'a> {
             scoring,
             &assembled.tree,
             &assembled.namespace_by_file,
+            &assembled.key_by_id,
             &assembled.pass_start_file_by_candidate,
             &capacity,
         );

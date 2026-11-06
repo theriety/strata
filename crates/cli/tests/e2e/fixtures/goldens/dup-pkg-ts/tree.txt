@@ -1,11 +1,17 @@
 dup-pkg-ts [packageGroup]
   beacon [package]
     widget [domain]
+      dials [folder]
+        beacon/src/widget/dials/dial.ts [file] 1 sloc
+          - dial (file)
       widget [folder]
         beacon/src/widget/frame.ts [file] 3 sloc
           - frame (file)
         beacon/src/widget/panel.ts [file] 3 sloc
           - panel (file)
+      gears [folder]
+        beacon/src/widget/gears/gear.ts [file] 1 sloc
+          - gear (file)
       parts [folder]
         beacon/src/widget/parts/knob.ts [file] 1 sloc
           - knob (file)

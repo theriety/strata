@@ -1,3 +1,3 @@
 capacity [violation] dup-ws-ts/atlas :: in `dup-ws-ts/atlas`: 2 domains holding files; the package cap is 1 (`capacity.package`).
-capacity [violation] dup-ws-ts/beacon/src/widget :: in `dup-ws-ts/beacon/src/widget`: 2 folders holding files; the domain cap is 1 (`capacity.domain`).
+capacity [violation] dup-ws-ts/beacon/src/widget :: in `dup-ws-ts/beacon/src/widget`: 3 sub-folders directly inside; the domain cap is 2 (`capacity.domain`).
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.

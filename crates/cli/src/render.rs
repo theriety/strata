@@ -723,7 +723,7 @@ mod tests {
 
         assert!(file.contains("- capacity [violation] in `spec/debug/doctor.ts`: 288 production lines; the file cap is 250 (`capacity.file`)."), "{file}");
         assert!(folder.contains("in `src/batch/adapters`: 25 entries (files and subfolders); the folder cap is 20 (`capacity.folder`)."), "{folder}");
-        assert!(domain.contains("[borderline] in `src/generators` + `spec/generators`: 21 folders holding files; the domain cap is 20 (`capacity.domain`). src/ and spec/ count together."), "{domain}");
+        assert!(domain.contains("[borderline] in `src/generators` + `spec/generators`: 21 sub-folders directly inside; the domain cap is 20 (`capacity.domain`). src/ and spec/ count together."), "{domain}");
         for text in [&file, &folder, &domain] {
             assert!(!text.contains("container ancestry"), "{text}");
             assert!(!text.contains("stale preformatted"), "{text}");

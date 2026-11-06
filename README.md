@@ -93,7 +93,7 @@ unlace turns the whole graph into a plan:
 | Feature                       | What it gives you                                                                                       |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------- |
 | **Cycle breaking**            | Every dependency cycle, with the cheapest edge to cut; exact ILP for small cycles, a heuristic beyond   |
-| **Capacity checks**           | Files over a production-line cap (600 by default) and over-full folders, domains and packages            |
+| **Capacity checks**           | Files over a production-line cap (600 by default) and over-full folders, domains and packages           |
 | **Visibility and polarity**   | Over-wide visibility, production code that depends on tests, and production items only tests use        |
 | **Candidate layouts**         | Scored before and after trees of the affected branches, with every proposed file and symbol move        |
 | **Relocation advice**         | Recommended moves separated from review candidates, with the evidence and review reasons for each       |
@@ -372,7 +372,7 @@ seed = 42
 [profiles.anchored.capacity]
 file = 600
 folder = 20
-domain = 16
+domain = 16 # direct sub-folders of a domain that hold files, not deeper folders
 package = 15
 package-group = 12
 
@@ -545,6 +545,8 @@ Saved analysis JSON uses result schema version 11, and readers reject version 10
   - a capacity violation lists one whole real path, its first `realPaths` entry. For a domain that merges several real folders, this is the lexicographically first. The repository root is `.`.
 
 Every path in the moves, symbol moves, move reasons and advice resolves on disk as written, relative to the analyzed root, with `.` for the repository root. This covers `path`, `from`, `to`, `fromPath`, `toPath`, `sourcePath`, `container`, `subject`, `partner` and the advice `destination` fields. A destination path names the folder or file the plan would create. The package-group label is a name, not a directory, so it is never added to a path. A real directory that happens to share the root's name is kept like any other segment, whether it is the Python flat layout (`proj/proj/`) or a manifest package (`tokio/tokio`).
+
+From 2026-11-05 the `measured` value of a `capacity.domain` finding (unit `folders`) counts the domain's direct sub-folders that hold files, not every file-holding folder beneath it; a same-named `src/` and `spec/` sub-folder counts once. The schema version is unchanged.
 
 Earlier versions: version 10 added the `testOnly` violation kind (a production item whose every user is test code), and version 9 added each profile's `allow-cross-package-moves` relocation parameter.
 

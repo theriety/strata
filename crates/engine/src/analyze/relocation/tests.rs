@@ -148,3 +148,116 @@ fn should_keep_the_plain_clustering_of_the_tree_when_the_package_wall_is_lifted(
     .collect();
     assert_eq!(lifted, expected);
 }
+
+/// The findings, the objective's price and the capacity remainder of one real
+/// assembled candidate read one measure: the priced capacity term is the
+/// findings' overage, and the remainder counts exactly the hard findings. Only
+/// the domain cap is set: the package cap is counted differently by findings
+/// (rendered domains) and pricing (every domain container), a divergence this
+/// change leaves alone.
+#[test]
+fn should_agree_between_findings_pricing_and_remainder_on_an_assembled_candidate() {
+    use unlace_ir::{Node, Polarity};
+
+    use crate::analyze::findings::{RealRoots, walk_all_capacity};
+    use crate::analyze::relocation::mirror::PolishEvidence;
+    use crate::analyze::rendering::render_tree;
+    use crate::config::CapacityConfig;
+    use crate::result::Severity;
+
+    let folders = ["a/x", "a/y", "a/z", "a/w", "b/p"];
+    let mut containers = vec![container(0, "app", ScopeLevel::PackageGroup, None)];
+    let mut nodes = Vec::new();
+    for (index, folder) in folders.iter().enumerate() {
+        let folder_id = u32::try_from(index).unwrap_or(0) * 2 + 1;
+        containers.push(container(folder_id, folder, ScopeLevel::Folder, Some(0)));
+        containers.push(container(
+            folder_id + 1,
+            &format!("{folder}/f.ts"),
+            ScopeLevel::File,
+            Some(folder_id),
+        ));
+        nodes.push(node(
+            u32::try_from(index).unwrap_or(0),
+            &format!("item{index}"),
+            folder_id + 1,
+            Polarity::Production,
+        ));
+    }
+    let snap = snapshot(nodes, Vec::new(), containers);
+    let mut config = AnalyzeConfig::default();
+    config.profiles.greenfield.capacity = CapacityConfig {
+        file: 1000,
+        folder: 1000,
+        domain: 0,
+        package: 1000,
+        package_group: 1000,
+    };
+    let profile = &config.profiles.greenfield;
+    let tests = TestPolicy::defaults();
+    let solver = PipelineSolver::new(
+        &snap,
+        profile,
+        profile.objective.coefficients(),
+        false,
+        &tests,
+    );
+    let parts = solver.real_partition.clone();
+    let evidence = PolishEvidence::default();
+    let assembled = solver.assemble_with_polish_evidence(&parts, &evidence);
+    let placement = |node: &Node| assembled.placement.get(&node.id.0).copied();
+    let rendered = render_tree(
+        &assembled.tree,
+        &snap.ir().nodes,
+        &placement,
+        &assembled.key_by_id,
+    );
+    assert!(rendered.is_ok(), "candidate tree renders");
+    let Ok(rendered) = rendered else { return };
+
+    let roots = RealRoots::from_tree_keyed(&assembled.tree, &assembled.key_by_id);
+    let findings = walk_all_capacity(&rendered, &profile.capacity, &roots);
+    let overage: f64 = findings
+        .iter()
+        .filter_map(|(_, violation)| violation.capacity.as_ref())
+        .map(|breach| {
+            let over = f64::from(breach.measured - breach.cap);
+            if breach.cap == 0 {
+                over
+            } else {
+                over / f64::from(breach.cap)
+            }
+        })
+        .sum();
+    assert!(overage > 0.0, "the fixture breaches a cap: {findings:?}");
+
+    let context = solver.scoring_context(&assembled);
+    let lookup = |id: u32| assembled.placement.get(&id).copied();
+    let placed = solver.scoring.place(&lookup);
+    let breakdown = context.score(
+        &placed,
+        context.move_distance(&placed),
+        &solver.coefficients,
+        &solver.weights,
+    );
+    assert!(
+        (breakdown.capacity - solver.coefficients.gamma * overage).abs() < 1e-9,
+        "priced {} vs findings {overage}",
+        breakdown.capacity
+    );
+
+    let hard = findings
+        .iter()
+        .filter(|(_, violation)| violation.severity == Severity::Violation)
+        .count();
+    let remainder = solver.capacity_remainder_with_polish_evidence(
+        &parts,
+        &evidence,
+        &rendered,
+        &profile.capacity,
+    );
+    assert_eq!(
+        usize::try_from(remainder.remaining).unwrap_or(usize::MAX),
+        hard
+    );
+}

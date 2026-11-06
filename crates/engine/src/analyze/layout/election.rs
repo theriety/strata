@@ -194,5 +194,9 @@ pub(in crate::analyze) fn elect(
     if fit_for_election(&first) {
         return first;
     }
+    // this fallback decoration is not recorded in `key_by_id` (only
+    // `qualify_elected` does), so a domain named `2024 (2024.x)` reads as its
+    // decorated name: its folders count as foreign sub-folders in the domain
+    // cap — consistent in findings and pricing, but an overcount.
     SmolStr::new(format!("{first} ({})", anchor.replace('/', ".")))
 }

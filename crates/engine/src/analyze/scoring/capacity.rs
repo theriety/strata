@@ -7,7 +7,7 @@ use unlace_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
 #[cfg(test)]
 use unlace_ir::{Polarity, Snapshot};
 
-use crate::analyze::findings::physical_folder_entries_repository_relative;
+use crate::analyze::findings::{RealRoots, physical_folder_entries_repository_relative};
 use crate::config::CapacityConfig;
 
 /// The capacity pressure of one tree, apart from file sizes: everything the
@@ -26,6 +26,7 @@ impl TreePressure {
     pub(super) fn new(
         tree: &ContainerTree,
         namespaces: &BTreeMap<ContainerId, SmolStr>,
+        key_by_id: &BTreeMap<u32, SmolStr>,
         capacity: &CapacityConfig,
     ) -> Self {
         let folder = physical_folder_entries_repository_relative(tree, Some(namespaces))
@@ -33,16 +34,14 @@ impl TreePressure {
             .map(|&measure| normalized_overage(measure, capacity.folder))
             .sum::<f64>();
         let children = children_by_container(tree);
+        let domain_counts = RealRoots::from_tree_keyed(tree, key_by_id).domain_subfolder_counts();
         let mut structural = Vec::new();
         for container in tree.containers() {
-            let (member_level, cap) = match container.level {
-                ScopeLevel::Domain => (ScopeLevel::Folder, capacity.domain),
-                ScopeLevel::Package => (ScopeLevel::Domain, capacity.package),
-                ScopeLevel::PackageGroup => (ScopeLevel::Package, capacity.package_group),
-                ScopeLevel::Folder | ScopeLevel::File => continue,
+            let Some((measure, cap)) =
+                structural_measure(tree, &children, &domain_counts, container, capacity)
+            else {
+                continue;
             };
-            let measure =
-                count_bound_structural_members(tree, &children, container.id, member_level);
             let overage = normalized_overage(measure, cap);
             // a zero overage leaves the running sum untouched.
             if overage != 0.0 {
@@ -83,6 +82,7 @@ pub(super) fn capacity_pressure(
     placement: &dyn Fn(u32) -> Option<ContainerId>,
     tree: &ContainerTree,
     namespaces: &BTreeMap<ContainerId, SmolStr>,
+    key_by_id: &BTreeMap<u32, SmolStr>,
     capacity: &CapacityConfig,
 ) -> f64 {
     let mut pressure = 0.0;
@@ -106,14 +106,13 @@ pub(super) fn capacity_pressure(
         .sum::<f64>();
 
     let children = children_by_container(tree);
+    let domain_counts = RealRoots::from_tree_keyed(tree, key_by_id).domain_subfolder_counts();
     for container in tree.containers() {
-        let (member_level, cap) = match container.level {
-            ScopeLevel::Domain => (ScopeLevel::Folder, capacity.domain),
-            ScopeLevel::Package => (ScopeLevel::Domain, capacity.package),
-            ScopeLevel::PackageGroup => (ScopeLevel::Package, capacity.package_group),
-            ScopeLevel::Folder | ScopeLevel::File => continue,
+        let Some((measure, cap)) =
+            structural_measure(tree, &children, &domain_counts, container, capacity)
+        else {
+            continue;
         };
-        let measure = count_bound_structural_members(tree, &children, container.id, member_level);
         pressure += normalized_overage(measure, cap);
     }
     pressure
@@ -139,6 +138,38 @@ fn children_by_container(tree: &ContainerTree) -> BTreeMap<ContainerId, Vec<Cont
     children
 }
 
+/// Measures one structural container, returning its measure and its cap, or
+/// `None` for a folder or file.
+///
+/// A domain counts only its direct sub-folders, read from the real roots of the
+/// tree as the findings do (`RealRoots::domain_subfolder_counts` here,
+/// `RealRoots::domain_measures` there), so
+/// a finding and its price cannot disagree. A package and a package group count
+/// their binding members at any depth.
+fn structural_measure(
+    tree: &ContainerTree,
+    children: &BTreeMap<ContainerId, Vec<ContainerId>>,
+    domain_counts: &BTreeMap<u32, u32>,
+    container: &Container,
+    capacity: &CapacityConfig,
+) -> Option<(u32, u32)> {
+    match container.level {
+        ScopeLevel::Domain => Some((
+            domain_counts.get(&container.id.0).copied().unwrap_or(0),
+            capacity.domain,
+        )),
+        ScopeLevel::Package => Some((
+            count_bound_structural_members(tree, children, container.id, ScopeLevel::Domain),
+            capacity.package,
+        )),
+        ScopeLevel::PackageGroup => Some((
+            count_bound_structural_members(tree, children, container.id, ScopeLevel::Package),
+            capacity.package_group,
+        )),
+        ScopeLevel::Folder | ScopeLevel::File => None,
+    }
+}
+
 fn count_bound_structural_members(
     tree: &ContainerTree,
     children: &BTreeMap<ContainerId, Vec<ContainerId>>,
@@ -157,16 +188,7 @@ fn count_bound_structural_members(
             continue;
         };
         let binds_file = subtree_binds_file(children, &by_id, id);
-        let binds_member = if member_level == ScopeLevel::Folder {
-            children.get(&id).into_iter().flatten().any(|child| {
-                by_id
-                    .get(child)
-                    .is_some_and(|entry| entry.level == ScopeLevel::File)
-            })
-        } else {
-            binds_file
-        };
-        if container.level == member_level && binds_member {
+        if container.level == member_level && binds_file {
             count = count.saturating_add(1);
         }
         pending.extend(children.get(&id).into_iter().flatten().copied());
@@ -257,4 +279,264 @@ pub(in crate::analyze) fn binding_pressure(tree: &ContainerTree, folder_budget: 
         }
     }
     pressure
+}
+
+#[cfg(test)]
+mod tests {
+    use smol_str::SmolStr;
+    use unlace_ir::{Layout, build_laminar_tree};
+
+    use super::*;
+    use crate::analyze::findings::walk_all_capacity;
+    use crate::analyze::rendering::render_tree;
+    use crate::analyze::test_support::container;
+    use crate::result::Level;
+
+    fn domain_cap(domain: u32) -> CapacityConfig {
+        CapacityConfig {
+            file: 1000,
+            folder: 1000,
+            domain,
+            package: 1000,
+            package_group: 1000,
+        }
+    }
+
+    /// Each domain finding's first real path and measure, sorted; a path
+    /// reported twice shows up twice.
+    fn reported_by_path(
+        tree: &ContainerTree,
+        keys: &BTreeMap<u32, SmolStr>,
+        capacity: &CapacityConfig,
+    ) -> Vec<(String, u32)> {
+        let roots = RealRoots::from_tree_keyed(tree, keys);
+        let Ok(dto) = render_tree(tree, &[], &|_| None, keys) else {
+            return Vec::new();
+        };
+        let mut reported: Vec<(String, u32)> = walk_all_capacity(&dto, capacity, &roots)
+            .into_iter()
+            .filter(|(level, _)| *level == Level::Domain)
+            .filter_map(|(_, finding)| finding.capacity)
+            .filter_map(|breach| {
+                breach
+                    .real_paths
+                    .first()
+                    .map(|path| (path.clone(), breach.measured))
+            })
+            .collect();
+        reported.sort();
+        reported
+    }
+
+    /// Each domain's priced measure keyed by its container name.
+    fn priced_by_name(
+        tree: &ContainerTree,
+        keys: &BTreeMap<u32, SmolStr>,
+    ) -> BTreeMap<String, u32> {
+        let counts = RealRoots::from_tree_keyed(tree, keys).domain_subfolder_counts();
+        let children = children_by_container(tree);
+        tree.containers()
+            .iter()
+            .filter(|container| container.level == ScopeLevel::Domain)
+            .filter_map(|container| {
+                structural_measure(tree, &children, &counts, container, &domain_cap(0))
+                    .filter(|&(measure, _)| measure > 0)
+                    .map(|(measure, _)| (container.name.to_string(), measure))
+            })
+            .collect()
+    }
+
+    fn pressure_of(
+        tree: &ContainerTree,
+        keys: &BTreeMap<u32, SmolStr>,
+        capacity: &CapacityConfig,
+    ) -> f64 {
+        TreePressure::new(tree, &BTreeMap::new(), keys, capacity).total(&[])
+    }
+
+    /// Findings and pricing measure each domain identically: the breach a
+    /// finding reports is the very count the objective prices.
+    #[test]
+    fn should_measure_each_domain_by_direct_subfolders_in_findings_and_pricing() {
+        let paths: Vec<SmolStr> = [
+            "src/gen/analysts/a.ts",
+            "spec/gen/analysts/b.ts",
+            "src/gen/embedders/deep/er/c.ts",
+            "src/gen/embedders/d.ts",
+            "src/gen/x/y/z/e.ts",
+            "src/gen/top.ts",
+            "src/gen/gen/g.ts",
+            "spec/gen/gen/h.ts",
+            "src/other/one/f.ts",
+        ]
+        .iter()
+        .map(|path| SmolStr::new(*path))
+        .collect();
+        let layout = Layout {
+            package_roots: Vec::new(),
+            source_roots: vec![SmolStr::new("src"), SmolStr::new("spec")],
+        };
+        let built = build_laminar_tree(&paths, "workspace", &layout);
+        let keys = BTreeMap::new();
+
+        let reported = reported_by_path(&built.tree, &keys, &domain_cap(0));
+        let priced = priced_by_name(&built.tree, &keys);
+
+        // `gen` (src and spec merged): analysts, embedders, x and the real
+        // `gen/gen`; its own files in `gen/` are no sub-folder.
+        assert_eq!(
+            reported,
+            [("spec/gen".to_owned(), 4), ("src/other".to_owned(), 1)]
+        );
+        assert_eq!(
+            priced,
+            BTreeMap::from([
+                ("workspace/gen".to_owned(), 4),
+                ("workspace/other".to_owned(), 1),
+            ])
+        );
+    }
+
+    /// Two sibling domains of one raw name carry decorated display names; the
+    /// measure reads their undecorated keys, so a 4/1 split measures 4 and 1.
+    #[test]
+    fn should_measure_decorated_sibling_domains_from_their_undecorated_keys() {
+        let tree = ContainerTree::new(vec![
+            container(0, "ws", ScopeLevel::PackageGroup, None),
+            container(1, "pa", ScopeLevel::Package, Some(0)),
+            container(2, "pa/app (pa.app.x1)", ScopeLevel::Domain, Some(1)),
+            container(3, "pa/app (pa.app.x5)", ScopeLevel::Domain, Some(1)),
+            container(4, "pa/app/x1", ScopeLevel::Folder, Some(2)),
+            container(5, "pa/app/x1/f.ts", ScopeLevel::File, Some(4)),
+            container(6, "pa/app/x2", ScopeLevel::Folder, Some(2)),
+            container(7, "pa/app/x2/f.ts", ScopeLevel::File, Some(6)),
+            container(8, "pa/app/x3", ScopeLevel::Folder, Some(2)),
+            container(9, "pa/app/x3/f.ts", ScopeLevel::File, Some(8)),
+            container(10, "pa/app/x4", ScopeLevel::Folder, Some(2)),
+            container(11, "pa/app/x4/f.ts", ScopeLevel::File, Some(10)),
+            container(12, "pa/app/x5", ScopeLevel::Folder, Some(3)),
+            container(13, "pa/app/x5/f.ts", ScopeLevel::File, Some(12)),
+            // a nested folder beneath `x1` is still the sub-folder `x1`; read
+            // against the decorated display name it would be a foreign folder.
+            container(14, "pa/app/x1/deep", ScopeLevel::Folder, Some(2)),
+            container(15, "pa/app/x1/deep/f.ts", ScopeLevel::File, Some(14)),
+        ]);
+        let keys: BTreeMap<u32, SmolStr> =
+            [(2, SmolStr::new("pa/app")), (3, SmolStr::new("pa/app"))]
+                .into_iter()
+                .collect();
+
+        let counts = RealRoots::from_tree_keyed(&tree, &keys).domain_subfolder_counts();
+        assert_eq!(counts, BTreeMap::from([(2, 4), (3, 1)]));
+
+        // cap 3: only the four-folder half overruns, by one third.
+        assert_eq!(
+            reported_by_path(&tree, &keys, &domain_cap(3)),
+            [("pa/app".to_owned(), 4)]
+        );
+        assert!((pressure_of(&tree, &keys, &domain_cap(3)) - 1.0 / 3.0).abs() < 1e-12);
+        assert!(
+            (capacity_pressure_of_tree(&tree, &keys, &domain_cap(3)) - 1.0 / 3.0).abs() < 1e-12
+        );
+    }
+
+    /// A domain whose undecorated key repeats its package's key is dropped from
+    /// the rendered tree, yet candidate pricing charges it. Findings measure the
+    /// container tree, so they report it too, at the package's real directory.
+    #[test]
+    fn should_report_and_price_a_domain_that_echoes_its_package() {
+        let tree = echoing_package_tree();
+        let keys: BTreeMap<u32, SmolStr> = [(2, SmolStr::new("cts")), (3, SmolStr::new("cts"))]
+            .into_iter()
+            .collect();
+
+        // the renderer drops both echoing domains.
+        let rendered = render_tree(&tree, &[], &|_| None, &keys).ok();
+        assert!(
+            rendered
+                .as_ref()
+                .is_some_and(|dto| !contains_domain_node(dto)),
+            "{rendered:?}"
+        );
+        // findings see the one domain over cap 1, reported at the package dir.
+        assert_eq!(
+            reported_by_path(&tree, &keys, &domain_cap(1)),
+            [("cts".to_owned(), 2)]
+        );
+        // pricing charges the very same overage.
+        assert!((pressure_of(&tree, &keys, &domain_cap(1)) - 1.0).abs() < 1e-12);
+        assert_eq!(
+            priced_by_name(&tree, &keys),
+            BTreeMap::from([
+                ("cts (cts.core)".to_owned(), 2),
+                ("cts (cts.zz)".to_owned(), 1)
+            ])
+        );
+    }
+
+    fn contains_domain_node(node: &crate::result::ContainerNode) -> bool {
+        node.level == Level::Domain || node.children.iter().flatten().any(contains_domain_node)
+    }
+
+    /// Package `cts` with two sibling domains of the key `cts`, as a candidate
+    /// tree carries them: decorated display names, folders keyed by real path.
+    fn echoing_package_tree() -> ContainerTree {
+        ContainerTree::new(vec![
+            container(0, "ws", ScopeLevel::PackageGroup, None),
+            container(1, "cts", ScopeLevel::Package, Some(0)),
+            container(2, "cts (cts.core)", ScopeLevel::Domain, Some(1)),
+            container(3, "cts (cts.zz)", ScopeLevel::Domain, Some(1)),
+            container(4, "cts/core/a", ScopeLevel::Folder, Some(2)),
+            container(5, "cts/core/a/f.ts", ScopeLevel::File, Some(4)),
+            container(6, "cts/io/b", ScopeLevel::Folder, Some(2)),
+            container(7, "cts/io/b/f.ts", ScopeLevel::File, Some(6)),
+            container(8, "cts/zz", ScopeLevel::Folder, Some(3)),
+            container(9, "cts/zz/f.ts", ScopeLevel::File, Some(8)),
+        ])
+    }
+
+    /// A folder whose key does not extend its domain's key is its own entry,
+    /// one per distinct real folder.
+    #[test]
+    fn should_count_each_foreign_folder_of_a_candidate_domain_as_its_own_entry() {
+        let tree = ContainerTree::new(vec![
+            container(0, "ws", ScopeLevel::PackageGroup, None),
+            container(1, "pa", ScopeLevel::Package, Some(0)),
+            container(2, "pa/app", ScopeLevel::Domain, Some(1)),
+            container(3, "pa/app/x", ScopeLevel::Folder, Some(2)),
+            container(4, "pa/app/x/f.ts", ScopeLevel::File, Some(3)),
+            container(5, "pa/other/a", ScopeLevel::Folder, Some(2)),
+            container(6, "pa/other/a/f.ts", ScopeLevel::File, Some(5)),
+            container(7, "pa/other/a/g.ts", ScopeLevel::File, Some(5)),
+            container(8, "pa/other/b", ScopeLevel::Folder, Some(2)),
+            container(9, "pa/other/b/f.ts", ScopeLevel::File, Some(8)),
+        ]);
+        let keys = BTreeMap::new();
+
+        // `x`, plus the two foreign folders `pa/other/a` and `pa/other/b`.
+        assert_eq!(
+            RealRoots::from_tree_keyed(&tree, &keys).domain_subfolder_counts(),
+            BTreeMap::from([(2, 3)])
+        );
+        assert_eq!(
+            reported_by_path(&tree, &keys, &domain_cap(0))
+                .iter()
+                .map(|(_, measured)| *measured)
+                .collect::<Vec<_>>(),
+            [3]
+        );
+    }
+
+    fn capacity_pressure_of_tree(
+        tree: &ContainerTree,
+        keys: &BTreeMap<u32, SmolStr>,
+        capacity: &CapacityConfig,
+    ) -> f64 {
+        let snapshot = crate::analyze::test_support::snapshot(
+            Vec::new(),
+            Vec::new(),
+            tree.containers().to_vec(),
+        );
+        capacity_pressure(&snapshot, &|_| None, tree, &BTreeMap::new(), keys, capacity)
+    }
 }

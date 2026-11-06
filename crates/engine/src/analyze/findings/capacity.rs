@@ -29,7 +29,7 @@ pub(in crate::analyze) fn snapshot_capacity_violations(
     capacity: &CapacityConfig,
 ) -> Vec<Violation> {
     let roots = RealRoots::from_tree(&snapshot.ir().containers);
-    let mut findings: Vec<Violation> = walk_capacity_from(tree, capacity, Some(&roots))
+    let mut findings: Vec<Violation> = walk_capacity_from(tree, capacity, &roots)
         .into_iter()
         .filter(|(level, _)| *level != Level::Folder)
         .map(|(_, violation)| violation)
@@ -43,34 +43,57 @@ pub(in crate::analyze) fn snapshot_capacity_violations(
     findings
 }
 
-/// DTO-only capacity walk retained for focused structural tests. Production
-/// analysis augments it with the snapshot's physical folder projection above.
+/// DTO-only capacity walk retained for focused structural tests that read no
+/// domain: it knows no real roots. Production analysis augments it with the
+/// snapshot's physical folder projection above.
 #[cfg(test)]
 pub(super) fn capacity_violations(tree: &ContainerNode, config: &AnalyzeConfig) -> Vec<Violation> {
-    walk_all_capacity(tree, &config.profiles.anchored.capacity)
-        .into_iter()
-        .map(|(_, violation)| violation)
-        .collect()
+    walk_all_capacity(
+        tree,
+        &config.profiles.anchored.capacity,
+        &RealRoots::empty(),
+    )
+    .into_iter()
+    .map(|(_, violation)| violation)
+    .collect()
 }
 
 /// Walks the DTO tree, returning each capacity finding with the level it hit.
+///
+/// `roots` are the real roots of the container tree `tree` was rendered from.
+/// The domain cap is measured over that container tree, by domain, through
+/// `roots` — the very measure candidate pricing uses — never over the rendered
+/// domain nodes, since the renderer drops a domain that only echoes its package.
 pub(in crate::analyze) fn walk_all_capacity(
     tree: &ContainerNode,
     source: &impl CapacitySource,
+    roots: &RealRoots,
 ) -> Vec<(Level, Violation)> {
-    walk_capacity_from(tree, source.capacity(), None)
+    walk_capacity_from(tree, source.capacity(), roots)
 }
 
 /// Walks the DTO tree; `roots` names the real directories of domains and above.
 fn walk_capacity_from(
     tree: &ContainerNode,
     capacity: &CapacityConfig,
-    roots: Option<&RealRoots>,
+    roots: &RealRoots,
 ) -> Vec<(Level, Violation)> {
     let mut findings = Vec::new();
     let mut path = Vec::new();
     append_display_segments(&mut path, tree);
     walk_capacity(tree, &path, capacity, roots, &mut findings);
+    for (measure, real_paths) in roots.domain_measures() {
+        if let Some(finding) = breach_violation(
+            Level::Domain,
+            measure,
+            capacity.domain,
+            real_paths,
+            None,
+            &[],
+        ) {
+            findings.push((Level::Domain, finding));
+        }
+    }
     findings
 }
 
@@ -79,29 +102,29 @@ fn walk_capacity(
     node: &ContainerNode,
     path: &[String],
     capacity: &CapacityConfig,
-    roots: Option<&RealRoots>,
+    roots: &RealRoots,
     findings: &mut Vec<(Level, Violation)>,
 ) {
-    let (measure, cap) = match node.level {
-        Level::File => (node.production_sloc.unwrap_or(0), capacity.file),
-        Level::Folder => (file_child_count(node), capacity.folder),
-        // QUAL-P3-2: upper levels count their real structural members deeply —
-        // a domain every file-binding folder beneath it, a package every
-        // binding domain, a package group every binding package — so nesting
-        // through an intermediate level cannot launder binding out of the
-        // finding. Only members that actually bind a file count: an interior
-        // directory chain (`a/b/c`) is one real place, never three. The folder
-        // arm is used only by DTO-focused tests; production folder findings
-        // come from the package-aware physical projection.
-        Level::Domain => (count_bound_members(node, Level::Folder).0, capacity.domain),
-        Level::Package => (count_bound_members(node, Level::Domain).0, capacity.package),
-        Level::PackageGroup => (
+    // QUAL-P3-2: a package counts every binding domain beneath it and a package
+    // group every binding package, deeply, so nesting through an intermediate
+    // level cannot launder binding out of the finding. A domain is measured over
+    // the container tree instead (D-44, 2026-11-05), so its node is skipped
+    // here. The folder arm is used only by DTO-focused tests; production folder
+    // findings come from the package-aware physical projection.
+    let measured = match node.level {
+        Level::File => Some((node.production_sloc.unwrap_or(0), capacity.file)),
+        Level::Folder => Some((file_child_count(node), capacity.folder)),
+        Level::Domain => None,
+        Level::Package => Some((count_bound_members(node, Level::Domain).0, capacity.package)),
+        Level::PackageGroup => Some((
             count_bound_members(node, Level::Package).0,
             capacity.package_group,
-        ),
+        )),
     };
 
-    if let Some(finding) = capacity_finding(node, path, measure, cap, roots) {
+    if let Some((measure, cap)) = measured
+        && let Some(finding) = capacity_finding(node, path, measure, cap, roots)
+    {
         findings.push((node.level, finding));
     }
 
@@ -136,12 +159,9 @@ fn append_display_segments(path: &mut Vec<String>, node: &ContainerNode) {
 /// Counts, in one pass, the descendants of `node` at `member_level` whose
 /// subtree binds at least one file — the real places beneath it — plus
 /// whether `node` itself binds one (QUAL-P3-2). An intermediate level can no
-/// longer launder binding out of the finding. A rendered directory chain
-/// interleaves one Folder node per path segment, so a folder counts as a real
-/// place only when it *directly* holds a file — otherwise every ancestor
-/// segment of `a/b/c` would price the single directory three times. Upper
-/// member levels (domain, package) have no such chaining, so their transitive
-/// binding stands.
+/// longer launder binding out of the finding. Used for the package and package
+/// group caps, whose members (domains, packages) have no folder-style chaining,
+/// so their transitive binding stands.
 fn count_bound_members(node: &ContainerNode, member_level: Level) -> (u32, bool) {
     if node.level == Level::File {
         return (0, true);
@@ -153,17 +173,8 @@ fn count_bound_members(node: &ContainerNode, member_level: Level) -> (u32, bool)
         members = members.saturating_add(child_members);
         holds |= child_holds;
     }
-    if node.level == member_level {
-        let binds = if member_level == Level::Folder {
-            node.children
-                .as_ref()
-                .is_some_and(|children| children.iter().any(|child| child.level == Level::File))
-        } else {
-            holds
-        };
-        if binds {
-            members = members.saturating_add(1);
-        }
+    if node.level == member_level && holds {
+        members = members.saturating_add(1);
     }
     (members, holds)
 }
@@ -177,14 +188,35 @@ fn file_child_count(node: &ContainerNode) -> u32 {
     u32::try_from(entries).unwrap_or(u32::MAX)
 }
 
-/// Builds a capacity finding if `measure` is at or over the borderline band of
-/// `cap`, classifying borderline (within ±10%) versus a hard breach.
+/// Builds the capacity finding of a rendered node, if it breaches `cap`.
 fn capacity_finding(
     node: &ContainerNode,
     path: &[String],
     measure: u32,
     cap: u32,
-    roots: Option<&RealRoots>,
+    roots: &RealRoots,
+) -> Option<Violation> {
+    let real_paths = match node.level {
+        Level::File => vec![node.name.clone()],
+        Level::Folder => Vec::new(),
+        level => roots.package_paths(node, level),
+    };
+    // for files the container name IS the full repo-relative path; folder
+    // and higher paths are carried by `real_paths`.
+    let file_path = (node.level == Level::File).then(|| node.name.clone());
+    breach_violation(node.level, measure, cap, real_paths, file_path, path)
+}
+
+/// Builds a capacity finding if `measure` is over `cap`, classifying borderline
+/// (within ±10%) versus a hard breach. `fallback` names the place when no real
+/// path is known.
+fn breach_violation(
+    level: Level,
+    measure: u32,
+    cap: u32,
+    real_paths: Vec<String>,
+    file_path: Option<String>,
+    fallback: &[String],
 ) -> Option<Violation> {
     if measure <= cap {
         return None;
@@ -198,29 +230,22 @@ fn capacity_finding(
         Severity::Borderline
     };
 
-    let (unit, config_key) = unit_and_key(node.level);
-    let real_paths = match node.level {
-        Level::File => vec![node.name.clone()],
-        Level::Folder => Vec::new(),
-        level => roots.map_or_else(Vec::new, |roots| roots.paths(node, level)),
-    };
+    let (unit, config_key) = unit_and_key(level);
     let breach = CapacityBreach {
         measured: measure,
         cap,
         unit,
         config_key: config_key.to_owned(),
         real_paths,
-        // for files the container name IS the full repo-relative path; folder
-        // and higher paths are carried by `real_paths`.
-        path: (node.level == Level::File).then(|| node.name.clone()),
+        path: file_path,
     };
     Some(Violation {
         kind: ViolationKind::Capacity,
         severity,
         location: breach
             .real_location()
-            .unwrap_or_else(|| vec![path.join("/")]),
-        detail: breach.describe(path),
+            .unwrap_or_else(|| vec![fallback.join("/")]),
+        detail: breach.describe(fallback),
         break_suggestions: None,
         capacity: Some(breach),
     })
