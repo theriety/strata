@@ -97,15 +97,15 @@ impl SymbolPass<'_> {
         let mut priced = Vec::with_capacity(members.len());
         for node in &members {
             self.place_tentatively(node.id.0, destination);
-            let total = self.pricing.score_with(&self.ledger.overlay);
-            priced.push((*node, running - total));
-            running = total;
+            let terms = self.pricing.score_with(&self.ledger.overlay);
+            priced.push((*node, running, terms));
+            running = terms;
         }
         let cyclic_now = CycleCounts::from_graph(&self.pricing.crossing_csr(&self.ledger));
         let vis_now = self.visibility.count_findings();
         if cyclic_now.exceeds(self.cyclic_base)
             || vis_now > self.visibility.vis_base
-            || before - running <= SYMBOL_MIN_IMPROVEMENT
+            || before.total - running.total <= SYMBOL_MIN_IMPROVEMENT
         {
             for node in &members {
                 self.revert_relocation(node.id.0, None, source);
@@ -116,9 +116,9 @@ impl SymbolPass<'_> {
         self.ledger.best = running;
         self.cyclic_base = cyclic_now;
         self.visibility.vis_base = vis_now;
-        for (node, delta) in priced {
+        for (node, prior, terms) in priced {
             self.ledger
-                .record_relocation(node, source, destination, delta, Some(file));
+                .record_relocation(node, (source, destination), (prior, terms), Some(file));
         }
         true
     }

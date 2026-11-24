@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::candidate::ScoreBreakdown;
 use super::finding::CapacityUnit;
 use super::group_keyed::GroupKeyed;
 
@@ -19,10 +20,12 @@ pub enum SymbolKind {
 ///
 /// Whole-file [`Move`]s relocate containers; a `SymbolMove` relocates a single
 /// symbol BETWEEN two files that both survive the proposal. `delta` is the
-/// objective improvement the relocation earned when the symbol polish accepted
-/// it (always negative — acceptance requires strict J improvement), and
-/// `broken_imports` counts the distinct other files whose imports would need
-/// re-pointing once the move applies (see the engine's symbol narration).
+/// objective change the relocation brought when the symbol polish accepted it
+/// (negative for an ordinary move; a collision-fold member may be positive,
+/// because only the fold's sum must improve — see `fold`), `terms`
+/// splits that change across the objective's terms, and `broken_imports`
+/// counts the distinct other files whose imports would need re-pointing once
+/// the move applies (see the engine's symbol narration).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SymbolMove {
@@ -34,11 +37,22 @@ pub struct SymbolMove {
     pub from_path: String,
     /// Full repo-relative path of the file the symbol lands in.
     pub to_path: String,
-    /// Objective improvement contributed by this relocation (`ΔJ < 0`).
+    /// Objective change contributed by this relocation: `ΔJ < 0` for an
+    /// ordinary move. A collision-fold member is priced in acceptance order
+    /// and only the fold's sum must improve, so its own `ΔJ` may be positive.
     pub delta: f64,
     /// Distinct files other than the origin housing a direct caller or callee
     /// that is NOT a future co-resident — the imports this move severs.
     pub broken_imports: u32,
+    /// The objective's per-term breakdown either side of the acceptance
+    /// (schema 12). Absent on a result saved at schema 11.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terms: Option<TermShift>,
+    /// Repo-relative path of the file whose collision fold (ADR-21) this move
+    /// belongs to (schema 12). A fold is accepted as one unit, so a member's
+    /// `delta` and `terms` may individually regress. Absent for an ordinary move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold: Option<String>,
     /// Human-facing name when it differs from `symbol` (a method reads
     /// `Type::method`). Display only: matching keys on `symbol`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -50,6 +64,44 @@ impl SymbolMove {
     #[must_use]
     pub fn label(&self) -> &str {
         self.display.as_deref().unwrap_or(&self.symbol)
+    }
+}
+
+/// The objective's per-term breakdown either side of one accepted symbol
+/// relocation (FIX08 Option A).
+///
+/// `before` is the symbol pass's running best when the move was priced, so the
+/// shift is path-dependent: it reflects the moves accepted earlier, never a
+/// leave-one-out counterfactual. Within a collision fold (see
+/// [`SymbolMove::fold`]) a member's shift may regress; only the fold's sum
+/// must improve. Every term of [`TermShift::deltas`] sums to
+/// the move's `delta`, because both breakdowns' terms sum to their `J`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TermShift {
+    /// The breakdown the relocation was priced against.
+    pub before: ScoreBreakdown,
+    /// The breakdown once the relocation was accepted.
+    pub after: ScoreBreakdown,
+}
+
+impl TermShift {
+    /// The per-term change `after − before`.
+    #[must_use]
+    pub fn deltas(&self) -> ScoreBreakdown {
+        let (before, after) = (&self.before, &self.after);
+        ScoreBreakdown {
+            cut: after.cut - before.cut,
+            imbalance: after.imbalance - before.imbalance,
+            naming: after.naming - before.naming,
+            path: after.path - before.path,
+            anchor: after.anchor - before.anchor,
+            capacity: after.capacity - before.capacity,
+            dependency_only: after.dependency_only - before.dependency_only,
+            companion_separation: after.companion_separation - before.companion_separation,
+            entry_inflow: after.entry_inflow - before.entry_inflow,
+            unit_outflow: after.unit_outflow - before.unit_outflow,
+        }
     }
 }
 
@@ -113,6 +165,17 @@ pub struct MirrorMove {
     pub to: String,
 }
 
+/// The strongest tie between the moved files and one file that stays in the
+/// source folder.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeftBehind {
+    /// The full path of the file left behind.
+    pub partner: String,
+    /// The summed two-way edge weight between it and the moved files.
+    pub weight: f64,
+}
+
 /// The dominant reason a narrated change was proposed, first match wins:
 /// followed subject > cap relief > dependency pull > naming cohesion >
 /// clustering fallback.
@@ -150,6 +213,11 @@ pub enum MoveReason {
         partner: String,
         /// The summed two-way edge weight of the pull.
         weight: f64,
+        /// The strongest pull the move leaves behind in the source folder,
+        /// measured by the same rule; absent when nothing there ties to the
+        /// moved files. Results written before it existed still load.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        left_behind: Option<LeftBehind>,
     },
     /// The moved files share naming tokens with the destination's residents.
     NamingCohesion {
@@ -184,12 +252,24 @@ impl MirrorMove {
 
 impl MoveReason {
     /// The group-keyed path the reason names, when it names one.
-    pub(crate) fn group_keyed(&mut self) -> Option<GroupKeyed<'_>> {
+    pub(crate) fn group_keyed(&mut self) -> Vec<GroupKeyed<'_>> {
         match self {
-            Self::Follows { subject } => Some(GroupKeyed::new(subject)),
-            Self::PulledBy { partner, .. } => Some(GroupKeyed::new(partner)),
-            Self::RelievesOverCap { container, .. } => Some(GroupKeyed::new(container)),
-            Self::NamingCohesion { .. } | Self::Clustering => None,
+            Self::Follows { subject } => vec![GroupKeyed::new(subject)],
+            Self::PulledBy {
+                partner,
+                left_behind,
+                ..
+            } => {
+                let mut keyed = vec![GroupKeyed::new(partner)];
+                keyed.extend(
+                    left_behind
+                        .iter_mut()
+                        .map(|l| GroupKeyed::new(&mut l.partner)),
+                );
+                keyed
+            }
+            Self::RelievesOverCap { container, .. } => vec![GroupKeyed::new(container)],
+            Self::NamingCohesion { .. } | Self::Clustering => Vec::new(),
         }
     }
 }
@@ -229,11 +309,26 @@ impl std::fmt::Display for MoveReason {
                 "relieves {container}, which has {}",
                 unit.against_cap(*count, *cap, config_key),
             ),
-            Self::PulledBy { partner, weight } => write!(
-                f,
-                "pulled by {} (w {weight:.1})",
-                crate::narrate::basename(partner)
-            ),
+            Self::PulledBy {
+                partner,
+                weight,
+                left_behind,
+            } => {
+                write!(
+                    f,
+                    "pulled by {} (w {weight:.1}",
+                    crate::narrate::basename(partner)
+                )?;
+                if let Some(left) = left_behind {
+                    write!(
+                        f,
+                        ", vs {:.1} to {} left behind",
+                        left.weight,
+                        crate::narrate::basename(&left.partner)
+                    )?;
+                }
+                write!(f, ")")
+            }
             Self::NamingCohesion { cohesion } => {
                 write!(f, "naming cohesion {cohesion:.2} with destination")
             }

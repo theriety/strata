@@ -218,7 +218,7 @@ fn reference_score(
     score_with_naming(candidate, naming, coefficients, weights)
 }
 
-fn bits(breakdown: &ScoreBreakdown) -> [u64; 9] {
+fn bits(breakdown: &ScoreBreakdown) -> [u64; 11] {
     [
         breakdown.cut,
         breakdown.imbalance,
@@ -228,6 +228,8 @@ fn bits(breakdown: &ScoreBreakdown) -> [u64; 9] {
         breakdown.capacity,
         breakdown.dependency_only,
         breakdown.companion_separation,
+        breakdown.entry_inflow,
+        breakdown.unit_outflow,
         breakdown.total,
     ]
     .map(f64::to_bits)
@@ -244,6 +246,8 @@ const fn every_term() -> Coefficients {
         gamma: 4.0,
         dependency_only: 0.05,
         companion_separation: 0.07,
+        entry_inflow: 0.11,
+        unit_outflow: 0.13,
     }
 }
 

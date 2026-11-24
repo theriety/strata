@@ -127,6 +127,7 @@ pub(super) fn test_only_violations(snapshot: &Snapshot, tests: &TestPolicy) -> V
                 severity: Severity::Violation,
                 detail,
                 location,
+                import_cycle: None,
                 break_suggestions: None,
                 capacity: None,
             }

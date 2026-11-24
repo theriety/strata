@@ -1,3 +1,4 @@
+use unlace_ir::laminar::Companions;
 use unlace_ir::{ContainerTree, Layout, build_laminar_tree};
 
 use super::RealRoots;
@@ -56,7 +57,10 @@ fn should_keep_the_leading_directory_of_a_package_that_shares_the_root_name() {
     // when the root holds a directory of its own name: its first segment equals
     // the root's name without being the root's label.
     let file = "ws/atlas/src/agent/loop.ts";
-    let roots = RealRoots::from_tree(&tree_of(&[file], "ws", &["ws/atlas"]));
+    let roots = RealRoots::from_tree(
+        &tree_of(&[file], "ws", &["ws/atlas"]),
+        &Companions::default(),
+    );
     let (_, package) = domain_and_package("ws/atlas", "ws/atlas/agent", file);
 
     assert_eq!(roots.package_paths(&package, Level::Package), ["ws/atlas"]);
@@ -65,7 +69,10 @@ fn should_keep_the_leading_directory_of_a_package_that_shares_the_root_name() {
 #[test]
 fn should_keep_the_leading_directory_of_a_domain_that_shares_the_root_name() {
     let file = "ws/atlas/src/agent/loop.ts";
-    let roots = RealRoots::from_tree(&tree_of(&[file], "ws", &["ws/atlas"]));
+    let roots = RealRoots::from_tree(
+        &tree_of(&[file], "ws", &["ws/atlas"]),
+        &Companions::default(),
+    );
 
     assert_eq!(
         domain_paths(&roots),
@@ -79,7 +86,7 @@ fn should_drop_the_root_label_from_a_package_keyed_under_it() {
     // a repository without manifest members keys its one package, and every
     // domain below it, under the root's label: `ws/agent` stands for `src/agent`.
     let file = "src/agent/loop.ts";
-    let roots = RealRoots::from_tree(&tree_of(&[file], "ws", &[]));
+    let roots = RealRoots::from_tree(&tree_of(&[file], "ws", &[]), &Companions::default());
     let (_, package) = domain_and_package("ws", "ws/agent", file);
 
     assert_eq!(roots.package_paths(&package, Level::Package), ["."]);
@@ -90,7 +97,7 @@ fn should_drop_the_root_label_from_a_package_keyed_under_it() {
 fn should_drop_one_root_label_and_keep_a_real_directory_that_repeats_it() {
     // `ws/ws/agent` below the label is the real directory `ws/agent`.
     let file = "ws/agent/loop.ts";
-    let roots = RealRoots::from_tree(&tree_of(&[file], "ws", &[]));
+    let roots = RealRoots::from_tree(&tree_of(&[file], "ws", &[]), &Companions::default());
 
     assert_eq!(domain_paths(&roots), ["ws"]);
 }
@@ -100,7 +107,7 @@ fn should_name_a_manifest_package_whose_directory_is_named_like_the_root() {
     // `tokio/tokio`: the manifest sits in a directory of the root's own name, so
     // the package key `ws` is a real directory and not the group label.
     let file = "ws/src/agent/loop.ts";
-    let roots = RealRoots::from_tree(&tree_of(&[file], "ws", &["ws"]));
+    let roots = RealRoots::from_tree(&tree_of(&[file], "ws", &["ws"]), &Companions::default());
     let (_, package) = domain_and_package("ws", "ws/agent", file);
 
     assert_eq!(roots.package_paths(&package, Level::Package), ["ws"]);
@@ -114,7 +121,10 @@ fn should_drop_the_label_from_a_loose_directory_named_like_a_real_package() {
     // decides which one is real.
     let loose = "atlas/foo/x.ts";
     let real = "ws/atlas/src/agent/loop.ts";
-    let roots = RealRoots::from_tree(&tree_of(&[loose, real], "ws", &["ws/atlas"]));
+    let roots = RealRoots::from_tree(
+        &tree_of(&[loose, real], "ws", &["ws/atlas"]),
+        &Companions::default(),
+    );
     let (_, real_package) = domain_and_package("ws/atlas", "ws/atlas/agent", real);
 
     assert_eq!(domain_paths(&roots), ["atlas", "ws/atlas/src/agent"]);
@@ -130,7 +140,37 @@ fn should_keep_loose_files_and_a_same_named_package_apart() {
     // container; the domains stay distinct and each keeps its own provenance.
     let real = "ws/src/agent/loop.ts";
     let loose = "loose/y.ts";
-    let roots = RealRoots::from_tree(&tree_of(&[real, loose], "ws", &["ws"]));
+    let roots = RealRoots::from_tree(
+        &tree_of(&[real, loose], "ws", &["ws"]),
+        &Companions::default(),
+    );
 
     assert_eq!(domain_paths(&roots), ["loose", "ws/src/agent"]);
+}
+
+#[test]
+fn should_root_a_source_root_companion_in_its_own_domain_directory() {
+    // `src/lexer.ts` is the entry of `src/lexer/` (ADR-31): its domain is the
+    // real directory `src/lexer`, as `src/lexer/index.ts`'s would be, not the
+    // transparent source root `src`.
+    let paths: Vec<_> = ["src/lexer.ts", "src/lexer/source.ts"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let facts = [unlace_ir::FileFact::folder_companion(
+        "src/lexer.ts",
+        "src/lexer",
+    )];
+    let companions = Companions::from_facts(&facts);
+    let layout = Layout {
+        package_roots: Vec::new(),
+        source_roots: vec!["src".into()],
+    };
+    let tree =
+        unlace_ir::laminar::build_laminar_tree_with_companions(&paths, "mdc", &layout, &companions)
+            .tree;
+
+    let roots = RealRoots::from_tree(&tree, &companions);
+
+    assert_eq!(domain_paths(&roots), vec!["src/lexer".to_owned()]);
 }

@@ -1,6 +1,11 @@
 # FIX08 design study — per-move score attribution
 
-Status: DESIGN STUDY ONLY — nothing here is implemented in FIX08. The
+Status: Option A implemented by DRF22 (schema 12). Each `SymbolMove` carries
+`terms` (`before`/`after` breakdowns), so a schema bump was needed after all,
+unlike the "unchanged" estimate below. File moves record no shift, because they
+are narrated as a diff between trees, not logged as they are accepted.
+
+Original status: DESIGN STUDY ONLY — nothing here is implemented in FIX08. The
 `SymbolMove.delta` shipped today carries the pass's acceptance delta (the
 strict-J margin the relocation earned at acceptance time); this note records
 what a fuller attribution would cost and recommends when to build it.

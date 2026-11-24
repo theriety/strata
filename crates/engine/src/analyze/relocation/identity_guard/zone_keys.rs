@@ -23,7 +23,7 @@ pub(in crate::analyze) fn zone_keys(files: &[FileInfo], test_zone: &[bool]) -> V
         if test_zone.get(vertex).copied().unwrap_or(false) {
             continue;
         }
-        for folder in ancestor_folders(&file.name) {
+        for folder in ancestor_folders(&file.directory) {
             production_folders.insert((file.home.package.as_str(), folder));
         }
     }
@@ -35,7 +35,7 @@ pub(in crate::analyze) fn zone_keys(files: &[FileInfo], test_zone: &[bool]) -> V
                 return SmolStr::default();
             }
             let package = file.home.package.as_str();
-            ancestor_folders(&file.name)
+            ancestor_folders(&file.directory)
                 .into_iter()
                 .find(|folder| !production_folders.contains(&(package, folder.clone())))
                 .map_or_else(
@@ -46,10 +46,15 @@ pub(in crate::analyze) fn zone_keys(files: &[FileInfo], test_zone: &[bool]) -> V
         .collect()
 }
 
-/// The folders above `path`, outermost first: `a/b/c.rs` gives `a`, `a/b`.
-fn ancestor_folders(path: &str) -> Vec<String> {
-    let segments: Vec<&str> = path.split('/').collect();
-    (1..segments.len())
+/// The folders from the top down to `directory`, outermost first: `a/b`
+/// gives `a`, `a/b`. A file passes its effective directory (ADR-31), so a
+/// folder companion counts inside its folder.
+fn ancestor_folders(directory: &str) -> Vec<String> {
+    let segments: Vec<&str> = directory
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    (1..=segments.len())
         .map(|end| {
             segments
                 .iter()
@@ -72,6 +77,7 @@ mod tests {
             name: SmolStr::new(path),
             production_sloc: 1,
             namespace: SmolStr::default(),
+            directory: SmolStr::new(path.rsplit_once('/').map_or("", |(directory, _)| directory)),
             home: LaminarHome {
                 folder: SmolStr::default(),
                 domain: SmolStr::default(),
@@ -84,8 +90,8 @@ mod tests {
 
     #[test]
     fn should_list_ancestor_folders_outermost_first() {
-        assert_eq!(ancestor_folders("a/b/c.rs"), vec!["a", "a/b"]);
-        assert_eq!(ancestor_folders("c.rs"), Vec::<String>::new());
+        assert_eq!(ancestor_folders("a/b"), vec!["a", "a/b"]);
+        assert_eq!(ancestor_folders(""), Vec::<String>::new());
     }
 
     #[test]
@@ -104,5 +110,18 @@ mod tests {
         let files = vec![info("src/a.ts", "p"), info("src/a.spec.ts", "p")];
         let keys = zone_keys(&files, &[false, true]);
         assert_eq!(keys, vec!["", "!src/a.spec.ts"]);
+    }
+
+    #[test]
+    fn should_count_a_folder_companion_inside_its_folder() {
+        // `spec/helpers.ts` is the production entry of `spec/helpers/`
+        // (ADR-31), so that folder holds production code and is no test root.
+        let mut entry = info("spec/helpers.ts", "p");
+        entry.directory = SmolStr::new("spec/helpers");
+        let files = vec![entry, info("spec/helpers/a.spec.ts", "p")];
+
+        let keys = zone_keys(&files, &[false, true]);
+
+        assert_eq!(keys, vec!["", "!spec/helpers/a.spec.ts"]);
     }
 }

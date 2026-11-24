@@ -3,7 +3,7 @@
 use crate::error::EvalError;
 
 use super::validate::{invalid, rationale};
-use super::{AssertBlock, FaceMode, RunMode, TargetSpec};
+use super::{AdviceTier, AssertBlock, CycleImportCut, FaceMode, RunMode, TargetSpec, Tier};
 
 impl TargetSpec {
     /// Per-kind assertion rules over one validated block.
@@ -103,6 +103,13 @@ impl TargetSpec {
                 ));
             }
         }
+        for pin in &block.cycle_import_cut {
+            lift(check_cycle_pin(pin))?;
+        }
+        for pin in &block.advice_tier {
+            lift(check_advice_pin(pin))?;
+        }
+        lift(check_guard(block))?;
         Self::validate_symbol_homes(block, run, fixture)
     }
 
@@ -130,6 +137,75 @@ impl TargetSpec {
 }
 
 /// Applies [`rationale`] with the assertion kind folded into the message.
+/// A cycle pin needs a rationale and two non-empty files; an `expect` needs
+/// two different non-empty files and, when given, a 1-based line.
+fn check_cycle_pin(pin: &CycleImportCut) -> Result<(), String> {
+    check_rationale(&pin.because, "cycle_import_cut")?;
+    if pin.files.len() < 2 || pin.files.iter().any(|file| file.trim().is_empty()) {
+        return Err("cycle_import_cut needs at least two non-empty file paths".to_owned());
+    }
+    if let Some(expect) = &pin.expect {
+        let blank = expect.importer.trim().is_empty() || expect.imported.trim().is_empty();
+        if blank || expect.importer == expect.imported || expect.line == Some(0) {
+            return Err(
+                "cycle_import_cut.expect needs two different non-empty files and a 1-based line"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// An advice pin needs a rationale, a non-empty path (and symbol and
+/// destination when given), and exactly one of `max_tier`/`exact_tier`; a
+/// `max_tier` of `recommended` caps nothing, so it is rejected as vacuous.
+fn check_advice_pin(pin: &AdviceTier) -> Result<(), String> {
+    check_rationale(&pin.because, "advice_tier")?;
+    let blank = |value: Option<&String>| value.is_some_and(|text| text.trim().is_empty());
+    if pin.path.trim().is_empty() || blank(pin.symbol.as_ref()) || blank(pin.to.as_ref()) {
+        return Err(
+            "advice_tier needs a non-empty path, and a non-empty symbol and to when given"
+                .to_owned(),
+        );
+    }
+    match (pin.max_tier, pin.exact_tier) {
+        (Some(Tier::Recommended), None) => Err(
+            "advice_tier max_tier = \"recommended\" caps nothing; use review or absent".to_owned(),
+        ),
+        (Some(_), None) | (None, Some(_)) => Ok(()),
+        _ => Err("advice_tier needs exactly one of max_tier/exact_tier".to_owned()),
+    }
+}
+
+/// A block carries at most one `recommended_guard`, each with a rationale,
+/// and only beside a mode-free pin it can enforce: the guard skips pins with
+/// their own `mode`, so without a mode-free `keep_together`, `preserve_dir` or
+/// `preserve_symbol_home` it would pass vacuously.
+fn check_guard(block: &AssertBlock) -> Result<(), String> {
+    for guard in &block.recommended_guard {
+        check_rationale(&guard.because, "recommended_guard")?;
+    }
+    if block.recommended_guard.len() > 1 {
+        return Err(
+            "recommended_guard appears more than once; one guard already judges every Recommended move"
+                .to_owned(),
+        );
+    }
+    let guardable = block.keep_together.iter().any(|set| set.mode.is_none())
+        || block.preserve_dir.iter().any(|dir| dir.mode.is_none())
+        || block
+            .preserve_symbol_home
+            .iter()
+            .any(|home| home.mode.is_none());
+    if !block.recommended_guard.is_empty() && !guardable {
+        return Err(
+            "recommended_guard needs a mode-free keep_together, preserve_dir or preserve_symbol_home pin in its block; without one it passes vacuously"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 fn check_rationale(because: &str, kind: &str) -> Result<(), String> {
     rationale(because).map_err(|message| format!("{kind}: {message}"))
 }
@@ -144,4 +220,109 @@ fn check_own_mode(run: RunMode, mode: Option<FaceMode>) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_advice_pin, check_guard};
+    use crate::target::{
+        AdviceTier, AssertBlock, FaceMode, PreserveSymbolHome, RecommendedGuard, Tier,
+    };
+
+    fn pin(max_tier: Option<Tier>, exact_tier: Option<Tier>) -> AdviceTier {
+        AdviceTier {
+            path: "src/tree/validation/shape.ts".to_owned(),
+            symbol: None,
+            to: Some("src/tree".to_owned()),
+            max_tier,
+            exact_tier,
+            because: "F1".to_owned(),
+        }
+    }
+
+    #[test]
+    fn should_accept_one_tier_and_reject_none_both_or_a_vacuous_cap() {
+        assert!(check_advice_pin(&pin(Some(Tier::Review), None)).is_ok());
+        assert!(check_advice_pin(&pin(None, Some(Tier::Recommended))).is_ok());
+        assert!(check_advice_pin(&pin(None, None)).is_err());
+        assert!(check_advice_pin(&pin(Some(Tier::Review), Some(Tier::Review))).is_err());
+        assert!(
+            check_advice_pin(&pin(Some(Tier::Recommended), None))
+                .is_err_and(|message| message.contains("caps nothing"))
+        );
+    }
+
+    #[test]
+    fn should_reject_a_blank_destination_or_symbol() {
+        let blank_to = AdviceTier {
+            to: Some(" ".to_owned()),
+            ..pin(Some(Tier::Review), None)
+        };
+        let blank_symbol = AdviceTier {
+            symbol: Some(String::new()),
+            ..pin(Some(Tier::Review), None)
+        };
+
+        assert!(check_advice_pin(&blank_to).is_err());
+        assert!(check_advice_pin(&blank_symbol).is_err());
+    }
+
+    fn guard() -> RecommendedGuard {
+        RecommendedGuard {
+            because: "SC-5".to_owned(),
+        }
+    }
+
+    fn home(mode: Option<FaceMode>) -> PreserveSymbolHome {
+        PreserveSymbolHome {
+            symbol: "inferMatches".to_owned(),
+            path: "src/differ/inference.ts".to_owned(),
+            mode,
+            because: "F3".to_owned(),
+        }
+    }
+
+    fn guarded(guards: Vec<RecommendedGuard>, homes: Vec<PreserveSymbolHome>) -> AssertBlock {
+        AssertBlock {
+            modes: Vec::new(),
+            candidate: 1,
+            preserve_dir: Vec::new(),
+            keep_together: Vec::new(),
+            separate: Vec::new(),
+            size_band: Vec::new(),
+            move_budget: Vec::new(),
+            no_synthetic_bucket: Vec::new(),
+            name_alignment: Vec::new(),
+            capacity_relief: Vec::new(),
+            non_inversion: Vec::new(),
+            preserve_symbol_home: homes,
+            cycle_import_cut: Vec::new(),
+            advice_tier: Vec::new(),
+            recommended_guard: guards,
+        }
+    }
+
+    #[test]
+    fn should_accept_one_guard_beside_a_mode_free_pin() {
+        assert!(check_guard(&guarded(vec![guard()], vec![home(None)])).is_ok());
+        assert!(check_guard(&guarded(Vec::new(), Vec::new())).is_ok());
+    }
+
+    #[test]
+    fn should_reject_a_guard_with_no_pin_to_enforce() {
+        let empty = guarded(vec![guard()], Vec::new());
+        let mode_limited = guarded(vec![guard()], vec![home(Some(FaceMode::Anchored))]);
+
+        assert!(check_guard(&empty).is_err_and(|message| message.contains("passes vacuously")));
+        assert!(
+            check_guard(&mode_limited).is_err_and(|message| message.contains("passes vacuously"))
+        );
+    }
+
+    #[test]
+    fn should_reject_a_duplicate_guard() {
+        let duplicate = guarded(vec![guard(), guard()], vec![home(None)]);
+
+        assert!(check_guard(&duplicate).is_err_and(|message| message.contains("more than once")));
+    }
 }

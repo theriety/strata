@@ -7,6 +7,7 @@ use unlace_ir::{ContainerId, EdgeKind, Node, NodeKind, Polarity, Snapshot};
 
 use super::placed::Placed;
 use crate::analyze::scoring::distance::folder_key_of_files;
+use crate::analyze::scoring::units::UnitFacts;
 
 /// One snapshot edge with everything about it that no placement changes.
 pub(super) struct EdgeFacts {
@@ -50,6 +51,8 @@ pub(in crate::analyze) struct SnapshotScoring {
     pub(super) production: Vec<(u32, u32)>,
     pub(super) dependency_nodes: Vec<DependencyFacts>,
     pub(super) companions: Vec<CompanionFacts>,
+    /// The companion units and where each pass-start file sits in them.
+    pub(super) units: UnitFacts,
     /// Folder key of each file path in the snapshot's own tree.
     pub(super) real_folder_of: BTreeMap<SmolStr, SmolStr>,
     /// The distinct current files that hold at least one declaration.
@@ -177,6 +180,7 @@ impl SnapshotScoring {
             production,
             dependency_nodes,
             companions,
+            units: UnitFacts::new(snapshot),
             real_folder_of,
             homes,
             node_home,

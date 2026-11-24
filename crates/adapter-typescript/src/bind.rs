@@ -8,10 +8,12 @@
 //! Module specifiers resolve in the order **relative path -> Node.js subpath
 //! import -> `tsconfig` `paths` alias -> package entry point**. References that
 //! cannot be resolved statically (dynamic `import('...')`) become low-confidence
-//! edges rather than being dropped.
+//! edges rather than being dropped. Each static import or re-export that
+//! resolves to an analysed file also becomes a file-import fact.
 
 mod containers;
 mod emission;
+mod imports;
 mod public_api;
 mod resolution;
 
@@ -28,6 +30,7 @@ use emission::{
     apply_polarity, assign_re_export_nodes, classify_polarity, emit_companion_affinities,
     emit_edges, emit_re_exports, exempt_module_objects, mark_test_source,
 };
+use imports::emit_file_imports;
 use public_api::PublicApiInputs;
 use resolution::Resolver;
 
@@ -141,6 +144,8 @@ pub(super) fn bind(
         advisory_uses: Vec::new(),
         file_facts: crate::pairs::file_facts(modules),
         test_support_roots: Vec::new(),
+        imports: emit_file_imports(modules, &resolver),
+        states_imports: true,
     }
 }
 
@@ -162,6 +167,7 @@ mod tests {
             re_exports: Vec::new(),
             export_clauses: Vec::new(),
             export_loads: Vec::new(),
+            module_loads: Vec::new(),
         }
     }
 

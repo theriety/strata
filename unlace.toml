@@ -72,6 +72,10 @@ anchor = 1.0
 # Fixed score penalty per declaration moved toward dependencies but no consumers.
 dependency-only = 0.05
 companion-separation = 0.05
+# Fixed charge per declaration moved from a companion folder `x/` into `x.ts` (ADR-33).
+entry-inflow = 0.0125
+# Fixed charge per file or declaration leaving the unit `x/ ∪ x.ts` (ADR-33; tracks entry-inflow).
+unit-outflow = 0.0125
 capacity = 4.0
 
 [profiles.anchored.weights]
@@ -109,6 +113,8 @@ pin-detected-test-symbols = true
 allow-cross-package-moves = false
 forbid-file-moves = []
 forbid-symbol-moves = []
+# Share of |score| a symbol move must gain to be accepted (ADR-34).
+symbol-gain-threshold = 0.001
 
 [profiles.anchored.relocation.test-mirroring]
 enabled = true
@@ -122,7 +128,7 @@ minimum-ambiguity-margin = 0.15
 [profiles.anchored.qualification.weights]
 unique-owner = 0.10
 role-affinity = 0.10
-source-cohesion = 0.25
+destination-advantage = 0.25
 destination-cohesion = 0.25
 producer-evidence = 0.10
 architectural-reach = 0.20
@@ -145,6 +151,10 @@ path = 0.0
 anchor = 0.0
 dependency-only = 0.05
 companion-separation = 0.05
+# Fixed charge per declaration moved from a companion folder `x/` into `x.ts` (ADR-33).
+entry-inflow = 0.0125
+# Fixed charge per file or declaration leaving the unit `x/ ∪ x.ts` (ADR-33; tracks entry-inflow).
+unit-outflow = 0.0125
 capacity = 4.0
 
 [profiles.greenfield.weights]
@@ -172,6 +182,8 @@ pin-detected-test-symbols = true
 allow-cross-package-moves = false
 forbid-file-moves = []
 forbid-symbol-moves = []
+# Share of |score| a symbol move must gain to be accepted (ADR-34).
+symbol-gain-threshold = 0.001
 
 [profiles.greenfield.relocation.test-mirroring]
 enabled = true
@@ -185,7 +197,7 @@ minimum-ambiguity-margin = 0.15
 [profiles.greenfield.qualification.weights]
 unique-owner = 0.10
 role-affinity = 0.10
-source-cohesion = 0.25
+destination-advantage = 0.25
 destination-cohesion = 0.25
 producer-evidence = 0.10
 architectural-reach = 0.20

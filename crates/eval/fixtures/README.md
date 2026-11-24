@@ -15,6 +15,14 @@ real OSS code, deterministic bytes, no timestamps or randomness.
 | `naming-drift` | naming-incoherence | python | 5 | does a proposal regroup misnamed containers so names match contents? |
 | `large-app` | scale | typescript | 108 | does proposal quality hold at three figures of file count? |
 | `cycle-span` | import-cycle | python | 5 | does an import cycle spanning two real directories keep both whole without churning a healthy layout? |
+| `companion-folders` | directory-tearing | typescript | 33 src + 1 manifest | do proposals keep companion-folder members, file entry points, and shared symbols where the code's own structure puts them? |
+
+Provenance: `companion-folders/` is a pruned copy of the in-house `mdc` parser
+(`src/` only), not synthetic. Files were removed one at a time, and a removal
+was kept only while every reproduced false move (F1–F9, the Recommended
+hoist, and a cross-file cycle that offers only same-file cuts) still appeared
+under `unlace analyze --mode both` on 1.0.0. File bodies are unedited, because
+the summed imbalance term depends on file sizes.
 
 Authoring rules live in CONTRACT.md; the short form: match the e2e fixture
 style under `crates/cli/tests/e2e/fixtures/`, tiny files whose imports express

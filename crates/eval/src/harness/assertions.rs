@@ -8,7 +8,9 @@ use crate::target::{AssertBlock, FaceMode, ReferenceSet};
 use super::inputs::EvalInputs;
 use super::{PairF1Report, Verdict};
 
+mod advice;
 mod churn;
+mod cycles;
 #[cfg(test)]
 pub(in crate::harness) mod fixtures;
 mod membership;
@@ -21,6 +23,8 @@ use membership::{evaluate_path_set, evaluate_preserve_dir, evaluate_preserve_sym
 use observations::reference_pairs;
 use shape::{evaluate_name_alignment, evaluate_no_synthetic_bucket, evaluate_size_band};
 
+pub(super) use advice::{drifted_advice_paths, evaluate_advice};
+pub(super) use cycles::evaluate_cycle_import_cuts;
 pub(super) use observations::observe_modes;
 pub(super) use preconditions::{all_findings, evaluate_preconditions};
 

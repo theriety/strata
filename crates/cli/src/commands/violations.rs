@@ -5,7 +5,10 @@
 //! configured caps) via the engine, and reports them. `--fail-on <classes>`
 //! raises the exit decision to a gating match when a hard violation of a listed
 //! class is present; capacity findings within ±10% of a cap are reported as
-//! `borderline` and never gate.
+//! `borderline` and never gate. When some or all files state no imports, the
+//! table ends with the cycle coverage note (ADR-35), so a gate log tells zero
+//! cycles apart from cycles the analysis could not see; the exit decision does
+//! not change.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -13,7 +16,7 @@ use std::path::PathBuf;
 use unlace_engine::{Severity, UnlaceError, Violation, ViolationKind, analyze, snapshot_from_root};
 
 use crate::commands::{ConfigOverrides, findings, resolve_config};
-use crate::render::{RenderOptions, write_json, write_violation_table};
+use crate::render::{RenderOptions, write_json, write_violation_report};
 
 /// The output format of the violations face.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,8 +151,9 @@ pub fn run(args: &ViolationsArgs, out: &mut impl Write) -> Result<Outcome, Unlac
 
     match args.format {
         ViolationFormat::Table => {
-            write_violation_table(
+            write_violation_report(
                 &findings,
+                &result.current.cycle_coverage,
                 RenderOptions {
                     full: args.full,
                     ..RenderOptions::default()
@@ -207,6 +211,8 @@ fn write_error(error: &std::io::Error) -> UnlaceError {
 
 #[cfg(test)]
 mod tests {
+    use unlace_engine::{CycleAnalysis, CycleCoverage};
+
     use super::*;
 
     #[test]
@@ -272,6 +278,7 @@ mod tests {
             severity: Severity::Violation,
             location: Vec::new(),
             detail: String::new(),
+            import_cycle: None,
             break_suggestions: None,
             capacity: None,
         };
@@ -288,6 +295,7 @@ mod tests {
             severity: Severity::Borderline,
             location: Vec::new(),
             detail: String::new(),
+            import_cycle: None,
             break_suggestions: None,
             capacity: None,
         };
@@ -303,6 +311,7 @@ mod tests {
             severity: Severity::Violation,
             location: Vec::new(),
             detail: String::new(),
+            import_cycle: None,
             break_suggestions: None,
             capacity: None,
         };
@@ -321,6 +330,7 @@ mod tests {
             severity: Severity::Borderline,
             location: Vec::new(),
             detail: String::new(),
+            import_cycle: None,
             break_suggestions: None,
             capacity: None,
         };
@@ -339,6 +349,7 @@ mod tests {
             severity: Severity::Violation,
             location: Vec::new(),
             detail: String::new(),
+            import_cycle: None,
             break_suggestions: None,
             capacity: None,
         };
@@ -350,6 +361,74 @@ mod tests {
         assert_eq!(gate(&[hard], &fail_on), Outcome::Clean);
     }
 
+    /// The table `violations` prints for `findings` under `coverage`.
+    fn table(findings: &[Violation], coverage: &CycleCoverage) -> String {
+        let mut out = Vec::new();
+        let written =
+            write_violation_report(findings, coverage, RenderOptions::default(), &mut out);
+        assert!(written.is_ok());
+        String::from_utf8(out).unwrap_or_default()
+    }
+
+    #[test]
+    fn should_note_partial_cycle_coverage_without_changing_the_gate() {
+        let partial = CycleCoverage {
+            status: CycleAnalysis::Partial,
+            files_without_imports: 2,
+        };
+        let fail_on = parse_fail_on("cycle").unwrap_or_default();
+
+        let text = table(&[], &partial);
+
+        assert!(
+            text.starts_with(
+                "no violations\nCycle analysis is partial: 2 files state no imports, so a cycle \
+                 through them is shown only where the symbol graph sees one.\n"
+            ),
+            "{text}"
+        );
+        assert_eq!(gate(&[], &fail_on), Outcome::Clean);
+    }
+
+    #[test]
+    fn should_note_unavailable_cycle_coverage_after_the_findings() {
+        let unavailable = CycleCoverage {
+            status: CycleAnalysis::Unavailable,
+            files_without_imports: 4,
+        };
+        let polarity = Violation {
+            kind: ViolationKind::Polarity,
+            severity: Severity::Violation,
+            location: vec!["src/a.rs".to_owned()],
+            detail: "test reaches production".to_owned(),
+            import_cycle: None,
+            break_suggestions: None,
+            capacity: None,
+        };
+
+        let text = table(&[polarity], &unavailable);
+
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines.get(..2),
+            Some(
+                [
+                    "polarity [violation] src/a.rs :: test reaches production",
+                    "Cycle analysis is unavailable: no analysed file states its imports, so no \
+                     cycle finding does not mean no cycle.",
+                ]
+                .as_slice()
+            )
+        );
+    }
+
+    #[test]
+    fn should_print_no_coverage_note_when_every_file_states_imports() {
+        let text = table(&[], &CycleCoverage::default());
+
+        assert!(!text.contains("Cycle analysis"), "{text}");
+    }
+
     #[test]
     fn should_gate_on_a_hard_violation_among_borderline_findings() {
         let cap = |severity| Violation {
@@ -357,6 +436,7 @@ mod tests {
             severity,
             location: vec!["c".to_owned()],
             detail: "over".to_owned(),
+            import_cycle: None,
             break_suggestions: None,
             capacity: None,
         };

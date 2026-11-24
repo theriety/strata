@@ -1,7 +1,7 @@
 # Unlace report — nested-python
 
 6 files · 12 symbols · 15 edges
-Snapshot `852221ba6d724d78ea5bbb361dd5e881dd8fc9f8ad1bc4dca176edb8bddf4132`
+Snapshot `a68168f1734917d3ddabff66885f27988a64cdfbbc3fdcb09bd9459a640b0760`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings
@@ -26,38 +26,35 @@ candidate is a proposed layout; inclusion does not make a move Recommended. Part
 rescored.
 
 anchored — 0 candidate(s)
-Baseline score: 0.3844
+Baseline score: 0.1984
 Fewer than the requested candidates survived; the solution space converged.
 Current layout is already optimal under this profile's search.
 No candidates were produced.
 
 greenfield — 1 candidate(s)
-Baseline score: 0.5844
+Baseline score: 0.3984
 Fewer than the requested candidates survived; the solution space converged.
 
 greenfield — candidate 1
-  Score: 0.5844 → 0.3535; improvement +0.2310
+  Score: 0.3984 → 0.3455; improvement +0.0529
   Proposed moves
-    - Move file `app.py` → `geometry/app.py`
-      Why: pulled toward `geometry/rectangle.py` — weight 2.0.
-    - Move symbol `describe` from `geometry/rectangle.py` → `geometry/app.py`
+    - Move symbol `describe` from `geometry/rectangle.py` → `app.py`
     - Move type `Shape` from `geometry/shape.py` → `geometry/rectangle.py`
   Folder impacts
-    `.`: 1 file(s) leaving · 0 entering
-    `geometry`: 0 file(s) leaving · 1 entering
+    No files enter or leave a folder.
   Before
     nested-python/
     ├── app.py *
     └── geometry/
         ├── rectangle.py *
-        │   └── symbol `describe` [to geometry/app.py]
+        │   └── symbol `describe` [to app.py]
         └── shape.py *
             └── type `Shape` [to geometry/rectangle.py]
   After
     nested-python/
+    ├── app.py *
+    │   └── symbol `describe` [from geometry/rectangle.py]
     └── geometry/
-        ├── app.py *
-        │   └── symbol `describe` [from geometry/rectangle.py]
         ├── rectangle.py *
         │   └── type `Shape` [from geometry/shape.py]
         └── shape.py *
@@ -73,12 +70,7 @@ thresholds; absent profiles did not select the move; conflicts name alternative 
 Advice consolidates the best candidate from each executed profile.
  Profiles share analysis-start evidence but apply their own weights and thresholds.
  Recommended (0):
- Review candidate (3):
-   - file `app.py` → `geometry` · supporting [greenfield] · qualified [] · absent [anchored] ·
-   conflicts []
-     review reasons: selected by only some executed profiles, destination evidence is below the
-     configured minimum, no strict majority of executed profiles provides qualifying support for
-     this destination
+ Review candidate (2):
    - symbol `describe` from `geometry/rectangle.py` → `app.py` · supporting [greenfield] ·
    qualified [] · absent [anchored] · conflicts []
      review reasons: selected by only some executed profiles, destination evidence is below the

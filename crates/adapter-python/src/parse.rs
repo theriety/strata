@@ -17,6 +17,7 @@ mod dunder_all;
 mod expressions;
 mod imports;
 mod lazy_loading;
+mod load_time;
 mod statements;
 
 use rayon::prelude::*;
@@ -32,6 +33,7 @@ use self::declaration::{
 use self::dunder_all::scan as scan_dunder_all;
 use self::imports::{conditional_imports, from_import, plain_import};
 use self::lazy_loading::sets_up_lazy_loading;
+use self::load_time::load_time_imports;
 
 /// A dynamic-resolution construct that yields a confidence below `1.0`.
 ///
@@ -91,6 +93,15 @@ pub struct Import {
     pub aliases: Vec<SmolStr>,
 }
 
+/// An import statement that runs when its module loads, with where it sits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportSite {
+    /// The 1-based line the statement starts on.
+    pub line: u32,
+    /// The statement's module, relative level and names.
+    pub import: Import,
+}
+
 /// A serializable, language-agnostic summary of one parsed module.
 ///
 /// This is the payload the adapter threads through [`unlace_ir::ParseTree`]:
@@ -107,6 +118,13 @@ pub struct ParsedModule {
     /// block (the `TYPE_CHECKING` and accelerator-fallback idioms). They feed
     /// public-API detection only, never the dependency edges.
     pub conditional_imports: Vec<Import>,
+    /// Every import statement that runs while the module loads, in source
+    /// order: the top-level ones and those in module-level `if`, `try`, `with`,
+    /// loop, `match` and class blocks. Imports under `if TYPE_CHECKING:` and
+    /// inside function bodies are left out, since neither loads its target
+    /// with the module. They feed the file-import facts only.
+    #[serde(default)]
+    pub import_sites: Vec<ImportSite>,
     /// Whether the module sets up lazy loading: it defines, assigns or imports
     /// a module-level `__getattr__` (PEP 562), or replaces itself in
     /// `sys.modules`, also inside a conditional block.
@@ -208,6 +226,7 @@ fn extract(path: &SmolStr, suite: &[Stmt], source: &str) -> ParsedModule {
         declarations,
         imports,
         conditional_imports: conditional_imports(suite),
+        import_sites: load_time_imports(suite, source),
         lazy_loading: sets_up_lazy_loading(suite),
         dunder_all: dunder_all.names,
         dunder_all_form: dunder_all.form,

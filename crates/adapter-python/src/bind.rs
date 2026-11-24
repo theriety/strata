@@ -17,6 +17,7 @@
 mod containers;
 mod dynamic;
 mod edges;
+mod imports;
 mod module_objects;
 mod polarity;
 mod public_api;
@@ -33,6 +34,7 @@ use unlace_ir::{
 
 use self::containers::ContainerBuilder;
 use self::edges::emit_edges;
+use self::imports::emit_imports;
 use self::module_objects::exempt_module_objects;
 use self::polarity::{apply_polarity, classify_polarity, mark_test_source};
 use self::public_api::mark_public_api;
@@ -115,6 +117,7 @@ pub(super) fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
     let polarity = classify_polarity(modules, &nodes, &local, &exported, &edges);
     apply_polarity(&mut nodes, &polarity);
     mark_public_api(&mut nodes, modules, &local);
+    let import_facts = emit_imports(modules, &resolver);
 
     IrFragment {
         nodes,
@@ -126,6 +129,8 @@ pub(super) fn bind(modules: &[ParsedModule], root: &Path) -> IrFragment {
         advisory_uses: Vec::new(),
         file_facts: crate::pairs::file_facts(modules),
         test_support_roots: Vec::new(),
+        imports: import_facts.imports,
+        states_imports: import_facts.complete,
     }
 }
 
@@ -171,6 +176,7 @@ mod tests {
             declarations: Vec::new(),
             imports: Vec::new(),
             conditional_imports: Vec::new(),
+            import_sites: Vec::new(),
             lazy_loading: false,
             dunder_all: Vec::new(),
             dunder_all_form: DunderAllForm::Absent,

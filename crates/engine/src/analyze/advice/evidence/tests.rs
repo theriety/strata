@@ -177,3 +177,51 @@ fn should_reward_only_the_common_ancestor_of_sibling_consumer_branches() {
         "a shared symbol's sibling-consumer LCA must enter the ambiguity pool"
     );
 }
+
+#[test]
+fn should_place_a_folder_companion_in_its_folder_for_reach_and_alternatives() {
+    // `tree/validation.ts` is the entry of `tree/validation/` (ADR-31) and the
+    // laminar build hangs it under that folder: its physical evidence folder is
+    // `tree/validation`, and `tree` keeps resolving to its own folder.
+    let mut ir = unlace_ir::IntermediateRepresentation::new(
+        vec![
+            node(0, "validate", 3, Polarity::Production),
+            node(1, "shape", 4, Polarity::Production),
+            node(2, "walk", 5, Polarity::Production),
+        ],
+        vec![type_ref(0, 1)],
+        unlace_ir::ContainerTree::new(vec![
+            container(0, "workspace", ScopeLevel::PackageGroup, None),
+            container(1, "tree", ScopeLevel::Domain, Some(0)),
+            container(2, "tree/validation", ScopeLevel::Folder, Some(1)),
+            container(3, "tree/validation.ts", ScopeLevel::File, Some(2)),
+            container(4, "tree/validation/shape.ts", ScopeLevel::File, Some(2)),
+            container(5, "tree/traversal.ts", ScopeLevel::File, Some(1)),
+        ]),
+    );
+    ir.file_facts.push(unlace_ir::FileFact::folder_companion(
+        "tree/validation.ts",
+        "tree/validation",
+    ));
+    let snapshot = unlace_ir::Snapshot::assemble(ir).ok();
+    let index = snapshot.as_ref().map(EvidenceIndex::new);
+
+    assert_eq!(
+        index
+            .as_ref()
+            .and_then(|index| index.physical_folder_for_file(ContainerId(3))),
+        Some(EvidencePlace::PhysicalFolder {
+            container: ContainerId(2),
+            path: "tree/validation".to_owned(),
+        })
+    );
+    assert_eq!(
+        index
+            .as_ref()
+            .and_then(|index| index.resolve_folder_place("tree")),
+        Some(EvidencePlace::PhysicalFolder {
+            container: ContainerId(1),
+            path: "tree".to_owned(),
+        })
+    );
+}

@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use smol_str::SmolStr;
 use swc_common::{FileName, SourceMap, Spanned, sync::Lrc};
 use swc_ecma_parser::{Parser, StringInput, Syntax, TsSyntax, lexer::Lexer};
-use unlace_ir::{AdapterError, SourceFile};
+use unlace_ir::{AdapterError, ImportKind, SourceFile};
 
 mod declarations;
 mod references;
@@ -51,6 +51,21 @@ pub enum DeclarationKind {
     Type,
     /// Executable file-scope content without an independent declaration.
     FileBody,
+}
+
+/// A top-level statement that loads another module when the file runs.
+///
+/// Type-only statements are erased at runtime and never become a load. A
+/// dynamic `import()` is never one either: it loads lazily, so it cannot take
+/// part in a load-time cycle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleLoad {
+    /// The module specifier exactly as written in the statement.
+    pub source: SmolStr,
+    /// Whether the statement binds names of the module or only runs it.
+    pub kind: ImportKind,
+    /// The 1-based line the statement starts on.
+    pub line: u32,
 }
 
 /// A static import (`import { x } from '...'`) with literal specifier.
@@ -188,6 +203,10 @@ pub struct ParsedModule {
     /// Only the public API pass reads them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub export_loads: Vec<ExportLoad>,
+    /// Runtime module loads of the top-level import and re-export statements,
+    /// in source order. They feed the file-import facts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub module_loads: Vec<ModuleLoad>,
 }
 
 /// A module an export loads and hands out.

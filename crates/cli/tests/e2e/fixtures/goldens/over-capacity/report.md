@@ -1,7 +1,7 @@
 # Unlace report — over-capacity
 
 3 files · 375 symbols · 0 edges
-Snapshot `3f214d4ce8d116f9db703133f34f3be610b97a013f46bd10049050eb5bbdeaa6`
+Snapshot `637abc54516ea25e9691934c598c7bc4054c5d93b88cb1af0282ea1a2d687c34`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings
@@ -22,8 +22,8 @@ greenfield profile-specific findings (0)
 ## Candidate layouts
 
 ```text
-anchored — 0 candidates (baseline 1.4095; search converged; current layout breaks 2 cap(s))
-greenfield — 0 candidates (baseline 1.6095; search converged; current layout breaks 2 cap(s))
+anchored — 0 candidates (baseline 1.4047; search converged; current layout breaks 2 cap(s))
+greenfield — 0 candidates (baseline 1.6047; search converged; current layout breaks 2 cap(s))
 ```
 
 ## Advice

@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
+use unlace_ir::laminar::{Companions, effective_directory};
 use unlace_ir::{Container, ContainerTree, ScopeLevel};
 
 use super::physical::real_label;
@@ -54,9 +55,10 @@ pub(in crate::analyze) struct RealRoots {
 }
 
 impl RealRoots {
-    /// Derives each file's domain and package directories from its own path.
-    pub(in crate::analyze) fn from_tree(tree: &ContainerTree) -> Self {
-        Self::from_tree_keyed(tree, &BTreeMap::new())
+    /// Derives each file's domain and package directories from its effective
+    /// directory: a folder companion's is its folder (ADR-31).
+    pub(in crate::analyze) fn from_tree(tree: &ContainerTree, companions: &Companions) -> Self {
+        Self::build(tree, &BTreeMap::new(), companions)
     }
 
     /// [`Self::from_tree`] over a candidate tree, whose upper containers may
@@ -65,9 +67,23 @@ impl RealRoots {
     /// decorated by the election fallback (`2024 (2024.x)`) is not in
     /// `key_by_id`, so its folders count as foreign sub-folders: consistent
     /// between findings and pricing, but an overcount.
+    ///
+    /// Candidate pricing reads only the folder-keyed sub-folder counts, and a
+    /// candidate tree already holds each folder companion in its folder's
+    /// container, so no companion facts are needed here.
     pub(in crate::analyze) fn from_tree_keyed(
         tree: &ContainerTree,
         key_by_id: &BTreeMap<u32, SmolStr>,
+    ) -> Self {
+        Self::build(tree, key_by_id, &Companions::default())
+    }
+
+    /// The shared derivation: each file's real roots are read from its
+    /// effective directory (ADR-31).
+    fn build(
+        tree: &ContainerTree,
+        key_by_id: &BTreeMap<u32, SmolStr>,
+        companions: &Companions,
     ) -> Self {
         let key_name = |container: &Container| -> String {
             key_by_id
@@ -113,11 +129,7 @@ impl RealRoots {
                 }
                 _ => package.clone(),
             };
-            let directory = path_segments(
-                file.name
-                    .rsplit_once('/')
-                    .map_or("", |(directory, _)| directory),
-            );
+            let directory = path_segments(effective_directory(&file.name, companions));
             let namespace = physical_namespace(&directory, &package, &scope_of(folder));
             let domain_directory = physical_directory(&package, &namespace, &scope_of(domain));
             let below_domain = if folder.is_some_and(|folder| folder.synthetic) {

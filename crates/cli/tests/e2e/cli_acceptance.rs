@@ -1018,12 +1018,51 @@ fn should_match_the_analyze_json_face_even_when_capacity_findings_exist() {
     );
 }
 
+/// Asserts one import cut joins two files of `members`, locates every
+/// statement it removes, and carries a positive weight (ADR-35).
+fn assert_located_import_cut(removed: &serde_json::Value, members: &[String]) {
+    let importer = removed.get("importer").and_then(serde_json::Value::as_str);
+    let imported = removed.get("imported").and_then(serde_json::Value::as_str);
+    assert!(
+        importer.is_some_and(|file| members.iter().any(|member| member == file))
+            && imported.is_some_and(|file| members.iter().any(|member| member == file))
+            && importer != imported,
+        "an import cut joins two files of the cycle: {removed}"
+    );
+    let statements = removed
+        .get("statements")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !statements.is_empty()
+            && statements.iter().all(|statement| {
+                statement
+                    .get("line")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|line| line > 0)
+                    && statement
+                        .get("specifier")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|specifier| !specifier.is_empty())
+            }),
+        "an import cut locates its statements: {removed}"
+    );
+    assert!(
+        removed
+            .get("weight")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|weight| weight >= 1),
+        "an import cut carries a positive weight: {removed}"
+    );
+}
+
 #[test]
-fn should_populate_break_suggestions_with_real_names_weights_and_exactness() {
-    // MFAS is wired (D-32 resolved): every cycle violation carries a non-empty
-    // breakSuggestions list whose entries name real symbols, price the break in
-    // the config's edge-weight currency, and flag ILP-proven minimality; the
-    // detail line leads with the first break.
+fn should_name_the_import_cut_of_a_cross_file_cycle() {
+    // ADR-35: a cycle finding reports a file-import cycle and names the
+    // imports whose removal breaks it, each located by specifier and line and
+    // carrying the symbol references that must move first; the detail line
+    // leads with the first import to remove.
     let root = fixture("cyclic");
     let root_str = root.to_str().unwrap_or_default();
 
@@ -1041,6 +1080,14 @@ fn should_populate_break_suggestions_with_real_names_weights_and_exactness() {
     let parsed: serde_json::Value =
         serde_json::from_str(&outcome.stdout).unwrap_or(serde_json::Value::Null);
 
+    assert_eq!(
+        parsed
+            .pointer("/current/cycleCoverage/status")
+            .and_then(serde_json::Value::as_str),
+        Some("complete"),
+        "every python file states its imports: {}",
+        outcome.stdout
+    );
     let cycles: Vec<&serde_json::Value> = parsed
         .pointer("/current/sharedFindings")
         .and_then(serde_json::Value::as_array)
@@ -1070,56 +1117,48 @@ fn should_populate_break_suggestions_with_real_names_weights_and_exactness() {
                     .collect()
             })
             .unwrap_or_default();
-        let suggestions = cycle
-            .get("breakSuggestions")
+        assert!(
+            members.len() >= 2
+                && members.iter().all(|member| {
+                    std::path::Path::new(member)
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("py"))
+                }),
+            "cycle locations are repository-relative file paths: {members:?}"
+        );
+        assert!(
+            cycle.get("breakSuggestions").is_none(),
+            "a cycle offers no symbol cut: {cycle}"
+        );
+        let status = cycle.pointer("/importCycle/status");
+        let exact = cycle.pointer("/importCycle/exact");
+        assert!(
+            status.and_then(serde_json::Value::as_str) == Some("cut")
+                && exact.and_then(serde_json::Value::as_bool) == Some(true),
+            "a 2-file cycle names an exact cut: {cycle}"
+        );
+        let cut = cycle
+            .pointer("/importCycle/cut")
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
         assert!(
-            !suggestions.is_empty(),
-            "a cycle carries at least one break suggestion: {cycle}"
+            !cut.is_empty(),
+            "a cycle names at least one import: {cycle}"
         );
-        assert!(
-            members.iter().all(|member| {
-                std::path::Path::new(member)
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("py"))
-            }),
-            "cycle locations are repository-relative file paths: {members:?}"
-        );
-        for suggestion in &suggestions {
-            let source = suggestion.get("source").and_then(serde_json::Value::as_str);
-            let target = suggestion.get("target").and_then(serde_json::Value::as_str);
-            assert!(
-                source.is_some_and(|name| !name.is_empty()),
-                "a break names its source symbol: {suggestion}"
-            );
-            assert!(
-                target.is_some_and(|name| !name.is_empty()),
-                "a break names its target symbol: {suggestion}"
-            );
-            assert!(
-                suggestion
-                    .get("weight")
-                    .and_then(serde_json::Value::as_f64)
-                    .is_some_and(|weight| weight > 0.0),
-                "a break carries a positive config-priced weight: {suggestion}"
-            );
-            assert!(
-                suggestion.get("exact").and_then(serde_json::Value::as_bool) == Some(true),
-                "a tiny scc solves exactly via the ilp: {suggestion}"
-            );
+        for removed in &cut {
+            assert_located_import_cut(removed, &members);
         }
         let detail = cycle
             .get("detail")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
         assert!(
-            detail.contains("-symbol cycle;")
-                && detail.contains("unlace keeps a dependency cycle in one file")
-                && detail.contains("; to split it, break ")
-                && detail.contains("exact"),
-            "the detail states the placement consequence and first break: {detail}"
+            detail.contains("-file import cycle; to break it, remove ")
+                && detail.contains("(line ")
+                && detail.contains("exact")
+                && !detail.contains("keeps a dependency cycle in one file"),
+            "the detail names the first import to remove: {detail}"
         );
     }
 }
@@ -1300,9 +1339,10 @@ fn should_render_a_greenfield_candidate_tree_for_the_constellation_fixture() {
 #[test]
 fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
     // the narration contract is pinned on constellation-ts's greenfield delta:
-    // four move groups over five files, each destination a real directory-
-    // derived cluster name (`constellation-ts/src/model`) reached through a
-    // dependency-pull reason. workspace-rust no longer carries this contract —
+    // `src/util` splits into the two clusters that use it — `clamp.ts` joins
+    // `src/core` and `hash.ts` joins `src/model` (ADR-32: with imbalance a mean,
+    // both single-cluster helpers follow their only callers), each destination a
+    // real directory-derived cluster reached through a dependency-pull reason. workspace-rust no longer carries this contract —
     // its greenfield candidate now converges back to the identity layout, so
     // diffing it against current narrates `no moves`. Synthetic grab-bag
     // labels like `mixed` stay dead: every destination is real.
@@ -1324,8 +1364,14 @@ fn should_narrate_the_greenfield_moves_for_the_workspace_fixture() {
         outcome.stdout
     );
     assert!(
-        outcome.stdout.contains("move — pulled by "),
-        "the move carries a dependency-pull reason, not a clustering fallback: {}",
+        outcome.stdout.contains("→ src/core]"),
+        "the core-only helper joins the real `core` cluster: {}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stdout.contains("split — pulled by beta.ts")
+            && outcome.stdout.contains("split — pulled by matrix.ts"),
+        "each split carries a dependency-pull reason, not a clustering fallback: {}",
         outcome.stdout
     );
     assert!(
@@ -2037,16 +2083,16 @@ fn should_exit_one_on_a_malformed_result_input_for_every_reader() {
 
 #[test]
 fn should_reject_a_result_with_an_unsupported_schema_version() {
-    // a saved result stamped with any other schemaVersion — future (999), the
-    // immediately retired v10, or v1 — must be refused up front with a remediable message, not
-    // misread field-by-field.
+    // a saved result stamped outside the readable 11..=12 range — future
+    // (999), the retired v10, or v1 — must be refused up front with a
+    // remediable message, not misread field-by-field.
     let result = analyze_to_file("rust");
     let contents = std::fs::read_to_string(&result).unwrap_or_default();
     let result_str = result.to_str().unwrap_or_default();
 
     for version in ["999", "10", "1"] {
         let stamped = contents.replace(
-            "\"schemaVersion\":11",
+            "\"schemaVersion\":12",
             &format!("\"schemaVersion\":{version}"),
         );
         assert_ne!(contents, stamped, "the version stamp was found and bumped");
@@ -2066,13 +2112,91 @@ fn should_reject_a_result_with_an_unsupported_schema_version() {
         );
         assert!(
             outcome.stderr.contains(&format!(
-                "unsupported result schemaVersion {version}; expected 11"
+                "unsupported result schemaVersion {version}; expected 11 to 12"
             )),
             "the refusal names the offending version: {}",
             outcome.stderr
         );
     }
     let _ = std::fs::remove_file(&result);
+}
+
+#[test]
+fn should_read_a_schema_eleven_result_without_term_shifts() {
+    // a v11 result predates per-move term shifts and fold paths: restamped and
+    // stripped of both, it still loads in every reading command. nested-ts
+    // narrates a symbol move, so a `SymbolMove` really deserializes without
+    // the schema-12 fields.
+    let result = analyze_to_file("nested-ts");
+    let contents = std::fs::read_to_string(&result).unwrap_or_default();
+    let mut json: serde_json::Value = serde_json::from_str(&contents).unwrap_or_default();
+    let stripped = strip_schema_twelve_fields(&mut json);
+    if let Some(version) = json.get_mut("schemaVersion") {
+        *version = serde_json::Value::from(11);
+    }
+    let written = std::fs::write(&result, json.to_string()).is_ok();
+    let result_str = result.to_str().unwrap_or_default();
+
+    let tree = run(&["tree", "--input", result_str, "--current"]);
+    let report = run(&["report", "--input", result_str]);
+
+    let _ = std::fs::remove_file(&result);
+    assert!(written, "the v11 result was written");
+    assert!(stripped > 0, "the fixture carried a term shift to strip");
+    assert_eq!(tree.code, 0, "tree reads a v11 result: {}", tree.stderr);
+    assert_eq!(
+        report.code, 0,
+        "report reads a v11 result: {}",
+        report.stderr
+    );
+}
+
+#[test]
+fn should_name_the_paying_terms_of_a_symbol_move_only_when_verbose() {
+    // nested-ts narrates a symbol move; --verbose adds its `pays:` line
+    // (schema 12 term shifts) and the default output stays unchanged.
+    let root = fixture("nested-ts");
+    let root_str = root.to_str().unwrap_or_default();
+
+    let verbose = run(&[
+        "analyze",
+        "--root",
+        root_str,
+        "--config",
+        PURE_DEFAULTS,
+        "--verbose",
+    ]);
+    let plain = run(&["analyze", "--root", root_str, "--config", PURE_DEFAULTS]);
+
+    assert_eq!(verbose.code, 0, "{}", verbose.stderr);
+    assert!(
+        verbose.stdout.contains("      pays: "),
+        "verbose output names the paying terms: {}",
+        verbose.stdout
+    );
+    assert!(
+        !plain.stdout.contains("pays: "),
+        "the default output carries no pays line: {}",
+        plain.stdout
+    );
+}
+
+/// Removes every schema-12 `terms` and `fold` member anywhere in `value`,
+/// returning how many `terms` objects it removed.
+fn strip_schema_twelve_fields(value: &mut serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Object(map) => {
+            let removed = usize::from(map.remove("terms").is_some());
+            map.remove("fold");
+            removed
+                + map
+                    .values_mut()
+                    .map(strip_schema_twelve_fields)
+                    .sum::<usize>()
+        }
+        serde_json::Value::Array(items) => items.iter_mut().map(strip_schema_twelve_fields).sum(),
+        _ => 0,
+    }
 }
 
 #[test]
@@ -2972,9 +3096,10 @@ fn should_reject_a_zero_seeds_per_candidate_from_config() {
 #[test]
 fn should_populate_conditional_splits_for_an_over_cap_scc() {
     // cyclic-oversized carries a three-file import cycle whose SCC exceeds the
-    // file cap: every candidate in both modes shares the same conditional split,
-    // its preconditions byte-identical to the cycle violation's break
-    // suggestions and its resulting file count ceil-packed to two.
+    // file cap: the cycle finding names its import cut (ADR-35), while every
+    // candidate in both modes shares the same conditional split, whose
+    // preconditions stay symbol edge breaks and whose resulting file count
+    // ceil-packs to two.
     let root = fixture("cyclic-oversized");
     let root_str = root.to_str().unwrap_or_default();
 
@@ -2992,17 +3117,17 @@ fn should_populate_conditional_splits_for_an_over_cap_scc() {
 
     assert_eq!(outcome.code, 0, "analyze exits 0");
     let parsed: serde_json::Value = serde_json::from_str(&outcome.stdout).unwrap_or_default();
-    let suggestions = parsed
+    let cut = parsed
         .pointer("/current/sharedFindings")
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
-        .find_map(|violation| violation.get("breakSuggestions"))
+        .find_map(|violation| violation.pointer("/importCycle/cut"))
         .cloned()
         .unwrap_or_default();
     assert!(
-        suggestions.as_array().is_some_and(|list| !list.is_empty()),
-        "the cycle violation carries break suggestions: {suggestions}"
+        cut.as_array().is_some_and(|list| list.len() == 1),
+        "the three-file ring is broken by one import: {cut}"
     );
     for mode in ["anchored", "greenfield"] {
         let candidates = parsed
@@ -3018,10 +3143,12 @@ fn should_populate_conditional_splits_for_an_over_cap_scc() {
                 .unwrap_or_default();
             assert_eq!(splits.len(), 1, "{mode} candidates carry the one split");
             let split = splits.first().cloned().unwrap_or_default();
-            assert_eq!(
-                split.get("preconditions"),
-                Some(&suggestions),
-                "{mode} split preconditions mirror the break suggestions"
+            assert!(
+                split
+                    .get("preconditions")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|edges| !edges.is_empty()),
+                "{mode} split preconditions name symbol edges"
             );
             assert_eq!(
                 split

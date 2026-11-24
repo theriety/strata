@@ -6,6 +6,7 @@ Unlace keeps semantic clustering separate from physical repository structure: mo
 
 - Status: `Accepted`
 - Date: `2026-08-29`
+- Amended by: ADR-31 (a companion `x.ts` is `x/`'s entry; adds the IR field `FileFact::folder_companion`)
 
 ## 🎯 Motivation
 

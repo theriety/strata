@@ -8,7 +8,6 @@ use std::collections::BTreeMap;
 
 use unlace_ir::{ScopeLevel, Snapshot};
 
-use crate::analyze::search::{SccSolution, solve_cycles};
 use crate::analyze::test_policy::TestPolicy;
 use crate::config::{CapacityConfig, ProfileConfig};
 use crate::result::{ContainerNode, Severity, Summary, Violation, ViolationKind};
@@ -16,6 +15,7 @@ use crate::snapshot::Language;
 
 mod capacity;
 mod cycles;
+mod import_cycles;
 mod ordering;
 mod physical;
 mod polarity;
@@ -32,7 +32,8 @@ mod tests;
 use capacity::capacity_violations;
 pub(in crate::analyze) use capacity::{snapshot_capacity_violations, walk_all_capacity};
 pub(in crate::analyze) use cycles::conditional_splits;
-use cycles::cycle_violations;
+pub(in crate::analyze) use import_cycles::cycle_coverage;
+use import_cycles::import_cycle_violations;
 use ordering::sort_and_dedup_violations;
 #[cfg(test)]
 use ordering::{sort_violations, violation_identity};
@@ -46,15 +47,19 @@ pub(in crate::analyze) use real_roots::RealRoots;
 use test_only::test_only_violations;
 use visibility::visibility_violations;
 
+/// The findings of the current tree under `profile`.
+///
+/// Cycle findings need no symbol break set: the import graph is cut on its
+/// own, and the hard symbol components serve only as unavailable witnesses,
+/// so no MFAS is solved here. `solve_cycles` runs only for the conditional
+/// splits of a profile result.
 pub(in crate::analyze) fn profile_findings(
     snapshot: &Snapshot,
     tree: &ContainerNode,
     profile: &ProfileConfig,
     tests: &TestPolicy,
 ) -> Vec<Violation> {
-    let weights = profile.weights.kind_weights();
-    let cycles = solve_cycles(snapshot, profile, &weights);
-    collect_violations(snapshot, &profile.capacity, tree, &cycles, tests)
+    collect_violations(snapshot, &profile.capacity, tree, tests)
 }
 
 /// Counts the capacity findings that hard-breach their caps: `Severity::Violation`
@@ -103,18 +108,18 @@ pub(in crate::analyze) fn summarize(snapshot: &Snapshot) -> Summary {
     }
 }
 
-/// Collects the violations of the current tree: dependency cycles, polarity
+/// Collects the violations of the current tree: file-import cycles (ADR-35),
+/// with the symbol cycles as witnesses where imports are unavailable, polarity
 /// breaches, visibility over-exports, and capacity findings against the
 /// configured caps.
 fn collect_violations(
     snapshot: &Snapshot,
     capacity: &CapacityConfig,
     tree: &ContainerNode,
-    cycles: &[SccSolution],
     tests: &TestPolicy,
 ) -> Vec<Violation> {
     let mut violations = Vec::new();
-    violations.extend(cycle_violations(snapshot, cycles));
+    violations.extend(import_cycle_violations(snapshot));
     violations.extend(polarity_violations(snapshot));
     violations.extend(visibility_violations(snapshot, tests));
     violations.extend(test_only_violations(snapshot, tests));

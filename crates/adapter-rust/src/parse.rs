@@ -15,6 +15,7 @@ mod advisory;
 mod declaration;
 mod dropped;
 mod globs;
+mod imports;
 mod items;
 mod metadata;
 mod modules;
@@ -28,6 +29,8 @@ use unlace_ir::{AdapterError, SourceFile};
 
 use self::advisory::{identifiers, mark_inline};
 use self::dropped::{DroppedUses, has_pub_use};
+use self::imports::collect_uses;
+pub use self::imports::{ModImport, QualifiedPath, UseStatement};
 use self::items::push_item;
 use self::metadata::{has_cfg_test, loader_may_drop};
 use self::modules::{Modules, collect_mod_decls, propagate_gates};
@@ -226,6 +229,18 @@ pub struct ParsedFile {
     /// cargo target root this is the program's start symbol.
     #[serde(default, skip_serializing_if = "is_false")]
     pub root_main: bool,
+    /// The out-of-line `mod x;` declarations that resolve to an analysed file,
+    /// in source order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mod_imports: Vec<ModImport>,
+    /// Every `use` item with the leaves it names, in source order, outside
+    /// test-only code.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<UseStatement>,
+    /// Every path of two or more segments outside a `use` tree, in source
+    /// order, outside test-only code and macro token trees.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<QualifiedPath>,
 }
 
 /// Parses Rust sources into [`ParsedFile`]s, one rayon task per file.
@@ -271,6 +286,7 @@ fn parse_one(file: &SourceFile) -> Result<(ParsedFile, Modules), AdapterError> {
         source: file.contents.clone(),
         file_gated: loader_may_drop(&ast.attrs),
     };
+    let found = collect_uses(&ast);
     let file = ParsedFile {
         path: file.path.clone(),
         declarations,
@@ -284,6 +300,9 @@ fn parse_one(file: &SourceFile) -> Result<(ParsedFile, Modules), AdapterError> {
         pub_use: has_pub_use(&ast.items),
         test_of: None,
         root_main: has_root_main(&ast.items),
+        mod_imports: Vec::new(),
+        uses: found.uses,
+        paths: found.paths,
     };
     Ok((file, modules))
 }

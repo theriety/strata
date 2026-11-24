@@ -1,6 +1,7 @@
 #![allow(clippy::assertions_on_constants)]
 
 use std::collections::{BTreeMap, BTreeSet};
+use unlace_ir::laminar::Companions;
 
 use smol_str::SmolStr;
 use unlace_core::cluster::{ClusterId, Partition};
@@ -2525,6 +2526,7 @@ fn relief_file(index: usize, stem: &str) -> FileInfo {
         name: SmolStr::new(format!("{stem}_{index:02}.py")),
         production_sloc: 10,
         namespace: SmolStr::new(""),
+        directory: SmolStr::default(),
         home: LaminarHome {
             folder: SmolStr::new("hub"),
             domain: SmolStr::new("hub"),
@@ -2608,7 +2610,7 @@ fn should_count_only_direct_folders_of_a_domain_not_those_of_a_sibling_domain() 
             walk_all_capacity(
                 &dto,
                 &config.profiles.anchored.capacity,
-                &RealRoots::from_tree(&tree),
+                &RealRoots::from_tree(&tree, &Companions::default()),
             )
         })
         .unwrap_or_default();

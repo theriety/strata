@@ -2,8 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
+/// θ (ADR-34): a symbol move must gain at least this share of the current
+/// score. Calibrated on the eval corpus: inside the band where every pin holds,
+/// and at least five times below the smallest relative gain of a move the
+/// corpus keeps.
+pub const DEFAULT_SYMBOL_GAIN_THRESHOLD: f64 = 1e-3;
+
 /// Per-profile relocation admission and test-mirroring policy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct RelocationConfig {
     /// Prevent declarations in detected tests, and test-polarity declarations in
@@ -20,6 +26,12 @@ pub struct RelocationConfig {
     /// Repo-relative file globs that block declarations leaving or entering a match.
     #[serde(rename = "forbid-symbol-moves")]
     pub forbid_symbol_moves: Vec<String>,
+    /// θ: a symbol move must gain at least `θ × |score|` of the score it
+    /// starts from (ADR-34). Relative, because the mean imbalance term
+    /// rescales every term with the tree (ADR-32). Finite and non-negative;
+    /// `0` keeps only the float-dust floor.
+    #[serde(rename = "symbol-gain-threshold")]
+    pub symbol_gain_threshold: f64,
     /// Exact immutable source-to-test mirroring policy.
     #[serde(rename = "test-mirroring")]
     pub test_mirroring: TestMirroringConfig,
@@ -32,6 +44,7 @@ impl Default for RelocationConfig {
             allow_cross_package_moves: false,
             forbid_file_moves: Vec::new(),
             forbid_symbol_moves: Vec::new(),
+            symbol_gain_threshold: DEFAULT_SYMBOL_GAIN_THRESHOLD,
             test_mirroring: TestMirroringConfig::default(),
         }
     }

@@ -1,6 +1,6 @@
 Unlace report — dup-pkg-ts
 11 files · 11 symbols · 11 edges
-Snapshot `53567d8884bf39711e1ac08a615576771323d3d1f5d90b01392bb9050882a0f8`
+Snapshot `bbf09d0db3ba8e7c27f52ff5204132e32b82c64ee7ed5c564c06c300e337d3a4`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 Structural findings
@@ -22,18 +22,18 @@ candidate is a proposed layout; inclusion does not make a move Recommended. Part
 rescored.
 
 anchored — 0 candidate(s)
-Baseline score: 6.2103
+Baseline score: 6.1146
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 No candidates were produced.
 
 greenfield — 1 candidate(s)
-Baseline score: 6.4103
+Baseline score: 6.3146
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 
 greenfield — candidate 1
-  Score: 6.4103 → 4.2180; improvement +2.1923
+  Score: 6.3146 → 4.1405; improvement +2.1741
   Capacity remaining: 1 (0 at file level).
   Proposed moves
     - Move file `dup-pkg-ts/src/agent/loop.ts` → `dup-pkg-ts/src/core/loop.ts`

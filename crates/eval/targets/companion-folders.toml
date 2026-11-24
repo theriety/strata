@@ -1,0 +1,188 @@
+# Constraint target for the `companion-folders` fixture — see CONTRACT.md for the schema.
+#
+# Failure mode: directory-tearing at file AND symbol grain. The fixture is a
+# trimmed copy of the TypeScript parser `mdc`, whose modules follow the
+# companion-folder convention: `x.ts` is the entry point and `x/` holds the
+# private parts only `x.ts` and its siblings import. unlace v1.0.0 (HEAD
+# 94732cd) proposes moves that contradict that structure: it hoists companion
+# members out of their folder (F1, F2), separates a file's sole entry point
+# from the private helpers it calls (F3–F7), and relocates a shared symbol into
+# a minority consumer (F8, F9). Each assertion pins the defended best state:
+# none of those moves happen. The findings are recorded in the
+# advice-false-moves stream (findings-mdc-run.md).
+
+schema = 1
+fixture = "companion-folders"
+
+[meta]
+failure_mode = "directory-tearing"
+language = "typescript"
+question = "Do proposals keep companion-folder members, file entry points, and shared symbols where the code's own structure puts them?"
+
+[run]
+mode = "both"        # every false move appeared in at least one mode's best candidate
+candidates = 3       # engine default k
+seed = 42            # engine default seed
+config = "defaults"  # pure built-in defaults; no fixture unlace.toml
+
+[[precondition]]
+kind = "file_count"
+min = 33
+max = 33
+because = "the fixture ships exactly 33 source files; any other count means discovery broke and the reproduced moves are not the measured ones"
+
+[[precondition]]
+kind = "violation_present"
+violation = "cycle"
+because = "the trimmed parser keeps its cross-file import cycles; without one the cycle-cut defect (C1) has no substrate"
+
+[[assert]]
+modes = ["anchored", "greenfield"]
+candidate = 1
+
+# --- F1, F2: companion folders keep their members (SC-1) ---------------------
+
+# keep_together, not preserve_dir: preserve_dir matches a node's `name`
+# against a full-prefix key ("tree/validation"), but HEAD's engine names
+# nested folders by their basename ("validation"). A preserve_dir pin would
+# therefore fail even on an untouched tree. keep_together ignores names and
+# still fails exactly when the companion member leaves its siblings.
+
+# F1. shape.ts is imported by validation.ts and its sibling content.ts and
+# imports only its sibling record.ts; hoisting it into tree/ tears the folder.
+[[assert.keep_together]]
+paths = [
+  "src/tree/validation/shape.ts",
+  "src/tree/validation/record.ts",
+  "src/tree/validation/content.ts",
+]
+because = "tree/validation/ is the companion folder of tree/validation.ts; shape.ts is used only by its owner and a sibling and depends only on a sibling, so it stays with them (F1)"
+
+# F2. mdcx-body.ts has one importer, its sibling mdcx.ts; the pull toward
+# lexer/types.ts is a type-only import every block/* sibling shares.
+[[assert.keep_together]]
+paths = ["src/lexer/block/mdcx-body.ts", "src/lexer/block/mdcx.ts"]
+because = "lexer/block/ is the companion folder of lexer/block.ts; mdcx-body.ts's only importer is its sibling mdcx.ts, so it stays beside it (F2)"
+
+# --- F3–F7: an entry point stays with the private helpers it calls (SC-2) ----
+
+[[assert.preserve_symbol_home]]
+symbol = "inferMatches"
+path = "src/differ/inference.ts"
+because = "inferMatches is inference.ts's only exported function and calls that file's private helpers; moving it to matcher.ts separates the entry point from its implementation (F3)"
+
+[[assert.preserve_symbol_home]]
+symbol = "readMdcxBlock"
+path = "src/lexer/block/mdcx.ts"
+because = "readMdcxBlock is mdcx.ts's entry point over its private readers, like its peers in block/*; hoisting it into block.ts strands those helpers (F4)"
+
+[[assert.preserve_symbol_home]]
+symbol = "buildAnnotation"
+path = "src/parser/inline/annotation.ts"
+because = "one of annotation.ts's three exports, each calling that file's private helpers; moving it into the companion owner inline.ts splits the file's implementation (F5)"
+
+[[assert.preserve_symbol_home]]
+symbol = "readInlineSelector"
+path = "src/parser/inline/annotation.ts"
+because = "symmetric to buildAnnotation: an export of annotation.ts built on its private helpers stays with them (F6)"
+
+[[assert.preserve_symbol_home]]
+symbol = "readInlineSuffix"
+path = "src/parser/inline/annotation.ts"
+because = "symmetric to buildAnnotation: an export of annotation.ts built on its private helpers stays with them (F7)"
+
+# --- F8, F9: a shared symbol does not move into a minority consumer (SC-3) ---
+
+[[assert.preserve_symbol_home]]
+symbol = "hasMetadata"
+path = "src/stringifier/metadata.ts"
+because = "hasMetadata serves four stringifier files (inline x3, block x2, document x2, inline/reference x1); its shared home beats any single consumer, least of all one the majority consumers are vetoed from (F8)"
+
+[[assert.preserve_symbol_home]]
+symbol = "appendToken"
+path = "src/syntax/inline/tokens.ts"
+because = "appendToken is called by InlineScanner (3 sites) and BracketResolver (1 site); moving it into the minority caller brackets.ts on a file-id tie is not a better home than the shared tokens module (F9)"
+
+# --- C1: a cross-file cycle names an import cut (SC-4, ADR-35) --------------
+
+# Substrates kept in the fixture: parser/adapters.ts <-> parser/build.ts (the
+# mdc finding) and lexer/block.ts <-> lexer/block/mdcx.ts <-> lexer/container/*
+# (reproduces on HEAD's debug build). 1.0.0 offered only same-file symbol cuts
+# for both.
+
+[[assert.cycle_import_cut]]
+files = ["src/parser/adapters.ts", "src/parser/build.ts"]
+expect = { importer = "src/parser/adapters.ts", imported = "src/parser/build.ts", line = 7 }
+because = "C1: a cross-file cycle finding must name break edges that remove the cross-file dependency, never only same-file cuts; the mdc finding offered only applyAdapters -> recognizeAdapter inside adapters.ts"
+
+[[assert.cycle_import_cut]]
+files = ["src/lexer/block.ts", "src/lexer/block/mdcx.ts"]
+expect = { importer = "src/lexer/block.ts", imported = "src/lexer/block/mdcx.ts", line = 5 }
+because = "C1: a cross-file cycle finding must name break edges that remove the cross-file dependency, never only same-file cuts; the lexer/block.ts <-> lexer/block/mdcx.ts <-> lexer/container/* cycle reproduced the same-file-only shape on HEAD's debug build"
+
+# --- SC-5: no falsified move reaches the Recommended tier --------------------
+
+# The pins above judge each mode's best candidate; these judge the result's
+# cross-profile advice, which is what a user acts on. F1 and F2 carry no `to`:
+# SC-1 forbids every move out of the companion folder, not only 1.0.0's. Each pin caps the
+# falsified move at `absent`: it may surface neither as a Recommended move nor
+# as a Review candidate. 1.0.0 recommended F1 and listed F2-F9 as Review
+# candidates (findings-mdc-run.md); at the calibrated defaults (DRF15) none of
+# F1-F9 appears in either tier, so every pin holds with the move absent and
+# fails the moment one resurfaces, e.g. F6 as Review at epsilon below 0.001.
+# The recommended_guard below still covers the Recommended tier for every pin.
+
+[[assert.recommended_guard]]
+because = "SC-5: every keep_together and preserve_symbol_home pin above encodes a move SC-1-SC-3 falsify, so no Recommended move may break one, whether or not a pin below names it"
+
+[[assert.advice_tier]]
+path = "src/tree/validation/shape.ts"
+max_tier = "absent"
+because = "F1, the one move 1.0.0 recommended (both profiles qualified it, into tree/): moving shape.ts anywhere out of its companion folder tree/validation/ tears it from the owner and sibling that import it and the sibling it imports (SC-1)"
+
+[[assert.advice_tier]]
+path = "src/lexer/block/mdcx-body.ts"
+max_tier = "absent"
+because = "F2: mdcx-body.ts's only importer is its sibling mdcx.ts inside the companion folder lexer/block/, so no move out of that folder is a recommendation; the pull toward lexer/types.ts that drew 1.0.0's lexer/ move is a type-only import every block/* sibling shares (SC-1)"
+
+[[assert.advice_tier]]
+symbol = "inferMatches"
+path = "src/differ/inference.ts"
+max_tier = "absent"
+because = "F3: inferMatches is inference.ts's only exported function and calls its private helpers; moving it anywhere separates the entry point from its implementation (SC-2)"
+
+[[assert.advice_tier]]
+symbol = "readMdcxBlock"
+path = "src/lexer/block/mdcx.ts"
+max_tier = "absent"
+because = "F4: readMdcxBlock is mdcx.ts's entry point over its private readers, like its block/* peers; moving it anywhere strands those helpers (SC-2)"
+
+[[assert.advice_tier]]
+symbol = "buildAnnotation"
+path = "src/parser/inline/annotation.ts"
+max_tier = "absent"
+because = "F5: one of annotation.ts's three exports, each calling the file's private helpers; moving it anywhere splits the file's implementation (SC-2)"
+
+[[assert.advice_tier]]
+symbol = "readInlineSelector"
+path = "src/parser/inline/annotation.ts"
+max_tier = "absent"
+because = "F6: an export of annotation.ts built on its private helpers; moving it anywhere splits the file's implementation (SC-2)"
+
+[[assert.advice_tier]]
+symbol = "readInlineSuffix"
+path = "src/parser/inline/annotation.ts"
+max_tier = "absent"
+because = "F7: an export of annotation.ts built on its private helpers; moving it anywhere splits the file's implementation (SC-2)"
+
+[[assert.advice_tier]]
+symbol = "hasMetadata"
+path = "src/stringifier/metadata.ts"
+max_tier = "absent"
+because = "F8: hasMetadata serves four stringifier files; its shared metadata.ts home beats any single consumer, so no move out of it is a recommendation (SC-3)"
+
+[[assert.advice_tier]]
+symbol = "appendToken"
+path = "src/syntax/inline/tokens.ts"
+max_tier = "absent"
+because = "F9: appendToken is called from scanner.ts (3 sites) and brackets.ts (1 site); 1.0.0 advised the minority caller brackets.ts, and the findings record scanner.ts only as the report's own better alternative, not as a verified home, so no move out of the shared tokens module has earned Recommended (SC-3)"

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Candidate, ContainerNode, ScoreBreakdown, Violation};
+use super::{Candidate, ContainerNode, CycleCoverage, ScoreBreakdown, Violation};
 use crate::config::ProfileConfig;
 
 /// A coarse census of the analyzed snapshot.
@@ -29,6 +29,9 @@ pub struct CurrentTree {
     pub tree: ContainerNode,
     /// Findings whose complete serialized content is identical in both profiles.
     pub shared_findings: Vec<Violation>,
+    /// How much of the file-import graph the cycle findings saw (ADR-35).
+    #[serde(default)]
+    pub cycle_coverage: CycleCoverage,
 }
 
 /// One profile's scoring and findings for the current layout.

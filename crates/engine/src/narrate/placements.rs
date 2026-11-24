@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use unlace_ir::laminar::{Companions, effective_directory};
 use unlace_ir::{ContainerTree, ScopeLevel};
 
 use super::paths::{
@@ -64,7 +65,15 @@ pub(super) fn folder_entry_counts(
 /// path components: a suggested domain that merges several real directories has
 /// no directory of its own to name, so it never contributes a destination
 /// segment (and its injective display label never leaks into a move target).
-pub(super) fn index_files(tree: &ContainerTree, package_rooted: bool) -> FilePlacements {
+///
+/// A folder companion's real directory is its folder (ADR-31): it is that
+/// folder's entry, so its namespace and placement read the folder, while the
+/// file keeps its physical path as its identity.
+pub(super) fn index_files(
+    tree: &ContainerTree,
+    package_rooted: bool,
+    companions: &Companions,
+) -> FilePlacements {
     let containers = tree.containers();
     let by_id: BTreeMap<u32, &unlace_ir::Container> = containers
         .iter()
@@ -112,9 +121,17 @@ pub(super) fn index_files(tree: &ContainerTree, package_rooted: bool) -> FilePla
         } else {
             project_physical_path(dataset, &raw_segments)
         };
-        let physical_directory_segments = physical_file_segments
+        // a companion's folder sits beside it, so its projected directory is
+        // the projected parent plus the folder's own name.
+        let mut physical_directory_segments = physical_file_segments
             .get(..physical_file_segments.len().saturating_sub(1))
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .to_vec();
+        if companions.folder_of(&container.name).is_some() {
+            physical_directory_segments
+                .extend(path_segments(effective_directory(&container.name, companions)).pop());
+        }
+        let physical_directory_segments = physical_directory_segments.as_slice();
         // both projections prefix exactly the package-group root segments.
         let root_length = dataset_segments
             .len()
@@ -153,5 +170,5 @@ pub(super) fn index_files(tree: &ContainerTree, package_rooted: bool) -> FilePla
 /// Projects immutable file identities onto their candidate physical folders.
 #[cfg(test)]
 pub(crate) fn physical_file_folders(tree: &ContainerTree) -> BTreeMap<String, Vec<String>> {
-    index_files(tree, false).parent_of
+    index_files(tree, false, &Companions::default()).parent_of
 }

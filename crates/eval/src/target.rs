@@ -16,8 +16,9 @@ mod precondition;
 mod validate;
 
 pub use assertion::{
-    AssertBlock, BandScope, BucketName, CapacityRelief, MoveBudget, NameAlignment, NonInversion,
-    PathSetAssertion, PreserveDir, PreserveSymbolHome, SizeBand,
+    AdviceTier, AssertBlock, BandScope, BucketName, CapacityRelief, CycleImportCut, ExpectedImport,
+    MoveBudget, NameAlignment, NonInversion, PathSetAssertion, PreserveDir, PreserveSymbolHome,
+    RecommendedGuard, SizeBand, Tier,
 };
 pub use precondition::{Precondition, PreconditionKind, SeverityFilter, ViolationClass};
 

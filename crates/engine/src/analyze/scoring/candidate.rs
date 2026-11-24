@@ -12,6 +12,7 @@ use unlace_ir::{ContainerId, ContainerTree, Node, NodeKind, ScopeLevel, Snapshot
 use super::capacity::capacity_pressure;
 use super::inputs::{cohesion_inputs, container_sizes};
 use super::relocation_counts::{companion_separations, dependency_only_relocations};
+use super::units::UnitFacts;
 use crate::config::CapacityConfig;
 
 /// Builds the scorer's [`ScoreCandidate`] view from a node-placement function over
@@ -93,6 +94,13 @@ pub(in crate::analyze) fn score_candidate(
         dependency_only_relocations(snapshot, placement, pass_start_file_by_candidate);
     let companion_separations =
         companion_separations(snapshot, placement, pass_start_file_by_candidate);
+    let units = UnitFacts::new(snapshot);
+    let (entry_inflows, declaration_outflows) = units.declaration_flows(&|node| {
+        placement(node).and_then(|file| pass_start_file_by_candidate.get(&file).copied())
+    });
+    let unit_outflows = units
+        .file_outflows(tree, pass_start_file_by_candidate)
+        .saturating_add(declaration_outflows);
 
     ScoreCandidate {
         edges,
@@ -103,6 +111,8 @@ pub(in crate::analyze) fn score_candidate(
         capacity_pressure,
         dependency_only_relocations,
         companion_separations,
+        entry_inflows,
+        unit_outflows,
     }
 }
 

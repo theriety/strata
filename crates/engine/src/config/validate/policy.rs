@@ -32,7 +32,10 @@ impl AnalyzeConfig {
         for (suffix, value) in [
             ("unique-owner", qualification_weights.unique_owner),
             ("role-affinity", qualification_weights.role_affinity),
-            ("source-cohesion", qualification_weights.source_cohesion),
+            (
+                "destination-advantage",
+                qualification_weights.destination_advantage,
+            ),
             (
                 "destination-cohesion",
                 qualification_weights.destination_cohesion,
@@ -47,7 +50,7 @@ impl AnalyzeConfig {
         }
         let qualification_total = qualification_weights.unique_owner
             + qualification_weights.role_affinity
-            + qualification_weights.source_cohesion
+            + qualification_weights.destination_advantage
             + qualification_weights.destination_cohesion
             + qualification_weights.producer_evidence
             + qualification_weights.architectural_reach;
@@ -83,6 +86,11 @@ impl AnalyzeConfig {
                 })?;
             }
         }
+
+        non_negative_finite(
+            &format!("{prefix}.relocation.symbol-gain-threshold"),
+            relocation.symbol_gain_threshold,
+        )?;
 
         let mirror_prefix = format!("{prefix}.relocation.test-mirroring.rules");
         let mut parsed_rules: Vec<(MirrorTemplate, Vec<MirrorTemplate>)> = Vec::new();

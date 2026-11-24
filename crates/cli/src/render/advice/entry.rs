@@ -164,9 +164,9 @@ fn detail_lines(item: &RelocationAdvice, options: RenderOptions) -> Vec<String> 
             .as_deref()
             .map_or_else(|| "none".to_owned(), nq);
         lines.extend(wrap(&format!(
-            "{}: owner {:.2} · role {:.2} · source {:.2} · destination {:.2} · producer {:.2} · reach {:.2} · margin {:.2}; weighted {:.2}/{:.2} · structural {:.2}/{:.2} · margin threshold {:.2} · qualified {} · best alternative {}",
+            "{}: owner {:.2} · role {:.2} · advantage {:.2} · destination {:.2} · producer {:.2} · reach {:.2} · margin {:.2}; weighted {:.2}/{:.2} · structural {:.2}/{:.2} · margin threshold {:.2} · qualified {} · best alternative {}",
             profile_name(assessment.profile), evidence.unique_owner, evidence.role_affinity,
-            evidence.source_cohesion, evidence.destination_cohesion, evidence.producer_evidence,
+            evidence.destination_advantage, evidence.destination_cohesion, evidence.producer_evidence,
             evidence.architectural_reach, assessment.ambiguity_margin, assessment.weighted_score,
             assessment.thresholds.minimum_evidence, assessment.structural_score,
             assessment.thresholds.minimum_structural, assessment.thresholds.minimum_ambiguity_margin,

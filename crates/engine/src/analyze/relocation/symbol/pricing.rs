@@ -1,12 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use unlace_core::graph::csr::Csr;
-use unlace_core::score::{Coefficients, KindWeights};
+use unlace_core::score::{Coefficients, KindWeights, ScoreBreakdown};
 use unlace_ir::{ContainerId, Node, NodeKind};
 
 use crate::analyze::relocation::SYMBOL_TARGETS;
 use crate::analyze::relocation::symbol::inputs::PassInputs;
 use crate::analyze::relocation::symbol::ledger::Ledger;
+use crate::analyze::relocation::symbol::pull::Pull;
 use crate::analyze::scoring::{Placed, ScoringContext};
 use unlace_ir::ScopeLevel;
 
@@ -37,6 +38,9 @@ pub(super) struct Pricing<'a> {
     /// [`NO_VERTEX`].
     vertex_of_file: Vec<u32>,
     vertex_count: usize,
+    /// Path of each candidate file: the stable key destinations of equal pull
+    /// rank by, so no tie depends on container numbering (ADR-34).
+    file_path: BTreeMap<ContainerId, String>,
     /// Both-direction priced incidence per node, computed once: an edge
     /// priced 0.0 never nominates a destination (FIX04).
     pub(super) incident: BTreeMap<u32, Vec<(u32, f64)>>,
@@ -117,6 +121,13 @@ impl<'a> Pricing<'a> {
             .enumerate()
             .map(|(index, container)| (container.id, u32::try_from(index).unwrap_or(u32::MAX)))
             .collect();
+        let file_path = assembled
+            .tree
+            .containers()
+            .iter()
+            .filter(|container| container.level == ScopeLevel::File)
+            .map(|container| (container.id, container.name.to_string()))
+            .collect();
         let mut vertex_of_file = vec![
             NO_VERTEX;
             file_vertices
@@ -169,24 +180,20 @@ impl<'a> Pricing<'a> {
             base_vertex,
             vertex_of_file,
             vertex_count: file_vertices.len(),
+            file_path,
             incident,
         }
     }
 
-    /// Ranks candidate destination files for `node` by summed two-way priced
-    /// pull from their *base-placed* residents (FIX12-B); strongest first, ties
-    /// toward the lower id, capped at [`SYMBOL_TARGETS`]. For a type, a
-    /// destination must exert more pull than its pass-start file, so
-    /// repository-wide objective normalization cannot trade a strong local
-    /// type affinity away for an unrelated global improvement. Runtime
-    /// symbols retain their established 1x admission behavior.
+    /// The summed two-way priced pull on `node` from the *base-placed*
+    /// residents of every file (FIX12-B), split into `source_file` and the
+    /// rest.
     ///
     /// Reading the overlay here would let a symbol chase a neighbour that moved
     /// earlier in the same pass, nominating a destination justified by nothing
     /// but another suggestion.
-    pub(super) fn nominate(&self, node: &Node, source_file: ContainerId) -> Vec<ContainerId> {
-        let mut pull: BTreeMap<ContainerId, f64> = BTreeMap::new();
-        let mut source_pull = 0.0;
+    pub(super) fn pull(&self, node: &Node, source_file: ContainerId) -> Pull {
+        let mut pull = Pull::default();
         for &(neighbour, weight) in self.incident.get(&node.id.0).into_iter().flatten() {
             if neighbour == node.id.0 {
                 continue;
@@ -195,15 +202,28 @@ impl<'a> Pricing<'a> {
                 continue;
             };
             if place == source_file {
-                source_pull += weight;
+                pull.home += weight;
                 continue;
             }
-            *pull.entry(place).or_insert(0.0) += weight;
+            *pull.by_file.entry(place).or_insert(0.0) += weight;
         }
+        pull
+    }
+
+    /// Ranks candidate destination files for `node` by `pull`; strongest
+    /// first, ties toward the lower path (ADR-34), capped at
+    /// [`SYMBOL_TARGETS`]. For a type, a destination must exert more pull than
+    /// its pass-start file, so repository-wide objective normalization cannot
+    /// trade a strong local type affinity away for an unrelated global
+    /// improvement. Runtime symbols retain their established 1x admission
+    /// behavior.
+    pub(super) fn nominate(&self, node: &Node, pull: &Pull) -> Vec<ContainerId> {
         let mut ranked: Vec<(ContainerId, f64)> = pull
-            .into_iter()
+            .by_file
+            .iter()
+            .map(|(file, destination_pull)| (*file, *destination_pull))
             .filter(|(_, destination_pull)| {
-                node.kind != NodeKind::Type || *destination_pull > source_pull
+                node.kind != NodeKind::Type || *destination_pull > pull.home
             })
             .collect();
         ranked.sort_by(|left, right| {
@@ -211,7 +231,7 @@ impl<'a> Pricing<'a> {
                 .1
                 .partial_cmp(&left.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then(left.0.cmp(&right.0))
+                .then_with(|| self.path_of(left.0).cmp(self.path_of(right.0)))
         });
         ranked
             .into_iter()
@@ -220,8 +240,14 @@ impl<'a> Pricing<'a> {
             .collect()
     }
 
-    /// Full objective value of the layout `state` describes.
-    pub(super) fn score_with(&self, state: &BTreeMap<u32, ContainerId>) -> f64 {
+    /// Path of candidate file `file`, empty for a file the tree does not hold.
+    pub(super) fn path_of(&self, file: ContainerId) -> &str {
+        self.file_path.get(&file).map_or("", String::as_str)
+    }
+
+    /// Full objective breakdown of the layout `state` describes; its `total`
+    /// is the J the pass compares.
+    pub(super) fn score_with(&self, state: &BTreeMap<u32, ContainerId>) -> ScoreBreakdown {
         let mut placed = self.base_placed.clone();
         for (id, file) in state {
             placed.set(*id, *file);
@@ -229,7 +255,6 @@ impl<'a> Pricing<'a> {
         let distance = self.context.move_distance(&placed);
         self.context
             .score(&placed, distance, self.coefficients, self.weights)
-            .total
     }
 
     /// The crossing-graph vertex of candidate file `file`, or [`NO_VERTEX`].

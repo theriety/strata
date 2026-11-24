@@ -38,6 +38,7 @@ mod tests {
             name: SmolStr::new(path),
             production_sloc: 1,
             namespace: SmolStr::default(),
+            directory: SmolStr::new(path.rsplit_once('/').map_or("", |(directory, _)| directory)),
             home: LaminarHome {
                 folder: SmolStr::default(),
                 domain: SmolStr::default(),

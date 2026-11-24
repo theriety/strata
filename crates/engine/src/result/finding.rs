@@ -18,9 +18,16 @@ pub struct Violation {
     pub location: Vec<String>,
     /// A human-readable description of the violation.
     pub detail: String,
-    /// Edge-break suggestions; present for cycle violations.
+    /// Symbol edge-break suggestions. Cycle findings carry their file-import
+    /// cut in [`Violation::import_cycle`] instead (ADR-35), so no finding the
+    /// engine builds today sets this; it stays readable in saved results.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub break_suggestions: Option<Vec<EdgeBreak>>,
+    /// The file-import cycle a cycle finding reports: the imports whose
+    /// removal breaks it, or why they cannot be named; present for cycle
+    /// violations (ADR-35).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_cycle: Option<ImportCycle>,
     /// The measured size against the breached cap; present for capacity
     /// violations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -252,4 +259,207 @@ pub struct EdgeBreak {
     /// resolve the cycle but does not by itself separate files.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub same_file: bool,
+}
+
+/// The file-import cycle behind a cycle finding (ADR-35).
+///
+/// A cycle finding reports a strongly connected component of the file-import
+/// graph the adapters state. Either the cut is named (`status` is `cut`) or a
+/// file on the cycle states no imports and the cut cannot be named
+/// (`unavailable`); an unavailable cycle is never reported as empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportCycle {
+    /// Whether the imports to remove are named.
+    pub status: ImportCycleStatus,
+    /// The imports whose removal breaks the cycle, in path order; empty when
+    /// unavailable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cut: Vec<ImportBreak>,
+    /// `true` when the cut is proven minimum, `false` for a heuristic cut.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exact: bool,
+    /// The cycle's files whose adapter states no imports; set only when
+    /// unavailable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_without_imports: Vec<String>,
+}
+
+/// Whether a cycle finding names its cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ImportCycleStatus {
+    /// Every file on the cycle states its imports; the cut is named.
+    Cut,
+    /// A file on the cycle states no imports, so no cut can be named.
+    Unavailable,
+}
+
+/// One import a cycle cut removes: every statement from `importer` that loads
+/// `imported`, and the symbol references those statements carry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBreak {
+    /// The file holding the import statements.
+    pub importer: String,
+    /// The file the statements load.
+    pub imported: String,
+    /// The statements to remove, by line.
+    pub statements: Vec<ImportStatement>,
+    /// The hard symbol edges from `importer` into `imported` that must be
+    /// relocated or inverted before the import can go.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<SymbolReference>,
+    /// The cut price: the number of references, and at least 1 (deleting
+    /// the statement).
+    pub weight: u32,
+}
+
+/// One import statement as the source writes it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportStatement {
+    /// The 1-based line of the statement.
+    pub line: u32,
+    /// The module specifier as written.
+    pub specifier: String,
+}
+
+/// One hard symbol edge an import carries.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolReference {
+    /// The referencing symbol in the importer.
+    pub source: String,
+    /// The referenced symbol in the imported file.
+    pub target: String,
+}
+
+/// How many references [`ImportBreak::describe`] lists before `+N more`.
+const LISTED_REFERENCES: usize = 3;
+
+impl ImportBreak {
+    /// Words the break, e.g. "remove `./build` (line 7) from
+    /// `src/parser/adapters.ts`, which carries 1 symbol reference
+    /// (applyAdapters -> buildAst)". `quote` spells each path, specifier and
+    /// symbol.
+    #[must_use]
+    pub fn describe(&self, quote: impl Fn(&str) -> String) -> String {
+        let statements = self
+            .statements
+            .iter()
+            .map(|statement| format!("{} (line {})", quote(&statement.specifier), statement.line))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let carried = match self.references.len() {
+            0 => "no symbol reference".to_owned(),
+            1 => "1 symbol reference".to_owned(),
+            count => format!("{count} symbol references"),
+        };
+        let mut text = format!(
+            "remove {statements} from {}, which carries {carried}",
+            quote(&self.importer)
+        );
+        if !self.references.is_empty() {
+            let mut listed: Vec<String> = self
+                .references
+                .iter()
+                .take(LISTED_REFERENCES)
+                .map(|reference| {
+                    format!(
+                        "{} -> {}",
+                        quote(&reference.source),
+                        quote(&reference.target)
+                    )
+                })
+                .collect();
+            if self.references.len() > LISTED_REFERENCES {
+                listed.push(format!(
+                    "+{} more",
+                    self.references.len() - LISTED_REFERENCES
+                ));
+            }
+            text.push_str(" (");
+            text.push_str(&listed.join(", "));
+            text.push(')');
+        }
+        text
+    }
+}
+
+impl ImportCycle {
+    /// Words the cycle over `files`: the first import to remove and how many
+    /// more follow, or which files leave the cut unavailable.
+    #[must_use]
+    pub fn describe(&self, files: &[String], quote: impl Fn(&str) -> String) -> String {
+        let size = files.len();
+        match self.status {
+            ImportCycleStatus::Unavailable => {
+                let missing = self
+                    .files_without_imports
+                    .iter()
+                    .map(|file| quote(file))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                // a narrowed finding lists only the files no cut covers, so
+                // the count says what the cycle runs through, not its size.
+                let noun = if size == 1 { "file" } else { "files" };
+                format!(
+                    "dependency cycle through {size} {noun}; import facts are unavailable for \
+                     {missing}, so the imports to remove cannot be named"
+                )
+            }
+            ImportCycleStatus::Cut => {
+                let method = if self.exact { "exact" } else { "heuristic" };
+                let Some(first) = self.cut.first() else {
+                    return format!("{size}-file import cycle");
+                };
+                let more = match self.cut.len() {
+                    1 => String::new(),
+                    2 => ", +1 more import".to_owned(),
+                    count => format!(", +{} more imports", count - 1),
+                };
+                format!(
+                    "{size}-file import cycle; to break it, {} ({method}){more}",
+                    first.describe(&quote)
+                )
+            }
+        }
+    }
+}
+
+/// How much of the file-import graph the cycle findings could see.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CycleCoverage {
+    /// Whether every, some, or no analysed file states its imports.
+    pub status: CycleAnalysis,
+    /// How many analysed files state no imports.
+    #[serde(default)]
+    pub files_without_imports: u32,
+}
+
+impl Default for CycleCoverage {
+    fn default() -> Self {
+        Self {
+            status: CycleAnalysis::Complete,
+            files_without_imports: 0,
+        }
+    }
+}
+
+/// Whether cycle findings cover the whole run (ADR-35).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CycleAnalysis {
+    /// Every analysed file states its imports: no cycle finding means no
+    /// import cycle.
+    Complete,
+    /// Some files state no imports: a cycle through them is reported as
+    /// unavailable when the symbol graph shows one, and may otherwise go
+    /// unseen.
+    Partial,
+    /// No file states its imports (an IR before schema 4, or no adapter could
+    /// resolve its imports): zero cycle findings does not mean zero cycles.
+    Unavailable,
 }

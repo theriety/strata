@@ -80,8 +80,11 @@ impl PipelineSolver<'_> {
             return evidence;
         }
         let assembled = self.assemble_with_polish_evidence(parts, &evidence);
-        let (current, proposed) =
-            physical_relocation_folders(&self.snapshot.ir().containers, &assembled.tree);
+        let (current, proposed) = physical_relocation_folders(
+            &self.snapshot.ir().containers,
+            &assembled.tree,
+            &self.facts.companions,
+        );
         let mut by_source: BTreeMap<u32, Vec<(u32, ExactMirrorLink)>> = BTreeMap::new();
         for (mirror_vertex, claims) in self.exact_mirror_links() {
             for link in claims.into_values() {

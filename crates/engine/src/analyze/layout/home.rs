@@ -7,11 +7,13 @@ use unlace_ir::{Container, ScopeLevel};
 
 use crate::narrate::{path_segments, physical_namespace};
 
-/// Renders a file's package-relative namespace (ADR-18) from its real path
-/// and laminar home — the see-through source-root segments its folder key
-/// omits (`src` for `crates/core/src/x.rs`).
-pub(in crate::analyze) fn render_namespace(path: &str, home: &LaminarHome) -> SmolStr {
-    let directory = path_segments(path.rsplit_once('/').map_or("", |(directory, _)| directory));
+/// Renders a file's package-relative namespace (ADR-18) from its effective
+/// directory (ADR-31, `unlace_ir::laminar::effective_directory`) and laminar
+/// home — the see-through source-root segments its folder key omits (`src`
+/// for `crates/core/src/x.rs`). A folder companion reads its folder, the
+/// directory its laminar home was built from.
+pub(in crate::analyze) fn render_namespace(directory: &str, home: &LaminarHome) -> SmolStr {
+    let directory = path_segments(directory);
     let package = path_segments(&home.package);
     let folder = if home.synthetic {
         package.clone()

@@ -12,11 +12,14 @@
 //!      + mu     * d(T, T0)             // move distance from the current tree
 //!      + gamma  * cap(T)               // scoped over-capacity binding
 //!      + delta  * dependency_only(T)   // dependency-only relocations
+//!      + kappa  * companion_sep(T)     // companion types away from their owner
+//!      + eps    * entry_inflow(T)      // declarations moved from `x/` into `x.ts`
+//!      + omega  * unit_outflow(T)      // files and declarations leaving `x/ ∪ x.ts`
 //! ```
 //!
 //! minimised over candidate trees. Every term is a dimensionless ratio on a
 //! comparable scale — cut is a weighted mean crossing height over its own
-//! edge-weight mass, imbalance sums squared CVs, naming/path/anchor are shares
+//! edge-weight mass, imbalance averages squared CVs, naming/path/anchor are shares
 //! of the token/layout populations, and capacity sums over-cap shares against
 //! the folder budget — so the coefficients act as relative weights rather than
 //! unit conversions between incommensurable units. Without that normalization
@@ -40,6 +43,14 @@
 //! move-level veto (a folder never accepts more than the cap) still holds in the
 //! solver; the term prices whole-layout binding, it does not trade against the
 //! veto.
+//!
+//! The two companion-unit terms (ADR-33) price the folder-companion convention
+//! of ADR-31 in both directions. A unit is a companion folder `x/` together
+//! with its entry `x.ts`: entry inflow counts declarations a candidate moves
+//! from a file inside `x/` into `x.ts`, and unit outflow counts files and
+//! declarations whose pass-start effective directory lies inside the unit and
+//! whose candidate location lies outside it. Both are fixed charges per moved
+//! item, like `dependency_only` and `companion_separation`, never vetoes.
 
 use std::collections::BTreeSet;
 
@@ -70,6 +81,12 @@ pub struct Coefficients {
     pub dependency_only: f64,
     /// Fixed charge for each companion type separated from its owner file.
     pub companion_separation: f64,
+    /// Fixed charge for each declaration moved from inside a companion folder
+    /// `x/` into its entry file `x.ts` (ADR-33).
+    pub entry_inflow: f64,
+    /// Fixed charge for each file or declaration that leaves the companion
+    /// unit `x/ ∪ x.ts` it started in (ADR-33).
+    pub unit_outflow: f64,
 }
 
 /// Per-kind base edge weights `w(e)` — the `[weights]` config surface.
@@ -203,12 +220,19 @@ pub struct Candidate {
     pub dependency_only_relocations: u32,
     /// Number of companion types separated from their immutable owner file.
     pub companion_separations: u32,
+    /// Number of declarations moved from a file inside a companion folder
+    /// `x/` into that folder's entry file `x.ts` (ADR-33).
+    pub entry_inflows: u32,
+    /// Number of files and declarations whose pass-start effective directory
+    /// lies inside a companion unit `x/ ∪ x.ts` and whose candidate location
+    /// lies outside it; a moved file counts once (ADR-33).
+    pub unit_outflows: u32,
 }
 
 /// Per-candidate score decomposition, reported in the DTO so users see *why* a
 /// tree ranks where it does.
 ///
-/// `total` is the sum of all seven terms — the value of J(T) being minimised.
+/// `total` is the sum of all ten terms — the value of J(T) being minimised.
 /// `naming` and `path` are already negated (their minus sign folded in), so the
 /// breakdown sums to `total` directly.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -230,7 +254,13 @@ pub struct ScoreBreakdown {
     pub dependency_only: f64,
     /// Fixed per-companion separation penalty.
     pub companion_separation: f64,
-    /// The full objective `J(T)`, the sum of the seven terms above.
+    /// `epsilon * entry_inflow(T)` — the fixed per-declaration charge for
+    /// moving a declaration from `x/` into its entry `x.ts` (ADR-33).
+    pub entry_inflow: f64,
+    /// `omega * unit_outflow(T)` — the fixed per-item charge for a file or
+    /// declaration leaving its companion unit `x/ ∪ x.ts` (ADR-33).
+    pub unit_outflow: f64,
+    /// The full objective `J(T)`, the sum of the ten terms above.
     pub total: f64,
 }
 
@@ -239,11 +269,12 @@ pub struct ScoreBreakdown {
 ///
 /// Each term is computed independently from the candidate's pre-extracted views:
 /// cut is the edge-weight-share-weighted mean crossing height normalized into
-/// `0.0..=1.0`, imbalance sums the squared coefficient of variation of every
-/// container's child sizes, naming and path are the (negated) cohesion bonuses,
+/// `0.0..=1.0`, imbalance averages the squared coefficient of variation of the
+/// child sizes of every container with two or more children, naming and path are the (negated) cohesion bonuses,
 /// anchor is `mu` times the move distance, capacity is `gamma` times the
-/// pre-extracted scoped binding pressure, and dependency-only pricing is its
-/// fixed coefficient times the qualifying relocation count. Acyclicity and
+/// pre-extracted scoped binding pressure, and the dependency-only,
+/// companion-separation, entry-inflow and unit-outflow terms are each a fixed
+/// coefficient times their pre-extracted count. Acyclicity and
 /// polarity stay hard vetoes enforced upstream.
 ///
 /// The reference scorer for tests: production prices naming once per tree and
@@ -287,6 +318,8 @@ pub fn score_with_naming(
         coefficients.dependency_only * f64::from(candidate.dependency_only_relocations);
     let companion_separation =
         coefficients.companion_separation * f64::from(candidate.companion_separations);
+    let entry_inflow = coefficients.entry_inflow * f64::from(candidate.entry_inflows);
+    let unit_outflow = coefficients.unit_outflow * f64::from(candidate.unit_outflows);
 
     ScoreBreakdown {
         cut,
@@ -297,6 +330,8 @@ pub fn score_with_naming(
         capacity,
         dependency_only,
         companion_separation,
+        entry_inflow,
+        unit_outflow,
         total: cut
             + imbalance
             + naming
@@ -304,7 +339,9 @@ pub fn score_with_naming(
             + anchor
             + capacity
             + dependency_only
-            + companion_separation,
+            + companion_separation
+            + entry_inflow
+            + unit_outflow,
     }
 }
 
@@ -353,16 +390,26 @@ fn cut_cost(edges: &[ScoredEdge], weights: &KindWeights) -> f64 {
     weighted_height / (MAX_CROSSING_HEIGHT * total_weight)
 }
 
-/// Sums the squared coefficient of variation of each container's child subtree
-/// sizes — higher when a container's children differ wildly in size.
+/// Averages the squared coefficient of variation of child subtree sizes over
+/// every container that has at least two children — higher when siblings differ
+/// wildly in size.
 ///
-/// A container with fewer than two children, or one whose children are all empty,
-/// contributes nothing (its mean is zero or it has no spread to measure).
+/// A mean, not a sum (ADR-32): a sum grows with the number of containers, so on a
+/// real repository it dwarfed the normalized cut term and rewarded moves that only
+/// tidied sizes. A container with fewer than two children has nothing to be
+/// imbalanced against and is left out of the mean; one whose children are all
+/// empty counts with zero spread. A candidate with no such container scores zero.
 fn imbalance(containers: &[ContainerSizes]) -> f64 {
-    containers
+    let measured: Vec<f64> = containers
         .iter()
+        .filter(|container| container.child_sizes.len() >= 2)
         .map(|container| squared_cv(&container.child_sizes))
-        .sum()
+        .collect();
+    if measured.is_empty() {
+        return 0.0;
+    }
+    let count = f64::from(u32::try_from(measured.len()).unwrap_or(u32::MAX));
+    measured.iter().sum::<f64>() / count
 }
 
 /// Returns the squared coefficient of variation (variance / mean²) of `sizes`, or
@@ -479,6 +526,8 @@ mod tests {
             gamma: 4.0,
             dependency_only: 0.05,
             companion_separation: 0.05,
+            entry_inflow: 0.05,
+            unit_outflow: 0.05,
         }
     }
 
@@ -503,6 +552,8 @@ mod tests {
             capacity_pressure: 0.0,
             dependency_only_relocations: 0,
             companion_separations: 0,
+            entry_inflows: 0,
+            unit_outflows: 0,
         }
     }
 
@@ -542,6 +593,62 @@ mod tests {
         let breakdown = score(&candidate, &coefficients, &KindWeights::default());
 
         assert!(close(breakdown.companion_separation, 0.0));
+        assert!(close(breakdown.total, 0.0));
+    }
+
+    #[test]
+    fn should_price_each_entry_inflow_at_its_coefficient() {
+        let coefficients = Coefficients {
+            entry_inflow: 0.25,
+            ..production_coefficients()
+        };
+        let candidate = Candidate {
+            entry_inflows: 2,
+            ..empty_candidate()
+        };
+
+        let breakdown = score(&candidate, &coefficients, &KindWeights::default());
+
+        assert!(close(breakdown.entry_inflow, 0.5));
+        assert!(close(breakdown.unit_outflow, 0.0));
+        assert!(close(breakdown.total, 0.5));
+    }
+
+    #[test]
+    fn should_price_each_unit_outflow_at_its_coefficient() {
+        let coefficients = Coefficients {
+            unit_outflow: 0.125,
+            ..production_coefficients()
+        };
+        let candidate = Candidate {
+            unit_outflows: 3,
+            ..empty_candidate()
+        };
+
+        let breakdown = score(&candidate, &coefficients, &KindWeights::default());
+
+        assert!(close(breakdown.unit_outflow, 0.375));
+        assert!(close(breakdown.entry_inflow, 0.0));
+        assert!(close(breakdown.total, 0.375));
+    }
+
+    #[test]
+    fn should_disable_companion_unit_pricing_at_zero() {
+        let candidate = Candidate {
+            entry_inflows: 4,
+            unit_outflows: 5,
+            ..empty_candidate()
+        };
+        let coefficients = Coefficients {
+            entry_inflow: 0.0,
+            unit_outflow: 0.0,
+            ..production_coefficients()
+        };
+
+        let breakdown = score(&candidate, &coefficients, &KindWeights::default());
+
+        assert!(close(breakdown.entry_inflow, 0.0));
+        assert!(close(breakdown.unit_outflow, 0.0));
         assert!(close(breakdown.total, 0.0));
     }
 
@@ -794,6 +901,37 @@ mod tests {
     }
 
     #[test]
+    fn should_average_imbalance_over_multi_child_containers() {
+        // one skewed container and one balanced one average to half the skew;
+        // the single-child container is left out of the mean.
+        let skewed = ContainerSizes {
+            child_sizes: vec![1, 3],
+        };
+        let alone = Candidate {
+            containers: vec![skewed.clone()],
+            ..empty_candidate()
+        };
+        let mixed = Candidate {
+            containers: vec![
+                skewed,
+                ContainerSizes {
+                    child_sizes: vec![5, 5],
+                },
+                ContainerSizes {
+                    child_sizes: vec![7],
+                },
+            ],
+            ..empty_candidate()
+        };
+        let coefficients = production_coefficients();
+
+        let alone_score = score(&alone, &coefficients, &KindWeights::default());
+        let mixed_score = score(&mixed, &coefficients, &KindWeights::default());
+
+        assert!(close(mixed_score.imbalance, alone_score.imbalance / 2.0));
+    }
+
+    #[test]
     fn should_reward_naming_cohesion_as_a_negative_term() {
         // two symbols sharing every token -> Jaccard 1.0 -> naming term negative.
         let candidate = Candidate {
@@ -959,6 +1097,8 @@ mod tests {
             capacity_pressure: 0.3,
             dependency_only_relocations: 2,
             companion_separations: 1,
+            entry_inflows: 3,
+            unit_outflows: 4,
         };
         let breakdown = score(
             &candidate,
@@ -973,7 +1113,9 @@ mod tests {
             + breakdown.anchor
             + breakdown.capacity
             + breakdown.dependency_only
-            + breakdown.companion_separation;
+            + breakdown.companion_separation
+            + breakdown.entry_inflow
+            + breakdown.unit_outflow;
         assert!(close(breakdown.total, expected));
     }
 

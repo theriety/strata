@@ -3,8 +3,9 @@
 use smol_str::SmolStr;
 use unlace_ir::{
     AdvisoryUse, Affinity, AffinityKind, Container, ContainerId, Edge, EdgeKind, Exposure,
-    FileFact, Hardness, IntermediateRepresentation, IrFragment, Layout, Node, NodeId, NodeKind,
-    Polarity, ScopeLadder, ScopeLevel, VisibilityScope, build_laminar_tree,
+    FileFact, FileImport, Hardness, ImportKind, IntermediateRepresentation, IrFragment, Layout,
+    Node, NodeId, NodeKind, Polarity, ScopeLadder, ScopeLevel, Snapshot, VisibilityScope,
+    build_laminar_tree,
 };
 
 use super::discovery::{discover_sources, manifest_dir};
@@ -234,6 +235,8 @@ fn should_reintern_ids_across_fragments_into_one_namespace() {
         advisory_uses: Vec::new(),
         file_facts: Vec::new(),
         test_support_roots: Vec::new(),
+        imports: Vec::new(),
+        states_imports: false,
     };
     let second = IrFragment {
         nodes: vec![node(0, "b", 0)],
@@ -249,6 +252,8 @@ fn should_reintern_ids_across_fragments_into_one_namespace() {
         advisory_uses: Vec::new(),
         file_facts: Vec::new(),
         test_support_roots: Vec::new(),
+        imports: Vec::new(),
+        states_imports: false,
     };
 
     let merged = merge_fragments(vec![first, second], "pkg", &Layout::default());
@@ -286,6 +291,8 @@ fn should_rehome_a_file_and_its_test_into_one_package() {
         advisory_uses: Vec::new(),
         file_facts: Vec::new(),
         test_support_roots: Vec::new(),
+        imports: Vec::new(),
+        states_imports: false,
     };
     let test = IrFragment {
         nodes: vec![node(0, "widget_test", 0)],
@@ -297,6 +304,8 @@ fn should_rehome_a_file_and_its_test_into_one_package() {
         advisory_uses: Vec::new(),
         file_facts: Vec::new(),
         test_support_roots: Vec::new(),
+        imports: Vec::new(),
+        states_imports: false,
     };
     let layout = Layout {
         package_roots: Vec::new(),
@@ -998,6 +1007,7 @@ fn should_merge_file_facts_from_every_fragment_without_touching_the_graph() {
         test_of: test_of.map(SmolStr::new),
         entry,
         start: None,
+        folder_companion: None,
     };
     let fragment = |path: &str, facts: Vec<FileFact>| IrFragment {
         nodes: vec![node(0, "a", 0)],
@@ -1034,4 +1044,133 @@ fn should_merge_file_facts_from_every_fragment_without_touching_the_graph() {
     assert_eq!(plain.file_facts, Vec::<FileFact>::new());
     assert_eq!(plain.nodes, merged.nodes);
     assert_eq!(plain.containers, merged.containers);
+}
+
+#[test]
+fn should_place_a_folder_companion_under_its_folder_when_merging() {
+    let fragment = |path: &str, facts: Vec<FileFact>| IrFragment {
+        nodes: vec![node(0, "a", 0)],
+        containers: vec![container(0, path)],
+        file_facts: facts,
+        ..IrFragment::default()
+    };
+    let merged = merge_fragments(
+        vec![
+            fragment(
+                "src/tree/validation.ts",
+                vec![FileFact::folder_companion(
+                    "src/tree/validation.ts",
+                    "src/tree/validation",
+                )],
+            ),
+            fragment("src/tree/validation/shape.ts", Vec::new()),
+        ],
+        "pkg",
+        &Layout::default(),
+    );
+    let containers = merged.containers.containers();
+    let folder_of = |file: &str| {
+        containers
+            .iter()
+            .find(|container| container.name == file)
+            .and_then(|container| container.parent)
+            .and_then(|parent| containers.iter().find(|container| container.id == parent))
+            .map(|folder| folder.name.to_string())
+    };
+
+    // the entry and the folder's file share the folder; the entry keeps its
+    // physical name.
+    assert_eq!(
+        folder_of("src/tree/validation.ts").as_deref(),
+        Some("pkg/src/tree/validation")
+    );
+    assert_eq!(
+        folder_of("src/tree/validation/shape.ts"),
+        folder_of("src/tree/validation.ts")
+    );
+}
+
+/// Builds a value import of `imported` stated on line 1 of `importer`.
+fn import(importer: &str, imported: &str) -> FileImport {
+    FileImport {
+        importer: SmolStr::new(importer),
+        imported: SmolStr::new(imported),
+        kind: ImportKind::Value,
+        specifier: SmolStr::new("./dep"),
+        line: 1,
+    }
+}
+
+#[test]
+fn should_merge_imports_and_cover_only_files_whose_adapter_states_them() {
+    let folder = Container {
+        level: ScopeLevel::Folder,
+        ..container(2, "src")
+    };
+    let stating = IrFragment {
+        nodes: vec![node(0, "a", 0), node(1, "b", 1)],
+        containers: vec![container(0, "src/a.ts"), container(1, "src/b.ts"), folder],
+        imports: vec![import("src/a.ts", "src/b.ts")],
+        states_imports: true,
+        ..IrFragment::default()
+    };
+    // a fragment that does not state its imports has its stray imports dropped.
+    let silent = IrFragment {
+        nodes: vec![node(0, "lib", 0)],
+        containers: vec![container(0, "src/lib.rs")],
+        imports: vec![import("src/lib.rs", "src/a.ts")],
+        ..IrFragment::default()
+    };
+
+    let merged = merge_fragments(vec![stating, silent], "pkg", &Layout::default());
+
+    assert_eq!(merged.imports, vec![import("src/a.ts", "src/b.ts")]);
+    assert_eq!(
+        merged.import_coverage,
+        vec![SmolStr::new("src/a.ts"), SmolStr::new("src/b.ts")]
+    );
+}
+
+#[test]
+fn should_report_imports_available_for_a_stating_adapter_that_found_none() -> Result<(), String> {
+    let fragment = |path: &str, states_imports: bool| IrFragment {
+        nodes: vec![node(0, "a", 0)],
+        containers: vec![container(0, path)],
+        states_imports,
+        ..IrFragment::default()
+    };
+    let merged = merge_fragments(
+        vec![fragment("src/a.ts", true), fragment("src/lib.rs", false)],
+        "pkg",
+        &Layout::default(),
+    );
+
+    let snapshot = Snapshot::assemble(merged).map_err(|error| error.to_string())?;
+
+    assert!(snapshot.ir().imports.is_empty());
+    assert!(snapshot.imports_available_for("src/a.ts"));
+    assert!(!snapshot.imports_available_for("src/lib.rs"));
+    Ok(())
+}
+
+#[test]
+fn should_merge_import_facts_without_touching_the_graph() {
+    let fragment = |imports: Vec<FileImport>| IrFragment {
+        nodes: vec![node(0, "a", 0), node(1, "b", 1)],
+        edges: vec![edge(0, 1, EdgeKind::Call)],
+        containers: vec![container(0, "src/a.ts"), container(1, "src/b.ts")],
+        imports,
+        states_imports: true,
+        ..IrFragment::default()
+    };
+    let plain = merge_fragments(vec![fragment(Vec::new())], "pkg", &Layout::default());
+    let mut with = merge_fragments(
+        vec![fragment(vec![import("src/a.ts", "src/b.ts")])],
+        "pkg",
+        &Layout::default(),
+    );
+
+    with.imports.clear();
+
+    assert_eq!(plain, with);
 }

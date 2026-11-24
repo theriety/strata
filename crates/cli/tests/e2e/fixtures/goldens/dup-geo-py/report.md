@@ -1,7 +1,7 @@
 # Unlace report — dup-geo-py
 
 6 files · 12 symbols · 8 edges
-Snapshot `7364a35529d43a72c0ac21950a5f04412afd2db196c5f6573ae05c847862a57b`
+Snapshot `89f65b0d94db3de813e1d2c9f7f8dfea00a5cd3b8b01a32127331ede583cf750`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings
@@ -25,17 +25,17 @@ candidate is a proposed layout; inclusion does not make a move Recommended. Part
 rescored.
 
 anchored — 0 candidate(s)
-Baseline score: 0.0685
+Baseline score: -0.0272
 Fewer than the requested candidates survived; the solution space converged.
 Current layout is already optimal under this profile's search.
 No candidates were produced.
 
 greenfield — 1 candidate(s)
-Baseline score: 0.2685
+Baseline score: 0.1728
 Fewer than the requested candidates survived; the solution space converged.
 
 greenfield — candidate 1
-  Score: 0.2685 → 0.2562; improvement +0.0123
+  Score: 0.1728 → 0.1445; improvement +0.0283
   Proposed moves
     - Move type `Shape` from `dup-geo-py/geometry/shape.py` → `dup-geo-py/geometry/rectangle.py`
   Folder impacts

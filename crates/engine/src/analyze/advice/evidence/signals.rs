@@ -90,7 +90,7 @@ impl EvidenceIndex<'_> {
                 consumers.insert(node.container);
             }
         }
-        let source_cohesion = ((wd - ws) / wd.max(ws).max(f64::EPSILON)).clamp(0.0, 1.0);
+        let destination_advantage = ((wd - ws) / wd.max(ws).max(f64::EPSILON)).clamp(0.0, 1.0);
         let destination_cohesion = if wall > 0.0 {
             let breadth = match neighbors.len() {
                 0 => 0.0,
@@ -104,7 +104,7 @@ impl EvidenceIndex<'_> {
         EvidenceSignals {
             unique_owner: f64::from(owners.len() == 1 && owners_in_destination == 1),
             role_affinity: jaccard_tokens(&subject_tokens, &destination_tokens),
-            source_cohesion,
+            destination_advantage,
             destination_cohesion,
             producer_evidence: if owners.is_empty() {
                 0.0

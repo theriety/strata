@@ -192,8 +192,27 @@ pub fn run_case(
     }
 
     let inputs = inputs::build_inputs(&result, block, expected_fixture)?;
-    let (verdicts, pair_f1) =
+    // Advice pins select by repo-relative path; a drifted path format would
+    // pass every pin as `absent`, so it is a harness defect, never distance.
+    if !block.advice_tier.is_empty() || !block.recommended_guard.is_empty() {
+        let drifted = assertions::drifted_advice_paths(&result.advice, &inputs.census);
+        if !drifted.is_empty() {
+            errors.push(EvalError::TargetInvalid {
+                target: expected_fixture.to_owned(),
+                message: format!(
+                    "advice names paths outside the fixture census ({}); the advice path format drifted, so every advice pin would pass as absent (harness defect, never distance)",
+                    drifted.join(", ")
+                ),
+            });
+        }
+    }
+    let (mut verdicts, pair_f1) =
         assertions::evaluate_assertions(block, &inputs, spec.reference.as_ref());
+    verdicts.extend(assertions::evaluate_cycle_import_cuts(
+        &block.cycle_import_cut,
+        &findings,
+    ));
+    verdicts.extend(assertions::evaluate_advice(block, &inputs, &result.advice));
     let observations = assertions::observe_modes(&result, &inputs.faces);
 
     let mut report = CaseReport {
@@ -229,6 +248,9 @@ mod tests {
             capacity_relief: Vec::new(),
             non_inversion: Vec::new(),
             preserve_symbol_home: Vec::new(),
+            cycle_import_cut: Vec::new(),
+            advice_tier: Vec::new(),
+            recommended_guard: Vec::new(),
         }
     }
 

@@ -151,6 +151,8 @@ fn should_place_moved_symbol_under_actual_before_and_after_files() -> TestResult
         to_path: "destination.ts".into(),
         delta: -0.1,
         broken_imports: 0,
+        terms: None,
+        fold: None,
     }];
 
     let output = saved_report(&result, false)?;
@@ -271,6 +273,8 @@ fn should_wrap_long_symbol_paths_without_losing_their_characters() -> TestResult
         to_path: to.clone(),
         delta: -0.1,
         broken_imports: 0,
+        terms: None,
+        fold: None,
     }];
 
     let report = saved_report(&result, false)?;
@@ -385,6 +389,8 @@ fn should_follow_relocated_symbol_destination_and_mirrored_test_in_paired_trees(
         to_path: "destination.ts".into(),
         delta: -0.1,
         broken_imports: 0,
+        terms: None,
+        fold: None,
     }];
 
     let report = saved_report(&result, false)?;
@@ -471,6 +477,8 @@ fn should_keep_duplicate_filenames_distinct_across_roots() -> TestResult {
         to_path: "right/options.ts".into(),
         delta: -0.1,
         broken_imports: 0,
+        terms: None,
+        fold: None,
     }];
 
     let report = saved_report(&result, false)?;
@@ -531,6 +539,8 @@ fn should_preserve_symbol_directory_named_like_project_root() -> TestResult {
         to_path: "project/destination.ts".into(),
         delta: -0.1,
         broken_imports: 0,
+        terms: None,
+        fold: None,
     }];
     candidate.tree = folder(
         "project",
@@ -644,6 +654,8 @@ fn should_preserve_literal_repeated_spaces_and_backticks_in_move_paths() -> Test
         to_path: "src/c  d.ts".into(),
         delta: -0.1,
         broken_imports: 0,
+        terms: None,
+        fold: None,
     }];
 
     let report = saved_report(&result, false)?;

@@ -78,6 +78,7 @@ fn plain_facts() -> FileFacts {
         test_case_files: BTreeSet::new(),
         shadow_test_files: BTreeSet::new(),
         folder_cap: 15,
+        companions: Companions::default(),
     }
 }
 
@@ -665,6 +666,7 @@ fn should_follow_a_spec_files_subject_into_its_folder() {
         test_case_files: ["src/io/app.spec.ts".to_owned()].into_iter().collect(),
         shadow_test_files: BTreeSet::new(),
         folder_cap: 15,
+        companions: Companions::default(),
     };
 
     let moves = narrate(&current, &candidate, &facts);
@@ -718,6 +720,7 @@ fn should_narrate_a_co_moved_spec_as_following_its_twin() {
         test_case_files: ["src/core/app.spec.ts".to_owned()].into_iter().collect(),
         shadow_test_files: BTreeSet::new(),
         folder_cap: 15,
+        companions: Companions::default(),
     };
 
     let moves = narrate(&start, &candidate, &facts);
@@ -757,6 +760,7 @@ fn should_narrate_a_shadow_test_file_as_following_its_subject() {
             .into_iter()
             .collect(),
         folder_cap: 15,
+        companions: Companions::default(),
     };
 
     let moves = narrate(&current, &candidate, &facts);
@@ -798,6 +802,7 @@ fn should_not_move_a_spec_when_only_its_domain_label_is_regrouped() {
         test_case_files: ["app.spec.ts".to_owned()].into_iter().collect(),
         shadow_test_files: BTreeSet::new(),
         folder_cap: 15,
+        companions: Companions::default(),
     };
 
     let moves = narrate(&current, &candidate, &facts);
@@ -819,6 +824,7 @@ fn should_explain_a_move_out_of_an_over_cap_folder() {
         test_case_files: BTreeSet::new(),
         shadow_test_files: BTreeSet::new(),
         folder_cap: 3,
+        companions: Companions::default(),
     };
 
     let moves = narrate(&current, &candidate, &facts);
@@ -877,6 +883,7 @@ fn should_attribute_cap_relief_to_the_dominant_over_cap_origin() {
         test_case_files: BTreeSet::new(),
         shadow_test_files: BTreeSet::new(),
         folder_cap: 3,
+        companions: Companions::default(),
     };
 
     let moves = narrate(&current, &candidate, &facts);
@@ -919,6 +926,7 @@ fn should_explain_a_move_by_its_strongest_dependency_pull() {
         test_case_files: BTreeSet::new(),
         shadow_test_files: BTreeSet::new(),
         folder_cap: 15,
+        companions: Companions::default(),
     };
 
     let moves = narrate(&current, &candidate, &facts);
@@ -981,4 +989,116 @@ fn should_narrate_nothing_for_identical_trees() {
     let moves = narrate(&tree, &tree, &plain_facts());
 
     assert_eq!(moves, []);
+}
+
+#[test]
+fn should_place_a_folder_companion_in_its_folder_without_moving_it() {
+    // `validation.ts` is the entry of `validation/` (ADR-31): its placement is
+    // that folder, and moving the folder's file `shape.ts` out narrates only
+    // that file, from the folder's real path.
+    let paths: Vec<SmolStr> = [
+        "src/tree/traversal.ts",
+        "src/tree/validation.ts",
+        "src/tree/validation/shape.ts",
+    ]
+    .into_iter()
+    .map(SmolStr::new)
+    .collect();
+    let facts = [unlace_ir::FileFact::folder_companion(
+        "src/tree/validation.ts",
+        "src/tree/validation",
+    )];
+    let companions = Companions::from_facts(&facts);
+    let layout = unlace_ir::Layout {
+        package_roots: Vec::new(),
+        source_roots: vec![SmolStr::new("src")],
+    };
+    let current =
+        unlace_ir::laminar::build_laminar_tree_with_companions(&paths, "mdc", &layout, &companions)
+            .tree;
+
+    let (before, after) = physical_relocation_folders(&current, &current, &companions);
+
+    assert_eq!(
+        before.get("mdc/src/tree/validation.ts"),
+        Some(&strings(&["mdc", "src", "tree", "validation"]))
+    );
+    assert_eq!(before, after);
+}
+
+/// Facts whose edges are `(from, to, weight)` triples.
+fn weighted_facts(edges: &[(&str, &str, f64)]) -> FileFacts {
+    let mut facts = plain_facts();
+    facts.edge_weights = edges
+        .iter()
+        .map(|(from, to, weight)| (((*from).to_owned(), (*to).to_owned()), *weight))
+        .collect();
+    facts
+}
+
+/// The F2 shape: `body` leaves `src/core` (where its importer `parent` stays)
+/// for `src/io` (where `types` lives).
+fn narrate_body_move(edges: &[(&str, &str, f64)]) -> Option<MoveReason> {
+    let current = two_folder_tree(
+        &["src/core/body.ts", "src/core/parent.ts"],
+        &["src/io/types.ts"],
+    );
+    let candidate = two_folder_tree(
+        &["src/core/parent.ts"],
+        &["src/core/body.ts", "src/io/types.ts"],
+    );
+    narrate(&current, &candidate, &weighted_facts(edges))
+        .first()
+        .map(|m| m.reason.clone())
+}
+
+#[test]
+fn should_not_narrate_a_pull_when_the_source_sibling_pulls_at_least_as_hard() {
+    let reason = narrate_body_move(&[
+        ("src/core/body.ts", "src/io/types.ts", 1.0),
+        ("src/core/parent.ts", "src/core/body.ts", 1.0),
+    ]);
+
+    assert!(
+        !matches!(reason, Some(MoveReason::PulledBy { .. })),
+        "{reason:?}"
+    );
+}
+
+#[test]
+fn should_name_both_sides_when_the_destination_pull_is_stronger() {
+    let reason = narrate_body_move(&[
+        ("src/core/body.ts", "src/io/types.ts", 1.8),
+        ("src/core/parent.ts", "src/core/body.ts", 1.0),
+    ]);
+
+    assert_eq!(
+        reason,
+        Some(MoveReason::PulledBy {
+            partner: "src/io/types.ts".to_owned(),
+            weight: 1.8,
+            left_behind: Some(crate::result::LeftBehind {
+                partner: "src/core/parent.ts".to_owned(),
+                weight: 1.0,
+            }),
+        })
+    );
+    assert_eq!(
+        reason.map(|r| r.to_string()),
+        Some("pulled by types.ts (w 1.8, vs 1.0 to parent.ts left behind)".to_owned())
+    );
+}
+
+#[test]
+fn should_keep_the_one_sided_pull_when_nothing_is_left_behind() {
+    let reason = narrate_body_move(&[("src/core/body.ts", "src/io/types.ts", 1.8)]);
+
+    assert_eq!(
+        reason,
+        Some(MoveReason::PulledBy {
+            partner: "src/io/types.ts".to_owned(),
+            weight: 1.8,
+            left_behind: None,
+        })
+    );
 }

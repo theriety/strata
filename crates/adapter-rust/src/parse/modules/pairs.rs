@@ -77,6 +77,8 @@ mod tests {
             cfg_test,
             may_drop: false,
             via_path: false,
+            name: String::new(),
+            line: 1,
         }
     }
 

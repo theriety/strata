@@ -1,6 +1,7 @@
 #![allow(clippy::assertions_on_constants)]
 
 use std::collections::BTreeMap;
+use unlace_ir::laminar::Companions;
 
 use unlace_core::cluster::ClusterId;
 use unlace_core::diversify::Solver;
@@ -350,7 +351,7 @@ fn should_keep_structural_capacity_findings_and_scores_in_lockstep_at_every_leve
         let finding_levels: Vec<_> = walk_all_capacity(
             &rendered,
             &capacity,
-            &RealRoots::from_tree(&snapshot.ir().containers),
+            &RealRoots::from_tree(&snapshot.ir().containers, &Companions::default()),
         )
         .into_iter()
         .map(|(finding_level, _)| finding_level)

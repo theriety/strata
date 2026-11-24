@@ -10,6 +10,7 @@ pub mod affinity;
 pub mod container;
 pub mod edge;
 pub mod file_fact;
+pub mod import;
 pub mod laminar;
 pub mod node;
 pub mod snapshot;
@@ -22,6 +23,7 @@ pub use affinity::{Affinity, AffinityKind};
 pub use container::{Container, ContainerId, ContainerTree, TreeError};
 pub use edge::{Edge, EdgeKind, Hardness};
 pub use file_fact::{FileFact, unique_test_pairs};
+pub use import::{FileImport, ImportKind};
 pub use laminar::{LaminarTree, Layout, build_laminar_tree};
 pub use node::{Node, NodeId, NodeKind, Polarity, ScopeLevel};
 pub use snapshot::{

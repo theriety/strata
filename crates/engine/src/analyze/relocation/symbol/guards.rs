@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
+use unlace_ir::laminar::{Companions, effective_directory};
 use unlace_ir::{ContainerId, Edge, Node, ScopeLevel, Snapshot};
 
 use crate::analyze::relocation::CandidateTree;
@@ -81,13 +82,17 @@ pub(in crate::analyze) struct ConsumerBranchOwnership {
 
 impl ConsumerBranchGuard {
     pub(super) fn new(assembled: &CandidateTree, snapshot: &Snapshot, edges: &[Edge]) -> Self {
+        let companions = Companions::from_facts(&snapshot.ir().file_facts);
         let pass_start_folder_by_file: BTreeMap<ContainerId, Vec<SmolStr>> = snapshot
             .ir()
             .containers
             .containers()
             .iter()
             .filter(|container| container.level == ScopeLevel::File)
-            .map(|container| (container.id, physical_folder_segments(&container.name)))
+            .map(|container| {
+                let directory = effective_directory(&container.name, &companions);
+                (container.id, folder_segments(directory))
+            })
             .collect();
         let folder_by_candidate_file = assembled
             .pass_start_file_by_candidate
@@ -188,12 +193,12 @@ impl ConsumerBranchGuard {
     }
 }
 
-fn physical_folder_segments(file: &str) -> Vec<SmolStr> {
-    file.rsplit_once('/').map_or_else(Vec::new, |(folder, _)| {
-        folder
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .map(SmolStr::new)
-            .collect()
-    })
+/// The segments of a file's effective directory (ADR-31): a folder companion
+/// sits on its folder's branch, not its parent's.
+fn folder_segments(directory: &str) -> Vec<SmolStr> {
+    directory
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(SmolStr::new)
+        .collect()
 }

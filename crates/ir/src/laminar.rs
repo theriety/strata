@@ -14,13 +14,86 @@
 //!
 //! Container `name`s remain full-prefix keys (`ai/adapters`, not `adapters`);
 //! callers that render a tree collapse adjacent overlapping segments themselves.
+//!
+//! A third input, the adapter-stated folder companions (ADR-31), places a file
+//! `x.ts` that is the entry of the folder `x/` beside it as if it were
+//! `x/index.ts`: [`effective_directory`] is the one place that answers "which
+//! directory does this file count in", for this builder and for every engine
+//! consumer that reasons about structure. The file keeps its physical path.
 
 use std::collections::{BTreeMap, HashMap};
 
 use smol_str::SmolStr;
 
 use crate::container::{Container, ContainerId, ContainerTree};
+use crate::file_fact::FileFact;
 use crate::node::ScopeLevel;
+
+/// The folder each companion file is the entry of (ADR-31), read from the
+/// adapters' [`FileFact::folder_companion`] facts.
+///
+/// Only a companion folder that sits beside its file (the folder's parent
+/// directory is the file's own directory) is kept: that is the shape the fact
+/// describes, and it keeps the file's package root and transparent source
+/// root unchanged, so a malformed fact degrades to "no companion". Two files
+/// may name one folder (a source and a beside-spec): both are its entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Companions {
+    /// Repo-relative file path → the repo-relative folder it is the entry of.
+    by_file: BTreeMap<SmolStr, SmolStr>,
+}
+
+impl Companions {
+    /// Collects the well-formed companion facts. A file stated twice keeps its
+    /// last fact in input order, which the snapshot merge fixes.
+    #[must_use]
+    pub fn from_facts(facts: &[FileFact]) -> Self {
+        let by_file = facts
+            .iter()
+            .filter_map(|fact| {
+                let folder = fact.folder_companion.as_ref()?;
+                is_sibling_folder(&fact.file, folder).then(|| (fact.file.clone(), folder.clone()))
+            })
+            .collect();
+        Self { by_file }
+    }
+
+    /// The folder `file` is the entry of, when it is a companion.
+    #[must_use]
+    pub fn folder_of(&self, file: &str) -> Option<&str> {
+        self.by_file.get(file).map(SmolStr::as_str)
+    }
+
+    /// Whether no file is a companion.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_file.is_empty()
+    }
+}
+
+/// The directory `path` counts in for structural reasoning (ADR-31): the
+/// folder it is the entry of when it is a companion, otherwise its physical
+/// parent directory (empty for a root-level file).
+///
+/// Clustering, capacity, the depth rule, reach and namespaces read this;
+/// reports, narration and move paths keep the physical path.
+#[must_use]
+pub fn effective_directory<'a>(path: &'a str, companions: &'a Companions) -> &'a str {
+    companions
+        .folder_of(path)
+        .unwrap_or_else(|| parent_directory(path))
+}
+
+/// The physical parent directory of `path`, empty for a root-level file.
+fn parent_directory(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(directory, _)| directory)
+}
+
+/// Whether `folder` is a named directory beside the file `file`.
+fn is_sibling_folder(file: &str, folder: &str) -> bool {
+    let (folder_parent, leaf) = folder.rsplit_once('/').unwrap_or(("", folder));
+    !leaf.is_empty() && folder_parent == parent_directory(file)
+}
 
 /// The manifest-derived shape inputs for [`build_laminar_tree`].
 #[derive(Debug, Clone, Default)]
@@ -53,6 +126,23 @@ pub struct LaminarTree {
 /// keeps a strictly-ascending ancestor chain.
 #[must_use]
 pub fn build_laminar_tree(paths: &[SmolStr], root_name: &str, layout: &Layout) -> LaminarTree {
+    build_laminar_tree_with_companions(paths, root_name, layout, &Companions::default())
+}
+
+/// [`build_laminar_tree`] that also places each folder companion as its
+/// folder's entry (ADR-31): the domain and folder of `x.ts` are read from its
+/// [`effective_directory`] `x`, so its file container hangs under the folder
+/// container of `x/` exactly as `x/index.ts` would. The package root still
+/// comes from the physical path, and the file container keeps its physical
+/// name. A companion folder at the package or source root becomes a domain of
+/// its own, as `x/index.ts` would.
+#[must_use]
+pub fn build_laminar_tree_with_companions(
+    paths: &[SmolStr],
+    root_name: &str,
+    layout: &Layout,
+    companions: &Companions,
+) -> LaminarTree {
     // no files means no tree: an empty repository has no root container, so
     // snapshot validation rejects it exactly as before this shared builder.
     if paths.is_empty() {
@@ -101,7 +191,8 @@ pub fn build_laminar_tree(paths: &[SmolStr], root_name: &str, layout: &Layout) -
     sorted.dedup();
 
     for path in sorted {
-        let (package_root, scope) = locate(path, &package_roots, &layout.source_roots);
+        let directory = effective_directory(path, companions);
+        let (package_root, scope) = locate(path, directory, &package_roots, &layout.source_roots);
         let package_key: SmolStr = if package_root.is_empty() {
             SmolStr::new(root_name)
         } else {
@@ -160,16 +251,22 @@ pub fn build_laminar_tree(paths: &[SmolStr], root_name: &str, layout: &Layout) -
 }
 
 /// Resolves the package root a file belongs to (the empty root when no
-/// manifest package encloses it) and the directory segments below that root,
-/// with one transparent source-root segment stripped.
+/// manifest package encloses it) and the segments of `directory`, the file's
+/// effective directory, below that root, with one transparent source-root
+/// segment stripped. The package root is matched against the physical `path`,
+/// so a companion stays in its own package.
 fn locate<'path>(
     path: &'path str,
+    directory: &'path str,
     package_roots: &[&'path str],
     source_roots: &[SmolStr],
 ) -> (&'path str, Vec<&'path str>) {
     let all: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
-    // the trailing segment is the filename, not a directory.
-    let dir = all.get(..all.len().saturating_sub(1)).unwrap_or(&[]);
+    let segments: Vec<&str> = directory
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let dir = segments.as_slice();
     let package_root = package_roots
         .iter()
         .copied()
@@ -532,5 +629,174 @@ mod tests {
             Vec::<String>::new()
         );
         assert_eq!(label_keyed(&built, ScopeLevel::Domain), vec!["ws/loose"]);
+    }
+
+    /// The folder container name of one file: the fourth link of its chain,
+    /// empty when the chain is short.
+    fn folder(built: &LaminarTree, path: &str) -> String {
+        chain(built, path).get(3).cloned().unwrap_or_default()
+    }
+
+    /// A companion index from `(file, folder)` facts.
+    fn companions(pairs: &[(&str, &str)]) -> Companions {
+        let facts: Vec<FileFact> = pairs
+            .iter()
+            .map(|(file, folder)| FileFact::folder_companion(*file, *folder))
+            .collect();
+        Companions::from_facts(&facts)
+    }
+
+    #[test]
+    fn should_return_the_companion_folder_as_the_effective_directory() {
+        let index = companions(&[("src/tree/validation.ts", "src/tree/validation")]);
+
+        assert_eq!(
+            effective_directory("src/tree/validation.ts", &index),
+            "src/tree/validation"
+        );
+        assert_eq!(
+            effective_directory("src/tree/traversal.ts", &index),
+            "src/tree"
+        );
+        assert_eq!(effective_directory("index.ts", &index), "");
+    }
+
+    #[test]
+    fn should_ignore_a_companion_folder_that_is_not_beside_its_file() {
+        // a folder elsewhere, a nested folder and an empty leaf are not the
+        // shape the fact describes, so the file keeps its own directory.
+        let index = companions(&[
+            ("src/a/x.ts", "src/b/x"),
+            ("src/a/y.ts", "src/a/y/deeper"),
+            ("src/a/z.ts", "src/a/"),
+        ]);
+
+        assert!(index.is_empty());
+        assert_eq!(effective_directory("src/a/x.ts", &index), "src/a");
+    }
+
+    #[test]
+    fn should_place_a_companion_file_as_its_folders_entry() {
+        let paths = [
+            SmolStr::new("src/tree/validation.ts"),
+            SmolStr::new("src/tree/validation/shape.ts"),
+            SmolStr::new("src/tree/traversal.ts"),
+        ];
+        let index = companions(&[("src/tree/validation.ts", "src/tree/validation")]);
+        let built =
+            build_laminar_tree_with_companions(&paths, "mdc", &layout(&[], &["src"]), &index);
+
+        // the companion shares the folder of `validation/`, keeping its name.
+        assert_eq!(
+            chain(&built, "src/tree/validation.ts"),
+            vec![
+                "mdc",
+                "mdc",
+                "mdc/tree",
+                "mdc/tree/validation",
+                "src/tree/validation.ts"
+            ]
+        );
+        assert_eq!(
+            folder(&built, "src/tree/validation/shape.ts"),
+            "mdc/tree/validation"
+        );
+        assert_eq!(folder(&built, "src/tree/traversal.ts"), "mdc/tree");
+        assert!(built.tree.validate().is_ok());
+    }
+
+    #[test]
+    fn should_keep_a_file_without_a_companion_in_its_parent_folder() {
+        let paths = [
+            SmolStr::new("src/tree/validation.ts"),
+            SmolStr::new("src/tree/validation/shape.ts"),
+        ];
+        let without = build_laminar_tree(&paths, "mdc", &layout(&[], &["src"]));
+        let empty = build_laminar_tree_with_companions(
+            &paths,
+            "mdc",
+            &layout(&[], &["src"]),
+            &Companions::default(),
+        );
+
+        assert_eq!(folder(&without, "src/tree/validation.ts"), "mdc/tree");
+        assert_eq!(levels(&without.tree), levels(&empty.tree));
+    }
+
+    #[test]
+    fn should_nest_companions_of_companion_folders() {
+        let paths = [
+            SmolStr::new("src/lexer/block.ts"),
+            SmolStr::new("src/lexer/block/mdcx.ts"),
+            SmolStr::new("src/lexer/block/mdcx/body.ts"),
+        ];
+        let index = companions(&[
+            ("src/lexer/block.ts", "src/lexer/block"),
+            ("src/lexer/block/mdcx.ts", "src/lexer/block/mdcx"),
+        ]);
+        let built =
+            build_laminar_tree_with_companions(&paths, "mdc", &layout(&[], &["src"]), &index);
+
+        assert_eq!(folder(&built, "src/lexer/block.ts"), "mdc/lexer/block");
+        assert_eq!(
+            folder(&built, "src/lexer/block/mdcx.ts"),
+            "mdc/lexer/block/mdcx"
+        );
+        assert_eq!(
+            folder(&built, "src/lexer/block/mdcx/body.ts"),
+            "mdc/lexer/block/mdcx"
+        );
+    }
+
+    #[test]
+    fn should_make_a_root_level_companion_folder_its_own_domain() {
+        // `src` is a transparent source root, so `src/lexer.ts` would sit in
+        // the synthetic workspace bucket; as the entry of `src/lexer/` it
+        // belongs to the `lexer` domain, as `src/lexer/index.ts` would. A
+        // repository-root `cli.ts` beside `cli/` does the same.
+        let paths = [
+            SmolStr::new("src/lexer.ts"),
+            SmolStr::new("src/lexer/source.ts"),
+            SmolStr::new("cli.ts"),
+            SmolStr::new("cli/run.ts"),
+        ];
+        let index = companions(&[("src/lexer.ts", "src/lexer"), ("cli.ts", "cli")]);
+        let built =
+            build_laminar_tree_with_companions(&paths, "mdc", &layout(&[], &["src"]), &index);
+
+        assert_eq!(
+            chain(&built, "src/lexer.ts"),
+            vec!["mdc", "mdc", "mdc/lexer", "mdc/lexer", "src/lexer.ts"]
+        );
+        assert_eq!(
+            chain(&built, "cli.ts"),
+            vec!["mdc", "mdc", "mdc/cli", "mdc/cli", "cli.ts"]
+        );
+        assert!(built.tree.validate().is_ok());
+    }
+
+    #[test]
+    fn should_make_two_files_naming_one_folder_both_its_entries() {
+        let paths = [
+            SmolStr::new("src/a/foo.ts"),
+            SmolStr::new("src/a/foo.spec.ts"),
+            SmolStr::new("src/a/foo/bar.ts"),
+        ];
+        let index = companions(&[
+            ("src/a/foo.ts", "src/a/foo"),
+            ("src/a/foo.spec.ts", "src/a/foo"),
+        ]);
+        let built =
+            build_laminar_tree_with_companions(&paths, "mdc", &layout(&[], &["src"]), &index);
+
+        assert_eq!(folder(&built, "src/a/foo.ts"), "mdc/a/foo");
+        assert_eq!(folder(&built, "src/a/foo.spec.ts"), "mdc/a/foo");
+        assert_eq!(folder(&built, "src/a/foo/bar.ts"), "mdc/a/foo");
+        // one folder container, however many entries name it.
+        let folders = levels(&built.tree)
+            .into_iter()
+            .filter(|(level, name)| *level == ScopeLevel::Folder && name == "mdc/a/foo")
+            .count();
+        assert_eq!(folders, 1);
     }
 }

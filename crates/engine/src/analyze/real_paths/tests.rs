@@ -47,6 +47,8 @@ fn symbol_move() -> SymbolMove {
         to_path: text("proj/core/b.py"),
         delta: -1.0,
         broken_imports: 0,
+        terms: None,
+        fold: None,
         display: None,
     }
 }
@@ -64,6 +66,8 @@ fn candidate() -> Candidate {
             capacity: 0.0,
             dependency_only: 0.0,
             companion_separation: 0.0,
+            entry_inflow: 0.0,
+            unit_outflow: 0.0,
         },
         improvement: 0.0,
         tree: ContainerNode {
@@ -87,7 +91,7 @@ fn assessment(destination: &str, alternative: &str) -> ProfileAssessment {
         evidence: EvidenceSignals {
             unique_owner: 0.0,
             role_affinity: 0.0,
-            source_cohesion: 0.0,
+            destination_advantage: 0.0,
             destination_cohesion: 0.0,
             producer_evidence: 0.0,
             architectural_reach: 0.0,
@@ -139,6 +143,7 @@ fn result() -> AnalyzeResult {
             files_by_language: BTreeMap::new(),
         },
         current: CurrentTree {
+            cycle_coverage: crate::result::CycleCoverage::default(),
             tree: ContainerNode {
                 name: text("proj"),
                 level: Level::PackageGroup,
@@ -331,6 +336,7 @@ fn finding(kind: ViolationKind, location: &[&str]) -> Violation {
         severity: Severity::Violation,
         location: location.iter().map(|segment| text(segment)).collect(),
         detail: text("detail"),
+        import_cycle: None,
         break_suggestions: None,
         capacity: None,
     }

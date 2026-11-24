@@ -27,6 +27,17 @@ pub struct ObjectiveConfig {
     /// Fixed charge while a companion type remains outside its owner file.
     #[serde(rename = "companion-separation")]
     pub companion_separation: f64,
+    /// `epsilon`: fixed charge for each declaration moved from inside a
+    /// companion folder `x/` into its entry file `x.ts` (ADR-33). Calibrated
+    /// on the eval corpus: five times the smallest value that holds every
+    /// pin at any symbol-gain threshold.
+    #[serde(rename = "entry-inflow")]
+    pub entry_inflow: f64,
+    /// `omega`: fixed charge for each file or declaration that leaves the
+    /// companion unit `x/ ∪ x.ts` it started in (ADR-33). Uncalibrated: no
+    /// eval case isolates it, so it tracks `entry_inflow`.
+    #[serde(rename = "unit-outflow")]
+    pub unit_outflow: f64,
 }
 
 impl Default for ObjectiveConfig {
@@ -39,6 +50,8 @@ impl Default for ObjectiveConfig {
             capacity: 4.0,
             dependency_only: 0.05,
             companion_separation: 0.05,
+            entry_inflow: 0.0125,
+            unit_outflow: 0.0125,
         }
     }
 }
@@ -55,6 +68,8 @@ impl ObjectiveConfig {
             gamma: self.capacity,
             dependency_only: self.dependency_only,
             companion_separation: self.companion_separation,
+            entry_inflow: self.entry_inflow,
+            unit_outflow: self.unit_outflow,
         }
     }
 }

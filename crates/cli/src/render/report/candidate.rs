@@ -1,11 +1,11 @@
 //! Candidate report lines: proposed file and symbol moves, splits, and impact.
 
-use unlace_engine::{AnalyzeResult, Candidate};
+use unlace_engine::{AnalyzeResult, Candidate, TermShift};
 
 use crate::render::advice::caption_for;
 use crate::render::changes::{Changes, destination};
 use crate::render::limit::{more_line, take_worst};
-use crate::render::{RenderOptions, nq, sf, wrap};
+use crate::render::{RenderOptions, TERMS, Term, nq, sf, wrap};
 
 pub(super) fn candidate_lines(
     result: &AnalyzeResult,
@@ -40,6 +40,7 @@ pub(super) fn candidate_lines(
                 sf(entry.delta),
                 entry.broken_imports
             ));
+            item.extend(entry.terms.as_ref().into_iter().flat_map(pays_lines));
         }
         moves.items.push(MoveItem {
             lines: item,
@@ -129,6 +130,53 @@ impl MoveList {
     }
 }
 
+/// The smallest term change a `pays:` line names; smaller shifts are float
+/// dust.
+const MIN_PAID_TERM: f64 = 1e-6;
+
+/// The verbose `pays:` lines of one symbol move: every term whose change
+/// across the acceptance reaches [`MIN_PAID_TERM`], largest first, wrapped
+/// like the neighbouring report lines with continuation lines aligned under
+/// the first term; empty when no term changes.
+fn pays_lines(shift: &TermShift) -> Vec<String> {
+    let deltas = shift.deltas();
+    let capacity: Term = |breakdown| breakdown.capacity;
+    let mut paid: Vec<(&str, f64)> = TERMS
+        .iter()
+        .copied()
+        .chain([("capacity", capacity)])
+        .map(|(name, term)| (name, term(&deltas)))
+        .filter(|(_, change)| change.abs() >= MIN_PAID_TERM)
+        .collect();
+    // larger |Δ| first; equal magnitudes fall back to the term name.
+    paid.sort_by(|left, right| {
+        right
+            .1
+            .abs()
+            .total_cmp(&left.1.abs())
+            .then_with(|| left.0.cmp(right.0))
+    });
+    let terms: Vec<String> = paid
+        .iter()
+        .map(|(name, change)| format!("{name} {}", term_change(*change)))
+        .collect();
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    // "      pays: " is 12 columns, so continuations start under the first term.
+    wrap(&format!("pays: {}", terms.join(", ")), 6, 12)
+}
+
+/// A signed term change at up to six decimals, trailing zeros trimmed, so a
+/// micro-shift still reads as non-zero.
+fn term_change(change: f64) -> String {
+    let text = format!("{change:+.6}");
+    let trimmed = text.trim_end_matches('0');
+    trimmed
+        .strip_suffix('.')
+        .map_or_else(|| trimmed.to_owned(), |whole| format!("{whole}.0"))
+}
+
 /// One item per file move and per mirrored test file, in plan order.
 fn file_move_items(candidate: &Candidate) -> MoveList {
     let mut list = MoveList {
@@ -183,4 +231,89 @@ fn file_move_items(candidate: &Candidate) -> MoveList {
         }
     }
     list
+}
+
+#[cfg(test)]
+mod tests {
+    use unlace_engine::ScoreBreakdown;
+
+    use super::*;
+
+    fn breakdown(cut: f64, entry_inflow: f64, naming: f64) -> ScoreBreakdown {
+        ScoreBreakdown {
+            cut,
+            imbalance: 0.0,
+            naming,
+            path: 0.0,
+            anchor: 0.0,
+            capacity: 0.0,
+            dependency_only: 0.0,
+            companion_separation: 0.0,
+            entry_inflow,
+            unit_outflow: 0.0,
+        }
+    }
+
+    #[test]
+    fn should_name_paying_terms_largest_first_and_drop_float_dust() {
+        let shift = TermShift {
+            before: breakdown(0.5, 0.0, -0.1),
+            after: breakdown(0.488, 0.05, -0.100_000_1),
+        };
+
+        let lines = pays_lines(&shift);
+
+        assert_eq!(lines, ["      pays: entry-inflow +0.05, cut -0.012"]);
+    }
+
+    #[test]
+    fn should_print_no_pays_line_when_every_term_is_unchanged() {
+        let shift = TermShift {
+            before: breakdown(0.5, 0.0, 0.0),
+            after: breakdown(0.5, 0.0, 0.0),
+        };
+
+        assert!(pays_lines(&shift).is_empty());
+    }
+
+    #[test]
+    fn should_wrap_a_long_pays_line_under_the_first_term() {
+        let shift = TermShift {
+            before: breakdown(0.0, 0.0, 0.0),
+            after: ScoreBreakdown {
+                imbalance: 0.4,
+                path: 0.3,
+                anchor: 0.2,
+                capacity: 0.1,
+                dependency_only: 0.05,
+                companion_separation: 0.04,
+                unit_outflow: 0.03,
+                ..breakdown(0.9, 0.8, 0.7)
+            },
+        };
+
+        let lines = pays_lines(&shift);
+
+        assert!(lines.len() >= 2, "expected a wrap, got {lines:?}");
+        for (index, line) in lines.iter().enumerate() {
+            assert!(line.chars().count() <= 99, "line too long: {line:?}");
+            let indent = if index == 0 {
+                "      pays: "
+            } else {
+                "            "
+            };
+            let rest = line.strip_prefix(indent);
+            assert!(
+                rest.is_some_and(|rest| !rest.starts_with(' ')),
+                "misaligned: {line:?}"
+            );
+        }
+        let joined = lines
+            .iter()
+            .map(|line| line.trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(joined.starts_with("pays: cut +0.9, entry-inflow +0.8, naming +0.7"));
+        assert!(joined.ends_with("unit-outflow +0.03"));
+    }
 }

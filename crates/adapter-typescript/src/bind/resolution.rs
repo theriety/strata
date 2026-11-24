@@ -32,6 +32,9 @@ pub(super) fn resolve_imports(
     imported
 }
 
+/// Extensions an ESM specifier may spell for a module whose source is TypeScript.
+const JS_EXTENSIONS: [&str; 4] = [".js", ".jsx", ".mjs", ".cjs"];
+
 /// Resolves module specifiers to canonical module paths.
 pub(super) struct Resolver {
     /// Set of known module paths, used to verify a resolution target exists.
@@ -72,6 +75,19 @@ impl Resolver {
             return Some(resolved);
         }
         self.resolve_package(specifier)
+    }
+
+    /// Resolves the specifier of a statement that loads a module at runtime.
+    ///
+    /// Resolves like [`Self::resolve`], then retries an ESM-style `.js`
+    /// specifier (`./x.js`) against its TypeScript source (`x.ts`).
+    pub(super) fn resolve_load(&self, importer: &str, specifier: &str) -> Option<SmolStr> {
+        self.resolve(importer, specifier).or_else(|| {
+            let stem = JS_EXTENSIONS
+                .iter()
+                .find_map(|extension| specifier.strip_suffix(extension))?;
+            self.resolve(importer, stem)
+        })
     }
 
     /// Resolves a relative specifier against the importer's directory.

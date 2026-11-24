@@ -72,6 +72,9 @@ pub(in crate::analyze) struct FileInfo {
     pub(in crate::analyze) home: LaminarHome,
     /// Opaque path prefix removed by the laminar render normalization.
     pub(in crate::analyze) namespace: SmolStr,
+    /// The directory the file counts in (ADR-31): its companion folder when
+    /// it is a folder's entry, otherwise its physical parent directory.
+    pub(in crate::analyze) directory: SmolStr,
 }
 
 /// Derives the opaque path prefix removed from a file's rendered laminar home.
@@ -94,6 +97,12 @@ pub(in crate::analyze) const SYMBOL_TARGETS: usize = 4;
 /// symbol. The file polish does not need this: its moves are whole files, whose
 /// deltas dwarf any rounding error.
 pub(in crate::analyze) const SYMBOL_MIN_IMPROVEMENT: f64 = 1e-12;
+
+/// Share of a symbol's external pull a destination file must hold before the
+/// symbol pass moves the symbol there (ADR-34). Below it the destination is a
+/// minority consumer, and the symbol's current home is the better shared
+/// location.
+pub(in crate::analyze) const SYMBOL_MAJORITY_SHARE: f64 = 0.5;
 
 /// Coherence floor under which a folder's residual population is held to be
 /// misdescribed by its own roof (FIX09): when fewer than half the files that
@@ -134,6 +143,8 @@ pub(in crate::analyze) struct PipelineSolver<'a> {
     mirror_enabled: bool,
     /// Whether declarations in detected test files are independently pinned.
     pin_test_symbols: bool,
+    /// θ: the share of the current score a symbol move must gain (ADR-34).
+    symbol_gain_threshold: f64,
     /// The current tree's file containers, ascending container id; vertex `i` of
     /// the file graph is `files[i]`.
     files: Vec<FileInfo>,

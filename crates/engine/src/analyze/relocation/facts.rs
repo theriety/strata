@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use unlace_core::score::KindWeights;
+use unlace_ir::laminar::Companions;
 use unlace_ir::{Container, Polarity, ScopeLevel, Snapshot};
 
 use crate::analyze::relocation::FileInfo;
@@ -139,5 +140,6 @@ fn file_facts_with_rootedness(
         test_case_files,
         shadow_test_files,
         folder_cap,
+        companions: Companions::from_facts(&ir.file_facts),
     }
 }

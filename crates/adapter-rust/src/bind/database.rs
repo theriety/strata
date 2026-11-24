@@ -4,11 +4,11 @@
 //! the primitives the other binding phases build on: loading, `goto_definition`
 //! resolution, and vfs path mapping.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use ra_ap_ide::{
-    AnalysisHost, FilePosition, GotoDefinitionConfig, RaFixtureConfig, SymbolKind, TextSize,
+    AnalysisHost, Crate, FilePosition, GotoDefinitionConfig, RaFixtureConfig, SymbolKind, TextSize,
 };
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace};
 use ra_ap_project_model::{
@@ -198,6 +198,10 @@ pub(super) enum ResolvedTarget {
         path: SmolStr,
         offset: u32,
         module: bool,
+        /// Marks a crate's root module (what `crate`, a `super` or `self` at
+        /// the root, and a crate name resolve to), which rust-analyzer kinds
+        /// apart from other modules, so `module` is unset for it.
+        crate_root: bool,
     },
     /// A known definition outside the workspace, never a name-fallback candidate.
     External,
@@ -288,6 +292,18 @@ impl Database {
         workspace_root: &Path,
     ) -> Option<ResolvedTarget> {
         let file_id = self.file_id_for(path, workspace_root)?;
+        self.resolve_in(file_id, offset, workspace_root)
+    }
+
+    /// Resolves the reference at `offset` of the loaded file `file_id`, as
+    /// [`Self::resolve`] does for a path; a caller resolving many offsets of
+    /// one file looks its id up once.
+    pub(super) fn resolve_in(
+        &self,
+        file_id: ra_ap_ide::FileId,
+        offset: u32,
+        workspace_root: &Path,
+    ) -> Option<ResolvedTarget> {
         let analysis = self.host.analysis();
         let position = FilePosition {
             file_id,
@@ -307,8 +323,30 @@ impl Database {
                 path: target_path,
                 offset: u32::from(target.full_range.start()),
                 module: target.kind == Some(SymbolKind::Module),
+                crate_root: target.kind == Some(SymbolKind::CrateRoot),
             },
         ))
+    }
+
+    /// The vfs file id and owning crates of every loaded file whose
+    /// repository-relative path is in `paths`, in one pass over the vfs. A file
+    /// the loader never loaded is absent.
+    pub(super) fn loaded_files(
+        &self,
+        paths: &BTreeSet<&str>,
+        workspace_root: &Path,
+    ) -> HashMap<SmolStr, (ra_ap_ide::FileId, Vec<Crate>)> {
+        let analysis = self.host.analysis();
+        self.vfs
+            .iter()
+            .filter_map(|(file_id, _)| {
+                let path = self.relative_path(file_id, workspace_root)?;
+                paths.contains(path.as_str()).then(|| {
+                    let crates = analysis.crates_for(file_id).unwrap_or_default();
+                    (path, (file_id, crates))
+                })
+            })
+            .collect()
     }
 
     /// Maps a repository-relative source path to its vfs file id.

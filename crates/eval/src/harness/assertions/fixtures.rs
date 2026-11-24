@@ -8,7 +8,7 @@ use crate::harness::inputs::{EvalInputs, FaceInputs, discover_packages};
 use crate::metrics::{members, structural_placement};
 use crate::target::FaceMode;
 
-pub(super) fn file(name: &str) -> ContainerNode {
+pub(in crate::harness) fn file(name: &str) -> ContainerNode {
     ContainerNode {
         name: name.to_owned(),
         level: Level::File,
@@ -18,7 +18,11 @@ pub(super) fn file(name: &str) -> ContainerNode {
     }
 }
 
-pub(super) fn node(level: Level, name: &str, children: Vec<ContainerNode>) -> ContainerNode {
+pub(in crate::harness) fn node(
+    level: Level,
+    name: &str,
+    children: Vec<ContainerNode>,
+) -> ContainerNode {
     ContainerNode {
         name: name.to_owned(),
         level,

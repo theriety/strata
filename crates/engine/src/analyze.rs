@@ -32,7 +32,7 @@ mod search;
 pub(crate) mod test_policy;
 
 use advice::build_advice;
-use findings::{profile_findings, summarize};
+use findings::{cycle_coverage, profile_findings, summarize};
 use rendering::render_tree;
 use search::build_profile_result;
 use test_policy::TestPolicy;
@@ -148,6 +148,7 @@ fn analyze_inner(
         current: CurrentTree {
             tree: current_node,
             shared_findings,
+            cycle_coverage: cycle_coverage(snapshot),
         },
         profiles,
         advice,

@@ -28,6 +28,7 @@ mod tests;
 use std::collections::{BTreeMap, BTreeSet};
 
 use unlace_ir::ContainerTree;
+use unlace_ir::laminar::Companions;
 
 use self::namespaces::preserve_pass_start_namespaces;
 use self::placements::{FilePlacements, folder_entry_counts, index_files};
@@ -59,6 +60,8 @@ pub(crate) struct FileFacts {
     pub(crate) shadow_test_files: BTreeSet<String>,
     /// The folder member cap, for the cap-relief reason.
     pub(crate) folder_cap: u32,
+    /// The adapter-stated folder companions, each placed in its folder.
+    pub(crate) companions: Companions,
 }
 
 /// Narrates the moves of `candidate` against `current`, grouped and explained.
@@ -92,8 +95,8 @@ fn narrate_with_rootedness(
     facts: &FileFacts,
     package_rooted: bool,
 ) -> Vec<Move> {
-    let before = index_files(current, package_rooted);
-    let mut after = index_files(candidate, package_rooted);
+    let before = index_files(current, package_rooted, &facts.companions);
+    let mut after = index_files(candidate, package_rooted, &facts.companions);
     preserve_pass_start_namespaces(&before, &mut after);
     after.members_of.clear();
     for (file, parent) in &after.parent_of {

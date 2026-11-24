@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use unlace_ir::laminar::{Companions, effective_directory};
 use unlace_ir::{
     Container, ContainerId, IntermediateRepresentation, Node, NodeId, ScopeLevel, Snapshot,
 };
@@ -34,6 +35,8 @@ pub(super) struct EvidenceIndex<'a> {
     files_by_path: BTreeMap<String, Option<ContainerId>>,
     folders_by_path: BTreeMap<String, Option<ContainerId>>,
     file_paths_by_id: BTreeMap<ContainerId, Option<String>>,
+    /// The adapter-stated folder companions: each is placed in its folder.
+    companions: Companions,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -59,6 +62,7 @@ impl<'a> EvidenceIndex<'a> {
         let dataset_root = (dataset_roots.len() == 1)
             .then(|| dataset_roots.into_iter().next())
             .flatten();
+        let companions = Companions::from_facts(&ir.file_facts);
         let mut files_by_path = BTreeMap::new();
         let mut folders_by_path = BTreeMap::new();
         let mut file_paths_by_id = BTreeMap::new();
@@ -74,12 +78,11 @@ impl<'a> EvidenceIndex<'a> {
                 .or_insert(Some(container.id));
             insert_unique_path(&mut file_paths_by_id, container.id, &container.name);
             if let Some(parent) = container.parent {
-                let folder = container
-                    .name
-                    .rsplit_once('/')
-                    .map_or("", |(folder, _)| folder);
+                let folder = effective_directory(&container.name, &companions);
                 // Physical folders are derived from immutable file facts, not semantic scope
                 // levels: a physical directory may be represented by a Domain or Package node.
+                // A folder companion belongs to its folder (ADR-31), whose container it
+                // hangs under.
                 folders_by_path
                     .entry(folder.to_owned())
                     .and_modify(|entry| {
@@ -103,6 +106,7 @@ impl<'a> EvidenceIndex<'a> {
             files_by_path,
             folders_by_path,
             file_paths_by_id,
+            companions,
         }
     }
 
@@ -175,7 +179,7 @@ impl<'a> EvidenceIndex<'a> {
             evidence: EvidenceSignals {
                 unique_owner: 0.0,
                 role_affinity: 0.0,
-                source_cohesion: 0.0,
+                destination_advantage: 0.0,
                 destination_cohesion: 0.0,
                 producer_evidence: 0.0,
                 architectural_reach: 0.0,

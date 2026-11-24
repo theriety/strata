@@ -59,6 +59,7 @@ pub(super) fn polarity_violations(snapshot: &Snapshot) -> Vec<Violation> {
                 severity: Severity::Violation,
                 detail: format!("{source_word} {source} depends on {target_word} {target}"),
                 location,
+                import_cycle: None,
                 break_suggestions: None,
                 capacity: None,
             })

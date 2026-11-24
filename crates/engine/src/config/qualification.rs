@@ -9,8 +9,8 @@ pub struct QualificationWeightsConfig {
     pub unique_owner: f64,
     #[serde(rename = "role-affinity")]
     pub role_affinity: f64,
-    #[serde(rename = "source-cohesion")]
-    pub source_cohesion: f64,
+    #[serde(rename = "destination-advantage", alias = "source-cohesion")]
+    pub destination_advantage: f64,
     #[serde(rename = "destination-cohesion")]
     pub destination_cohesion: f64,
     #[serde(rename = "producer-evidence")]
@@ -24,7 +24,7 @@ impl Default for QualificationWeightsConfig {
         Self {
             unique_owner: 0.10,
             role_affinity: 0.10,
-            source_cohesion: 0.25,
+            destination_advantage: 0.25,
             destination_cohesion: 0.25,
             producer_evidence: 0.10,
             architectural_reach: 0.20,

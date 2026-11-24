@@ -85,6 +85,8 @@ pub(super) fn symbol_advice(symbol: &str, from_path: &str, to_path: &str) -> Adv
                 to_path: to_path.to_owned(),
                 delta: -0.1,
                 broken_imports: 0,
+                terms: None,
+                fold: None,
             },
         },
         subject: format!("symbol:{from_path}:{symbol}"),
@@ -461,6 +463,8 @@ fn should_keep_same_named_type_and_runtime_relocations_as_distinct_advice() {
         to_path: to_path.to_owned(),
         delta: -0.1,
         broken_imports: 1,
+        terms: None,
+        fold: None,
     };
     let (Some(anchored), Some(initial_greenfield)) =
         (profiles.anchored.as_mut(), profiles.greenfield.as_mut())
@@ -771,7 +775,7 @@ fn should_keep_lexical_only_consensus_in_review_at_zero_thresholds() -> Result<(
         profile.qualification.weights = crate::config::QualificationWeightsConfig {
             unique_owner: 0.0,
             role_affinity: 1.0,
-            source_cohesion: 0.0,
+            destination_advantage: 0.0,
             destination_cohesion: 0.0,
             producer_evidence: 0.0,
             architectural_reach: 0.0,

@@ -61,7 +61,7 @@ fn should_serialize_the_resolved_tests_section_once_at_the_top_level() {
 }
 
 #[test]
-fn should_serialize_profile_results_as_schema_version_eleven_without_modes() {
+fn should_serialize_profile_results_as_schema_version_twelve_without_modes() {
     let snapshot = snapshot(
         vec![node(0, "item", 0, Polarity::Production)],
         vec![],
@@ -77,7 +77,7 @@ fn should_serialize_profile_results_as_schema_version_eleven_without_modes() {
         serialized
             .get("schemaVersion")
             .and_then(serde_json::Value::as_u64),
-        Some(11)
+        Some(12)
     );
     // version 9 carries the per-profile package-wall parameter (ADR-17).
     assert_eq!(

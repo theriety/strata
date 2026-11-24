@@ -25,7 +25,7 @@ Qualification uses six weighted signals and a derived ambiguity margin:
 
 - `unique-owner` recognizes a sole explicit owner relationship in the destination;
 - `role-affinity` measures token agreement with the destination, but can never qualify a move alone;
-- `source-cohesion` measures whether destination support outweighs evidence that should keep the declaration with its source cluster;
+- `destination-advantage` measures how far destination support outweighs evidence that should keep the declaration with its source cluster (amended 2026-11-25; originally `source-cohesion`);
 - `destination-cohesion` measures support from the destination cluster and caps the contribution of a single neighbor;
 - `producer-evidence` derives producer authority from explicit adapter-emitted owner affinities rather than passive consumption;
 - `architectural-reach` favors a shared consumer ancestor over one consumer branch; and
@@ -67,3 +67,7 @@ Users receive a smaller high-confidence `Recommended` set and retain uncertain b
 Profiles gain independently configurable qualification policy without acquiring the ability to bypass hard guards. Lexical names can support other evidence but cannot independently authorize relocation. More conservative thresholds may move advice from `Recommended` to `Review candidate`; they do not delete the underlying per-profile candidate.
 
 Saved-result consumers must migrate to schema version 8 and read the top-level advice groups and their evidence explanations. The additional evidence indexing and cross-profile aggregation add deterministic analysis work after candidate construction but do not change candidate search, scoring, or structural findings.
+
+## Amendment (2026-11-25)
+
+The signal originally named `source-cohesion` is renamed `destination-advantage` (`destinationAdvantage` in results, `destination_advantage` in code). Its formula is unchanged: `clamp((wd - ws) / max(wd, ws), 0, 1)`, the destination's pull advantage over the source, so a value of 0 means the source pulls at least as hard. The old name implied the opposite. `source-cohesion` remains accepted as a deprecated config key and `sourceCohesion` as a result alias; setting both config keys is a validation error.

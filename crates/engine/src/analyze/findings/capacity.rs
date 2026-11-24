@@ -1,6 +1,7 @@
 //! Capacity findings over the container tree against the configured per-level caps.
 
 use unlace_ir::Snapshot;
+use unlace_ir::laminar::Companions;
 
 use crate::analyze::BORDERLINE_CAPACITY_MARGIN;
 use crate::analyze::findings::physical::{
@@ -28,13 +29,15 @@ pub(in crate::analyze) fn snapshot_capacity_violations(
     tree: &ContainerNode,
     capacity: &CapacityConfig,
 ) -> Vec<Violation> {
-    let roots = RealRoots::from_tree(&snapshot.ir().containers);
+    let companions = Companions::from_facts(&snapshot.ir().file_facts);
+    let roots = RealRoots::from_tree(&snapshot.ir().containers, &companions);
     let mut findings: Vec<Violation> = walk_capacity_from(tree, capacity, &roots)
         .into_iter()
         .filter(|(level, _)| *level != Level::Folder)
         .map(|(_, violation)| violation)
         .collect();
-    let (entries, real_folders) = physical_folders_repository_relative(&snapshot.ir().containers);
+    let (entries, real_folders) =
+        physical_folders_repository_relative(&snapshot.ir().containers, &companions);
     findings.extend(physical_folder_findings_with_real(
         &entries,
         &real_folders,
@@ -246,6 +249,7 @@ fn breach_violation(
             .real_location()
             .unwrap_or_else(|| vec![fallback.join("/")]),
         detail: breach.describe(fallback),
+        import_cycle: None,
         break_suggestions: None,
         capacity: Some(breach),
     })

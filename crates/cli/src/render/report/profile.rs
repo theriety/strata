@@ -113,7 +113,7 @@ fn score_lines(profile: &ModeResult, candidate: &Candidate) -> Vec<String> {
             sf(after - before)
         ));
     }
-    lines.extend(wrap("Terms: cut measures dependency separation; imbalance measures uneven sizes; naming measures name fit; path measures relocation distance; anchor credits existing placement; dependency-only penalizes moving toward dependencies alone; companion-separation penalizes separating named signature companions; capacity penalizes remaining cap breaches.", 2, 2));
+    lines.extend(wrap("Terms: cut measures dependency separation; imbalance measures uneven sizes; naming measures name fit; path measures relocation distance; anchor credits existing placement; dependency-only penalizes moving toward dependencies alone; companion-separation penalizes separating named signature companions; entry-inflow penalizes moving declarations from a companion folder into its entry file; unit-outflow penalizes files and declarations leaving a companion folder and its entry; capacity penalizes remaining cap breaches.", 2, 2));
     lines.extend(wrap(
         "Columns round independently to four decimals; totals use unrounded values.",
         2,

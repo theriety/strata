@@ -1,7 +1,7 @@
 # Unlace report — dup-ws-ts
 
 11 files · 11 symbols · 11 edges
-Snapshot `08769e57555ec5b5f27c885492e423d60ce2d316c4ce8cfb9bb35ca3b591f120`
+Snapshot `e832ed5eef653d0b96fc484f0b6eab1ba01e9dd41501420d4f8ba1cbb0addcaf`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings
@@ -28,18 +28,18 @@ candidate is a proposed layout; inclusion does not make a move Recommended. Part
 rescored.
 
 anchored — 0 candidate(s)
-Baseline score: 6.2103
+Baseline score: 6.1146
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 No candidates were produced.
 
 greenfield — 1 candidate(s)
-Baseline score: 6.4103
+Baseline score: 6.3146
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 
 greenfield — candidate 1
-  Score: 6.4103 → 4.2180; improvement +2.1923
+  Score: 6.3146 → 4.1405; improvement +2.1741
   Capacity remaining: 1 (0 at file level).
   Proposed moves
     - Move file `dup-ws-ts/atlas/src/agent/loop.ts` → `dup-ws-ts/atlas/src/core/loop.ts`

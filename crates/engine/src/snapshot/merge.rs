@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 
 use smol_str::SmolStr;
+use unlace_ir::laminar::{Companions, build_laminar_tree_with_companions};
 use unlace_ir::{
     ContainerId, IntermediateRepresentation, IrFragment, Layout, Node, NodeId, ScopeLevel,
-    build_laminar_tree,
 };
 
 use super::visibility::apply_visibility_scopes;
@@ -19,7 +19,14 @@ use super::visibility::apply_visibility_scopes;
 ///
 /// Each fragment's own file-level containers name the repo-relative path of the
 /// file every node lives in; those paths seed [`build_laminar_tree`], and each
-/// node is reattached to its file's container in the rebuilt tree.
+/// node is reattached to its file's container in the rebuilt tree. A file an
+/// adapter states as a folder companion hangs under its folder's container, as
+/// that folder's entry (ADR-31).
+///
+/// Import facts are concatenated as stated. A fragment whose adapter states
+/// its imports adds every file it carries to the import coverage, so the
+/// snapshot can tell a file that imports nothing from one whose imports are
+/// unknown.
 pub(super) fn merge_fragments(
     fragments: Vec<IrFragment>,
     root_name: &str,
@@ -33,6 +40,8 @@ pub(super) fn merge_fragments(
     let mut advisory_uses = Vec::new();
     let mut file_facts = Vec::new();
     let mut test_support_roots = Vec::new();
+    let mut imports = Vec::new();
+    let mut import_coverage = Vec::new();
     // the file path each merged node belongs to, parallel to `nodes`.
     let mut node_paths: Vec<SmolStr> = Vec::new();
     let mut all_paths: Vec<SmolStr> = Vec::new();
@@ -48,6 +57,16 @@ pub(super) fn merge_fragments(
             .map(|container| (container.id.0, container.name.clone()))
             .collect();
         all_paths.extend(file_path.values().cloned());
+        if fragment.states_imports {
+            // read the container list, not the map, so the order is stable.
+            import_coverage.extend(
+                fragment
+                    .containers
+                    .iter()
+                    .filter(|container| container.level == ScopeLevel::File)
+                    .map(|container| container.name.clone()),
+            );
+        }
 
         // each fragment's ids span 0..=max; advancing the base by one past its
         // own maximum guarantees the next fragment's re-interned ids never
@@ -89,10 +108,16 @@ pub(super) fn merge_fragments(
         }
         file_facts.extend(fragment.file_facts);
         test_support_roots.extend(fragment.test_support_roots);
+        // an adapter that does not state its imports has no coverage, so any
+        // imports it sent would sit outside it; keep only stated ones.
+        if fragment.states_imports {
+            imports.extend(fragment.imports);
+        }
         node_offset += node_span;
     }
 
-    let built = build_laminar_tree(&all_paths, root_name, layout);
+    let companions = Companions::from_facts(&file_facts);
+    let built = build_laminar_tree_with_companions(&all_paths, root_name, layout, &companions);
     for (node, path) in nodes.iter_mut().zip(&node_paths) {
         node.container = built.files.get(path).copied().unwrap_or(ContainerId(0));
     }
@@ -112,6 +137,8 @@ pub(super) fn merge_fragments(
     ir.advisory_uses = advisory_uses;
     ir.file_facts = file_facts;
     ir.test_support_roots = test_support_roots;
+    ir.imports = imports;
+    ir.import_coverage = import_coverage;
     ir
 }
 

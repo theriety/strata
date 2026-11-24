@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
+use unlace_ir::laminar::{Companions, effective_directory};
 use unlace_ir::{Container, ContainerId, ContainerTree, ScopeLevel};
 
 use crate::analyze::BORDERLINE_CAPACITY_MARGIN;
@@ -24,27 +25,36 @@ pub(super) fn physical_folder_entries(
     tree: &ContainerTree,
     namespaces: Option<&BTreeMap<ContainerId, SmolStr>>,
 ) -> BTreeMap<Vec<String>, u32> {
-    physical_folder_entries_with_rootedness(tree, namespaces, true).0
+    physical_folder_entries_with_rootedness(tree, namespaces, &Companions::default(), true).0
 }
 
 pub(in crate::analyze) fn physical_folder_entries_repository_relative(
     tree: &ContainerTree,
     namespaces: Option<&BTreeMap<ContainerId, SmolStr>>,
 ) -> BTreeMap<Vec<String>, u32> {
-    physical_folder_entries_with_rootedness(tree, namespaces, false).0
+    physical_folder_entries_with_rootedness(tree, namespaces, &Companions::default(), false).0
 }
 
 /// The repository-relative entry counts together with each folder's real
 /// directory, so a finding can name the folder as it exists on disk.
+///
+/// A folder companion counts as an entry of its folder, not of the folder's
+/// parent (ADR-31).
 pub(in crate::analyze) fn physical_folders_repository_relative(
     tree: &ContainerTree,
+    companions: &Companions,
 ) -> (BTreeMap<Vec<String>, u32>, RealFolders) {
-    physical_folder_entries_with_rootedness(tree, None, false)
+    physical_folder_entries_with_rootedness(tree, None, companions, false)
 }
 
+/// The shared count. With `namespaces`, each file's directory is composed from
+/// its pass-start namespace and its folder, which already places a companion
+/// inside its folder, so the namespaced wrappers pass no `companions`; without
+/// them, the directory is each file's effective directory.
 fn physical_folder_entries_with_rootedness(
     tree: &ContainerTree,
     namespaces: Option<&BTreeMap<ContainerId, SmolStr>>,
+    companions: &Companions,
     package_rooted: bool,
 ) -> (BTreeMap<Vec<String>, u32>, RealFolders) {
     let by_id: BTreeMap<u32, &Container> = tree
@@ -85,12 +95,10 @@ fn physical_folder_entries_with_rootedness(
             folder.map_or_else(Vec::new, |folder| real_key(folder, dataset))
         };
         // the file's own path is repo-relative: its directory is the real one,
-        // whatever root name the projection prefixes.
-        let real_directory: Vec<String> = path_segments(
-            file.name
-                .rsplit_once('/')
-                .map_or("", |(directory, _)| directory),
-        );
+        // whatever root name the projection prefixes. A companion's is its
+        // folder (ADR-31).
+        let real_directory: Vec<String> =
+            path_segments(effective_directory(&file.name, companions));
         let directory = if let Some(namespace) = namespaces.and_then(|values| values.get(&file.id))
         {
             // restore the package-relative namespace between the package and
@@ -190,6 +198,7 @@ pub(in crate::analyze) fn physical_folder_findings_with_real(
                     .real_location()
                     .unwrap_or_else(|| vec![path.join("/")]),
                 detail: breach.describe(path),
+                import_cycle: None,
                 break_suggestions: None,
                 capacity: Some(breach),
             })

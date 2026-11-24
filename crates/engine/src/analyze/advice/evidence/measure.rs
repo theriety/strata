@@ -38,13 +38,13 @@ pub(super) fn weighted_evidence(e: EvidenceSignals, config: &ProfileConfig) -> f
     let w = config.qualification.weights;
     let total = w.unique_owner
         + w.role_affinity
-        + w.source_cohesion
+        + w.destination_advantage
         + w.destination_cohesion
         + w.producer_evidence
         + w.architectural_reach;
     (e.unique_owner * w.unique_owner
         + e.role_affinity * w.role_affinity
-        + e.source_cohesion * w.source_cohesion
+        + e.destination_advantage * w.destination_advantage
         + e.destination_cohesion * w.destination_cohesion
         + e.producer_evidence * w.producer_evidence
         + e.architectural_reach * w.architectural_reach)
@@ -53,7 +53,7 @@ pub(super) fn weighted_evidence(e: EvidenceSignals, config: &ProfileConfig) -> f
 pub(super) fn structural_evidence(e: EvidenceSignals, config: &ProfileConfig) -> f64 {
     let w = config.qualification.weights;
     let total = w.unique_owner
-        + w.source_cohesion
+        + w.destination_advantage
         + w.destination_cohesion
         + w.producer_evidence
         + w.architectural_reach;
@@ -61,7 +61,7 @@ pub(super) fn structural_evidence(e: EvidenceSignals, config: &ProfileConfig) ->
         0.0
     } else {
         (e.unique_owner * w.unique_owner
-            + e.source_cohesion * w.source_cohesion
+            + e.destination_advantage * w.destination_advantage
             + e.destination_cohesion * w.destination_cohesion
             + e.producer_evidence * w.producer_evidence
             + e.architectural_reach * w.architectural_reach)

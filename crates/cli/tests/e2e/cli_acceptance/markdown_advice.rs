@@ -66,6 +66,8 @@ fn relocation() -> SymbolMove {
         to_path: "shared/owner.ts".to_owned(),
         delta: -0.1,
         broken_imports: 1,
+        terms: None,
+        fold: None,
     }
 }
 
@@ -88,7 +90,7 @@ fn advice() -> RelocationAdvice {
             evidence: EvidenceSignals {
                 unique_owner: 1.0,
                 role_affinity: 0.8,
-                source_cohesion: 0.7,
+                destination_advantage: 0.7,
                 destination_cohesion: 0.6,
                 producer_evidence: 0.5,
                 architectural_reach: 0.4,
@@ -127,7 +129,7 @@ fn should_preserve_saved_confidence_and_evidence_in_markdown() -> Result<(), Str
         "greenfield→`shared/alternative.ts`",
         "owner 1.00",
         "role 0.80",
-        "source 0.70",
+        "advantage 0.70",
         "destination 0.60",
         "producer 0.50",
         "reach 0.40",
@@ -307,7 +309,7 @@ fn should_define_evidence_before_scores_and_quote_saved_move_paths() -> Result<(
     for definition in [
         "owner means unique ownership",
         "role means role affinity",
-        "source and destination mean cohesion at each side",
+        "advantage means how much more the destination pulls than the source",
         "producer means producer evidence",
         "reach means architectural reach",
         "Weighted is the normalized score across all six signals",
@@ -358,7 +360,7 @@ fn should_explain_advice_in_the_public_summary() -> Result<(), String> {
         .collect::<Vec<_>>()
         .join(" ");
     for expected in [
-        "Review candidate (1)",
+        "Review candidate (2)",
         "owner means unique ownership",
         "Profiles share analysis-start evidence",
         "selected by only some executed profiles",
@@ -431,7 +433,7 @@ fn should_roundtrip_finite_analyzed_advice_through_saved_report() -> Result<(), 
             assessment.ambiguity_margin,
             assessment.evidence.unique_owner,
             assessment.evidence.role_affinity,
-            assessment.evidence.source_cohesion,
+            assessment.evidence.destination_advantage,
             assessment.evidence.destination_cohesion,
             assessment.evidence.producer_evidence,
             assessment.evidence.architectural_reach,
@@ -443,7 +445,7 @@ fn should_roundtrip_finite_analyzed_advice_through_saved_report() -> Result<(), 
     let restored: AnalyzeResult =
         serde_json::from_slice(&encoded).map_err(|error| error.to_string())?;
     let markdown = report_with_detail(&restored, true)?;
-    assert!(markdown.contains("Review candidate (1)") && markdown.contains("weighted 0.70/0.60"));
+    assert!(markdown.contains("Review candidate (2)") && markdown.contains("weighted 0.70/0.60"));
     Ok(())
 }
 

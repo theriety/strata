@@ -23,8 +23,8 @@ pub(super) struct PassInputs<'a> {
 }
 
 /// The admission rules of a [`SymbolPass`]: which files may not give or
-/// receive a symbol, whether test-polarity declarations are pinned, and
-/// whether the package wall is lifted.
+/// receive a symbol, whether test-polarity declarations are pinned, whether
+/// the package wall is lifted, and the relative gain a move must earn.
 #[derive(Default)]
 pub(super) struct RelocationPolicy {
     /// Files whose symbols may not leave.
@@ -38,4 +38,7 @@ pub(super) struct RelocationPolicy {
     /// Nodes an adapter marked as a program's start symbol: never relocated
     /// out of their file, whatever else the file's policy allows (ADR-26).
     pub(super) start_symbols: BTreeSet<u32>,
+    /// θ: the share of the score a move starts from that it must gain
+    /// (ADR-34). The default `0` keeps only the float-dust floor.
+    pub(super) gain_threshold: f64,
 }

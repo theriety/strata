@@ -49,6 +49,7 @@ impl PipelineSolver<'_> {
                 pin_test_polarity: self.pin_detected_test_symbols(),
                 allow_cross_package: self.relocation_identity.allows_cross_package_moves(),
                 start_symbols: start_symbol_nodes(self.snapshot.ir()),
+                gain_threshold: self.symbol_gain_threshold,
             },
         );
         pass.fold(&evidence.folds);

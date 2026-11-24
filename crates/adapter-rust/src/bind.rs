@@ -21,6 +21,7 @@ mod dropped_use;
 mod edges;
 mod fallback;
 mod file_facts;
+mod file_imports;
 mod polarity;
 mod public_api;
 mod visibility;
@@ -112,6 +113,7 @@ pub(super) fn bind(
     let advisory_uses = advisory::settle(advisory, &nodes);
     let file_facts = file_facts::file_facts(files, &database, root);
     let test_support_roots = database.test_support_roots(root);
+    let (imports, states_imports) = file_imports::file_imports(files, &database, workspace_root);
 
     Ok(IrFragment {
         nodes,
@@ -123,6 +125,8 @@ pub(super) fn bind(
         advisory_uses,
         file_facts,
         test_support_roots,
+        imports,
+        states_imports,
     })
 }
 
@@ -199,6 +203,9 @@ mod tests {
             pub_use: false,
             test_of: None,
             root_main: false,
+            mod_imports: Vec::new(),
+            uses: Vec::new(),
+            paths: Vec::new(),
         }
     }
 
@@ -546,6 +553,9 @@ mod tests {
             pub_use: false,
             test_of: None,
             root_main: false,
+            mod_imports: Vec::new(),
+            uses: Vec::new(),
+            paths: Vec::new(),
         };
         let assignment = NodeAssignment::build(&[file], Path::new("repo"));
 

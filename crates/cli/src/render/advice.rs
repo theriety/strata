@@ -21,13 +21,21 @@ pub(super) fn caption_for(reason: &MoveReason) -> String {
         MoveReason::PulledBy {
             partner,
             weight: pull,
-        } => {
-            format!(
+            left_behind,
+        } => match left_behind {
+            Some(left) => format!(
+                "Why: pulled toward {} — weight {}, against {} to {} left behind.",
+                nq(partner),
+                weight(*pull),
+                weight(left.weight),
+                nq(&left.partner)
+            ),
+            None => format!(
                 "Why: pulled toward {} — weight {}.",
                 nq(partner),
                 weight(*pull)
-            )
-        }
+            ),
+        },
         MoveReason::RelievesOverCap {
             container,
             count,
@@ -71,7 +79,7 @@ pub(super) fn advice_with_options(result: &AnalyzeResult, options: RenderOptions
     }
     if options.verbose && has_assessments {
         lines.extend(wrap(
-            "Evidence: owner means unique ownership; role means role affinity; source and destination mean cohesion at each side; producer means producer evidence; reach means architectural reach.",
+            "Evidence: owner means unique ownership; role means role affinity; advantage means how much more the destination pulls than the source; destination means destination cohesion; producer means producer evidence; reach means architectural reach.",
             1,
             1,
         ));

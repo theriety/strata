@@ -94,6 +94,10 @@ impl ScoringContext<'_> {
                 .zip(self.group_cohesions.iter().copied()),
         );
 
+        let (entry_inflows, declaration_outflows) = self
+            .lookups
+            .units
+            .declaration_flows(&|node| self.pass_start_file(placed, node));
         let candidate = Candidate {
             edges,
             containers: self.container_sizes(&file_sloc),
@@ -103,8 +107,17 @@ impl ScoringContext<'_> {
             capacity_pressure: self.pressure.total(&file_sloc),
             dependency_only_relocations: self.dependency_only_relocations(placed),
             companion_separations: self.companion_separations(placed),
+            entry_inflows,
+            unit_outflows: self.file_outflows.saturating_add(declaration_outflows),
         };
         score_with_naming(&candidate, naming, coefficients, weights)
+    }
+
+    /// The pass-start file the candidate file holding `node` stands for.
+    fn pass_start_file(&self, placed: &Placed, node: u32) -> Option<ContainerId> {
+        placed
+            .file(node)
+            .and_then(|file| self.pass_start.get(file.0 as usize).copied().flatten())
     }
 
     /// Production declarations that left their pass-start file for one holding

@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use super::FileFacts;
 use super::placements::FilePlacements;
 use super::tokens::{jaccard, tokenize};
-use crate::result::{CapacityUnit, MoveReason};
+use crate::result::{CapacityUnit, LeftBehind, MoveReason};
 
 /// Everything a group's reason computation reads.
 pub(super) struct GroupContext<'a> {
@@ -89,35 +89,20 @@ pub(super) fn group_reason(ctx: &GroupContext<'_>) -> MoveReason {
                     .collect()
             });
 
-    // dependency pull: the resident with the strongest two-way tie to the group.
-    let mut best: Option<(&String, f64)> = None;
-    for resident in &residents {
-        let mut total = 0.0;
-        for file in ctx.files {
-            let outgoing = ((*file).clone(), (*resident).clone());
-            let incoming = ((*resident).clone(), (*file).clone());
-            total += ctx
-                .facts
-                .edge_weights
-                .get(&outgoing)
-                .copied()
-                .unwrap_or(0.0);
-            total += ctx
-                .facts
-                .edge_weights
-                .get(&incoming)
-                .copied()
-                .unwrap_or(0.0);
-        }
-        let replace = best.as_ref().is_none_or(|(_, top)| total > *top);
-        if replace && total > 0.0 {
-            best = Some((*resident, total));
-        }
-    }
-    if let Some((partner, total)) = best {
+    // dependency pull: the resident with the strongest two-way tie to the group,
+    // narrated only when it beats the strongest tie the move leaves behind.
+    let pull = strongest_tie(ctx, residents.iter().copied());
+    let left_behind = strongest_tie(ctx, source_residents(ctx));
+    if let Some((partner, total)) = pull
+        && left_behind.as_ref().is_none_or(|(_, kept)| total > *kept)
+    {
         return MoveReason::PulledBy {
             partner: partner.clone(),
             weight: total,
+            left_behind: left_behind.map(|(left, weight)| LeftBehind {
+                partner: left.clone(),
+                weight,
+            }),
         };
     }
 
@@ -143,4 +128,48 @@ pub(super) fn group_reason(ctx: &GroupContext<'_>) -> MoveReason {
     }
 
     MoveReason::Clustering
+}
+
+/// The files that stay in the group's source folders: members of an origin
+/// both before and after the move, other than the group itself.
+fn source_residents<'a>(ctx: &GroupContext<'a>) -> impl Iterator<Item = &'a String> {
+    let origins = ctx.origins;
+    let (before, after, files) = (ctx.before, ctx.after, ctx.files);
+    origins.iter().flat_map(move |origin| {
+        let staying = after.members_of.get(*origin);
+        before
+            .members_of
+            .get(*origin)
+            .into_iter()
+            .flatten()
+            .filter(move |member| {
+                staying.is_some_and(|kept| kept.contains(*member))
+                    && files.iter().all(|file| *file != *member)
+            })
+    })
+}
+
+/// The pull rule applied to both sides of a move: a candidate's pull is the sum
+/// of the edge weights in both directions between it and every moved file, and
+/// the strongest single candidate with a positive pull wins (first on ties).
+fn strongest_tie<'a>(
+    ctx: &GroupContext<'_>,
+    candidates: impl Iterator<Item = &'a String>,
+) -> Option<(&'a String, f64)> {
+    let mut best: Option<(&String, f64)> = None;
+    for candidate in candidates {
+        let mut total = 0.0;
+        for file in ctx.files {
+            for key in [
+                ((*file).clone(), candidate.clone()),
+                (candidate.clone(), (*file).clone()),
+            ] {
+                total += ctx.facts.edge_weights.get(&key).copied().unwrap_or(0.0);
+            }
+        }
+        if total > 0.0 && best.as_ref().is_none_or(|(_, top)| total > *top) {
+            best = Some((candidate, total));
+        }
+    }
+    best
 }

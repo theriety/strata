@@ -80,6 +80,37 @@ impl Resolver {
         self.by_dotted.get(dotted.as_str()).cloned()
     }
 
+    /// The absolute dotted name of the module a `from` statement names, for an
+    /// absolute or a relative import alike; `None` when a relative import climbs
+    /// above the importer's top package.
+    pub(super) fn absolute_dotted(&self, importer: &str, import: &Import) -> Option<String> {
+        if import.level == 0 {
+            Some(import.module.to_string())
+        } else {
+            self.relative_dotted(importer, import)
+        }
+    }
+
+    /// Whether the first segment of `dotted` is a top-level name of the analysed
+    /// set; anything else is a package outside it.
+    pub(super) fn is_first_party(&self, dotted: &str) -> bool {
+        let first = dotted.split('.').next().unwrap_or(dotted);
+        self.by_dotted
+            .keys()
+            .any(|name| !name.is_empty() && name.split('.').next() == Some(first))
+    }
+
+    /// Whether some analysed module lives below `dotted`: a namespace package,
+    /// or a regular package whose own file is not analysed.
+    pub(super) fn has_descendants(&self, dotted: &str) -> bool {
+        self.by_dotted.keys().any(|name| {
+            (dotted.is_empty() && !name.is_empty())
+                || name
+                    .strip_prefix(dotted)
+                    .is_some_and(|rest| rest.starts_with('.'))
+        })
+    }
+
     /// Computes the absolute dotted name a relative import refers to.
     ///
     /// Level 1 (`from . import x`) is the importer's own package; each extra dot
@@ -211,6 +242,7 @@ mod tests {
             declarations: Vec::new(),
             imports: Vec::new(),
             conditional_imports: Vec::new(),
+            import_sites: Vec::new(),
             lazy_loading: false,
             dunder_all: Vec::new(),
             dunder_all_form: DunderAllForm::Absent,

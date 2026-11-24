@@ -1,4 +1,4 @@
-moves (2 group(s), 5 file(s); gain +2.2222):
+moves (2 group(s), 5 file(s); gain +2.2049):
 move — relieves atlas/foo, which has 4 entries (files and subfolders) against the folder cap of 3 (`capacity.folder`)
   1. atlas/foo/b1.ts [atlas/foo → atlas/foo/b]
   2. atlas/foo/b2.ts [atlas/foo → atlas/foo/b]

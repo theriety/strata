@@ -14,7 +14,7 @@ use unlace_eval::{EvalError, e2e_fixture_root, eval_fixture_root, harness, load_
 
 /// The compile-time-checked case table: every committed target paired with the
 /// designed defect its distance is measured against.
-const CASES: [(&str, &str); 9] = [
+const CASES: [(&str, &str); 10] = [
     ("collapse", "workspace collapse"),
     ("large-app", "proposal quality at scale"),
     ("welding", "cross-directory welding"),
@@ -24,6 +24,7 @@ const CASES: [(&str, &str); 9] = [
     ("naming-drift", "naming incoherence"),
     ("cycle-span", "import-cycle tearing"),
     ("spec-twin-ts", "source-test mixing"),
+    ("companion-folders", "companion-folder false moves"),
 ];
 
 /// The designed defect of one case, read from [`CASES`] without indexing.
@@ -168,6 +169,14 @@ fn cycle_span_witnesses_import_cycle_tearing() {
 #[test]
 fn spec_twin_ts_witnesses_source_test_mixing() {
     assert_best_state("spec-twin-ts");
+}
+
+/// Witness (committed red, DRF04): proposals must keep companion-folder
+/// members, file entry points, and shared symbols where the code's own
+/// structure puts them — the false moves unlace v1.0.0 makes on mdc (F1–F9).
+#[test]
+fn companion_folders_witnesses_false_moves() {
+    assert_best_state("companion-folders");
 }
 
 /// EVL04 coverage guard: the table covers exactly the committed target files,

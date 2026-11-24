@@ -1,7 +1,7 @@
 # Unlace report — twin-follow-ts
 
 2 files · 2 symbols · 1 edges
-Snapshot `1f2d68065bf97a7ab84b4f85a62c91f34b767247d5cc5cf99f964cd1e93d5af7`
+Snapshot `51660e95cfd26c048553ff1cc43e094063d0184da93cb50a78dc98786fdf77d4`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings

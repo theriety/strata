@@ -190,6 +190,7 @@ mod tests {
             declarations: Vec::new(),
             imports: Vec::new(),
             conditional_imports: Vec::new(),
+            import_sites: Vec::new(),
             lazy_loading: false,
             dunder_all: Vec::new(),
             dunder_all_form: DunderAllForm::Absent,

@@ -1,6 +1,6 @@
 Unlace report — dup-mix-ts
 8 files · 8 symbols · 10 edges
-Snapshot `2b777bb0281c19a1980fa1744635a9d95a1fd5c5bf0a60ab194e14d865948bd9`
+Snapshot `ddcbd153f695b149464c76d6866314332fb06722be23a5730cd9e84311d674e7`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 Structural findings
@@ -22,18 +22,18 @@ candidate is a proposed layout; inclusion does not make a move Recommended. Part
 rescored.
 
 anchored — 0 candidate(s)
-Baseline score: 8.1876
+Baseline score: 8.1275
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 No candidates were produced.
 
 greenfield — 1 candidate(s)
-Baseline score: 8.3876
+Baseline score: 8.3275
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 
 greenfield — candidate 1
-  Score: 8.3876 → 4.1890; improvement +4.1986
+  Score: 8.3275 → 4.1463; improvement +4.1812
   Capacity remaining: 1 (0 at file level).
   Proposed moves
     - Move file `dup-mix-ts/atlas/src/agent/loop.ts` → `dup-mix-ts/atlas/src/core/loop.ts`

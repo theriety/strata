@@ -107,10 +107,27 @@ fn merge_profile(
     overrides: Option<serde_json::Value>,
 ) -> Result<ProfileConfig, serde_json::Error> {
     let mut merged = serde_json::to_value(defaults)?;
-    if let Some(overrides) = overrides {
+    if let Some(mut overrides) = overrides {
+        migrate_deprecated_weight_key(&mut overrides);
         merge_value(&mut merged, overrides);
     }
     serde_json::from_value(merged)
+}
+
+/// Renames the deprecated `qualification.weights.source-cohesion` override to
+/// `destination-advantage` so it replaces the default instead of duplicating
+/// it; a profile that sets both keeps both, and fails as a duplicate field.
+fn migrate_deprecated_weight_key(overrides: &mut serde_json::Value) {
+    let weights = overrides
+        .get_mut("qualification")
+        .and_then(|qualification| qualification.get_mut("weights"))
+        .and_then(serde_json::Value::as_object_mut);
+    if let Some(weights) = weights
+        && !weights.contains_key("destination-advantage")
+        && let Some(value) = weights.remove("source-cohesion")
+    {
+        weights.insert("destination-advantage".to_owned(), value);
+    }
 }
 
 fn merge_value(target: &mut serde_json::Value, overrides: serde_json::Value) {

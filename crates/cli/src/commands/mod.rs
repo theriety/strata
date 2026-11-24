@@ -15,8 +15,8 @@ pub mod violations;
 use std::path::Path;
 
 use unlace_engine::{
-    AnalyzeConfig, AnalyzeResult, Candidate, ModeResult, RESULT_SCHEMA_VERSION, UnlaceError,
-    Violation, load_config,
+    AnalyzeConfig, AnalyzeResult, Candidate, MIN_RESULT_SCHEMA_VERSION, ModeResult,
+    RESULT_SCHEMA_VERSION, UnlaceError, Violation, load_config,
 };
 
 /// Loads the effective config: the file at `config_path` if it exists, else the
@@ -117,11 +117,12 @@ fn read_result(path: &Path) -> Result<AnalyzeResult, UnlaceError> {
         .and_then(serde_json::Value::as_u64)
         .and_then(|version| u32::try_from(version).ok())
         .unwrap_or_default();
-    if schema_version != RESULT_SCHEMA_VERSION {
+    if !(MIN_RESULT_SCHEMA_VERSION..=RESULT_SCHEMA_VERSION).contains(&schema_version) {
         return Err(UnlaceError::InputUnreadable {
             path: path.to_path_buf(),
             reason: format!(
-                "unsupported result schemaVersion {schema_version}; expected {RESULT_SCHEMA_VERSION}"
+                "unsupported result schemaVersion {schema_version}; expected \
+                 {MIN_RESULT_SCHEMA_VERSION} to {RESULT_SCHEMA_VERSION}"
             ),
         });
     }
@@ -334,6 +335,7 @@ mod tests {
                 files_by_language: std::collections::BTreeMap::new(),
             },
             current: unlace_engine::CurrentTree {
+                cycle_coverage: unlace_engine::CycleCoverage::default(),
                 tree: unlace_engine::ContainerNode {
                     name: "r".to_owned(),
                     level: unlace_engine::Level::File,

@@ -2,6 +2,7 @@
 
 mod builders;
 mod companions;
+mod loads;
 
 use smol_str::SmolStr;
 use swc_common::{BytePos, Spanned};
@@ -14,6 +15,7 @@ use self::builders::{
     supertypes_of_class, type_alias_declaration, var_declarations,
 };
 use self::companions::{class_signature_companions, function_signature_companions};
+use self::loads::module_load;
 use super::references::{collect_class, collect_expression, collect_function, collect_statements};
 use super::{
     Declaration, DeclarationKind, ExportClause, ExportLoad, ImportBinding, ImportedName,
@@ -30,12 +32,16 @@ pub(super) fn extract(
     let mut declarations = Vec::new();
     let mut imports = Vec::new();
     let mut re_exports = Vec::new();
+    let mut module_loads = Vec::new();
     let mut exports = Exports::default();
     // Top-level executable statements that declare nothing still carry SLOC
     // and dependencies, so they aggregate into one synthetic `<module>` entity.
     let mut module_statements: Vec<&swc_ecma_ast::Stmt> = Vec::new();
 
     for item in &module.body {
+        if let ModuleItem::ModuleDecl(decl) = item {
+            module_loads.extend(module_load(decl, contents, base));
+        }
         match item {
             ModuleItem::ModuleDecl(decl) => match decl {
                 ModuleDecl::Import(import) => imports.push(static_import(import)),
@@ -123,6 +129,7 @@ pub(super) fn extract(
         re_exports,
         export_clauses: exports.clauses,
         export_loads: exports.loads,
+        module_loads,
     }
 }
 

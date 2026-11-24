@@ -56,6 +56,16 @@ pub struct ScoreBreakdown {
     pub dependency_only: f64,
     /// The charge for companion types separated from their immutable owners.
     pub companion_separation: f64,
+    /// The charge for declarations moved from a companion folder `x/` into its
+    /// entry `x.ts` (ADR-33). Additive: a result written before the term
+    /// existed reads as zero.
+    #[serde(default)]
+    pub entry_inflow: f64,
+    /// The charge for files and declarations leaving their companion unit
+    /// `x/ ∪ x.ts` (ADR-33). Additive: a result written before the term
+    /// existed reads as zero.
+    #[serde(default)]
+    pub unit_outflow: f64,
 }
 
 impl From<unlace_core::score::ScoreBreakdown> for ScoreBreakdown {
@@ -69,6 +79,8 @@ impl From<unlace_core::score::ScoreBreakdown> for ScoreBreakdown {
             capacity: value.capacity,
             dependency_only: value.dependency_only,
             companion_separation: value.companion_separation,
+            entry_inflow: value.entry_inflow,
+            unit_outflow: value.unit_outflow,
         }
     }
 }

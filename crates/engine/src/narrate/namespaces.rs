@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use unlace_ir::ContainerTree;
+use unlace_ir::laminar::Companions;
 
 use super::paths::physical_directory;
 use super::placements::{FilePlacements, index_files};
@@ -134,9 +135,10 @@ fn kept_namespace<'a>(
 pub(crate) fn physical_relocation_folders(
     current: &ContainerTree,
     candidate: &ContainerTree,
+    companions: &Companions,
 ) -> (BTreeMap<String, Vec<String>>, BTreeMap<String, Vec<String>>) {
-    let before = index_files(current, false);
-    let mut after = index_files(candidate, false);
+    let before = index_files(current, false, companions);
+    let mut after = index_files(candidate, false, companions);
     preserve_pass_start_namespaces(&before, &mut after);
     (before.parent_of, after.parent_of)
 }

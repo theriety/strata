@@ -172,6 +172,8 @@ fn relocates_and_narrates_first_symbol(snapshot: &Snapshot) -> Vec<SymbolMove> {
             from_file,
             to_file,
             delta: 1.0,
+            before: breakdown_totalling(1.0),
+            after: breakdown_totalling(0.0),
             fold: None,
         }],
         total: 0.0,
@@ -290,6 +292,8 @@ fn should_reject_a_cross_namespace_symbol_in_the_final_overlay() {
             from_file: source,
             to_file: destination,
             delta: 1.0,
+            before: breakdown_totalling(1.0),
+            after: breakdown_totalling(0.0),
             fold: None,
         }],
         total: 0.0,
@@ -442,6 +446,7 @@ fn file_info(container: u32, path: &str, sloc: u32) -> FileInfo {
         name: SmolStr::new(path),
         production_sloc: sloc,
         namespace: SmolStr::new(""),
+        directory: SmolStr::new(path.rsplit_once('/').map_or("", |(directory, _)| directory)),
         home: LaminarHome {
             folder: SmolStr::new(""),
             domain: SmolStr::new(""),
@@ -917,6 +922,37 @@ fn should_pin_symbols_in_production_polarity_test_support_by_default() {
         support_file.is_some_and(|file| solver.symbol_source_blocks(&assembled).contains(&file)),
         "default test-symbol policy must block support declarations before nomination"
     );
+}
+
+/// A breakdown whose whole objective `total` sits in the cut term.
+fn breakdown_totalling(total: f64) -> unlace_core::score::ScoreBreakdown {
+    unlace_core::score::ScoreBreakdown {
+        cut: total,
+        imbalance: 0.0,
+        naming: 0.0,
+        path: 0.0,
+        anchor: 0.0,
+        capacity: 0.0,
+        dependency_only: 0.0,
+        companion_separation: 0.0,
+        entry_inflow: 0.0,
+        unit_outflow: 0.0,
+        total,
+    }
+}
+
+/// The ten terms of a core breakdown, summed independently of its `total`.
+fn term_sum(terms: &unlace_core::score::ScoreBreakdown) -> f64 {
+    terms.cut
+        + terms.imbalance
+        + terms.naming
+        + terms.path
+        + terms.anchor
+        + terms.capacity
+        + terms.dependency_only
+        + terms.companion_separation
+        + terms.entry_inflow
+        + terms.unit_outflow
 }
 
 /// Bundles a solver's pricing inputs for a directly constructed pass.
@@ -1431,7 +1467,7 @@ fn should_veto_a_cross_boundary_destination_even_when_priced() {
     // masquerade as the veto — with best at infinity, any destination
     // that survives the gate chain is deterministically accepted, so
     // `!accepted` proves THIS veto fired.
-    pass.ledger.best = f64::INFINITY;
+    pass.ledger.best.total = f64::INFINITY;
 
     let accepted = ir
         .nodes
@@ -2391,9 +2427,9 @@ fn should_veto_a_later_declaration_after_an_earlier_arrival_claims_its_name()
         .ok_or("the later declaration witness must exist")?;
     let assembled = solver.assemble(&solver.real_partition);
     let mut pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
-    pass.ledger.best = f64::INFINITY;
+    pass.ledger.best.total = f64::INFINITY;
     let first_moved = pass.try_relocate(first_subject);
-    pass.ledger.best = f64::INFINITY;
+    pass.ledger.best.total = f64::INFINITY;
     let second_moved = pass.try_relocate(second_subject);
     let relocated: Vec<_> = pass
         .ledger
@@ -2552,10 +2588,15 @@ fn should_not_unlock_a_referenced_symbol_by_moving_its_claimant_first() {
 /// to close a cycle after the symbol moves.
 #[test]
 fn should_veto_a_drained_claim_through_a_transitive_baseline_path() {
+    // shared_value is declared folder-visible, so draining the claimant away
+    // from it exports nothing new (ADR-34) and the witness isolates the
+    // pass-start veto.
+    let mut shared_value = node(1, "shared_value", 2, Polarity::Production);
+    shared_value.visibility = ScopeLevel::Folder;
     let snapshot = snapshot(
         vec![
             node(0, "claimant", 2, Polarity::Production),
-            node(1, "shared_value", 2, Polarity::Production),
+            shared_value,
             node(2, "claimant_lure", 3, Polarity::Production),
             node(3, "destination_resident", 4, Polarity::Production),
             node(4, "middle_resident", 5, Polarity::Production),
@@ -2669,7 +2710,7 @@ fn relocates_first_symbol_with_affinities(
     let ir = snapshot.ir();
     let assembled = solver.assemble(&solver.real_partition);
     let mut pass = SymbolPass::new(pass_inputs(snapshot, &solver, &assembled));
-    pass.ledger.best = f64::INFINITY;
+    pass.ledger.best.total = f64::INFINITY;
     let accepted = ir
         .nodes
         .first()
@@ -2817,13 +2858,13 @@ fn relocates_claimant_then_subject(
         .entry(1)
         .or_default()
         .push((destination_lure, 5.0));
-    pass.ledger.best = f64::INFINITY;
+    pass.ledger.best.total = f64::INFINITY;
     let claimant_moved = ir
         .nodes
         .iter()
         .find(|node| node.id == NodeId(0))
         .is_some_and(|claimant| pass.try_relocate(claimant));
-    pass.ledger.best = f64::INFINITY;
+    pass.ledger.best.total = f64::INFINITY;
     // Hold visibility aside so the witness isolates cycle admission. The
     // production visibility contract has its own focused relocation cases.
     pass.visibility.vis_base = usize::MAX;
@@ -3023,7 +3064,7 @@ fn should_keep_a_test_zone_resident_inside_the_test_zone() {
     // masquerade as the veto — with best at infinity, any destination
     // that survives the gate chain is deterministically accepted, so
     // `!accepted` proves THIS veto fired.
-    pass.ledger.best = f64::INFINITY;
+    pass.ledger.best.total = f64::INFINITY;
 
     let accepted = ir
         .nodes
@@ -3084,7 +3125,7 @@ fn should_still_allow_moves_inside_one_zone() {
     // family alone — with zone edges priced zero everywhere, an intra-zone
     // move can never pay its own displacement under J, and that pricing
     // doctrine is covered by the zero-price tests, not here.
-    pass.ledger.best = f64::INFINITY;
+    pass.ledger.best.total = f64::INFINITY;
 
     let accepted = ir
         .nodes
@@ -3152,7 +3193,7 @@ fn should_reject_a_pinned_symbol_before_it_can_change_a_later_admission() {
     );
     pass.pricing.incident.entry(0).or_default().push((4, 5.0));
     pass.pricing.incident.entry(2).or_default().push((4, 5.0));
-    pass.ledger.best = f64::INFINITY;
+    pass.ledger.best.total = f64::INFINITY;
 
     let blocked_node = ir.nodes.first();
     assert!(blocked_node.is_some(), "blocked symbol must exist");
@@ -4039,6 +4080,72 @@ fn fold_relocations(snapshot: &Snapshot) -> Vec<(u32, Option<u32>)> {
         .collect()
 }
 
+/// A fold prices its members one at a time in acceptance order: each member's
+/// breakdown starts where the previous one's ended, and only the unit as a
+/// whole must improve the objective (FIX08 Option A, ADR-21).
+#[test]
+fn should_chain_the_breakdowns_of_a_folds_members() {
+    let snapshot = collision_fold_snapshot(true, false);
+    let tests = TestPolicy::defaults();
+    let mut config = AnalyzeConfig::default();
+    config
+        .profiles
+        .greenfield
+        .relocation
+        .pin_detected_test_symbols = false;
+    let profile = &config.profiles.greenfield;
+    let solver = PipelineSolver::new(
+        &snapshot,
+        profile,
+        profile.objective.coefficients(),
+        false,
+        &tests,
+    );
+    let evidence = PolishEvidence {
+        folds: vec![CollisionFold {
+            file: 4,
+            into: 5,
+            offered: true,
+        }],
+        ..PolishEvidence::default()
+    };
+
+    let outcome = solver.symbol_polish_with_polish_evidence(&solver.real_partition, &evidence);
+    let members: Vec<_> = outcome
+        .relocations
+        .iter()
+        .filter(|relocation| relocation.fold == Some(ContainerId(4)))
+        .collect();
+    let chained = members
+        .windows(2)
+        .all(|pair| pair.first().map(|first| first.after) == pair.last().map(|next| next.before));
+    let unit_gain = members
+        .first()
+        .zip(members.last())
+        .map(|(first, last)| first.before.total - last.after.total);
+
+    assert_eq!(
+        members.len(),
+        2,
+        "unpinned, both `moving` and `t` fold; got {} relocations",
+        outcome.relocations.len()
+    );
+    assert!(
+        chained,
+        "each member starts from the previous member's after"
+    );
+    assert!(
+        unit_gain.is_some_and(|gain| gain > 0.0),
+        "the fold as a unit improves the objective; got {unit_gain:?}"
+    );
+    for member in &members {
+        assert!(
+            (member.delta - (member.before.total - member.after.total)).abs() < 1e-12,
+            "a member's delta is its own marginal change"
+        );
+    }
+}
+
 /// F7: a test-polarity declaration pinned by polarity stays in the folded
 /// file and does not refuse the unit; the production declarations fold.
 #[test]
@@ -4141,4 +4248,434 @@ fn should_pin_only_the_production_symbol_a_start_fact_names_in_its_file() {
         super::polish::start_symbol_nodes(&ir_with("c.rs")),
         BTreeSet::new()
     );
+}
+
+#[test]
+fn should_count_a_folder_companion_as_deep_as_its_folder() -> Result<(), String> {
+    // `right/destination.ts` is the entry of `right/destination/` (ADR-31): a
+    // move into it from `left/` goes one level deeper, so the depth rule vetoes
+    // the move the equal-depth witness above admits.
+    let mut ir = symbol_depth_snapshot(NodeKind::Symbol, "left", "right")
+        .ir()
+        .clone();
+    ir.file_facts.push(unlace_ir::FileFact::folder_companion(
+        "right/destination.ts",
+        "right/destination",
+    ));
+    let snapshot = Snapshot::assemble(ir).map_err(|error| error.to_string())?;
+
+    let (accepted, relocated) = relocates_first_symbol(&snapshot);
+
+    assert!(
+        !accepted && relocated.is_empty(),
+        "a companion is as deep as its folder; relocations {relocated:?}"
+    );
+    Ok(())
+}
+
+// ADR-34: the gates a symbol move must pass to earn its place.
+
+/// Runs the symbol pass's single-symbol step for `subject` with the files
+/// holding `forbidden_residents` barred as destinations, unscored so every
+/// admitted move improves, and returns the path the subject moved to.
+fn gated_destination(
+    snapshot: &Snapshot,
+    subject: u32,
+    forbidden_residents: &[u32],
+) -> Option<String> {
+    let tests = TestPolicy::defaults();
+    let config = AnalyzeConfig::default();
+    let solver = PipelineSolver::new(
+        snapshot,
+        &config.profiles.greenfield,
+        config.profiles.greenfield.objective.coefficients(),
+        false,
+        &tests,
+    );
+    let assembled = solver.assemble(&solver.real_partition);
+    let forbidden_destinations = forbidden_residents
+        .iter()
+        .filter_map(|resident| assembled.placement.get(resident).copied())
+        .collect();
+    let mut pass = SymbolPass::new_with_policy(
+        pass_inputs(snapshot, &solver, &assembled),
+        RelocationPolicy {
+            forbidden_destinations,
+            ..RelocationPolicy::default()
+        },
+    );
+    pass.ledger.best.total = f64::INFINITY;
+    let node = snapshot
+        .ir()
+        .nodes
+        .iter()
+        .find(|node| node.id.0 == subject)?;
+    if !pass.try_relocate(node) {
+        return None;
+    }
+    let destination = pass.ledger.relocations.first()?.to_file;
+    Some(pass.pricing.path_of(destination).to_owned())
+}
+
+/// F3 shape: an exported entry point whose consumers sit in another file,
+/// calling helpers only its own file uses.
+fn entry_with_helpers_snapshot(helpers_exported: bool) -> Snapshot {
+    let helper = |id: u32, name: &str| {
+        let mut helper = node(id, name, 2, Polarity::Production);
+        if helpers_exported {
+            helper.visibility = ScopeLevel::Folder;
+        }
+        helper
+    };
+    snapshot(
+        vec![
+            node(0, "infer_matches", 2, Polarity::Production),
+            helper(1, "match_remaining"),
+            helper(2, "infer_candidate"),
+            node(3, "matcher", 3, Polarity::Production),
+            node(4, "matcher_peer", 3, Polarity::Production),
+        ],
+        vec![edge(0, 1), edge(0, 2), edge(3, 0), edge(4, 0)],
+        vec![
+            container(0, "src", ScopeLevel::PackageGroup, None),
+            container(1, "differ", ScopeLevel::Folder, Some(0)),
+            container(2, "differ/inference.ts", ScopeLevel::File, Some(1)),
+            container(3, "differ/matcher.ts", ScopeLevel::File, Some(1)),
+        ],
+    )
+}
+
+#[test]
+fn should_keep_an_entry_point_with_its_file_private_helpers() {
+    let moved = gated_destination(&entry_with_helpers_snapshot(false), 0, &[]);
+
+    assert_eq!(
+        moved, None,
+        "moving the entry would export match_remaining and infer_candidate (SC-2)"
+    );
+}
+
+#[test]
+fn should_move_an_entry_point_whose_helpers_are_already_exported() {
+    let moved = gated_destination(&entry_with_helpers_snapshot(true), 0, &[]);
+
+    assert_eq!(moved.as_deref(), Some("differ/matcher.ts"));
+}
+
+/// A private declaration its own file uses, pulled toward its dependencies;
+/// `shared` adds a consumer in a third file, so it is already exported.
+fn private_consumed_at_home_snapshot(shared: bool) -> Snapshot {
+    let mut edges = vec![edge(1, 0), edge(0, 2), edge(0, 3)];
+    if shared {
+        edges.push(edge(4, 0));
+    }
+    snapshot(
+        vec![
+            node(0, "format_step", 2, Polarity::Production),
+            node(1, "home_caller", 2, Polarity::Production),
+            node(2, "dependency", 3, Polarity::Production),
+            node(3, "dependency_peer", 3, Polarity::Production),
+            node(4, "outside_caller", 4, Polarity::Production),
+        ],
+        edges,
+        vec![
+            container(0, "src", ScopeLevel::PackageGroup, None),
+            container(1, "area", ScopeLevel::Folder, Some(0)),
+            container(2, "area/home.ts", ScopeLevel::File, Some(1)),
+            container(3, "area/dependency.ts", ScopeLevel::File, Some(1)),
+            container(4, "area/outside.ts", ScopeLevel::File, Some(1)),
+        ],
+    )
+}
+
+#[test]
+fn should_not_export_a_private_declaration_its_file_still_uses() {
+    let moved = gated_destination(&private_consumed_at_home_snapshot(false), 0, &[]);
+
+    assert_eq!(moved, None, "home_caller would newly import format_step");
+}
+
+#[test]
+fn should_move_an_already_exported_declaration_toward_its_dependencies() {
+    let moved = gated_destination(&private_consumed_at_home_snapshot(true), 0, &[]);
+
+    assert_eq!(moved.as_deref(), Some("area/dependency.ts"));
+}
+
+/// F8 shape: a shared helper used three times from `inline.ts`, twice from
+/// `block.ts` and once from `document.ts`.
+fn shared_helper_snapshot() -> Snapshot {
+    snapshot(
+        vec![
+            node(0, "has_metadata", 2, Polarity::Production),
+            node(1, "metadata_peer", 2, Polarity::Production),
+            node(2, "inline_text", 3, Polarity::Production),
+            node(3, "inline_link", 3, Polarity::Production),
+            node(4, "inline_code", 3, Polarity::Production),
+            node(5, "block_heading", 5, Polarity::Production),
+            node(6, "block_fence", 5, Polarity::Production),
+            node(7, "document_root", 4, Polarity::Production),
+        ],
+        vec![
+            edge(2, 0),
+            edge(3, 0),
+            edge(4, 0),
+            edge(5, 0),
+            edge(6, 0),
+            edge(7, 0),
+        ],
+        vec![
+            container(0, "src", ScopeLevel::PackageGroup, None),
+            container(1, "stringifier", ScopeLevel::Folder, Some(0)),
+            container(2, "stringifier/metadata.ts", ScopeLevel::File, Some(1)),
+            container(3, "stringifier/inline.ts", ScopeLevel::File, Some(1)),
+            container(4, "stringifier/document.ts", ScopeLevel::File, Some(1)),
+            container(5, "stringifier/block.ts", ScopeLevel::File, Some(1)),
+        ],
+    )
+}
+
+#[test]
+fn should_keep_a_shared_helper_home_when_only_a_minority_consumer_is_admitted() {
+    // inline.ts and block.ts stand vetoed, as the file-cycle veto vetoes
+    // them on mdc; document.ts holds a sixth of the pull.
+    let moved = gated_destination(&shared_helper_snapshot(), 0, &[2, 5]);
+
+    assert_eq!(moved, None, "document.ts is a minority consumer (SC-3)");
+}
+
+#[test]
+fn should_refuse_every_minority_consumer_of_a_spread_helper() {
+    // inline.ts holds half, block.ts and document.ts the rest: with inline.ts
+    // vetoed, neither remaining consumer holds half.
+    let moved = gated_destination(&shared_helper_snapshot(), 0, &[2]);
+
+    assert_eq!(moved, None);
+}
+
+/// F9 shape: a token helper called from one class in `scanner.ts` and one in
+/// `brackets.ts`; `scanner_sites` parallel edges model the scanner's call
+/// sites, so `1` is the class-collapsed IR.
+fn class_call_sites_snapshot(scanner_sites: usize) -> Snapshot {
+    let mut edges = vec![edge(3, 0)];
+    edges.extend((0..scanner_sites).map(|_| edge(2, 0)));
+    snapshot(
+        vec![
+            node(0, "append_token", 2, Polarity::Production),
+            node(1, "token_peer", 2, Polarity::Production),
+            node(2, "InlineScanner", 3, Polarity::Production),
+            node(3, "BracketResolver", 4, Polarity::Production),
+        ],
+        edges,
+        vec![
+            container(0, "src", ScopeLevel::PackageGroup, None),
+            container(1, "syntax", ScopeLevel::Folder, Some(0)),
+            container(2, "syntax/tokens.ts", ScopeLevel::File, Some(1)),
+            container(3, "syntax/scanner.ts", ScopeLevel::File, Some(1)),
+            container(4, "syntax/brackets.ts", ScopeLevel::File, Some(1)),
+        ],
+    )
+}
+
+#[test]
+fn should_keep_a_helper_home_when_class_consumers_tie() {
+    let moved = gated_destination(&class_call_sites_snapshot(1), 0, &[]);
+
+    assert_eq!(
+        moved, None,
+        "one edge per class ties scanner.ts with brackets.ts; a tie keeps it home"
+    );
+}
+
+#[test]
+fn should_move_a_helper_to_the_file_holding_most_call_sites() {
+    let moved = gated_destination(&class_call_sites_snapshot(3), 0, &[]);
+
+    assert_eq!(moved.as_deref(), Some("syntax/scanner.ts"));
+}
+
+#[test]
+fn should_not_move_a_helper_to_its_minority_caller_when_the_majority_is_vetoed() {
+    let moved = gated_destination(&class_call_sites_snapshot(3), 0, &[2]);
+
+    assert_eq!(moved, None, "brackets.ts holds one call site of four");
+}
+
+#[test]
+fn should_rank_equal_pull_by_path_rather_than_file_id() {
+    let snapshot = class_call_sites_snapshot(1);
+    let tests = TestPolicy::defaults();
+    let config = AnalyzeConfig::default();
+    let solver = PipelineSolver::new(
+        &snapshot,
+        &config.profiles.greenfield,
+        config.profiles.greenfield.objective.coefficients(),
+        false,
+        &tests,
+    );
+    let assembled = solver.assemble(&solver.real_partition);
+    let pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
+    let subject = snapshot.ir().nodes.first();
+    assert!(subject.is_some(), "the fixture declares append_token first");
+    let Some(subject) = subject else {
+        return;
+    };
+    let source = assembled.placement.get(&0).copied();
+    assert!(source.is_some(), "append_token is placed");
+    let Some(source) = source else {
+        return;
+    };
+
+    let ranked: Vec<&str> = pass
+        .pricing
+        .nominate(subject, &pass.pricing.pull(subject, source))
+        .into_iter()
+        .map(|file| pass.pricing.path_of(file))
+        .collect();
+
+    assert_eq!(ranked, ["syntax/brackets.ts", "syntax/scanner.ts"]);
+}
+
+#[test]
+fn should_admit_only_a_destination_holding_an_untied_majority_of_the_pull() {
+    let pull = |shares: &[(u32, f64)]| pull::Pull {
+        by_file: shares
+            .iter()
+            .map(|(file, share)| (ContainerId(*file), *share))
+            .collect(),
+        home: 1.0,
+    };
+
+    assert!(pull(&[(1, 3.0), (2, 1.0)]).admits(ContainerId(1)));
+    assert!(!pull(&[(1, 3.0), (2, 1.0)]).admits(ContainerId(2)));
+    assert!(pull(&[(1, 1.0), (2, 0.5), (3, 0.5)]).admits(ContainerId(1)));
+    assert!(!pull(&[(1, 1.0), (2, 1.0)]).admits(ContainerId(1)));
+    assert!(!pull(&[(1, 1.0), (2, 1.0), (3, 1.0)]).admits(ContainerId(1)));
+    assert!(!pull(&[(1, 1.0)]).admits(ContainerId(9)));
+}
+
+#[test]
+fn should_prefer_the_lower_total_and_hold_a_tie() {
+    let trial = |file: u32, total: f64| Trial::Single {
+        destination: ContainerId(file),
+        terms: breakdown_totalling(total),
+        cyclic: CycleCounts::default(),
+        visible: 0,
+    };
+
+    let lower = Trial::better(trial(1, 2.0), trial(2, 1.0));
+    let tied = Trial::better(trial(1, 1.0), trial(2, 1.0));
+    let still_tied = Trial::better(tied, trial(3, 1.5));
+
+    assert!(matches!(
+        lower,
+        Trial::Single { destination, .. } if destination == ContainerId(2)
+    ));
+    assert!(matches!(still_tied, Trial::Tied { total } if (total - 1.0).abs() < f64::EPSILON));
+}
+
+/// Greenfield symbol moves of the misfiled-symbol fixture under θ.
+fn misfiled_moves_under_threshold(threshold: f64) -> Vec<SymbolMove> {
+    let snapshot = misfiled_symbol_snapshot(Polarity::Production);
+    let mut config = AnalyzeConfig::default();
+    config.profiles.anchored.candidates = 1;
+    config.profiles.greenfield.relocation.symbol_gain_threshold = threshold;
+    analyze(&snapshot, &config)
+        .ok()
+        .and_then(|result| result.profiles.greenfield)
+        .and_then(|mode| mode.candidates.into_iter().next())
+        .map(|candidate| candidate.symbol_moves)
+        .unwrap_or_default()
+}
+
+#[test]
+fn should_require_a_symbol_move_to_gain_its_relative_threshold() {
+    let free = misfiled_moves_under_threshold(0.0);
+    let strict = misfiled_moves_under_threshold(1.0);
+
+    assert!(
+        free.iter().any(|entry| entry.symbol == "s"),
+        "θ = 0 keeps only the float-dust floor; got {free:?}"
+    );
+    assert!(
+        strict.iter().all(|entry| entry.symbol != "s"),
+        "no move gains its whole starting score; got {strict:?}"
+    );
+}
+
+#[test]
+fn should_record_the_breakdown_either_side_of_each_acceptance() {
+    let snapshot = misfiled_symbol_snapshot(Polarity::Production);
+    let tests = TestPolicy::defaults();
+    let config = AnalyzeConfig::default();
+    let solver = PipelineSolver::new(
+        &snapshot,
+        &config.profiles.greenfield,
+        config.profiles.greenfield.objective.coefficients(),
+        false,
+        &tests,
+    );
+    let assembled = solver.assemble(&solver.real_partition);
+    let mut pass = SymbolPass::new(pass_inputs(&snapshot, &solver, &assembled));
+    let start = pass.pricing.score_with(&BTreeMap::new());
+
+    pass.run();
+    let relocations = &pass.ledger.relocations;
+    let chained = relocations
+        .windows(2)
+        .all(|pair| pair.first().map(|first| first.after) == pair.last().map(|next| next.before));
+
+    assert!(
+        !relocations.is_empty(),
+        "the misfiled symbol must move for the capture to be observable"
+    );
+    assert_eq!(relocations.first().map(|first| first.before), Some(start));
+    assert!(
+        chained,
+        "each acceptance starts from the previous one's after"
+    );
+    assert_eq!(
+        relocations.last().map(|last| last.after),
+        Some(pass.pricing.score_with(&pass.ledger.overlay)),
+        "the last after is the rescored final overlay, not the ledger's copy"
+    );
+    for relocation in relocations {
+        assert!(
+            (relocation.delta - (relocation.before.total - relocation.after.total)).abs() < 1e-12,
+            "delta is the drop in total across the acceptance"
+        );
+        assert!(
+            (term_sum(&relocation.after) - term_sum(&relocation.before) + relocation.delta).abs()
+                < 1e-9,
+            "the per-term changes sum to the acceptance delta"
+        );
+    }
+}
+
+#[test]
+fn should_narrate_term_deltas_that_sum_to_each_symbol_move_delta() {
+    let moves = greenfield_symbol_moves(&transparent_namespace_symbol_snapshot(false));
+
+    assert!(!moves.is_empty(), "the fixture narrates a symbol move");
+    for entry in &moves {
+        let deltas = entry.terms.map(|terms| terms.deltas());
+        let sum = deltas.map(|terms| {
+            terms.cut
+                + terms.imbalance
+                + terms.naming
+                + terms.path
+                + terms.anchor
+                + terms.capacity
+                + terms.dependency_only
+                + terms.companion_separation
+                + terms.entry_inflow
+                + terms.unit_outflow
+        });
+
+        assert!(
+            sum.is_some_and(|sum| (sum - entry.delta).abs() < 1e-9),
+            "per-term deltas {deltas:?} must sum to delta {}",
+            entry.delta
+        );
+    }
 }

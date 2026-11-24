@@ -105,6 +105,7 @@ fn resolve_reference(
             path: target_path,
             offset: target_offset,
             module,
+            ..
         } = resolved
         else {
             return None;

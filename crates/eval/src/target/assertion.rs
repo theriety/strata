@@ -48,11 +48,110 @@ pub struct AssertBlock {
     /// symbol-grain relocation must not churn homes the best state keeps).
     #[serde(default)]
     pub preserve_symbol_home: Vec<PreserveSymbolHome>,
+    /// File sets whose cycle finding must name an import cut (ADR-35: a
+    /// cross-file cycle never offers only symbol cuts).
+    #[serde(default)]
+    pub cycle_import_cut: Vec<CycleImportCut>,
+    /// Moves whose cross-profile advice tier is capped or pinned (SC-5: a
+    /// move the target falsifies never reaches `Recommended`).
+    #[serde(default)]
+    pub advice_tier: Vec<AdviceTier>,
+    /// Guards that no `Recommended` move breaks this block's own
+    /// `keep_together`, `preserve_dir`, or `preserve_symbol_home` pins.
+    #[serde(default)]
+    pub recommended_guard: Vec<RecommendedGuard>,
+}
+
+/// An advice tier, ordered weakest first: no advice, `Review candidate`,
+/// `Recommended`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tier {
+    /// The result carries no advice entry for the move.
+    Absent,
+    /// The move appears only among `reviewCandidates`.
+    Review,
+    /// The move appears among `recommended`.
+    Recommended,
+}
+
+/// A move whose advice tier is capped (`max_tier`) or pinned (`exact_tier`).
+///
+/// Read from the result's cross-profile `advice`, never a candidate tree, so
+/// it takes no mode. `path` is the full repo-relative file the move leaves:
+/// without `symbol` it selects whole-file advice relocating that file
+/// (primary or mirrored test); with `symbol` it selects symbol advice moving
+/// that symbol out of `path`. `to`, when given, narrows the selection to
+/// advice whose destination (a folder for a file move, a file for a symbol
+/// move) equals it. The observed tier is the strongest tier any selected
+/// entry holds, `absent` when none matches.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdviceTier {
+    /// Full repo-relative path of the file the move leaves.
+    pub path: String,
+    /// The relocated symbol's source-declared name, for symbol advice.
+    #[serde(default)]
+    pub symbol: Option<String>,
+    /// The destination the selection is narrowed to, when given.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// The strongest tier the move may reach; exactly one of this and
+    /// [`AdviceTier::exact_tier`].
+    #[serde(default)]
+    pub max_tier: Option<Tier>,
+    /// The tier the move must hold exactly.
+    #[serde(default)]
+    pub exact_tier: Option<Tier>,
+    /// Why the move may not rank higher (or must rank exactly so).
+    pub because: String,
+}
+
+/// The SC-5 guard: every `Recommended` advice entry must leave each of the
+/// block's `keep_together`, `preserve_dir`, and `preserve_symbol_home` pins
+/// intact. Read from the cross-profile advice, so it takes no mode.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecommendedGuard {
+    /// Why no recommended move may contradict the pinned best state.
+    pub because: String,
 }
 
 /// Default candidate index: the best-scoring candidate.
 fn default_candidate() -> u32 {
     1
+}
+
+/// A cross-file cycle whose finding must name the imports to remove.
+///
+/// Read from the current layout's findings, never a candidate: some cycle
+/// finding must span every listed file, and each such finding must name at
+/// least one import between two of its files, with the statement located.
+/// A finding that offers only symbol cuts, or reports its cut unavailable,
+/// fails. With `expect`, each such finding's cut must also name that import.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CycleImportCut {
+    /// Full repo-relative paths of files on the cycle.
+    pub files: Vec<String>,
+    /// The import the cut must name, when pinned.
+    #[serde(default)]
+    pub expect: Option<ExpectedImport>,
+    /// Why the cycle exists and must be cut at an import.
+    pub because: String,
+}
+
+/// One import a `cycle_import_cut` pin expects in the cut.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpectedImport {
+    /// Full repo-relative path of the file holding the import.
+    pub importer: String,
+    /// Full repo-relative path of the file it loads.
+    pub imported: String,
+    /// The 1-based line one of its statements must start on, when pinned.
+    #[serde(default)]
+    pub line: Option<u32>,
 }
 
 /// A symbol that must keep its home file in the asserted candidate tree.

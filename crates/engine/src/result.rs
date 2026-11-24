@@ -25,11 +25,13 @@ pub use self::advice::{
 };
 pub use self::candidate::{Candidate, ContainerNode, Level, ScoreBreakdown, SymbolPlacement};
 pub use self::finding::{
-    CapacityBreach, CapacityUnit, ConditionalSplit, EdgeBreak, Severity, Violation, ViolationKind,
+    CapacityBreach, CapacityUnit, ConditionalSplit, CycleAnalysis, CycleCoverage, EdgeBreak,
+    ImportBreak, ImportCycle, ImportCycleStatus, ImportStatement, Severity, SymbolReference,
+    Violation, ViolationKind,
 };
 pub(crate) use self::group_keyed::GroupKeyed;
 pub use self::movement::{
-    FileMove, MirrorMove, Move, MoveKind, MoveReason, SymbolKind, SymbolMove,
+    FileMove, LeftBehind, MirrorMove, Move, MoveKind, MoveReason, SymbolKind, SymbolMove, TermShift,
 };
 pub use self::profile::{
     CapacityRemainder, CurrentStanding, CurrentTree, ModeResult, Modes, ProfileCurrent,
@@ -39,9 +41,16 @@ pub use self::settings::TestSettings;
 
 /// The schema version stamped into every [`AnalyzeResult`] this crate produces.
 ///
-/// Readers of a saved result reject any other version rather than misreading a
-/// future shape.
-pub const RESULT_SCHEMA_VERSION: u32 = 11;
+/// Schema 12 carries each symbol move's per-term objective shift
+/// ([`TermShift`]); DRF14 adds file-grain cycle findings under the same
+/// version (ADR-35). Readers reject a version outside
+/// [`MIN_RESULT_SCHEMA_VERSION`]`..=RESULT_SCHEMA_VERSION` rather than
+/// misread an unknown shape.
+pub const RESULT_SCHEMA_VERSION: u32 = 12;
+
+/// The oldest saved-result schema a reader still accepts. A schema-11 result
+/// differs only by fields that default when absent.
+pub const MIN_RESULT_SCHEMA_VERSION: u32 = 11;
 
 /// The top-level analysis result: the snapshot hash, the current tree with its
 /// violations, and the per-profile candidate sets.
@@ -53,8 +62,9 @@ pub const RESULT_SCHEMA_VERSION: u32 = 11;
 #[serde(rename_all = "camelCase")]
 pub struct AnalyzeResult {
     /// The result schema version ([`RESULT_SCHEMA_VERSION`]); a saved result
-    /// with any other version is rejected on read. Defaults to `0` (unsupported)
-    /// when absent, so pre-versioned files fail with a clear message.
+    /// outside the readable range is rejected on read. Defaults to `0`
+    /// (unsupported) when absent, so pre-versioned files fail with a clear
+    /// message.
     #[serde(default)]
     pub schema_version: u32,
     /// The hex blake3 hash of the analyzed snapshot.

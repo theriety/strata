@@ -1,6 +1,7 @@
 #![allow(clippy::assertions_on_constants)]
 
 use std::collections::BTreeMap;
+use unlace_ir::laminar::Companions;
 
 use smol_str::SmolStr;
 use unlace_ir::{
@@ -95,12 +96,12 @@ fn should_emit_identical_findings_once_as_shared() {
         cycle.map(|finding| finding.location.as_slice()),
         Some(["src/left.rs".to_owned(), "src/right.rs".to_owned()].as_slice())
     );
+    // no file states its imports, so the symbol cycle stands in as an
+    // unavailable import cycle (ADR-35).
     assert!(cycle.is_some_and(|finding| {
-        finding
-            .detail
-            .contains("unlace keeps a dependency cycle in one file")
-            && finding.detail.contains("to split it, break")
-            && !finding.detail.contains("must remain")
+        finding.detail
+            == "dependency cycle through 2 files; import facts are unavailable for \
+                src/left.rs, src/right.rs, so the imports to remove cannot be named"
     }));
     assert_eq!(anchored_unique, []);
     assert_eq!(greenfield_unique, []);
@@ -656,7 +657,7 @@ fn should_count_domain_capacity_by_top_level_directory_subtrees() {
             walk_all_capacity(
                 &dto,
                 &config.profiles.anchored.capacity,
-                &RealRoots::from_tree(&tree),
+                &RealRoots::from_tree(&tree, &Companions::default()),
             )
         })
         .unwrap_or_default();
@@ -794,6 +795,7 @@ fn should_sort_violations_by_severity_then_kind_then_location() {
         severity,
         location: vec![location.to_owned()],
         detail: String::new(),
+        import_cycle: None,
         break_suggestions: None,
         capacity: None,
     };
@@ -835,6 +837,7 @@ fn should_deduplicate_findings_by_complete_serialized_identity() {
         severity: Severity::Violation,
         location: vec!["workspace/area".to_owned()],
         detail: "folder holds 3 against a cap of 1".to_owned(),
+        import_cycle: None,
         break_suggestions: None,
         capacity: Some(CapacityBreach {
             measured: 3,
@@ -875,6 +878,7 @@ fn should_count_only_hard_capacity_findings_as_breaks() {
         severity,
         location: vec![location.to_owned()],
         detail: String::new(),
+        import_cycle: None,
         break_suggestions: None,
         capacity: None,
     };
@@ -1451,4 +1455,44 @@ fn should_order_file_crossing_cuts_before_same_file_cuts_and_flag_the_latter() {
         order,
         [("b", "c", false), ("c", "a", false), ("a", "b", true)]
     );
+}
+
+#[test]
+fn should_count_a_folder_companion_as_an_entry_of_its_folder() {
+    // `block.ts` is the entry of `block/` (ADR-31): it counts in `block/`,
+    // not as a third entry of `lexer/` beside `types.ts` and `block/`.
+    let paths: Vec<SmolStr> = [
+        "src/lexer/types.ts",
+        "src/lexer/block.ts",
+        "src/lexer/block/leaf.ts",
+        "src/lexer/block/table.ts",
+    ]
+    .into_iter()
+    .map(SmolStr::new)
+    .collect();
+    let facts = [unlace_ir::FileFact::folder_companion(
+        "src/lexer/block.ts",
+        "src/lexer/block",
+    )];
+    let companions = Companions::from_facts(&facts);
+    let layout = Layout {
+        package_roots: Vec::new(),
+        source_roots: vec![SmolStr::new("src")],
+    };
+    let tree =
+        unlace_ir::laminar::build_laminar_tree_with_companions(&paths, "mdc", &layout, &companions)
+            .tree;
+
+    let (entries, real_folders) =
+        crate::analyze::findings::physical::physical_folders_repository_relative(
+            &tree,
+            &companions,
+        );
+    let by_real: BTreeMap<&str, u32> = entries
+        .iter()
+        .filter_map(|(path, count)| Some((real_folders.get(path)?.as_str(), *count)))
+        .collect();
+
+    assert_eq!(by_real.get("src/lexer"), Some(&2), "{by_real:?}");
+    assert_eq!(by_real.get("src/lexer/block"), Some(&3), "{by_real:?}");
 }

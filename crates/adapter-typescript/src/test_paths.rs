@@ -208,6 +208,7 @@ mod tests {
             re_exports: Vec::new(),
             export_clauses: Vec::new(),
             export_loads: Vec::new(),
+            module_loads: Vec::new(),
         }
     }
 

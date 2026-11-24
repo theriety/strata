@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 
+use unlace_ir::laminar::effective_directory;
 use unlace_ir::{ContainerId, NodeId, NodeKind};
 
 use crate::analyze::advice::evidence::{EvidenceIndex, EvidencePlace};
@@ -103,7 +104,7 @@ impl EvidenceIndex<'_> {
     }
     pub(super) fn physical_folder_for_file(&self, file: ContainerId) -> Option<EvidencePlace> {
         let path = self.file_paths_by_id.get(&file)?.as_deref()?;
-        let folder_path = path.rsplit_once('/').map_or("", |(folder, _)| folder);
+        let folder_path = effective_directory(path, &self.companions);
         let container = self.containers.get(&file)?.parent?;
         Some(EvidencePlace::PhysicalFolder {
             container,

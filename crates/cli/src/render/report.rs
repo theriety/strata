@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use unlace_engine::AnalyzeResult;
 
 use super::advice::advice_with_options;
-use super::findings::findings_lines;
+use super::findings::{cycle_coverage_note, findings_lines};
 use super::{RenderOptions, effective_parameter_lines, effective_tests_line, present_modes, wrap};
 
 mod candidate;
@@ -40,6 +40,7 @@ impl Report {
         ];
         let mut findings =
             findings_lines("Shared findings", &result.current.shared_findings, options);
+        findings.extend(cycle_coverage_lines(&result.current.cycle_coverage));
         for (name, profile) in present_modes(result) {
             findings.push(String::new());
             findings.extend(findings_lines(
@@ -156,4 +157,12 @@ fn longest_backtick_run(text: &str) -> usize {
         .map(str::len)
         .max()
         .unwrap_or(0)
+}
+
+/// The cycle coverage note, wrapped, when cycle findings could not see the
+/// whole file-import graph (ADR-35).
+fn cycle_coverage_lines(coverage: &unlace_engine::CycleCoverage) -> Vec<String> {
+    cycle_coverage_note(coverage)
+        .map(|text| wrap(&text, 2, 2))
+        .unwrap_or_default()
 }

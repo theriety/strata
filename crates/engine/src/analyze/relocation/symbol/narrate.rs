@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use unlace_ir::{ContainerId, Node, ScopeLevel};
 
 use crate::analyze::relocation::{CandidateTree, PipelineSolver};
-use crate::result::{SymbolKind, SymbolMove};
+use crate::result::{SymbolKind, SymbolMove, TermShift};
 
 use super::outcome::SymbolOutcome;
 
@@ -96,6 +96,13 @@ impl PipelineSolver<'_> {
                     .to_owned(),
                 delta: -relocation.delta,
                 broken_imports: u32::try_from(severed.len()).unwrap_or(u32::MAX),
+                terms: Some(TermShift {
+                    before: relocation.before.into(),
+                    after: relocation.after.into(),
+                }),
+                fold: relocation
+                    .fold
+                    .and_then(|file| current_name.get(&file.0).map(|name| (*name).to_owned())),
             });
         }
         moves

@@ -425,3 +425,44 @@
 - **Impact on spec**: none in-stream — no production code, TOML, DTO, golden, or coefficient movement; the witness moves from red-pending-fix to standing-red-by-ruling; the redesign stream inherits the measured chain above plus the preserved veto evidence
 - **Severity**: minor
 - **Resolution (2026-09-25)**: at `c18f840` the witness passes (`cargo nextest run -p unlace-eval`: 36/36 green), so the standing red is retired; the witness now guards against import-cycle tearing regressions and the eval module doc no longer records a waived red
+
+### D-51: ω (`unit-outflow`) has no isolating eval case and tracks ε (`entry-inflow`)
+- **When**: advice-false-moves DRF04–DRF16 (2026-11-25)
+- **Draft said**: ADR-33 prices companion entry inflow (ε) and unit outflow (ω) as two terms, each calibrated on the eval corpus
+- **What I did instead**: calibrated ε only, as five times the smallest value that holds every companion-folder pin at any symbol-gain threshold, and set ω to the same `0.0125`. No eval case exercises a file or declaration leaving a unit without entering its entry file, so a different ω would move no measured result
+- **Reason**: verification (the corpus cannot separate the two terms; inventing a separate number would be a guess presented as a calibration)
+- **Impact on spec**: none (both default to `0.0125`; `0.0` disables either)
+- **Severity**: minor
+- **Resolution**: open until a corpus case isolates unit outflow; the config doc comment and README mark ω uncalibrated
+
+### D-52: Rust macro-body paths are not scanned for import facts
+- **When**: advice-false-moves DRF10–DRF12 (2026-11-25)
+- **Draft said**: ADR-35 takes cycle findings from the file-import facts each adapter states
+- **What I did instead**: the Rust adapter records `use` trees and qualified paths outside macros. A path inside a macro invocation's token tree (`println!("{}", a::f())`), and a `use` inside a macro, state no import, because `syn` never parses a token tree. Attribute paths, `pub(in ..)` visibility, `Self::` paths and `cfg(test)` code are also left out
+- **Reason**: wrong-integration (`syn` leaves a macro invocation's token tree unparsed, so a path inside it cannot be resolved to an import)
+- **Impact on spec**: behavior-change (a cycle held together only by a macro-body path is not reported)
+- **Severity**: minor
+
+### D-53: Type-only back-edge cycles are no longer reported, because cycles are import cycles
+- **When**: advice-false-moves DRF14 (2026-11-25)
+- **Draft said**: a cycle finding is a strongly connected component of the hard symbol graph, and unlace 1.0.0 reported one whenever a type reference closed it
+- **What I did instead**: a cycle finding is a cycle of file imports (ADR-35). A type-only import loads nothing at runtime, so a cycle whose back edge is type-only forms no import cycle and is dropped. Rust parent/child facade `use` cycles now report as violations
+- **Reason**: behavior-change (the 1.0.0 cut named same-file symbol edges that did not remove the cross-file dependency the reader saw)
+- **Impact on spec**: behavior-change (a reader upgrading from 1.0.0 sees such findings disappear; goldens `cyclic`, `cyclic-oversized` and `dupflat` changed text)
+- **Severity**: minor
+
+### D-54: An unavailable cycle status is reported for files without import facts
+- **When**: advice-false-moves DRF14 (2026-11-25)
+- **Draft said**: a cycle finding names the imports whose removal breaks it
+- **What I did instead**: when a cycle runs through a file whose adapter states no imports, the finding reports `importCycle.status = "unavailable"` and names those files instead of a cut, and `current.cycleCoverage` records `partial` or `unavailable` for the run. An unavailable cycle is never reported as empty. Saved results and IR snapshots before IR schema 4 state no imports, so every file in them reads as unavailable
+- **Reason**: behavior-change (a silent gap would let "no cycle finding" read as "no cycle")
+- **Impact on spec**: surface-change (additive result fields under schema 12; a coverage note in the `violations` and `report` faces; the exit code is unchanged)
+- **Severity**: minor
+
+### D-55: The deprecated `source-cohesion` alias carries no deprecation warning
+- **When**: advice-false-moves DRF20 (2026-11-25)
+- **Draft said**: the qualification weight `source-cohesion` is renamed `destination-advantage`, and the old key should be flagged as deprecated
+- **What I did instead**: the old key is accepted as a serde alias and renamed on load without any warning. Setting both keys is a configuration error that names the deprecated key. The README and the checked-in `unlace.toml` use the new name
+- **Reason**: behavior-change (the rename shipped with the alias and no warning; a deprecation warning is not built)
+- **Impact on spec**: none (a profile using the old key behaves identically)
+- **Severity**: minor

@@ -121,9 +121,20 @@ pub struct IrFragment {
     /// Name-matched uses that count for visibility advice only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub advisory_uses: Vec<AdvisoryUse>,
-    /// Test pairs and entry files this adapter states for its language.
+    /// Test pairs, entry files and folder companions this adapter states for
+    /// its language.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_facts: Vec<crate::FileFact>,
+    /// File imports this adapter resolved to analysed files. The merge keeps
+    /// them only when `states_imports` is set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imports: Vec<crate::FileImport>,
+    /// Whether this adapter states every resolvable import of its files, so an
+    /// empty `imports` means "no imports" rather than "imports not stated". An
+    /// adapter that cannot resolve its imports leaves it unset, and the engine
+    /// then reports its files' import cycles as unavailable.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub states_imports: bool,
     /// Repo-relative `/`-separated directories of crates that only support
     /// tests (test harnesses); items under them are not production code.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

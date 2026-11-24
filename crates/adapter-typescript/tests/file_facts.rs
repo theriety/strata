@@ -96,3 +96,108 @@ fn should_record_no_entry_files() {
     let facts = facts(&["src/index.ts", "src/main.ts"]);
     assert_eq!(facts.iter().filter(|fact| fact.entry).count(), 0);
 }
+
+fn companion(file: &str, folder: &str) -> FileFact {
+    FileFact::folder_companion(file, folder)
+}
+
+#[test]
+fn should_state_a_module_beside_its_folder_as_the_folders_companion() {
+    assert_eq!(
+        facts(&["src/block.ts", "src/block/leaf.ts", "src/other.ts"]),
+        vec![companion("src/block.ts", "src/block")]
+    );
+}
+
+#[test]
+fn should_state_a_root_level_companion_for_every_module_extension() {
+    assert_eq!(
+        facts(&[
+            "a.ts",
+            "a/x.ts",
+            "src/b.tsx",
+            "src/b/x.ts",
+            "src/c.mts",
+            "src/c/x.ts",
+        ]),
+        vec![
+            companion("a.ts", "a"),
+            companion("src/b.tsx", "src/b"),
+            companion("src/c.mts", "src/c"),
+        ]
+    );
+}
+
+#[test]
+fn should_state_nothing_when_the_folder_has_its_own_index() {
+    assert_eq!(
+        facts(&["src/block.ts", "src/block/index.ts", "src/block/leaf.ts"]),
+        Vec::<FileFact>::new()
+    );
+}
+
+#[test]
+fn should_state_nothing_when_two_modules_share_the_stem() {
+    assert_eq!(
+        facts(&["src/block.ts", "src/block.tsx", "src/block/leaf.ts"]),
+        Vec::<FileFact>::new()
+    );
+}
+
+#[test]
+fn should_state_nothing_when_the_folder_holds_no_analysed_module() {
+    assert_eq!(
+        facts(&["src/block.ts", "src/block/logo.svg", "src/other/leaf.ts"]),
+        Vec::<FileFact>::new()
+    );
+}
+
+#[test]
+fn should_give_a_paired_spec_its_mirrored_companion_folder() {
+    assert_eq!(
+        facts(&[
+            "src/lexer/block.ts",
+            "src/lexer/block/leaf.ts",
+            "spec/lexer/block.spec.ts",
+            "spec/lexer/block/leaf.spec.ts",
+        ]),
+        vec![
+            FileFact {
+                folder_companion: Some(SmolStr::new("spec/lexer/block")),
+                ..pair("spec/lexer/block.spec.ts", "src/lexer/block.ts")
+            },
+            pair("spec/lexer/block/leaf.spec.ts", "src/lexer/block/leaf.ts"),
+            companion("src/lexer/block.ts", "src/lexer/block"),
+        ]
+    );
+}
+
+#[test]
+fn should_give_a_paired_spec_no_companion_when_its_mirror_folder_is_absent() {
+    assert_eq!(
+        facts(&[
+            "src/lexer/block.ts",
+            "src/lexer/block/leaf.ts",
+            "spec/lexer/block.spec.ts",
+        ]),
+        vec![
+            pair("spec/lexer/block.spec.ts", "src/lexer/block.ts"),
+            companion("src/lexer/block.ts", "src/lexer/block"),
+        ]
+    );
+}
+
+#[test]
+fn should_state_a_companion_at_every_nesting_level() {
+    assert_eq!(
+        facts(&[
+            "src/block.ts",
+            "src/block/mdcx.ts",
+            "src/block/mdcx/body.ts"
+        ]),
+        vec![
+            companion("src/block.ts", "src/block"),
+            companion("src/block/mdcx.ts", "src/block/mdcx"),
+        ]
+    );
+}

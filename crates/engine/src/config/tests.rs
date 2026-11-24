@@ -35,6 +35,94 @@ fn should_default_to_the_config_less_baseline() {
     assert!(
         (config.profiles.greenfield.objective.companion_separation - 0.05).abs() < f64::EPSILON
     );
+    assert!(
+        (config.profiles.anchored.objective.entry_inflow - ANCHORED_ENTRY_INFLOW).abs()
+            < f64::EPSILON
+    );
+    assert!(
+        (config.profiles.anchored.objective.unit_outflow - ANCHORED_UNIT_OUTFLOW).abs()
+            < f64::EPSILON
+    );
+    assert!(
+        (config.profiles.greenfield.objective.entry_inflow - GREENFIELD_ENTRY_INFLOW).abs()
+            < f64::EPSILON
+    );
+    assert!(
+        (config.profiles.greenfield.objective.unit_outflow - GREENFIELD_UNIT_OUTFLOW).abs()
+            < f64::EPSILON
+    );
+}
+
+/// The calibrated companion-unit defaults (ADR-33), stated once for the tests.
+const ANCHORED_ENTRY_INFLOW: f64 = 0.0125;
+const ANCHORED_UNIT_OUTFLOW: f64 = 0.0125;
+const GREENFIELD_ENTRY_INFLOW: f64 = 0.0125;
+const GREENFIELD_UNIT_OUTFLOW: f64 = 0.0125;
+
+#[test]
+fn should_parse_explicit_companion_unit_objectives() {
+    let parsed = toml::from_str::<AnalyzeConfig>(
+        "[profiles.greenfield.objective]\nentry-inflow = 0.0\nunit-outflow = 0.75\n",
+    );
+    assert!(
+        parsed.is_ok(),
+        "the companion-unit keys parse: {:?}",
+        parsed.as_ref().err()
+    );
+    let config = parsed.unwrap_or_default();
+
+    assert!(config.profiles.greenfield.objective.entry_inflow.abs() < f64::EPSILON);
+    assert!((config.profiles.greenfield.objective.unit_outflow - 0.75).abs() < f64::EPSILON);
+    assert!(
+        (config.profiles.anchored.objective.entry_inflow - ANCHORED_ENTRY_INFLOW).abs()
+            < f64::EPSILON
+    );
+    assert!(
+        (config.profiles.anchored.objective.unit_outflow - ANCHORED_UNIT_OUTFLOW).abs()
+            < f64::EPSILON
+    );
+}
+
+#[test]
+fn should_reject_invalid_companion_unit_objectives_with_their_key_path() {
+    for value in [-0.01, f64::INFINITY, f64::NAN] {
+        for (expected, objective) in [
+            (
+                "profiles.greenfield.objective.entry-inflow",
+                ObjectiveConfig {
+                    entry_inflow: value,
+                    ..ProfileConfig::greenfield().objective
+                },
+            ),
+            (
+                "profiles.greenfield.objective.unit-outflow",
+                ObjectiveConfig {
+                    unit_outflow: value,
+                    ..ProfileConfig::greenfield().objective
+                },
+            ),
+        ] {
+            let result = AnalyzeConfig {
+                profiles: ProfilesConfig {
+                    greenfield: ProfileConfig {
+                        objective,
+                        ..ProfileConfig::greenfield()
+                    },
+                    ..ProfilesConfig::default()
+                },
+                ..AnalyzeConfig::default()
+            }
+            .validate();
+
+            assert!(
+                matches!(
+                    &result,
+                    Err(UnlaceError::ConfigInvalid { key: Some(key), .. }) if key == expected
+                ),
+                "{value} is rejected at {expected}, got {result:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -266,7 +354,7 @@ minimum-ambiguity-margin = 0.15
 [profiles.anchored.qualification.weights]
 unique-owner = 0.10
 role-affinity = 0.10
-source-cohesion = 0.25
+destination-advantage = 0.25
 destination-cohesion = 0.25
 producer-evidence = 0.10
 architectural-reach = 0.20
@@ -308,7 +396,7 @@ minimum-ambiguity-margin = 0.20
 [profiles.greenfield.qualification.weights]
 unique-owner = 0.05
 role-affinity = 0.15
-source-cohesion = 0.20
+destination-advantage = 0.20
 destination-cohesion = 0.30
 producer-evidence = 0.10
 architectural-reach = 0.20
@@ -389,7 +477,7 @@ minimum-ambiguity-margin = 0.15
 [profiles.anchored.qualification.weights]
 unique-owner = 0.10
 role-affinity = 0.10
-source-cohesion = 0.25
+destination-advantage = 0.25
 destination-cohesion = 0.25
 producer-evidence = 0.10
 architectural-reach = 0.20
@@ -401,7 +489,7 @@ minimum-ambiguity-margin = 0.20
 [profiles.greenfield.qualification.weights]
 unique-owner = 0.05
 role-affinity = 0.15
-source-cohesion = 0.20
+destination-advantage = 0.20
 destination-cohesion = 0.30
 producer-evidence = 0.10
 architectural-reach = 0.20
@@ -459,8 +547,8 @@ fn should_default_every_profile_to_the_conservative_qualification_policy() {
                 0.10,
             ),
             (
-                "weights.source-cohesion",
-                qualification.weights.source_cohesion,
+                "weights.destination-advantage",
+                qualification.weights.destination_advantage,
                 0.25,
             ),
             (
@@ -908,6 +996,8 @@ fn should_map_objective_config_onto_coefficients() {
         capacity: 4.0,
         dependency_only: 0.8,
         companion_separation: 0.9,
+        entry_inflow: 1.1,
+        unit_outflow: 1.2,
     };
 
     let coefficients = objective.coefficients();
@@ -918,6 +1008,8 @@ fn should_map_objective_config_onto_coefficients() {
     assert!((coefficients.mu - 0.7).abs() < f64::EPSILON);
     assert!((coefficients.dependency_only - 0.8).abs() < f64::EPSILON);
     assert!((coefficients.companion_separation - 0.9).abs() < f64::EPSILON);
+    assert!((coefficients.entry_inflow - 1.1).abs() < f64::EPSILON);
+    assert!((coefficients.unit_outflow - 1.2).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -1040,4 +1132,109 @@ fn should_reject_same_file_weights_below_one() {
 #[test]
 fn should_accept_the_shipped_defaults_within_every_search_ceiling() {
     assert!(AnalyzeConfig::default().validate().is_ok());
+}
+
+#[test]
+fn should_default_the_symbol_gain_threshold_in_both_profiles() {
+    let config = AnalyzeConfig::default();
+
+    // The calibrated θ (ADR-34, calibration table).
+    assert!((DEFAULT_SYMBOL_GAIN_THRESHOLD - 1e-3).abs() < f64::EPSILON);
+
+    for profile in [&config.profiles.anchored, &config.profiles.greenfield] {
+        assert!(
+            (profile.relocation.symbol_gain_threshold - DEFAULT_SYMBOL_GAIN_THRESHOLD).abs()
+                < f64::EPSILON
+        );
+    }
+}
+
+#[test]
+fn should_parse_an_explicit_symbol_gain_threshold() {
+    let parsed = toml::from_str::<AnalyzeConfig>(
+        "[profiles.greenfield.relocation]\nsymbol-gain-threshold = 0.0\n",
+    );
+    assert!(
+        parsed.is_ok(),
+        "zero keeps only the float-dust floor: {:?}",
+        parsed.as_ref().err()
+    );
+    let config = parsed.unwrap_or_default();
+
+    assert!(
+        config
+            .profiles
+            .greenfield
+            .relocation
+            .symbol_gain_threshold
+            .abs()
+            < f64::EPSILON
+    );
+    assert!(
+        (config.profiles.anchored.relocation.symbol_gain_threshold - DEFAULT_SYMBOL_GAIN_THRESHOLD)
+            .abs()
+            < f64::EPSILON
+    );
+}
+
+#[test]
+fn should_reject_an_invalid_symbol_gain_threshold_with_its_key_path() {
+    for value in [-0.01, f64::INFINITY, f64::NAN] {
+        let mut config = AnalyzeConfig::default();
+        config.profiles.anchored.relocation.symbol_gain_threshold = value;
+
+        let result = config.validate();
+
+        assert!(
+            matches!(
+                &result,
+                Err(UnlaceError::ConfigInvalid { key: Some(key), .. })
+                    if key == "profiles.anchored.relocation.symbol-gain-threshold"
+            ),
+            "{value} is rejected at its key, got {result:?}"
+        );
+    }
+}
+
+#[test]
+fn should_accept_the_deprecated_source_cohesion_weight_key() {
+    let old = "[profiles.anchored.qualification.weights]\nsource-cohesion = 0.4\n";
+    let new = "[profiles.anchored.qualification.weights]\ndestination-advantage = 0.4\n";
+
+    let old: Result<AnalyzeConfig, _> = toml::from_str(old);
+    let new: Result<AnalyzeConfig, _> = toml::from_str(new);
+
+    let weight = |config: Result<AnalyzeConfig, _>| {
+        config.ok().map(|config| {
+            config
+                .profiles
+                .anchored
+                .qualification
+                .weights
+                .destination_advantage
+        })
+    };
+    assert_eq!(weight(old), Some(0.4));
+    assert_eq!(weight(new), Some(0.4));
+}
+
+#[test]
+fn should_reject_both_spellings_of_the_destination_advantage_weight() {
+    let path = std::env::temp_dir().join(format!("unlace-alias-{}.toml", std::process::id()));
+    let written = std::fs::write(
+        &path,
+        "[profiles.anchored.qualification.weights]\n\
+         destination-advantage = 0.3\nsource-cohesion = 0.3\n",
+    );
+    assert!(written.is_ok());
+
+    let loaded = load_config(&path);
+    let _ = std::fs::remove_file(&path);
+
+    assert!(matches!(
+        loaded,
+        Err(UnlaceError::ConfigInvalid { key: Some(key), reason })
+            if key == "profiles.anchored.qualification.weights.destination-advantage"
+                && reason.contains("deprecated")
+    ));
 }

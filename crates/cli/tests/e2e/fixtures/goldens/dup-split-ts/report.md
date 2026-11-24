@@ -1,7 +1,7 @@
 # Unlace report — dup-split-ts
 
 11 files · 11 symbols · 12 edges
-Snapshot `8e05d78407a915f4fc3b666a524bee7a5b8ad04a234701d48ca1b4864dc9525e`
+Snapshot `74a3b5cd4f7072443989b0f223fa133f992e57f55b3f40ca59ee6dbdc1d23226`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 ## Structural findings
@@ -28,12 +28,12 @@ candidate is a proposed layout; inclusion does not make a move Recommended. Part
 rescored.
 
 anchored — 1 candidate(s)
-Baseline score: 2.8270
+Baseline score: 2.7611
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 
 anchored — candidate 1
-  Score: 2.8270 → 0.6047; improvement +2.2222
+  Score: 2.7611 → 0.5562; improvement +2.2049
   Capacity remaining: 0 (0 at file level).
   Proposed moves
     - Move file `atlas/foo/b1.ts` → `atlas/foo/b/b1.ts`
@@ -84,12 +84,12 @@ anchored — candidate 1
   Unchanged branches and symbols omitted; excluded files are not shown.
 
 greenfield — 1 candidate(s)
-Baseline score: 3.0270
+Baseline score: 2.9611
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 
 greenfield — candidate 1
-  Score: 3.0270 → 0.2545; improvement +2.7724
+  Score: 2.9611 → 0.2060; improvement +2.7551
   Capacity remaining: 0 (0 at file level).
   Proposed moves
     - Move file `atlas/foo/b1.ts` → `atlas/foo/b/b1.ts`

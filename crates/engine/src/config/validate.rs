@@ -143,6 +143,14 @@ impl AnalyzeConfig {
             &key("objective.companion-separation"),
             profile.objective.companion_separation,
         )?;
+        non_negative_finite(
+            &key("objective.entry-inflow"),
+            profile.objective.entry_inflow,
+        )?;
+        non_negative_finite(
+            &key("objective.unit-outflow"),
+            profile.objective.unit_outflow,
+        )?;
         non_negative_finite(&key("weights.value-import"), profile.weights.value_import)?;
         non_negative_finite(&key("weights.inheritance"), profile.weights.inheritance)?;
         non_negative_finite(&key("weights.call"), profile.weights.call)?;

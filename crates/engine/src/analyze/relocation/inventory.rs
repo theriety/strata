@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use smol_str::SmolStr;
 use unlace_core::condense::Condensation;
+use unlace_ir::laminar::{Companions, effective_directory};
 use unlace_ir::{Container, IntermediateRepresentation, Polarity, ScopeLevel};
 
 use crate::analyze::layout::{LaminarHome, laminar_home, qualify_folder_names, render_namespace};
@@ -52,6 +53,7 @@ pub(in crate::analyze) fn file_inventory(
         .iter()
         .map(|container| (container.id.0, container))
         .collect();
+    let companions = Companions::from_facts(&ir.file_facts);
     let mut files: Vec<FileInfo> = ir
         .containers
         .containers()
@@ -59,11 +61,13 @@ pub(in crate::analyze) fn file_inventory(
         .filter(|container| container.level == ScopeLevel::File)
         .map(|container| {
             let home = laminar_home(&by_id, container.id.0);
+            let directory = effective_directory(&container.name, &companions);
             FileInfo {
                 container: container.id.0,
                 name: container.name.clone(),
                 production_sloc: 0,
-                namespace: render_namespace(&container.name, &home),
+                namespace: render_namespace(directory, &home),
+                directory: SmolStr::new(directory),
                 home,
             }
         })

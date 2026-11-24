@@ -30,6 +30,7 @@ pub fn load_config(path: impl AsRef<Path>) -> Result<AnalyzeConfig, UnlaceError>
             reason: error.message().to_owned(),
         })?;
     reject_legacy_keys(&document)?;
+    reject_conflicting_aliases(&document)?;
     let config: AnalyzeConfig =
         toml::from_str(&text).map_err(|error| UnlaceError::ConfigInvalid {
             key: None,
@@ -55,6 +56,33 @@ fn reject_legacy_keys(document: &toml::Value) -> Result<(), UnlaceError> {
     for field in TOP_LEVEL_KEYS {
         if document.get(field).is_some() {
             return Err(unknown_legacy_key(field.to_owned(), field));
+        }
+    }
+    Ok(())
+}
+
+/// Rejects a profile that spells one weight under both its current key and its
+/// deprecated alias, naming the full key path of the conflict.
+fn reject_conflicting_aliases(document: &toml::Value) -> Result<(), UnlaceError> {
+    let Some(profiles) = document.get("profiles").and_then(toml::Value::as_table) else {
+        return Ok(());
+    };
+    for (profile, body) in profiles {
+        let weights = body
+            .get("qualification")
+            .and_then(|qualification| qualification.get("weights"))
+            .and_then(toml::Value::as_table);
+        if weights.is_some_and(|table| {
+            table.contains_key("destination-advantage") && table.contains_key("source-cohesion")
+        }) {
+            return Err(UnlaceError::ConfigInvalid {
+                key: Some(format!(
+                    "profiles.{profile}.qualification.weights.destination-advantage"
+                )),
+                reason: "`source-cohesion` is the deprecated name of `destination-advantage`; \
+                         set only `destination-advantage`"
+                    .to_owned(),
+            });
         }
     }
     Ok(())

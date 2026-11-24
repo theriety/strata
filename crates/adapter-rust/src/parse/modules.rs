@@ -12,6 +12,7 @@ use syn::Item;
 
 use super::advisory::mark_all;
 use super::globs::{module_paths, resolve_globs};
+use super::imports::{ModImport, line_of};
 use super::metadata::{has_cfg_test, loader_may_drop};
 use super::{Declaration, ParsedFile};
 
@@ -29,6 +30,8 @@ pub(super) struct ModDecl {
     cfg_test: bool,
     /// Whether the declaration (or an enclosing inline module) may be dropped by the loader.
     may_drop: bool,
+    /// 1-based line of the `mod` keyword.
+    line: u32,
 }
 
 /// A parsed file's module declarations and source text.
@@ -72,6 +75,7 @@ fn collect(items: &[Item], prefix: &[String], gates: (bool, bool), out: &mut Vec
                 path: path_attr(&item_mod.attrs),
                 cfg_test,
                 may_drop,
+                line: line_of(item_mod.mod_token.span),
             });
         }
     }
@@ -95,13 +99,16 @@ fn path_attr(attrs: &[syn::Attribute]) -> Option<String> {
 }
 
 /// Marks every declaration of a file reached through a `cfg(test)` module
-/// declaration as `cfg(test)` code with no production SLOC, and records the
-/// names used in files reached through a declaration the loader may drop.
+/// declaration as `cfg(test)` code with no production SLOC, clears its `use`
+/// items and qualified paths (a test-only load states no file import), and
+/// records the names used in files reached through a declaration the loader
+/// may drop.
 pub(super) fn propagate_gates(parsed: &mut [(ParsedFile, Modules)]) {
     let known: HashSet<SmolStr> = parsed.iter().map(|(file, _)| file.path.clone()).collect();
     let children = resolve_children(parsed, &known);
 
     let test_files = reach(&children, |child| child.cfg_test);
+    let production_files = production_reach(&children, &known);
     let mut dropped_files = reach(&children, |child| child.may_drop);
     let gated: Vec<SmolStr> = parsed
         .iter()
@@ -116,6 +123,12 @@ pub(super) fn propagate_gates(parsed: &mut [(ParsedFile, Modules)]) {
             file.re_exports
                 .iter_mut()
                 .for_each(|re_export| re_export.cfg_test = true);
+            // a file a production declaration also loads keeps its imports:
+            // only a load that every route gates on cfg(test) states none.
+            if !production_files.contains(&file.path) {
+                file.uses.clear();
+                file.paths.clear();
+            }
         }
         if dropped_files.contains(&file.path) {
             mark_all(file, &modules.source);
@@ -124,6 +137,7 @@ pub(super) fn propagate_gates(parsed: &mut [(ParsedFile, Modules)]) {
     let sources = pairs::test_sources(&children);
     for (file, _) in parsed.iter_mut() {
         file.test_of = sources.get(&file.path).cloned();
+        file.mod_imports = mod_imports(children.get(&file.path));
     }
     let paths = module_paths(parsed, &children);
     resolve_globs(parsed, &paths);
@@ -139,6 +153,35 @@ fn reach(children: &HashMap<SmolStr, Vec<Child>>, select: fn(&Child) -> bool) ->
         .map(|child| child.path.clone())
         .collect();
     descend(children, seeds, &mut found);
+    found
+}
+
+/// Files a production build loads: every file no module declaration names
+/// (a crate root), and every file reached from one through declarations that
+/// are not `cfg(test)`.
+fn production_reach(
+    children: &HashMap<SmolStr, Vec<Child>>,
+    known: &HashSet<SmolStr>,
+) -> HashSet<SmolStr> {
+    let declared: HashSet<&SmolStr> = children
+        .values()
+        .flatten()
+        .map(|child| &child.path)
+        .collect();
+    let mut found: HashSet<SmolStr> = HashSet::new();
+    let mut pending: Vec<SmolStr> = known
+        .iter()
+        .filter(|path| !declared.contains(path))
+        .cloned()
+        .collect();
+    found.extend(pending.iter().cloned());
+    while let Some(path) = pending.pop() {
+        for child in children.get(&path).into_iter().flatten() {
+            if !child.cfg_test && found.insert(child.path.clone()) {
+                pending.push(child.path.clone());
+            }
+        }
+    }
     found
 }
 
@@ -206,6 +249,25 @@ pub(super) struct Child {
     cfg_test: bool,
     may_drop: bool,
     via_path: bool,
+    /// The declared module name.
+    name: String,
+    /// 1-based line of the declaration.
+    line: u32,
+}
+
+/// The file imports a file's resolved `mod x;` declarations make, in source order.
+fn mod_imports(children: Option<&Vec<Child>>) -> Vec<ModImport> {
+    let mut found: Vec<ModImport> = children
+        .into_iter()
+        .flatten()
+        .map(|child| ModImport {
+            imported: child.path.clone(),
+            name: SmolStr::new(&child.name),
+            line: child.line,
+        })
+        .collect();
+    found.sort_by(|left, right| (left.line, &left.imported).cmp(&(right.line, &right.imported)));
+    found
 }
 
 /// Whether a file is a cargo target root, whose children live beside it rather
@@ -279,6 +341,8 @@ fn child_files(
                     cfg_test: decl.cfg_test,
                     may_drop: decl.may_drop,
                     via_path: decl.path.is_some(),
+                    name: decl.name.clone(),
+                    line: decl.line,
                 })
         })
         .collect()
@@ -319,6 +383,7 @@ mod tests {
             path: path.map(str::to_string),
             cfg_test: false,
             may_drop: false,
+            line: 1,
         }
     }
 
@@ -398,5 +463,45 @@ mod tests {
         );
 
         assert_eq!(found, vec!["shared/x.rs"]);
+    }
+
+    fn child(path: &str, cfg_test: bool) -> Child {
+        Child {
+            path: SmolStr::new(path),
+            module: vec![path.to_owned()],
+            cfg_test,
+            may_drop: false,
+            via_path: false,
+            name: path.to_owned(),
+            line: 1,
+        }
+    }
+
+    #[test]
+    fn should_keep_a_file_loaded_by_both_a_test_and_a_production_declaration_in_production() {
+        let known: HashSet<SmolStr> = ["lib.rs", "shared.rs", "mock.rs"]
+            .into_iter()
+            .map(SmolStr::new)
+            .collect();
+        let children: HashMap<SmolStr, Vec<Child>> = HashMap::from([(
+            SmolStr::new("lib.rs"),
+            vec![
+                child("shared.rs", false),
+                child("shared.rs", true),
+                child("mock.rs", true),
+            ],
+        )]);
+
+        let production = production_reach(&children, &known);
+
+        assert!(production.contains("lib.rs"), "a crate root loads");
+        assert!(
+            production.contains("shared.rs"),
+            "a production mod loads it"
+        );
+        assert!(
+            !production.contains("mock.rs"),
+            "only a cfg(test) mod loads it"
+        );
     }
 }

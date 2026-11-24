@@ -25,6 +25,8 @@ use unlace_engine::{AnalyzeResult, ModeResult, ProfileConfig, ScoreBreakdown, Te
 pub const ADVICE_DISCLAIMER: &str = "All findings and moves are suggestions. Applying them may break the build; use your own judgement.";
 
 pub use diff::{render_diff, render_moves};
+pub use findings::write_violation_report;
+#[cfg(test)]
 pub use findings::write_violation_table;
 pub use tree::render_tree;
 
@@ -223,9 +225,11 @@ pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<St
             weight(p.objective.capacity)
         ),
         format!(
-            "             dependency-only {} · companion-separation {}",
+            "             dependency-only {} · companion-separation {} · entry-inflow {} · unit-outflow {}",
             weight(p.objective.dependency_only),
-            weight(p.objective.companion_separation)
+            weight(p.objective.companion_separation),
+            weight(p.objective.entry_inflow),
+            weight(p.objective.unit_outflow)
         ),
         format!(
             "   weights   value-import {} · inheritance {} · call {} · type-reference {} · re-export {}",
@@ -251,11 +255,12 @@ pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<St
             weight(p.diversity.min_distance)
         ),
         format!(
-            "   relocation pin-test-symbols {} · cross-package {} · file patterns {} · symbol patterns {}",
+            "   relocation pin-test-symbols {} · cross-package {} · file patterns {} · symbol patterns {} · symbol-gain-threshold {}",
             p.relocation.pin_detected_test_symbols,
             p.relocation.allow_cross_package_moves,
             p.relocation.forbid_file_moves.len(),
-            p.relocation.forbid_symbol_moves.len()
+            p.relocation.forbid_symbol_moves.len(),
+            weight(p.relocation.symbol_gain_threshold)
         ),
         format!(
             "              mirroring enabled {} · builtins {} · rules {}",
@@ -270,10 +275,10 @@ pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<St
             weight(p.qualification.minimum_ambiguity_margin)
         ),
         format!(
-            "                 owner {} · role {} · source {} · destination {}",
+            "                 owner {} · role {} · advantage {} · destination {}",
             weight(p.qualification.weights.unique_owner),
             weight(p.qualification.weights.role_affinity),
-            weight(p.qualification.weights.source_cohesion),
+            weight(p.qualification.weights.destination_advantage),
             weight(p.qualification.weights.destination_cohesion)
         ),
         format!(
@@ -288,7 +293,7 @@ pub(crate) fn effective_parameter_lines(name: &str, p: &ProfileConfig) -> Vec<St
 type Term = fn(&ScoreBreakdown) -> f64;
 
 /// The scored terms that always print, in their fixed table order.
-const TERMS: [(&str, Term); 7] = [
+const TERMS: [(&str, Term); 9] = [
     ("cut", |breakdown| breakdown.cut),
     ("imbalance", |breakdown| breakdown.imbalance),
     ("naming", |breakdown| breakdown.naming),
@@ -298,6 +303,8 @@ const TERMS: [(&str, Term); 7] = [
     ("companion-separation", |breakdown| {
         breakdown.companion_separation
     }),
+    ("entry-inflow", |breakdown| breakdown.entry_inflow),
+    ("unit-outflow", |breakdown| breakdown.unit_outflow),
 ];
 
 #[cfg(test)]
@@ -341,6 +348,7 @@ mod tests {
                 files_by_language: BTreeMap::from([("ts".to_owned(), 4)]),
             },
             current: CurrentTree {
+                cycle_coverage: unlace_engine::CycleCoverage::default(),
                 tree: file_node("lib", 2),
                 shared_findings: Vec::new(),
             },
@@ -432,6 +440,8 @@ mod tests {
             anchor: 0.0,
             dependency_only: 0.0,
             companion_separation: 0.0,
+            entry_inflow: 0.0,
+            unit_outflow: 0.0,
             capacity: 0.0,
         }
     }
@@ -458,6 +468,7 @@ mod tests {
             severity: Severity::Violation,
             location: vec!["a".to_owned(), "b".to_owned()],
             detail: "dependency cycle".to_owned(),
+            import_cycle: None,
             break_suggestions: None,
             capacity: None,
         }
@@ -470,6 +481,7 @@ mod tests {
             severity: Severity::Violation,
             location: vec![name.to_owned()],
             detail: format!("{name} over cap"),
+            import_cycle: None,
             break_suggestions: None,
             capacity: None,
         }
@@ -636,8 +648,20 @@ mod tests {
             caption_for(&MoveReason::PulledBy {
                 partner: "src/core/engine.ts".to_owned(),
                 weight: 1.0,
+                left_behind: None,
             }),
             "Why: pulled toward `src/core/engine.ts` — weight 1.0."
+        );
+        assert_eq!(
+            caption_for(&MoveReason::PulledBy {
+                partner: "src/core/engine.ts".to_owned(),
+                weight: 1.8,
+                left_behind: Some(unlace_engine::LeftBehind {
+                    partner: "src/core/sibling.ts".to_owned(),
+                    weight: 1.0,
+                }),
+            }),
+            "Why: pulled toward `src/core/engine.ts` — weight 1.8, against 1.0 to `src/core/sibling.ts` left behind."
         );
         assert_eq!(
             caption_for(&MoveReason::RelievesOverCap {
@@ -674,6 +698,7 @@ mod tests {
             severity,
             location: vec!["ai/generators".to_owned()],
             detail: "stale preformatted detail".to_owned(),
+            import_cycle: None,
             break_suggestions: None,
             capacity: Some(CapacityBreach {
                 measured,
@@ -737,6 +762,7 @@ mod tests {
             severity: Severity::Violation,
             location: vec!["alpha".to_owned(), "beta".to_owned()],
             detail: "2-symbol cycle".to_owned(),
+            import_cycle: None,
             break_suggestions: Some(vec![
                 EdgeBreak {
                     source: "beta".to_owned(),
@@ -782,6 +808,7 @@ mod tests {
             severity: Severity::Violation,
             location: vec!["src/core/left.ts".to_owned(), "src/core/right.ts".to_owned()],
             detail: "2-symbol cycle; unlace keeps a dependency cycle in one file; to split it, break right -> left (w=1.0, exact)".to_owned(),
+            import_cycle: None,
             break_suggestions: Some(vec![EdgeBreak {
                 source: "right".to_owned(),
                 target: "left".to_owned(),
@@ -808,6 +835,7 @@ mod tests {
             severity: Severity::Violation,
             location: vec!["left.ts".to_owned(), "right.ts".to_owned()],
             detail: "2-symbol cycle; unlace keeps a dependency cycle in one file; to split it, break right -> left (w=1.0, exact)".to_owned(),
+            import_cycle: None,
             break_suggestions: Some(vec![EdgeBreak {
                 source: "right".to_owned(),
                 target: "left".to_owned(),
@@ -869,6 +897,8 @@ mod tests {
             to_path: "src/task/types.rs".to_owned(),
             delta: -0.002,
             broken_imports: 4,
+            terms: None,
+            fold: None,
         };
 
         assert!(symbol_move_line(&make(SymbolKind::Type)).starts_with(" - move type `WorkInput`"));
@@ -1036,12 +1066,67 @@ mod tests {
     }
 
     #[test]
+    fn should_name_each_import_to_remove_for_an_import_cycle() {
+        let removal = |importer: &str, imported: &str, specifier: &str, line: u32| {
+            unlace_engine::ImportBreak {
+                importer: importer.to_owned(),
+                imported: imported.to_owned(),
+                statements: vec![unlace_engine::ImportStatement {
+                    line,
+                    specifier: specifier.to_owned(),
+                }],
+                references: vec![unlace_engine::SymbolReference {
+                    source: "parseFragment".to_owned(),
+                    target: "buildAst".to_owned(),
+                }],
+                weight: 1,
+            }
+        };
+        let violation = Violation {
+            kind: ViolationKind::Cycle,
+            severity: Severity::Violation,
+            location: vec!["src/adapters.ts".to_owned(), "src/build.ts".to_owned()],
+            detail: String::new(),
+            import_cycle: Some(unlace_engine::ImportCycle {
+                status: unlace_engine::ImportCycleStatus::Cut,
+                cut: vec![
+                    removal("src/adapters.ts", "src/build.ts", "./build", 7),
+                    removal("src/build.ts", "src/adapters.ts", "./adapters", 14),
+                ],
+                exact: true,
+                files_without_imports: Vec::new(),
+            }),
+            break_suggestions: None,
+            capacity: None,
+        };
+
+        let text =
+            findings::findings_lines("Shared", &[violation], RenderOptions::default()).join(" ");
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        assert!(
+            text.contains(
+                "`src/adapters.ts`/`src/build.ts` — 2-file import cycle; to break it, remove \
+                 `./build` (line 7) from `src/adapters.ts`, which carries 1 symbol reference \
+                 (`parseFragment` -> `buildAst`) (exact), +1 more import"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("Also remove `./adapters` (line 14) from `src/build.ts`"),
+            "{text}"
+        );
+        assert!(!text.contains("same file"), "{text}");
+    }
+
+    #[test]
     fn should_label_a_same_file_cut_honestly() {
         let violation = Violation {
             kind: ViolationKind::Cycle,
             severity: Severity::Violation,
             location: vec!["a.rs".to_owned(), "b.rs".to_owned()],
             detail: "2-symbol cycle".to_owned(),
+            import_cycle: None,
             break_suggestions: Some(vec![
                 EdgeBreak {
                     source: "x".to_owned(),
@@ -1121,6 +1206,7 @@ mod tests {
                 MoveReason::PulledBy {
                     partner: "src/deeply/nested/generators/synthographers/helpers.ts".to_owned(),
                     weight: 7.8,
+                    left_behind: None,
                 },
             )];
         }
@@ -1167,6 +1253,8 @@ mod tests {
                 to_path: "src/b.ts".to_owned(),
                 delta: -0.1,
                 broken_imports: 0,
+                terms: None,
+                fold: None,
             }];
         }
 
@@ -1387,6 +1475,8 @@ mod tests {
             to_path: destination.clone(),
             delta: -0.1,
             broken_imports: 0,
+            terms: None,
+            fold: None,
         }];
         let mut terminal = Vec::new();
 
@@ -1492,6 +1582,8 @@ mod tests {
             to_path: destination.clone(),
             delta: -0.1,
             broken_imports: 0,
+            terms: None,
+            fold: None,
         }];
         let mut terminal = Vec::new();
 
@@ -1603,7 +1695,7 @@ mod tests {
             evidence: unlace_engine::EvidenceSignals {
                 unique_owner: 1.0,
                 role_affinity: 0.8,
-                source_cohesion: 0.7,
+                destination_advantage: 0.7,
                 destination_cohesion: 0.6,
                 producer_evidence: 0.5,
                 architectural_reach: 0.4,
@@ -1627,6 +1719,8 @@ mod tests {
             to_path: "shared/owner.ts".to_owned(),
             delta: -0.1,
             broken_imports: 1,
+            terms: None,
+            fold: None,
         };
         let candidate = result
             .profiles
@@ -1673,7 +1767,7 @@ mod tests {
             "greenfield→`shared/alternative.ts`",
             "owner 1.00",
             "role 0.80",
-            "source 0.70",
+            "advantage 0.70",
             "destination 0.60",
             "producer 0.50",
             "reach 0.40",
@@ -1741,7 +1835,7 @@ mod tests {
                 evidence: unlace_engine::EvidenceSignals {
                     unique_owner: 0.0,
                     role_affinity: 0.0,
-                    source_cohesion: 0.0,
+                    destination_advantage: 0.0,
                     destination_cohesion: 0.0,
                     producer_evidence: 0.0,
                     architectural_reach: 0.0,
@@ -1974,6 +2068,8 @@ mod tests {
                 to_path: "src/task/types.rs".to_owned(),
                 delta: 0.0,
                 broken_imports: 1,
+                terms: None,
+                fold: None,
             }],
             capacity_remainder: None,
         };
@@ -2162,6 +2258,8 @@ mod tests {
                 to_path: "shared/owner.ts".to_owned(),
                 delta: -0.1,
                 broken_imports: 1,
+                terms: None,
+                fold: None,
             };
             unlace_engine::RelocationAdvice {
                 proposal: unlace_engine::RelocationProposal::Symbol { relocation },
@@ -2204,6 +2302,8 @@ mod tests {
                     to_path: "src/a.ts".to_owned(),
                     delta: -0.1,
                     broken_imports: 1,
+                    terms: None,
+                    fold: None,
                 },
             },
             destination: "src/a.ts".to_owned(),
@@ -2233,7 +2333,7 @@ mod tests {
             evidence: unlace_engine::EvidenceSignals {
                 unique_owner: 0.5,
                 role_affinity: 0.5,
-                source_cohesion: 0.5,
+                destination_advantage: 0.5,
                 destination_cohesion: 0.5,
                 producer_evidence: 0.5,
                 architectural_reach: 0.5,
@@ -2451,6 +2551,8 @@ mod tests {
                     to_path: "shared/owner.ts".to_owned(),
                     delta: -0.1,
                     broken_imports: 1,
+                    terms: None,
+                    fold: None,
                 })
                 .collect();
         }

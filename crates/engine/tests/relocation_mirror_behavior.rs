@@ -312,10 +312,10 @@ fn should_link_an_exact_nested_mirror_despite_a_colliding_basename() {
 }
 
 #[test]
-fn should_serialize_linked_relocations_as_schema_version_eleven() {
+fn should_serialize_linked_relocations_as_schema_version_twelve() {
     let json = serialized_analysis(&exact_mirror_snapshot(true, false), &mirror_config());
 
-    assert_eq!(json.get("schemaVersion").and_then(Value::as_u64), Some(11));
+    assert_eq!(json.get("schemaVersion").and_then(Value::as_u64), Some(12));
 }
 
 #[test]
@@ -347,6 +347,24 @@ fn should_never_move_a_file_the_adapter_marks_as_an_entry() {
     assert!(
         source_move(&json, "source/module/task.ts").is_none(),
         "an entry file is pinned: {json}"
+    );
+}
+
+#[test]
+fn should_never_move_a_folder_companion_apart_from_its_folder() {
+    // `task.ts` is the entry of `source/module/task/` (ADR-31). Like
+    // `task/index.ts` it is not a sibling that may leave its folder, so it is
+    // pinned the way an entry file is.
+    let mut ir = exact_mirror_ir(false, false, "task.ts", "spec/module/task.spec.ts", None);
+    ir.file_facts.push(FileFact::folder_companion(
+        "source/module/task.ts",
+        "source/module/task",
+    ));
+    let json = serialized_analysis(&assemble(ir), &mirror_config());
+
+    assert!(
+        source_move(&json, "source/module/task.ts").is_none(),
+        "a folder companion is pinned: {json}"
     );
 }
 

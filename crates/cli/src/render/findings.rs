@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 use std::io::{self, Write};
 
-use unlace_engine::{EdgeBreak, Severity, Violation, ViolationKind};
+use unlace_engine::{CycleAnalysis, CycleCoverage, EdgeBreak, Severity, Violation, ViolationKind};
 
 use super::limit::{more_line, take_worst};
 use super::{RenderOptions, nq, wrap};
@@ -55,6 +55,13 @@ fn finding_lines(violation: &Violation) -> Vec<String> {
     for edge in violation.break_suggestions.iter().flatten().skip(1) {
         lines.extend(wrap(&format!("Also cut: {}", cut_text(edge)), 4, 4));
     }
+    let further = violation
+        .import_cycle
+        .iter()
+        .flat_map(|cycle| cycle.cut.iter().skip(1));
+    for import in further {
+        lines.extend(wrap(&format!("Also {}", import.describe(nq)), 4, 4));
+    }
     lines
 }
 
@@ -71,8 +78,9 @@ fn cut_text(edge: &EdgeBreak) -> String {
 }
 
 /// Rebuilds one cycle finding's text from its structured fields, quoting every
-/// symbol name; the priced cut leads and further cuts collapse behind an
-/// explicit `+N more`.
+/// path, specifier and symbol: the first import to remove leads and further
+/// imports collapse behind an explicit `+N more` (ADR-35). A saved result
+/// that predates import cycles still words its symbol cut.
 pub(super) fn cycle_finding_text(violation: &Violation) -> String {
     let members = violation
         .location
@@ -80,6 +88,9 @@ pub(super) fn cycle_finding_text(violation: &Violation) -> String {
         .map(|name| nq(name))
         .collect::<Vec<_>>()
         .join("/");
+    if let Some(cycle) = &violation.import_cycle {
+        return format!("{members} — {}", cycle.describe(&violation.location, nq));
+    }
     let size = violation.location.len();
     let mut detail = if violation.detail.is_empty() {
         format!("{size}-symbol cycle")
@@ -106,19 +117,35 @@ pub(super) fn cycle_finding_text(violation: &Violation) -> String {
 }
 
 /// Writes a violation listing for `violations` to `out`, worst findings first
-/// and capped unless `options.full`.
+/// and capped unless `options.full`, as a fully covered run.
 ///
 /// # Errors
 ///
 /// Returns an [`io::Error`] if writing fails.
+#[cfg(test)]
 pub fn write_violation_table(
     violations: &[Violation],
     options: RenderOptions,
     out: &mut impl Write,
 ) -> io::Result<()> {
+    write_violation_report(violations, &CycleCoverage::default(), options, out)
+}
+
+/// Writes the violation listing followed by the cycle coverage note when cycle
+/// findings could not see every file (ADR-35), so a CI log tells zero cycles
+/// apart from cycles the analysis could not see.
+///
+/// # Errors
+///
+/// Returns an [`io::Error`] if writing fails.
+pub fn write_violation_report(
+    violations: &[Violation],
+    coverage: &CycleCoverage,
+    options: RenderOptions,
+    out: &mut impl Write,
+) -> io::Result<()> {
     if violations.is_empty() {
         writeln!(out, "no violations")?;
-        return writeln!(out, "{}", super::ADVICE_DISCLAIMER);
     }
     let (shown, hidden) = take_worst(violations, options, |violation| {
         severity_rank(violation.severity)
@@ -136,7 +163,31 @@ pub fn write_violation_table(
     if let Some(line) = more_line(hidden, 0) {
         writeln!(out, "{line}")?;
     }
+    if let Some(note) = cycle_coverage_note(coverage) {
+        writeln!(out, "{note}")?;
+    }
     writeln!(out, "{}", super::ADVICE_DISCLAIMER)
+}
+
+/// Says when cycle findings could not see the whole file-import graph
+/// (ADR-35): no cycle finding then does not mean no cycle. `None` when every
+/// analysed file states its imports.
+pub(super) fn cycle_coverage_note(coverage: &CycleCoverage) -> Option<String> {
+    match coverage.status {
+        CycleAnalysis::Complete => None,
+        CycleAnalysis::Partial => Some(format!(
+            "Cycle analysis is partial: {} {} no imports, so a cycle through them is shown only where the symbol graph sees one.",
+            coverage.files_without_imports,
+            if coverage.files_without_imports == 1 {
+                "file states"
+            } else {
+                "files state"
+            },
+        )),
+        CycleAnalysis::Unavailable => Some(
+            "Cycle analysis is unavailable: no analysed file states its imports, so no cycle finding does not mean no cycle.".to_owned(),
+        ),
+    }
 }
 
 /// Ranks a severity so hard violations are shown before borderline findings.

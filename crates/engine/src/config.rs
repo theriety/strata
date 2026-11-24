@@ -35,7 +35,9 @@ pub(crate) use mirror::{MirrorCaptures, MirrorTemplate};
 pub use objective::{ObjectiveConfig, WeightsConfig};
 pub use profile::{ProfileConfig, ProfilesConfig};
 pub use qualification::{QualificationConfig, QualificationWeightsConfig};
-pub use relocation::{RelocationConfig, TestMirrorRule, TestMirroringConfig};
+pub use relocation::{
+    DEFAULT_SYMBOL_GAIN_THRESHOLD, RelocationConfig, TestMirrorRule, TestMirroringConfig,
+};
 pub use search::{CapacityConfig, DiversityConfig, SolverConfig, TestsConfig};
 
 use serde::{Deserialize, Serialize};

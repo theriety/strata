@@ -49,8 +49,8 @@ All findings and moves are suggestions. Applying them may break the build; use y
 
 Structural findings
 Shared findings (1)
-  - cycle [violation] `alpha.py`/`beta.py` — 2-symbol cycle; unlace keeps a dependency cycle in
-    one file; to split it, break `beta_step` -> `alpha_step` (w=1.0, exact)
+  - cycle [violation] `alpha.py`/`beta.py` — 2-file import cycle; to break it, remove `beta` (line
+    3) from `alpha.py`, which carries 1 symbol reference (`alpha_step` -> `beta_step`) (exact)
 
 Candidate layouts
 anchored — 0 candidates (baseline -0.0750; search converged; current layout already optimal)
@@ -92,7 +92,7 @@ unlace turns the whole graph into a plan:
 
 | Feature                       | What it gives you                                                                                       |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------- |
-| **Cycle breaking**            | Every dependency cycle, with the cheapest edge to cut; exact ILP for small cycles, a heuristic beyond   |
+| **Cycle breaking**            | Every import cycle, with the cheapest imports to cut; exact up to 12 files, a heuristic beyond          |
 | **Capacity checks**           | Files over a production-line cap (600 by default) and over-full folders, domains and packages           |
 | **Visibility and polarity**   | Over-wide visibility, production code that depends on tests, and production items only tests use        |
 | **Candidate layouts**         | Scored before and after trees of the affected branches, with every proposed file and symbol move        |
@@ -123,10 +123,10 @@ unlace turns the whole graph into a plan:
 | Rust                         | ✅      | Cargo workspaces, `#[cfg(test)]` modules, restricted visibility and trait impl blocks   |
 | Python                       | ✅      | Imports, references, calls, and `test_*.py`/`*_test.py` pairs                           |
 | Other languages              | ❌      | Files in other languages are not analyzed                                               |
-| Exact cycle breaking         | ⚠️      | Exact ILP up to a configurable cycle size; larger cycles use a heuristic                |
+| Exact cycle breaking         | ⚠️      | Exact for import cycles of up to 12 files; larger cycles use a heuristic                |
 | Applying moves automatically | ❌      | unlace only proposes moves; you apply them by hand or with your own tooling             |
 | CI gating                    | ✅      | `unlace violations --fail-on` exits with code `2` on a match                            |
-| Saved analysis JSON          | ⚠️      | Read only at the current result schema version; re-run `analyze` after upgrading        |
+| Saved analysis JSON          | ⚠️      | Result schema 11 and 12 are read; older files need a fresh `analyze` after upgrading    |
 
 ---
 
@@ -239,7 +239,7 @@ The evidence qualification is deterministic and language-neutral. It evaluates t
 
 - **Unique owner** — the destination contains the sole explicit function or method that owns the symbol.
 - **Role affinity** — the symbol's name agrees with the destination filename and existing symbols. Names are hints and can never authorize a move alone.
-- **Source cohesion** — the move does not break a stronger conceptual cluster in the source file.
+- **Destination advantage** — how much more strongly the destination pulls the symbol than the source it leaves (`(destination − source) / max`, floored at 0); 0 means the source pulls at least as hard. Formerly `source-cohesion`, still accepted as a deprecated config alias.
 - **Destination cohesion** — multiple destination declarations support the symbol's role; one nearby declaration is deliberately limited evidence.
 - **Producer evidence** — explicit owner affinities emitted by an adapter provide producer evidence that outweighs passive consumers.
 - **Ambiguity margin** — the proposed destination must clearly beat the strongest conservative alternative supported by the analysis-start graph.
@@ -248,6 +248,16 @@ The evidence qualification is deterministic and language-neutral. It evaluates t
 Hard structural guards remain profile-independent. Profiles may adjust only the soft evidence weights and thresholds used to qualify otherwise admissible moves.
 
 The ambiguity comparison deliberately over-approximates alternatives from pass-start evidence: the current source, incident production-neighbor homes, explicit owner homes, and the common physical folder of consumers. It does not reconstruct every optimizer admission check. An implausible alternative may therefore demote a move to `Review candidate`, but ambiguity qualification cannot promote a move or remove it from the raw candidates.
+
+### Reading Cycle Findings
+
+A cycle finding is a cycle of **file imports**: the files import each other, directly or through other files. Each finding names a cut, the fewest imports to remove from the importing files to break the cycle, with the line of each import and the symbol references it carries. The cut is exact for cycles of up to 12 files and a heuristic beyond. A cycle that only exists between types (a type-only back edge that no import statement states) is not reported. A Rust parent module and its child that `use` each other through a facade are reported like any other cycle.
+
+Cycle findings depend on the imports each adapter states. The result's `current.cycleCoverage` records how much of the import graph was visible: `complete` (every analysed file states its imports), `partial` (some do not; `filesWithoutImports` counts them) or `unavailable` (none do). A cycle through files without import facts is reported with `importCycle.status = "unavailable"`, which names the files and no cut. When coverage is not `complete`, no cycle finding does not mean no cycle; `violations` and `report` say so in a coverage note.
+
+### Reading Score Evidence
+
+With `--verbose`, each proposed symbol move adds a `pays:` line listing every objective term the move changed by at least 0.000001, largest change first, with its signed change; the line wraps under its first term.
 
 ### Inspecting a Saved Analysis
 
@@ -287,6 +297,8 @@ unlace violations --root path/to/repo --fail-on cycle,capacity:violation
 ```
 
 Selector classes are `cycle`, `polarity`, `capacity`, and `visibility`, each optionally suffixed with a severity (`:violation` or `:borderline`).
+
+When some or all analysed files state no imports, the table ends with a cycle coverage note (`Cycle analysis is partial: …` or `Cycle analysis is unavailable: …`). No cycle finding then does not mean no cycle. The note does not change the exit code.
 
 | Flag | Meaning |
 |------|---------|
@@ -383,6 +395,8 @@ path = 0.2
 anchor = 1.0
 dependency-only = 0.05
 companion-separation = 0.05
+entry-inflow = 0.0125
+unit-outflow = 0.0125
 capacity = 4.0
 
 [profiles.anchored.qualification]
@@ -393,7 +407,7 @@ minimum-ambiguity-margin = 0.15
 [profiles.anchored.qualification.weights]
 unique-owner = 0.10
 role-affinity = 0.10
-source-cohesion = 0.25
+destination-advantage = 0.25
 destination-cohesion = 0.25
 producer-evidence = 0.10
 architectural-reach = 0.20
@@ -421,6 +435,7 @@ pin-detected-test-symbols = true
 allow-cross-package-moves = false
 forbid-file-moves = []
 forbid-symbol-moves = []
+symbol-gain-threshold = 0.001
 
 [profiles.anchored.relocation.test-mirroring]
 enabled = true
@@ -444,6 +459,8 @@ path = 0.0
 anchor = 0.0
 dependency-only = 0.05
 companion-separation = 0.05
+entry-inflow = 0.0125
+unit-outflow = 0.0125
 capacity = 4.0
 
 [profiles.greenfield.qualification]
@@ -454,7 +471,7 @@ minimum-ambiguity-margin = 0.15
 [profiles.greenfield.qualification.weights]
 unique-owner = 0.10
 role-affinity = 0.10
-source-cohesion = 0.25
+destination-advantage = 0.25
 destination-cohesion = 0.25
 producer-evidence = 0.10
 architectural-reach = 0.20
@@ -482,11 +499,18 @@ pin-detected-test-symbols = true
 allow-cross-package-moves = false
 forbid-file-moves = []
 forbid-symbol-moves = []
+symbol-gain-threshold = 0.001
 
 [profiles.greenfield.relocation.test-mirroring]
 enabled = true
 builtins = true
 ```
+
+Three keys price companion folders (a folder `x/` beside its entry file `x.ts`) and symbol moves:
+
+- `objective.entry-inflow` (default `0.0125`) is a fixed charge for each declaration moved from inside a companion folder into its entry file (ADR-33).
+- `objective.unit-outflow` (default `0.0125`) is a fixed charge for each file or declaration that leaves the unit made of a companion folder and its entry file. It is uncalibrated: no eval case isolates it, so it tracks `entry-inflow`.
+- `relocation.symbol-gain-threshold` (default `0.001`) is the share of its starting score a symbol move must gain to be accepted. It is relative to `|score|`, finite and non-negative; `0` keeps only a float-dust floor (ADR-34).
 
 `[tests]` is one policy for every profile and every consumer: the test-only finding, relocation (test zones and the tie-cut, test-symbol pinning), polarity findings, and capacity and scoring. Three inputs decide, in this order of precedence:
 
@@ -534,7 +558,13 @@ When a source moves, every exact mirror must follow it; if any mirror is blocked
 
 The former `analysis.mode`, `analysis.candidates`, `analysis.seed`, and top-level analysis-policy sections are invalid. `--mode` remains a CLI compatibility selector: it chooses which parameter profiles execute but does not define their parameters.
 
-Saved analysis JSON uses result schema version 11, and readers reject version 10 and earlier results. Version 11 makes three changes:
+Saved analysis JSON is written at result schema version 12. Readers accept versions 11 and 12 and reject version 10 and earlier; a version 11 result simply lacks the fields below. Version 12 makes three changes:
+
+- Each symbol move carries `terms {before, after}`, the objective's per-term breakdown either side of its acceptance, which feeds the `--verbose` `pays:` line.
+- A symbol move accepted as part of a collision fold carries `fold`, the repo-relative path of the file whose fold it belongs to. A fold is accepted as one unit, so a member's own `delta` and `terms` may individually regress.
+- Cycle findings are file-import cycles. A cycle violation carries `importCycle` (`status` `cut` or `unavailable`, the `cut` imports with their lines, `exact`, and `filesWithoutImports`), and `current` carries `cycleCoverage` (`status` and `filesWithoutImports`). The IR snapshot the adapters produce moves to schema 4, which adds the `ModuleDeclaration` import kind.
+
+Version 11 made three changes:
 
 - It records the resolved `[tests]` section once, as a top-level `tests` object (`helperCap`, `patterns`, `builtins`), and drops it from each profile's `parameters`.
 - It adds `unit` (`lines`, `entries`, `folders`, `domains` or `packages`), `configKey` (for example `capacity.domain`) and `realPaths` (repo-relative real directories, or the file path) to each violation's `capacity` object, so a capacity finding states what it counted, the cap and where. A `relievesOverCap` move reason also carries `unit` and `configKey`. For a file-level breach the existing `path` field is kept and always equals `realPaths[0]`; it is absent for folder, domain, package and package-group breaches.
@@ -552,7 +582,7 @@ Earlier versions: version 10 added the `testOnly` violation kind (a production i
 
 The top-level `advice` object contains `recommended` and `reviewCandidates`; raw per-profile candidates remain available for inspection. Each advice item records `destination`, `supportingProfiles`, `qualifiedProfiles`, `absentProfiles`, `conflictingDestinations`, `assessments`, and `reviewReasons`. An assessment includes all six raw evidence signals, the weighted and structural scores, the ambiguity margin and best alternative, the effective thresholds, and the qualification result. There is no serialized rejected group.
 
-Each score breakdown includes `dependencyOnly` and `companionSeparation`. The latter is the directional charge for keeping a conservatively matched signature type away from its immutable owner file. Each primary file `Move` also has `mirrors`, whose entries contain `sourcePath`, `path`, `from`, and `to`. Earlier saved result versions are not accepted by `report`, `tree`, or `diff`.
+Each score breakdown includes `dependencyOnly` and `companionSeparation`. The latter is the directional charge for keeping a conservatively matched signature type away from its immutable owner file. Each primary file `Move` also has `mirrors`, whose entries contain `sourcePath`, `path`, `from`, and `to`. Result versions older than 11 are not accepted by `report`, `tree`, or `diff`.
 
 ---
 

@@ -234,8 +234,11 @@ impl PipelineSolver<'_> {
         evidence: &PolishEvidence,
     ) -> Vec<(usize, usize)> {
         let assembled = self.assemble_with_polish_evidence(parts, evidence);
-        let (current, proposed) =
-            physical_relocation_folders(&self.snapshot.ir().containers, &assembled.tree);
+        let (current, proposed) = physical_relocation_folders(
+            &self.snapshot.ir().containers,
+            &assembled.tree,
+            &self.facts.companions,
+        );
         let mut claims: BTreeMap<String, Vec<(bool, &str, usize)>> = BTreeMap::new();
         for (vertex, file) in self.files.iter().enumerate() {
             let path = self.repository_path(file.name.as_str());

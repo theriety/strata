@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use unlace_core::score::ScoreBreakdown;
 use unlace_ir::ContainerId;
 
 use crate::analyze::relocation::CandidateTree;
 
 /// One symbol relocation the FIX08 symbol polish accepted, in candidate-tree
-/// file ids. `delta` is the strict J improvement it earned at acceptance time.
+/// file ids. `delta` is the strict J improvement it earned at acceptance time,
+/// `before.total - after.total`.
 pub(in crate::analyze) struct SymbolRelocation {
     /// The relocated node's id.
     pub(super) node: u32,
@@ -17,6 +19,11 @@ pub(in crate::analyze) struct SymbolRelocation {
     /// for an ordinary relocation; within a fold it is the marginal change in
     /// acceptance order, and only the fold's sum is guaranteed positive.
     pub(super) delta: f64,
+    /// The running-best breakdown the relocation was priced against.
+    pub(super) before: ScoreBreakdown,
+    /// The breakdown the pass held once it accepted the relocation; the next
+    /// relocation's `before`.
+    pub(super) after: ScoreBreakdown,
     /// The collision fold this relocation belongs to (ADR-21), as the
     /// pass-start id of the file it drains; `None` for an ordinary relocation.
     /// A fold is accepted or refused as one unit.

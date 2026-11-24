@@ -13,7 +13,7 @@ The evidence model is language-neutral:
 
 - **Unique owner** favors the destination containing the sole explicit owner relationship.
 - **Role affinity** measures lexical agreement with the destination, but names never authorize a move by themselves.
-- **Source cohesion** checks whether destination support outweighs the conceptual evidence lost by leaving the source.
+- **Destination advantage** measures how far destination support outweighs the pull of the source it leaves (0 when the source pulls at least as hard).
 - **Destination cohesion** requires broad support in the destination instead of treating one neighbor as ownership.
 - **Producer evidence** derives from explicit adapter-emitted owner affinities rather than passive consumers.
 - **Ambiguity margin** compares the proposed destination with the strongest conservative alternative supported by the analysis-start graph.
@@ -32,7 +32,7 @@ The public result has two groups. `Recommended` requires sufficient evidence and
 | [ADR-1](decisions/product/adr-1-recommendations-only.md) | Recommendations only — unlace never delivers or executes move scripts | product | `decisions/product/adr-1-recommendations-only.md` | Accepted |
 | [ADR-5](decisions/relocation/adr-5-pass-start-dependencies-govern-symbol-moves.md) | Pass-start dependencies govern symbol moves | relocation | `decisions/relocation/adr-5-pass-start-dependencies-govern-symbol-moves.md` | Accepted |
 | [ADR-6](decisions/relocation/adr-6-symbol-destination-guardrails.md) | Symbol destinations obey pass-start guardrails | relocation | `decisions/relocation/adr-6-symbol-destination-guardrails.md` | Accepted |
-| [ADR-8](decisions/relocation/adr-8-physical-layout-governs-relocation-and-capacity.md) | Physical layout governs relocation and capacity | relocation | `decisions/relocation/adr-8-physical-layout-governs-relocation-and-capacity.md` | Accepted |
+| [ADR-8](decisions/relocation/adr-8-physical-layout-governs-relocation-and-capacity.md) | Physical layout governs relocation and capacity | relocation | `decisions/relocation/adr-8-physical-layout-governs-relocation-and-capacity.md` | Accepted (amended by ADR-31) |
 | [ADR-11](decisions/relocation/adr-11-relocation-ownership-scoring.md) | Relocation ownership and dependency-only scoring | relocation | `decisions/relocation/adr-11-relocation-ownership-scoring.md` | Accepted |
 | [ADR-12](decisions/advice/adr-12-companion-owner-affinity.md) | Conservative companion-owner affinity | advice | `decisions/advice/adr-12-companion-owner-affinity.md` | Accepted |
 | [ADR-14](decisions/advice/adr-14-profile-consensus.md) | Evidence-qualified profile consensus | advice | `decisions/advice/adr-14-profile-consensus.md` | Accepted |
@@ -51,3 +51,8 @@ The public result has two groups. `Recommended` requires sufficient evidence and
 | [ADR-28](decisions/product/adr-28-no-file-packing-until-designed.md) | No file packing until it is designed | product | `decisions/product/adr-28-no-file-packing-until-designed.md` | Accepted |
 | [ADR-29](decisions/analysis/adr-29-public-api-follows-each-languages-export-surface.md) | Public API follows each language's real export surface | analysis | `decisions/analysis/adr-29-public-api-follows-each-languages-export-surface.md` | Accepted |
 | [ADR-30](decisions/analysis/adr-30-one-test-policy-decides-what-is-test-code.md) | One test policy decides what is test code | analysis | `decisions/analysis/adr-30-one-test-policy-decides-what-is-test-code.md` | Accepted |
+| [ADR-31](decisions/relocation/adr-31-a-companion-file-is-its-folders-entry.md) | A companion file is its folder's entry | relocation | `decisions/relocation/adr-31-a-companion-file-is-its-folders-entry.md` | Accepted |
+| [ADR-32](decisions/analysis/adr-32-imbalance-is-a-mean.md) | Size imbalance is a mean over containers, not a sum | analysis | `decisions/analysis/adr-32-imbalance-is-a-mean.md` | Accepted |
+| [ADR-33](decisions/analysis/adr-33-price-companion-entry-inflow-and-unit-outflow.md) | Price companion entry inflow and unit outflow | analysis | `decisions/analysis/adr-33-price-companion-entry-inflow-and-unit-outflow.md` | Accepted |
+| [ADR-34](decisions/relocation/adr-34-symbol-moves-must-earn-their-place.md) | Symbol moves must earn their place | relocation | `decisions/relocation/adr-34-symbol-moves-must-earn-their-place.md` | Accepted |
+| [ADR-35](decisions/reporting/adr-35-cycles-are-file-import-cycles.md) | Cycle findings are file-import cycles | reporting | `decisions/reporting/adr-35-cycles-are-file-import-cycles.md` | Accepted |

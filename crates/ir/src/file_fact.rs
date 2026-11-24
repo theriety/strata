@@ -7,9 +7,10 @@ use smol_str::SmolStr;
 
 /// What an adapter knows about one source file beyond its declarations.
 ///
-/// Test pairs and entry files are language conventions, so the adapter that
-/// owns the language states them and the engine only reads them. A file with no
-/// pair and no entry role has no fact. An adapter states a pair only when it
+/// Test pairs, entry files and folder companions are language conventions, so
+/// the adapter that owns the language states them and the engine only reads
+/// them. A file with no pair, no entry role and no companion folder has no
+/// fact. An adapter states a pair only when it
 /// can prove it (a module tree, a mirrored path whose source exists); when
 /// unsure it records nothing, so a missing fact means "no pair" and "not an
 /// entry".
@@ -37,6 +38,16 @@ pub struct FileFact {
     /// TypeScript and Python adapters have none), so absent means "none".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<SmolStr>,
+    /// The repo-relative directory `x` this file `x.ts` is the entry of: the
+    /// file sits beside `x/` and stands in for `x/index.ts` (decisions D1/E1).
+    /// The adapter records nothing, so the file stays an ordinary sibling, when
+    /// `x/index.ts` also exists, when both `x.ts` and `x.tsx` sit beside `x/`,
+    /// or when `x/` holds no analysed module. A test paired with such a file
+    /// gets the mirrored companion of its own (`spec/lexer/block.spec.ts`
+    /// gets `spec/lexer/block`), so the pair stays mirrored. Added to schema
+    /// 4; absent means "no companion folder".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_companion: Option<SmolStr>,
 }
 
 impl FileFact {
@@ -48,6 +59,7 @@ impl FileFact {
             test_of: Some(source.into()),
             entry: false,
             start: None,
+            folder_companion: None,
         }
     }
 
@@ -59,6 +71,7 @@ impl FileFact {
             test_of: None,
             entry: true,
             start: None,
+            folder_companion: None,
         }
     }
 
@@ -71,6 +84,20 @@ impl FileFact {
             test_of: None,
             entry: true,
             start: Some(start.into()),
+            folder_companion: None,
+        }
+    }
+
+    /// A fact stating that `file` is the entry of the companion directory
+    /// `folder` beside it.
+    #[must_use]
+    pub fn folder_companion(file: impl Into<SmolStr>, folder: impl Into<SmolStr>) -> Self {
+        Self {
+            file: file.into(),
+            test_of: None,
+            entry: false,
+            start: None,
+            folder_companion: Some(folder.into()),
         }
     }
 }

@@ -6,6 +6,7 @@ use smol_str::SmolStr;
 use unlace_core::cluster::Partition;
 use unlace_core::condense::condense;
 use unlace_core::score::Coefficients;
+use unlace_ir::laminar::Companions;
 use unlace_ir::{ScopeLevel, Snapshot};
 
 use crate::analyze::layout::{
@@ -43,10 +44,14 @@ impl<'a> PipelineSolver<'a> {
         // are pinned (ADR-26). An unpaired test is an ordinary file, held to
         // its test root by the zone keys instead.
         let paired_tests = exact_links(&files, &test_zone, &adapter_pairs, &mirror_rules);
+        // a folder companion is its folder's entry (ADR-31): like `x/index.ts`
+        // it is not a sibling that may move apart from `x/`, so it is pinned
+        // the same way. Its folder's files and its symbols still move.
+        let companions = Companions::from_facts(&ir.file_facts);
         let entry_files: BTreeSet<&str> = ir
             .file_facts
             .iter()
-            .filter(|fact| fact.entry)
+            .filter(|fact| fact.entry || companions.folder_of(&fact.file).is_some())
             .map(|fact| fact.file.as_str())
             .collect();
         let zones = zone_keys(&files, &test_zone);
@@ -205,6 +210,7 @@ impl<'a> PipelineSolver<'a> {
             adapter_pairs,
             mirror_enabled: profile.relocation.test_mirroring.enabled,
             pin_test_symbols: profile.relocation.pin_detected_test_symbols,
+            symbol_gain_threshold: profile.relocation.symbol_gain_threshold,
             files: relieved_files,
             index_of,
             condensation,

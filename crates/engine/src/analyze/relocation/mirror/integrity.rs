@@ -70,8 +70,11 @@ impl PipelineSolver<'_> {
         let mut reverted_any = false;
         for _ in 0..=self.files.len() {
             let assembled = self.assemble_with_polish_evidence(parts, evidence);
-            let (current, proposed) =
-                physical_relocation_folders(&self.snapshot.ir().containers, &assembled.tree);
+            let (current, proposed) = physical_relocation_folders(
+                &self.snapshot.ir().containers,
+                &assembled.tree,
+                &self.facts.companions,
+            );
             let mut moved_vertices: BTreeMap<usize, Vec<String>> = BTreeMap::new();
             for (vertex, file) in self.files.iter().enumerate() {
                 let path = self.repository_path(file.name.as_str());

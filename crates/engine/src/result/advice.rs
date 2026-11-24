@@ -89,7 +89,8 @@ pub struct ProfileAssessment {
 pub struct EvidenceSignals {
     pub unique_owner: f64,
     pub role_affinity: f64,
-    pub source_cohesion: f64,
+    #[serde(alias = "sourceCohesion")]
+    pub destination_advantage: f64,
     pub destination_cohesion: f64,
     pub producer_evidence: f64,
     pub architectural_reach: f64,

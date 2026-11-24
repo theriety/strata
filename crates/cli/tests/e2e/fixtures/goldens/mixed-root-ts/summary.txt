@@ -1,6 +1,6 @@
 Unlace report — mixed-root-ts
 12 files · 12 symbols · 11 edges
-Snapshot `451050929fc795aedc83f73e3c197d546c55752d7630ca1f4fc9a17bb10a0100`
+Snapshot `1e5a985cb27af8380b648abda1023ca58760fab940ffd4025a55f5d9e30cb879`
 All findings and moves are suggestions. Applying them may break the build; use your own judgement.
 
 Structural findings
@@ -22,12 +22,12 @@ candidate is a proposed layout; inclusion does not make a move Recommended. Part
 rescored.
 
 anchored — 1 candidate(s)
-Baseline score: 4.2038
+Baseline score: 4.1109
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 
 anchored — candidate 1
-  Score: 4.2038 → 3.0994; improvement +1.1044
+  Score: 4.1109 → 3.0018; improvement +1.1092
   Capacity remaining: 1 (0 at file level).
   Proposed moves
     - Move file `atlas/src/core/beta.ts` → `atlas/src/core/beta/beta.ts`
@@ -59,12 +59,12 @@ anchored — candidate 1
   Unchanged branches and symbols omitted; excluded files are not shown.
 
 greenfield — 1 candidate(s)
-Baseline score: 4.4038
+Baseline score: 4.3109
 Fewer than the requested candidates survived; the solution space converged.
 Current layout violates 2 capacity cap(s).
 
 greenfield — candidate 1
-  Score: 4.4038 → 2.9851; improvement +1.4187
+  Score: 4.3109 → 2.8875; improvement +1.4234
   Capacity remaining: 1 (0 at file level).
   Proposed moves
     - Move file `atlas/src/core/beta.ts` → `atlas/src/core/beta/beta.ts`

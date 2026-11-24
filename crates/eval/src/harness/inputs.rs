@@ -62,14 +62,20 @@ pub(super) fn packages_holding<'a>(
 
 /// Whether `file` sits under `[<package-root>/][<source-root>/]<path>/`.
 fn directory_contains(package_prefix: Option<&str>, file: &str, path: &str) -> bool {
+    directory_root(package_prefix, file, path).is_some()
+}
+
+/// The repo-relative directory `[<package-root>/][<source-root>/]<path>` that
+/// holds `file`, or `None` when `file` does not sit under it.
+pub(super) fn directory_root<'f>(
+    package_prefix: Option<&str>,
+    file: &'f str,
+    path: &str,
+) -> Option<&'f str> {
     let mut rest = match package_prefix {
-        Some(root) => match file
+        Some(root) => file
             .strip_prefix(root)
-            .and_then(|tail| tail.strip_prefix('/'))
-        {
-            Some(tail) => tail,
-            None => return false,
-        },
+            .and_then(|tail| tail.strip_prefix('/'))?,
         None => file,
     };
     // One leading source-root segment below the package root is transparent.
@@ -79,7 +85,9 @@ fn directory_contains(package_prefix: Option<&str>, file: &str, path: &str) -> b
         rest = tail;
     }
     let slash_after_path = || rest.as_bytes().get(path.len()).copied() == Some(b'/');
-    rest == path || (rest.starts_with(path) && rest.len() > path.len() && slash_after_path())
+    let holds =
+        rest == path || (rest.starts_with(path) && rest.len() > path.len() && slash_after_path());
+    holds.then(|| &file[..file.len() - rest.len() + path.len()])
 }
 
 /// Whether `file` lives directly under directory `dir` (`dir/…`).
@@ -158,8 +166,23 @@ pub(super) fn validate_references(
             }
         }
     };
+    for pin in &block.cycle_import_cut {
+        check_file_set("cycle_import_cut", &pin.files);
+        if let Some(expect) = &pin.expect {
+            check_file_set(
+                "cycle_import_cut.expect",
+                &[expect.importer.clone(), expect.imported.clone()],
+            );
+        }
+    }
     for assertion in block.keep_together.iter().chain(block.separate.iter()) {
         check_file_set("keep_together/separate", &assertion.paths);
+    }
+    for pin in &block.advice_tier {
+        check_file_set("advice_tier", std::slice::from_ref(&pin.path));
+        if let (Some(_), Some(to)) = (&pin.symbol, &pin.to) {
+            check_file_set("advice_tier.to", std::slice::from_ref(to));
+        }
     }
     if let Some(reference) = &spec.reference {
         for container in &reference.container {
@@ -183,6 +206,34 @@ pub(super) fn validate_references(
     // pins an existing home, so a misspelled symbol or path is a harness
     // error, never permanent fake distance.
     let homes = current_symbol_homes(current);
+    for pin in &block.advice_tier {
+        // A file move's destination is a folder: it must hold some census file
+        // today, so a typo never selects nothing and passes as `absent`.
+        if pin.symbol.is_none()
+            && let Some(to) = &pin.to
+            && !census.iter().any(|file| starts_with_segment(file, to))
+        {
+            errors.push(EvalError::TargetInvalid {
+                target: fixture.to_owned(),
+                message: format!(
+                    "advice_tier destination {to:?} is no directory of the fixture census"
+                ),
+            });
+        }
+        if let Some(symbol) = &pin.symbol
+            && !homes
+                .get(&pin.path)
+                .is_some_and(|symbols| symbols.contains(symbol))
+        {
+            errors.push(EvalError::TargetInvalid {
+                target: fixture.to_owned(),
+                message: format!(
+                    "advice_tier selects {symbol:?} leaving {:?}, which the current layout does not show",
+                    pin.path
+                ),
+            });
+        }
+    }
     for assertion in &block.preserve_symbol_home {
         if !homes
             .get(&assertion.path)
@@ -308,5 +359,126 @@ pub(super) fn mode_result_of(result: &AnalyzeResult, face: FaceMode) -> Option<&
     match face {
         FaceMode::Anchored => result.profiles.anchored.as_ref(),
         FaceMode::Greenfield => result.profiles.greenfield.as_ref(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use unlace_engine::result::{ContainerNode, Level, SymbolPlacement};
+
+    use super::validate_references;
+    use crate::harness::assertions::fixtures::{file, node};
+    use crate::target::TargetSpec;
+
+    const INFERENCE: &str = "src/differ/inference.ts";
+    const SHAPE: &str = "src/tree/validation/shape.ts";
+
+    /// The current tree: `inference.ts` exporting `inferMatches`, beside `shape.ts`.
+    fn current() -> ContainerNode {
+        let mut inference = file(INFERENCE);
+        inference.symbols = Some(vec![SymbolPlacement {
+            name: "inferMatches".to_owned(),
+            display: None,
+            visibility: Level::Package,
+        }]);
+        node(Level::Package, "fixture", vec![inference, file(SHAPE)])
+    }
+
+    /// The load-time errors for one block of `advice_tier` pins; a target
+    /// that fails to parse reports that instead, so no test passes vacuously.
+    fn errors_for(pins: &str) -> Vec<String> {
+        let parsed = toml::from_str::<TargetSpec>(&format!(
+            r#"
+schema = 1
+fixture = "fixture"
+[meta]
+failure_mode = "directory-tearing"
+language = "typescript"
+question = "q"
+[run]
+mode = "both"
+candidates = 3
+seed = 42
+config = "defaults"
+[[assert]]
+modes = ["anchored"]
+candidate = 1
+{pins}
+"#
+        ));
+        let spec = match parsed {
+            Ok(spec) => spec,
+            Err(error) => return vec![format!("unparsable test target: {error}")],
+        };
+        let census: BTreeSet<String> = [INFERENCE, SHAPE].map(str::to_owned).into();
+        spec.assert.first().map_or_else(
+            || vec!["test target has no assert block".to_owned()],
+            |block| {
+                validate_references(&spec, block, &census, &[], &current(), "fixture")
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect()
+            },
+        )
+    }
+
+    fn pin(fields: &str) -> String {
+        format!("[[assert.advice_tier]]\n{fields}\nmax_tier = \"review\"\nbecause = \"F\"\n")
+    }
+
+    #[test]
+    fn should_accept_advice_pins_resolving_against_the_census() {
+        let pins = [
+            pin(&format!("path = \"{SHAPE}\"\nto = \"src/tree\"")),
+            pin(&format!(
+                "path = \"{INFERENCE}\"\nsymbol = \"inferMatches\"\nto = \"{SHAPE}\""
+            )),
+        ]
+        .concat();
+
+        assert_eq!(errors_for(&pins), Vec::<String>::new());
+    }
+
+    #[test]
+    fn should_reject_a_misspelled_advice_path() {
+        let errors = errors_for(&pin("path = \"src/tree/validation/shap.ts\""));
+
+        assert_eq!(errors.len(), 1);
+        assert!(errors.iter().all(|error| {
+            error.contains("advice_tier references \"src/tree/validation/shap.ts\"")
+        }));
+    }
+
+    #[test]
+    fn should_reject_an_unknown_symbol_home() {
+        let errors = errors_for(&pin(&format!(
+            "path = \"{INFERENCE}\"\nsymbol = \"inferMatch\""
+        )));
+
+        assert_eq!(errors.len(), 1);
+        assert!(errors.iter().all(|error| {
+            error.contains("selects \"inferMatch\" leaving \"src/differ/inference.ts\"")
+        }));
+    }
+
+    #[test]
+    fn should_reject_a_destination_outside_the_census() {
+        let folder = errors_for(&pin(&format!("path = \"{SHAPE}\"\nto = \"src/nowhere\"")));
+        let symbol_file = errors_for(&pin(&format!(
+            "path = \"{INFERENCE}\"\nsymbol = \"inferMatches\"\nto = \"src/differ/matcher.ts\""
+        )));
+
+        assert_eq!(folder.len(), 1);
+        assert!(
+            folder
+                .iter()
+                .all(|error| error.contains("destination \"src/nowhere\" is no directory"))
+        );
+        assert_eq!(symbol_file.len(), 1);
+        assert!(symbol_file.iter().all(|error| {
+            error.contains("advice_tier.to references \"src/differ/matcher.ts\"")
+        }));
     }
 }

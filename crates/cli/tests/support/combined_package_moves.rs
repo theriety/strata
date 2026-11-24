@@ -111,6 +111,8 @@ pub fn configure(result: &mut AnalyzeResult) -> Result<(), &'static str> {
         to_path: "right/destination.ts".into(),
         delta: -0.1,
         broken_imports: 0,
+        terms: None,
+        fold: None,
     }];
     Ok(())
 }
