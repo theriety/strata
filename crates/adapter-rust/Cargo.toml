@@ -1,6 +1,6 @@
 [package]
 name = "unlace-adapter-rust"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 rust-version.workspace = true
 publish = false

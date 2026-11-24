@@ -18,8 +18,9 @@ members = [
 # treated as a member of the outer workspace.
 exclude = ["crates/adapter-rust/tests/fixtures/workspace"]
 
-# Minimum supported Rust version; matches the rust-toolchain.toml pin.
 [workspace.package]
+version = "1.0.0"
+# Minimum supported Rust version; matches the rust-toolchain.toml pin.
 rust-version = "1.96"
 
 [workspace.dependencies]

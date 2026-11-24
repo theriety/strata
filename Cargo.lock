@@ -3702,7 +3702,7 @@ dependencies = [
 
 [[package]]
 name = "unlace-adapter-python"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rayon",
  "rustpython-parser",
@@ -3714,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "unlace-adapter-rust"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3735,7 +3735,7 @@ dependencies = [
 
 [[package]]
 name = "unlace-adapter-typescript"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rayon",
  "serde",
@@ -3750,7 +3750,7 @@ dependencies = [
 
 [[package]]
 name = "unlace-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -3761,7 +3761,7 @@ dependencies = [
 
 [[package]]
 name = "unlace-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "criterion",
  "highs",
@@ -3773,7 +3773,7 @@ dependencies = [
 
 [[package]]
 name = "unlace-engine"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "glob",
  "ignore",
@@ -3792,7 +3792,7 @@ dependencies = [
 
 [[package]]
 name = "unlace-eval"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3803,7 +3803,7 @@ dependencies = [
 
 [[package]]
 name = "unlace-ir"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "blake3",
  "serde",
