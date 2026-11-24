@@ -33,7 +33,6 @@ criterion = "0.5"
 highs = "1"
 ignore = "0.4"
 rayon = "1"
-libc = "0.2"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

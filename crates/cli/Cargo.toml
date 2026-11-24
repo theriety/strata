@@ -15,8 +15,6 @@ serde_json = { workspace = true }
 unicode-width = "0.2"
 
 [dev-dependencies]
-serde_json = { workspace = true }
-unlace-engine = { path = "../engine" }
 assert_cmd = "2"
 
 [[test]]
